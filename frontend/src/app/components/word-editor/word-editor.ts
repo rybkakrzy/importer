@@ -68,7 +68,8 @@ export class WordEditorComponent {
         this.isUploading.set(false);
       },
       error: (error) => {
-        this.errorMessage.set(error.message || 'Error uploading document');
+        const errorMsg = error?.error?.message || error?.message || 'Error parsing document content';
+        this.errorMessage.set(`Upload failed: ${errorMsg}`);
         this.isUploading.set(false);
         console.error('Upload error:', error);
       }
@@ -143,7 +144,8 @@ export class WordEditorComponent {
         this.isSaving.set(false);
       },
       error: (error) => {
-        this.errorMessage.set('Error saving document');
+        const errorMsg = error?.error?.message || error?.message || 'Unknown error';
+        this.errorMessage.set(`Save failed: ${errorMsg}. Please try again or check your internet connection.`);
         this.isSaving.set(false);
         console.error('Save error:', error);
       }

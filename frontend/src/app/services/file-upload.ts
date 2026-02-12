@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../environments/environment';
 
 export interface ZipFileEntry {
   fileName: string;
@@ -28,7 +29,7 @@ export interface ZipUploadResponse {
   providedIn: 'root',
 })
 export class FileUpload {
-  private apiUrl = 'http://localhost:5190/api/FileUpload';
+  private apiUrl = `${environment.apiUrl}/api/FileUpload`;
 
   constructor(private http: HttpClient) {}
 

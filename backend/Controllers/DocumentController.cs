@@ -81,7 +81,7 @@ public class DocumentController : ControllerBase
 
         try
         {
-            var memoryStream = new MemoryStream();
+            using var memoryStream = new MemoryStream();
             CreateDocumentFromContent(memoryStream, request.Content);
             
             memoryStream.Position = 0;

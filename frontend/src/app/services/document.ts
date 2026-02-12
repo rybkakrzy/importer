@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { environment } from '../../environments/environment';
 
 export interface DocumentRun {
   text: string;
@@ -27,7 +28,7 @@ export interface DocumentUploadResponse {
   providedIn: 'root',
 })
 export class DocumentService {
-  private apiUrl = 'http://localhost:5190/api/Document';
+  private apiUrl = `${environment.apiUrl}/api/Document`;
 
   constructor(private http: HttpClient) {}
 
