@@ -46,7 +46,18 @@ export class WordEditorComponent {
         if (response.success && response.content) {
           try {
             const content = JSON.parse(response.content);
-            this.documentContent.set(content);
+            // Convert property names from PascalCase to camelCase
+            const normalizedContent = content.map((para: any) => ({
+              text: para.Text || para.text || '',
+              style: para.Style || para.style || 'normal',
+              runs: (para.Runs || para.runs || []).map((run: any) => ({
+                text: run.Text || run.text || '',
+                bold: run.Bold ?? run.bold ?? false,
+                italic: run.Italic ?? run.italic ?? false,
+                underline: run.Underline ?? run.underline ?? false
+              }))
+            }));
+            this.documentContent.set(normalizedContent);
             this.fileName.set(response.fileName || 'document.docx');
           } catch (e) {
             this.errorMessage.set('Error parsing document content');
