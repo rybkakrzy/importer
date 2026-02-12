@@ -96,7 +96,7 @@ public class FileUploadController : ControllerBase
                 ProcessedAt = DateTime.UtcNow
             };
 
-            _logger.LogTrace("Migration completed successfully!");
+            _logger.LogTrace("ZIP file processing completed successfully!");
             
             return Ok(response);
         }
