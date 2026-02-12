@@ -1,0 +1,121 @@
+<div class="word-editor-container">
+  <div class="header">
+    <h2>📝 Online Word Editor</h2>
+    <p class="subtitle">Upload, Edit, and Save DOCX Documents</p>
+  </div>
+
+  <!-- Upload Section -->
+  <div class="upload-section" *ngIf="documentContent().length === 0">
+    <div class="file-input-wrapper">
+      <input
+        type="file"
+        (change)="onFileSelected($event)"
+        accept=".docx"
+        id="docxInput"
+        class="file-input"
+      />
+      <label for="docxInput" class="file-label">
+        📄 Choose DOCX File
+      </label>
+      <span class="file-name" *ngIf="selectedFile()">
+        {{ selectedFile()!.name }}
+      </span>
+    </div>
+
+    <button
+      (click)="uploadFile()"
+      [disabled]="!selectedFile() || isUploading()"
+      class="upload-button"
+    >
+      {{ isUploading() ? 'Loading...' : 'Open Document' }}
+    </button>
+  </div>
+
+  <!-- Error Message -->
+  <div class="error-message" *ngIf="errorMessage()">
+    ⚠️ {{ errorMessage() }}
+  </div>
+
+  <!-- Editor Section -->
+  <div class="editor-section" *ngIf="documentContent().length > 0">
+    <div class="toolbar">
+      <button (click)="addParagraph()" class="toolbar-button" title="Add Paragraph">
+        ➕ Add Paragraph
+      </button>
+      <button (click)="saveDocument()" [disabled]="isSaving()" class="toolbar-button save-button" title="Save">
+        💾 {{ isSaving() ? 'Saving...' : 'Save Document' }}
+      </button>
+      <button (click)="clearDocument()" class="toolbar-button" title="Close">
+        ❌ Close
+      </button>
+      <span class="file-info">{{ fileName() }}</span>
+    </div>
+
+    <div class="document-editor">
+      <div 
+        *ngFor="let paragraph of documentContent(); let pIndex = index" 
+        class="paragraph-wrapper"
+      >
+        <div class="paragraph-toolbar">
+          <select 
+            [value]="paragraph.style" 
+            (change)="changeStyle(pIndex, $any($event.target).value)"
+            class="style-select"
+          >
+            <option value="normal">Normal</option>
+            <option value="h1">Heading 1</option>
+            <option value="h2">Heading 2</option>
+            <option value="h3">Heading 3</option>
+          </select>
+          <button (click)="deleteParagraph(pIndex)" class="delete-button" title="Delete Paragraph">
+            🗑️
+          </button>
+        </div>
+
+        <div 
+          [class]="'paragraph ' + paragraph.style"
+        >
+          <span 
+            *ngFor="let run of paragraph.runs; let rIndex = index"
+            [class.bold]="run.bold"
+            [class.italic]="run.italic"
+            [class.underline]="run.underline"
+            contenteditable="true"
+            (blur)="onContentChange($event, pIndex, rIndex)"
+            class="editable-run"
+            [attr.data-placeholder]="run.text === '' ? 'Type here...' : null"
+          >{{ run.text }}</span>
+        </div>
+
+        <div class="run-controls">
+          <span *ngFor="let run of paragraph.runs; let rIndex = index" class="run-control">
+            <button 
+              (click)="toggleFormatting(pIndex, rIndex, 'bold')"
+              [class.active]="run.bold"
+              class="format-button"
+              title="Bold"
+            >
+              <strong>B</strong>
+            </button>
+            <button 
+              (click)="toggleFormatting(pIndex, rIndex, 'italic')"
+              [class.active]="run.italic"
+              class="format-button"
+              title="Italic"
+            >
+              <em>I</em>
+            </button>
+            <button 
+              (click)="toggleFormatting(pIndex, rIndex, 'underline')"
+              [class.active]="run.underline"
+              class="format-button"
+              title="Underline"
+            >
+              <u>U</u>
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
