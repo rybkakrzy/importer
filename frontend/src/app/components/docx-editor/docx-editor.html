@@ -1,0 +1,21 @@
+<div class="docx-editor-container">
+  <h2>Edytor DOCX online</h2>
+
+  <div class="toolbar">
+    <input type="file" accept=".docx" (change)="onDocxSelected($event)" />
+    <button (click)="openDocx()" [disabled]="!selectedDocx || isOpening">
+      {{ isOpening ? 'Otwieranie...' : 'Otwórz DOCX' }}
+    </button>
+    <button (click)="saveDocx()" [disabled]="isSaving || isOpening">
+      {{ isSaving ? 'Zapisywanie...' : 'Zapisz jako DOCX' }}
+    </button>
+  </div>
+
+  <div class="message error" *ngIf="errorMessage">{{ errorMessage }}</div>
+  <div class="message info" *ngIf="infoMessage">{{ infoMessage }}</div>
+
+  <div class="editor"
+       contenteditable="true"
+       [innerHTML]="editorContent"
+       (input)="onEditorInput($event)"></div>
+</div>
