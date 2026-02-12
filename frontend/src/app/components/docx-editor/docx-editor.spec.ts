@@ -7,15 +7,16 @@ describe('DocxEditorComponent', () => {
   let component: DocxEditorComponent;
   let fixture: ComponentFixture<DocxEditorComponent>;
   let openDocxCalledWith: File | null = null;
+  let openDocxResponse = {
+    success: true,
+    message: 'ok',
+    fileName: 'test.docx',
+    html: '<p>Test</p>'
+  };
   const fileUploadServiceMock = {
     openDocx: (file: File) => {
       openDocxCalledWith = file;
-      return of({
-        success: true,
-        message: 'ok',
-        fileName: 'test.docx',
-        html: '<p>Test</p>'
-      });
+      return of(openDocxResponse);
     },
     saveDocx: (_request: { fileName?: string; html: string }) => of(new Blob())
   };
@@ -43,5 +44,21 @@ describe('DocxEditorComponent', () => {
 
     expect(openDocxCalledWith).toBe(file);
     expect(component.editorContent).toBe('<p>Test</p>');
+  });
+
+  it('should sanitize unsafe html when opening docx', () => {
+    openDocxResponse = {
+      success: true,
+      message: 'ok',
+      fileName: 'test.docx',
+      html: '<p>Safe</p><script>alert(1)</script>'
+    };
+    const file = new File(['docx'], 'test.docx');
+    component.selectedDocx = file;
+
+    component.openDocx();
+
+    expect(component.editorContent).not.toContain('<script>');
+    expect(component.editorContent).toContain('Safe');
   });
 });

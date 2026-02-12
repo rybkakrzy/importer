@@ -24,6 +24,7 @@ public class DocxEditorController : ControllerBase
         {
             return BadRequest(new DocxOpenResponse { Success = false, Message = "Przesłany plik musi być typu DOCX" });
         }
+        var safeFileName = $"{SanitizeFileName(fileName)}.docx";
 
         await using var memoryStream = new MemoryStream();
         await Request.Body.CopyToAsync(memoryStream);
@@ -66,7 +67,7 @@ public class DocxEditorController : ControllerBase
             {
                 Success = true,
                 Message = "Plik DOCX został odczytany",
-                FileName = fileName,
+                FileName = safeFileName,
                 Html = html
             });
         }
@@ -79,7 +80,7 @@ public class DocxEditorController : ControllerBase
     [HttpPost("save")]
     public ActionResult SaveDocx([FromBody] DocxSaveRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.Html))
+        if (!HasMeaningfulText(request.Html))
         {
             return BadRequest("Brak treści do zapisu.");
         }
@@ -155,7 +156,7 @@ public class DocxEditorController : ControllerBase
             .Select(p => p.Trim())
             .ToList();
 
-        return paragraphs.Count == 0 ? [string.Empty] : paragraphs;
+        return paragraphs.All(string.IsNullOrWhiteSpace) ? [string.Empty] : paragraphs;
     }
 
     private static void WriteEntry(ZipArchive archive, string path, string content)
@@ -176,6 +177,17 @@ public class DocxEditorController : ControllerBase
         var noExtension = Path.GetFileNameWithoutExtension(fileName);
         var sanitized = string.Concat(noExtension.Where(ch => !Path.GetInvalidFileNameChars().Contains(ch)));
         return string.IsNullOrWhiteSpace(sanitized) ? "dokument" : sanitized;
+    }
+
+    private static bool HasMeaningfulText(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return false;
+        }
+
+        var text = WebUtility.HtmlDecode(Regex.Replace(html, "<[^>]+>", string.Empty));
+        return !string.IsNullOrWhiteSpace(text);
     }
 }
 

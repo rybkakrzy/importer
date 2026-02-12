@@ -1,5 +1,6 @@
 import { CommonModule } from '@angular/common';
-import { Component } from '@angular/core';
+import { Component, SecurityContext } from '@angular/core';
+import { DomSanitizer } from '@angular/platform-browser';
 import { FileUpload as FileUploadService } from '../../services/file-upload';
 
 @Component({
@@ -17,17 +18,31 @@ export class DocxEditorComponent {
   errorMessage: string | null = null;
   infoMessage: string | null = null;
 
-  constructor(private fileUploadService: FileUploadService) {}
+  constructor(
+    private fileUploadService: FileUploadService,
+    private sanitizer: DomSanitizer
+  ) {}
 
   onDocxSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
-    this.selectedDocx = input.files?.[0] ?? null;
+    const file = input.files?.[0] ?? null;
+    if (file && !file.name.toLowerCase().endsWith('.docx')) {
+      this.selectedDocx = null;
+      this.errorMessage = 'Można wybrać tylko plik DOCX.';
+      this.infoMessage = null;
+      return;
+    }
+
+    this.selectedDocx = file;
     this.errorMessage = null;
     this.infoMessage = null;
   }
 
   onEditorInput(event: Event): void {
-    this.editorContent = (event.target as HTMLElement).innerHTML;
+    this.editorContent = this.sanitizer.sanitize(
+      SecurityContext.HTML,
+      (event.target as HTMLElement).innerHTML
+    ) ?? '<p><br></p>';
   }
 
   openDocx(): void {
@@ -48,7 +63,7 @@ export class DocxEditorComponent {
     this.fileUploadService.openDocx(this.selectedDocx).subscribe({
       next: (response) => {
         if (response.success && response.html) {
-          this.editorContent = response.html;
+          this.editorContent = this.sanitizer.sanitize(SecurityContext.HTML, response.html) ?? '<p><br></p>';
           this.openedFileName = response.fileName ?? this.selectedDocx?.name ?? null;
           this.infoMessage = response.message;
         } else {
@@ -78,7 +93,8 @@ export class DocxEditorComponent {
       html: this.editorContent
     }).subscribe({
       next: (blob) => {
-        const suggestedName = (this.openedFileName ?? this.selectedDocx?.name ?? 'dokument').replace(/\.docx$/i, '') + '.docx';
+        const rawName = this.openedFileName ?? this.selectedDocx?.name ?? 'dokument.docx';
+        const suggestedName = rawName.toLowerCase().endsWith('.docx') ? rawName : `${rawName}.docx`;
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
