@@ -8,5 +8,5 @@ import { FileUploadComponent } from './components/file-upload/file-upload';
   styleUrl: './app.css'
 })
 export class App {
-  protected readonly title = signal('Importer Parametryzacji');
+  protected readonly title = signal('jesteś?');
 }
