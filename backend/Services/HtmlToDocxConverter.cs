@@ -352,14 +352,73 @@ public class HtmlToDocxConverter
             new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4 },
             new InsideVerticalBorder { Val = BorderValues.Single, Size = 4 }
         ));
-        tableProps.Append(new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct });
+        
+        // Sprawdź szerokość ze stylu HTML
+        var tableStyle = node.GetAttributeValue("style", "");
+        var tableWidthMatch = Regex.Match(tableStyle, @"width:\s*(\d+)(%|px)?");
+        if (tableWidthMatch.Success)
+        {
+            var widthValue = tableWidthMatch.Groups[1].Value;
+            var unit = tableWidthMatch.Groups[2].Value;
+            
+            if (unit == "%" || string.IsNullOrEmpty(unit))
+            {
+                // Procenty - konwertuj na 50ths (5000 = 100%)
+                var pct = int.Parse(widthValue);
+                tableProps.Append(new TableWidth { Width = (pct * 50).ToString(), Type = TableWidthUnitValues.Pct });
+            }
+            else if (unit == "px")
+            {
+                // Piksele - konwertuj na twips (1px ≈ 15 twips)
+                var px = int.Parse(widthValue);
+                tableProps.Append(new TableWidth { Width = (px * 15).ToString(), Type = TableWidthUnitValues.Dxa });
+            }
+        }
+        else
+        {
+            // Domyślnie auto
+            tableProps.Append(new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto });
+        }
+        
+        tableProps.Append(new TableLayout { Type = TableLayoutValues.Autofit });
         table.Append(tableProps);
 
-        // Przetwórz wiersze
-        var rows = node.SelectNodes(".//tr");
-        if (rows != null)
+        // Zbierz informacje o kolumnach dla GridSpan
+        var maxCols = 0;
+        var rowNodes = node.SelectNodes(".//tr");
+        if (rowNodes != null)
         {
-            foreach (var rowNode in rows)
+            foreach (var rowNode in rowNodes)
+            {
+                var cellCount = 0;
+                var cells = rowNode.SelectNodes(".//td|.//th");
+                if (cells != null)
+                {
+                    foreach (var cellNode in cells)
+                    {
+                        var colspan = cellNode.GetAttributeValue("colspan", "1");
+                        cellCount += int.TryParse(colspan, out var cs) ? cs : 1;
+                    }
+                }
+                maxCols = Math.Max(maxCols, cellCount);
+            }
+        }
+
+        // Utwórz siatkę tabeli
+        if (maxCols > 0)
+        {
+            var grid = new TableGrid();
+            for (int i = 0; i < maxCols; i++)
+            {
+                grid.Append(new GridColumn());
+            }
+            table.Append(grid);
+        }
+
+        // Przetwórz wiersze
+        if (rowNodes != null)
+        {
+            foreach (var rowNode in rowNodes)
             {
                 var row = new TableRow();
                 var cells = rowNode.SelectNodes(".//td|.//th");
@@ -370,25 +429,122 @@ public class HtmlToDocxConverter
                     {
                         var cell = new TableCell();
                         var cellProps = new TableCellProperties();
-                        cellProps.Append(new TableCellWidth { Type = TableWidthUnitValues.Auto });
                         
-                        // Parsuj style komórki
-                        var style = cellNode.GetAttributeValue("style", "");
-                        if (style.Contains("background-color"))
+                        // Parsuj colspan
+                        var colspanAttr = cellNode.GetAttributeValue("colspan", "1");
+                        if (int.TryParse(colspanAttr, out var colspan) && colspan > 1)
                         {
-                            var colorMatch = Regex.Match(style, @"background-color:\s*#?([a-fA-F0-9]{6})");
-                            if (colorMatch.Success)
+                            cellProps.Append(new GridSpan { Val = colspan });
+                        }
+                        
+                        // Parsuj rowspan - wymaga VMerge
+                        var rowspanAttr = cellNode.GetAttributeValue("rowspan", "1");
+                        if (int.TryParse(rowspanAttr, out var rowspan) && rowspan > 1)
+                        {
+                            cellProps.Append(new VerticalMerge { Val = MergedCellValues.Restart });
+                        }
+                        
+                        // Parsuj szerokość komórki ze stylu
+                        var cellStyle = cellNode.GetAttributeValue("style", "");
+                        var cellWidthMatch = Regex.Match(cellStyle, @"width:\s*(\d+)(px|%)?");
+                        if (cellWidthMatch.Success)
+                        {
+                            var widthVal = int.Parse(cellWidthMatch.Groups[1].Value);
+                            var widthUnit = cellWidthMatch.Groups[2].Value;
+                            
+                            if (widthUnit == "px" || string.IsNullOrEmpty(widthUnit))
                             {
-                                cellProps.Append(new Shading { Fill = colorMatch.Groups[1].Value });
+                                cellProps.Append(new TableCellWidth { Width = (widthVal * 15).ToString(), Type = TableWidthUnitValues.Dxa });
+                            }
+                            else if (widthUnit == "%")
+                            {
+                                cellProps.Append(new TableCellWidth { Width = (widthVal * 50).ToString(), Type = TableWidthUnitValues.Pct });
                             }
                         }
+                        else
+                        {
+                            cellProps.Append(new TableCellWidth { Type = TableWidthUnitValues.Auto });
+                        }
+                        
+                        // Parsuj kolor tła
+                        if (cellStyle.Contains("background"))
+                        {
+                            var colorMatch = Regex.Match(cellStyle, @"background(?:-color)?:\s*#?([a-fA-F0-9]{6})");
+                            if (colorMatch.Success)
+                            {
+                                cellProps.Append(new Shading { Val = ShadingPatternValues.Clear, Fill = colorMatch.Groups[1].Value });
+                            }
+                        }
+                        
+                        // Wyrównanie pionowe
+                        if (cellStyle.Contains("vertical-align"))
+                        {
+                            var vAlignMatch = Regex.Match(cellStyle, @"vertical-align:\s*(top|middle|bottom)");
+                            if (vAlignMatch.Success)
+                            {
+                                var vAlign = vAlignMatch.Groups[1].Value switch
+                                {
+                                    "top" => TableVerticalAlignmentValues.Top,
+                                    "middle" => TableVerticalAlignmentValues.Center,
+                                    "bottom" => TableVerticalAlignmentValues.Bottom,
+                                    _ => TableVerticalAlignmentValues.Top
+                                };
+                                cellProps.Append(new TableCellVerticalAlignment { Val = vAlign });
+                            }
+                        }
+                        
+                        // Ramki komórki
+                        cellProps.Append(new TableCellBorders(
+                            new TopBorder { Val = BorderValues.Single, Size = 4 },
+                            new BottomBorder { Val = BorderValues.Single, Size = 4 },
+                            new LeftBorder { Val = BorderValues.Single, Size = 4 },
+                            new RightBorder { Val = BorderValues.Single, Size = 4 }
+                        ));
 
                         cell.Append(cellProps);
 
-                        // Dodaj zawartość komórki
-                        var cellPara = new Paragraph();
-                        AppendInlineContent(cellPara, cellNode);
-                        cell.Append(cellPara);
+                        // Dodaj zawartość komórki - może być wiele paragrafów
+                        var hasContent = false;
+                        foreach (var childNode in cellNode.ChildNodes)
+                        {
+                            if (childNode.Name.ToLower() == "p" || 
+                                childNode.Name.ToLower() == "div" ||
+                                childNode.Name.ToLower() == "br")
+                            {
+                                var elements = ConvertHtmlNode(childNode);
+                                foreach (var el in elements)
+                                {
+                                    if (el is Paragraph para)
+                                    {
+                                        cell.Append(para);
+                                        hasContent = true;
+                                    }
+                                }
+                            }
+                            else if (childNode.NodeType == HtmlNodeType.Text || 
+                                     childNode.Name.ToLower() == "span" ||
+                                     childNode.Name.ToLower() == "strong" ||
+                                     childNode.Name.ToLower() == "b" ||
+                                     childNode.Name.ToLower() == "em" ||
+                                     childNode.Name.ToLower() == "i")
+                            {
+                                // Inline content - zbierz do jednego paragrafu
+                                if (!hasContent)
+                                {
+                                    var cellPara = new Paragraph();
+                                    AppendInlineContent(cellPara, cellNode);
+                                    cell.Append(cellPara);
+                                    hasContent = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Jeśli komórka jest pusta, dodaj pusty paragraf (wymagany w Word)
+                        if (!hasContent)
+                        {
+                            cell.Append(new Paragraph());
+                        }
 
                         row.Append(cell);
                     }

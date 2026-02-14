@@ -770,7 +770,26 @@ public class DocxToHtmlConverter
     private string ConvertTableToHtml(Table table, WordprocessingDocument document)
     {
         var html = new StringBuilder();
-        html.Append("<table style=\"border-collapse:collapse;width:100%;margin:10px 0;\">");
+        
+        // Pobierz szerokość tabeli
+        var tableWidth = "auto";
+        var tableProps = table.GetFirstChild<TableProperties>();
+        if (tableProps?.TableWidth?.Width?.Value != null)
+        {
+            var width = tableProps.TableWidth;
+            if (width.Type?.Value == TableWidthUnitValues.Pct)
+            {
+                var pctValue = int.Parse(width.Width.Value) / 50;
+                tableWidth = $"{pctValue}%";
+            }
+            else if (width.Type?.Value == TableWidthUnitValues.Dxa)
+            {
+                var pxValue = TwipsToPx(int.Parse(width.Width.Value));
+                tableWidth = $"{pxValue}px";
+            }
+        }
+        
+        html.Append($"<table style=\"border-collapse:collapse;width:{tableWidth};margin:10px 0;\">");
 
         foreach (var row in table.Elements<TableRow>())
         {
@@ -778,8 +797,36 @@ public class DocxToHtmlConverter
             
             foreach (var cell in row.Elements<TableCell>())
             {
+                var cellProps = cell.TableCellProperties;
                 var cellStyle = GetTableCellStyle(cell);
-                html.Append($"<td style=\"{cellStyle}\">");
+                
+                // Sprawdź colspan (GridSpan)
+                var colspan = "";
+                var gridSpan = cellProps?.GridSpan;
+                if (gridSpan?.Val?.Value != null && gridSpan.Val.Value > 1)
+                {
+                    colspan = $" colspan=\"{gridSpan.Val.Value}\"";
+                }
+                
+                // Sprawdź rowspan (VerticalMerge)
+                var rowspan = "";
+                var vMerge = cellProps?.VerticalMerge;
+                if (vMerge != null && vMerge.Val?.Value == MergedCellValues.Restart)
+                {
+                    // Policz ile wierszy jest scalonych
+                    var rowSpanCount = CountRowSpan(table, row, cell);
+                    if (rowSpanCount > 1)
+                    {
+                        rowspan = $" rowspan=\"{rowSpanCount}\"";
+                    }
+                }
+                else if (vMerge != null && vMerge.Val == null)
+                {
+                    // Ta komórka jest kontynuacją merge - pomiń ją
+                    continue;
+                }
+                
+                html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
                 
                 foreach (var para in cell.Elements<Paragraph>())
                 {
@@ -794,6 +841,38 @@ public class DocxToHtmlConverter
 
         html.Append("</table>");
         return html.ToString();
+    }
+    
+    /// <summary>
+    /// Liczy rowspan dla komórki z VerticalMerge Restart
+    /// </summary>
+    private int CountRowSpan(Table table, TableRow startRow, TableCell startCell)
+    {
+        var rows = table.Elements<TableRow>().ToList();
+        var startRowIndex = rows.IndexOf(startRow);
+        var cellIndex = startRow.Elements<TableCell>().ToList().IndexOf(startCell);
+        
+        var rowSpan = 1;
+        for (int i = startRowIndex + 1; i < rows.Count; i++)
+        {
+            var cells = rows[i].Elements<TableCell>().ToList();
+            if (cellIndex >= cells.Count) break;
+            
+            var cell = cells[cellIndex];
+            var vMerge = cell.TableCellProperties?.VerticalMerge;
+            
+            // Jeśli ma VerticalMerge bez wartości (kontynuacja) lub z Continue
+            if (vMerge != null && (vMerge.Val == null || vMerge.Val.Value == MergedCellValues.Continue))
+            {
+                rowSpan++;
+            }
+            else
+            {
+                break;
+            }
+        }
+        
+        return rowSpan;
     }
 
     /// <summary>

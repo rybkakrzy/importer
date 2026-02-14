@@ -14,12 +14,37 @@ import { EditorCommand, EditorState, HeadingLevel, DocumentStyle } from '../../m
 /** Domyślne style Word */
 const DEFAULT_WORD_STYLES: DocumentStyle[] = [
   {
+    id: 'Title',
+    name: 'Tytuł',
+    type: 'paragraph',
+    fontFamily: 'Calibri Light',
+    fontSize: 28,
+    color: '#000000',
+    isBold: false,
+    isItalic: false,
+    isUnderline: false
+  },
+  {
+    id: 'Subtitle',
+    name: 'Podtytuł',
+    type: 'paragraph',
+    fontFamily: 'Calibri',
+    fontSize: 14,
+    color: '#5A5A5A',
+    isBold: false,
+    isItalic: true,
+    isUnderline: false
+  },
+  {
     id: 'Normal',
     name: 'Normalny',
     type: 'paragraph',
     fontFamily: 'Calibri',
     fontSize: 11,
     color: '#000000',
+    isBold: false,
+    isItalic: false,
+    isUnderline: false,
     alignment: 'left',
     spaceAfter: 8,
     lineSpacing: 1.08
@@ -32,6 +57,8 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
     fontSize: 16,
     color: '#2F5496',
     isBold: true,
+    isItalic: false,
+    isUnderline: false,
     spaceBefore: 12,
     outlineLevel: 1
   },
@@ -43,6 +70,8 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
     fontSize: 13,
     color: '#2F5496',
     isBold: true,
+    isItalic: false,
+    isUnderline: false,
     spaceBefore: 2,
     outlineLevel: 2
   },
@@ -54,6 +83,8 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
     fontSize: 12,
     color: '#1F3763',
     isBold: true,
+    isItalic: false,
+    isUnderline: false,
     spaceBefore: 2,
     outlineLevel: 3
   },
@@ -66,6 +97,7 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
     color: '#2F5496',
     isBold: true,
     isItalic: true,
+    isUnderline: false,
     outlineLevel: 4
   },
   {
@@ -75,6 +107,9 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
     fontFamily: 'Calibri Light',
     fontSize: 11,
     color: '#2F5496',
+    isBold: false,
+    isItalic: false,
+    isUnderline: false,
     outlineLevel: 5
   },
   {
@@ -84,7 +119,9 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
     fontFamily: 'Calibri Light',
     fontSize: 11,
     color: '#1F3763',
+    isBold: false,
     isItalic: true,
+    isUnderline: false,
     outlineLevel: 6
   }
 ];
@@ -171,11 +208,13 @@ export class EditorToolbarComponent {
   private styleIdToCommand(styleId: string): string {
     const id = styleId.toLowerCase();
     if (id === 'normal') return 'paragraph';
+    if (id === 'title') return 'title';
+    if (id === 'subtitle') return 'subtitle';
     if (id.startsWith('heading')) {
       const level = id.replace('heading', '');
       return `heading${level}`;
     }
-    return 'paragraph';
+    return styleId.toLowerCase();
   }
 
   /**
@@ -193,13 +232,12 @@ export class EditorToolbarComponent {
     const format = select.value as EditorCommand;
     this.selectedBlockFormat.set(format);
     
-    // Znajdź styl i wyemituj go
+    // Znajdź styl i wyemituj go - applyDocumentStyle zajmie się wszystkim
     const selectedFormat = this.blockFormats().find(f => f.value === format);
     if (selectedFormat) {
       this.styleChange.emit(selectedFormat.style);
     }
-    
-    this.executeCommand(format);
+    // Nie emitujemy już executeCommand - applyDocumentStyle robi wszystko
   }
 
   /**

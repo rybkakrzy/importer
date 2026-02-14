@@ -129,6 +129,8 @@ export interface EditorState {
   canRedo: boolean;
   wordCount: number;
   characterCount: number;
+  fontSize?: number;
+  fontFamily?: string;
   currentFormatting: TextFormatting;
   currentStyle: Partial<ParagraphStyle>;
 }
@@ -147,10 +149,13 @@ export type EditorCommand =
   | 'bold' | 'italic' | 'underline' | 'strikethrough'
   | 'subscript' | 'superscript'
   | 'alignLeft' | 'alignCenter' | 'alignRight' | 'alignJustify'
+  | 'justifyLeft' | 'justifyCenter' | 'justifyRight' | 'justifyFull'
   | 'indent' | 'outdent'
   | 'bulletList' | 'numberedList'
+  | 'insertUnorderedList' | 'insertOrderedList'
   | 'insertLink' | 'insertImage' | 'insertTable'
   | 'undo' | 'redo'
+  | 'selectAll'
   | 'removeFormat'
   | 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'heading5' | 'heading6'
   | 'paragraph';

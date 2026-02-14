@@ -1,36 +1,64 @@
-<div class="wysiwyg-editor" [class.landscape]="pageOrientation === 'landscape'">
-  <!-- Linie marginesów na kartce -->
-  @if (showMarginGuides) {
-    <div class="margin-guides">
-      <div class="margin-guide margin-guide-top" [style.top.px]="pageMargins.top * 37.8"></div>
-      <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMargins.bottom * 37.8"></div>
-      <div class="margin-guide margin-guide-left" [style.left.px]="pageMargins.left * 37.8"></div>
-      <div class="margin-guide margin-guide-right" [style.right.px]="pageMargins.right * 37.8"></div>
-      <!-- Narożniki marginesów -->
-      <div class="margin-corner top-left" 
-           [style.top.px]="pageMargins.top * 37.8" 
-           [style.left.px]="pageMargins.left * 37.8"></div>
-      <div class="margin-corner top-right" 
-           [style.top.px]="pageMargins.top * 37.8" 
-           [style.right.px]="pageMargins.right * 37.8"></div>
-      <div class="margin-corner bottom-left" 
-           [style.bottom.px]="pageMargins.bottom * 37.8" 
-           [style.left.px]="pageMargins.left * 37.8"></div>
-      <div class="margin-corner bottom-right" 
-           [style.bottom.px]="pageMargins.bottom * 37.8" 
-           [style.right.px]="pageMargins.right * 37.8"></div>
-    </div>
-  }
-  
-  <div 
-    #editorContent
-    class="editor-content"
-    contenteditable="true"
-    spellcheck="true"
-    [attr.placeholder]="'Zacznij pisać...'"
-    [style.padding-top.px]="pageMargins.top * 37.8"
-    [style.padding-bottom.px]="pageMargins.bottom * 37.8"
-    [style.padding-left.px]="pageMargins.left * 37.8"
-    [style.padding-right.px]="pageMargins.right * 37.8"
-  ></div>
+<div class="wysiwyg-editor-wrapper">
+  <div class="pages-container">
+    <!-- Każda strona A4 -->
+    @for (page of pages(); track $index) {
+      <div class="page-wrapper">
+        <div class="page" 
+             [class.landscape]="pageOrientation === 'landscape'"
+             [attr.data-page-number]="$index + 1">
+          <!-- Linie marginesów na kartce -->
+          @if (showMarginGuides && $index === 0) {
+            <div class="margin-guides">
+              <div class="margin-guide margin-guide-top" [style.top.px]="pageMargins.top * 37.8"></div>
+              <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMargins.bottom * 37.8"></div>
+              <div class="margin-guide margin-guide-left" [style.left.px]="pageMargins.left * 37.8"></div>
+              <div class="margin-guide margin-guide-right" [style.right.px]="pageMargins.right * 37.8"></div>
+              <!-- Narożniki marginesów -->
+              <div class="margin-corner top-left" 
+                   [style.top.px]="pageMargins.top * 37.8" 
+                   [style.left.px]="pageMargins.left * 37.8"></div>
+              <div class="margin-corner top-right" 
+                   [style.top.px]="pageMargins.top * 37.8" 
+                   [style.right.px]="pageMargins.right * 37.8"></div>
+              <div class="margin-corner bottom-left" 
+                   [style.bottom.px]="pageMargins.bottom * 37.8" 
+                   [style.left.px]="pageMargins.left * 37.8"></div>
+              <div class="margin-corner bottom-right" 
+                   [style.bottom.px]="pageMargins.bottom * 37.8" 
+                   [style.right.px]="pageMargins.right * 37.8"></div>
+            </div>
+          }
+          
+          @if ($index === 0) {
+            <div 
+              #editorContent
+              class="editor-content"
+              contenteditable="true"
+              spellcheck="true"
+              [attr.placeholder]="'Zacznij pisać...'"
+              [style.padding-top.px]="pageMargins.top * 37.8"
+              [style.padding-bottom.px]="pageMargins.bottom * 37.8"
+              [style.padding-left.px]="pageMargins.left * 37.8"
+              [style.padding-right.px]="pageMargins.right * 37.8"
+              (mouseup)="saveSelection()"
+              (keyup)="saveSelection()"
+            ></div>
+          } @else {
+            <div class="page-overflow-content"
+                 [style.padding-top.px]="pageMargins.top * 37.8"
+                 [style.padding-bottom.px]="pageMargins.bottom * 37.8"
+                 [style.padding-left.px]="pageMargins.left * 37.8"
+                 [style.padding-right.px]="pageMargins.right * 37.8"
+                 [innerHTML]="page">
+            </div>
+          }
+        </div>
+        
+        <!-- Separator między stronami - styl Google Docs -->
+        @if ($index < pages().length - 1) {
+          <div class="page-separator"></div>
+        }
+      </div>
+    }
+  </div>
 </div>

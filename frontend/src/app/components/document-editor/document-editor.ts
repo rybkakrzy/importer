@@ -2,7 +2,8 @@ import {
   Component, 
   ViewChild, 
   inject,
-  signal 
+  signal,
+  HostListener
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -57,8 +58,13 @@ export class DocumentEditorComponent {
   // Stan UI
   isLoading = signal(false);
   showMenu = signal(false);
+  showEditMenu = signal(false);
+  showFormatMenu = signal(false);
+  showInsertMenu = signal(false);
+  activeSubmenu = signal<string | null>(null);
   showTemplates = signal(false);
   showAbout = signal(false);
+  showFindReplace = signal(false);
   errorMessage = signal<string | null>(null);
   successMessage = signal<string | null>(null);
   
@@ -68,6 +74,10 @@ export class DocumentEditorComponent {
   // Zoom
   zoomLevel = signal(100);
   zoomLevels = [50, 75, 100, 125, 150, 200];
+
+  // Strony
+  currentPage = signal(1);
+  totalPages = signal(1);
 
   // Ustawienia strony
   showPageSetup = signal(false);
@@ -359,31 +369,9 @@ export class DocumentEditorComponent {
    * Obsługa zmiany stylu dokumentu
    */
   onStyleChange(style: DocumentStyle): void {
-    // Zastosuj styl do zaznaczenia
+    // Zastosuj pełny styl do zaznaczenia
     if (this.editor) {
-      // Zastosuj właściwości czcionki ze stylu
-      if (style.fontFamily) {
-        this.editor.setFontFamily(style.fontFamily);
-      }
-      if (style.fontSize) {
-        this.editor.setFontSize(style.fontSize);
-      }
-      if (style.color) {
-        this.editor.setTextColor(style.color);
-      }
-      if (style.isBold !== undefined) {
-        // Jeśli styl wymaga bold a tekst nie jest bold - lub odwrotnie
-        const currentState = this.editorState()?.currentFormatting?.bold ?? false;
-        if (style.isBold !== currentState) {
-          this.editor.executeCommand('bold');
-        }
-      }
-      if (style.isItalic !== undefined) {
-        const currentState = this.editorState()?.currentFormatting?.italic ?? false;
-        if (style.isItalic !== currentState) {
-          this.editor.executeCommand('italic');
-        }
-      }
+      this.editor.applyDocumentStyle(style);
     }
   }
 
@@ -410,6 +398,44 @@ export class DocumentEditorComponent {
    */
   setZoom(level: number): void {
     this.zoomLevel.set(level);
+  }
+
+  /**
+   * Obsługuje scroll aby aktualizować bieżącą stronę
+   */
+  onEditorScroll(event: Event): void {
+    const container = event.target as HTMLElement;
+    const scrollTop = container.scrollTop;
+    const scale = this.zoomLevel() / 100;
+    
+    // Wysokość strony A4 w pikselach + margines
+    const PAGE_HEIGHT = 1122;
+    const PAGE_GAP = 40; // gap między stronami + separator
+    const PADDING_TOP = 20; // padding containera
+    
+    // Oblicz wysokość strony z uwzględnieniem skali
+    const scaledPageHeight = PAGE_HEIGHT * scale;
+    const scaledGap = PAGE_GAP * scale;
+    
+    // Oblicz pozycję środka widocznego obszaru
+    const viewportCenter = scrollTop + (container.clientHeight / 2) - (PADDING_TOP * scale);
+    
+    // Oblicz bieżącą stronę
+    const currentPageNum = Math.floor(viewportCenter / (scaledPageHeight + scaledGap)) + 1;
+    const maxPages = this.totalPages();
+    
+    this.currentPage.set(Math.min(Math.max(1, currentPageNum), maxPages));
+  }
+
+  /**
+   * Obsługuje zmianę liczby stron
+   */
+  onPagesChange(pageCount: number): void {
+    this.totalPages.set(pageCount);
+    // Upewnij się, że currentPage nie jest większa niż totalPages
+    if (this.currentPage() > pageCount) {
+      this.currentPage.set(pageCount);
+    }
   }
 
   /**
@@ -440,8 +466,503 @@ export class DocumentEditorComponent {
    * Toggle menu
    */
   toggleMenu(): void {
-    this.showMenu.update(v => !v);
+    const wasOpen = this.showMenu();
+    this.closeAllMenus();
+    this.showMenu.set(!wasOpen);
+  }
+
+  /**
+   * Toggle menu Edytuj
+   */
+  toggleEditMenu(): void {
+    const wasOpen = this.showEditMenu();
+    this.closeAllMenus();
+    this.showEditMenu.set(!wasOpen);
+  }
+
+  /**
+   * Toggle menu Format
+   */
+  toggleFormatMenu(): void {
+    const wasOpen = this.showFormatMenu();
+    this.closeAllMenus();
+    this.showFormatMenu.set(!wasOpen);
+  }
+
+  /**
+   * Toggle menu Wstaw
+   */
+  toggleInsertMenu(): void {
+    const wasOpen = this.showInsertMenu();
+    this.closeAllMenus();
+    this.showInsertMenu.set(!wasOpen);
+  }
+
+  /**
+   * Zamyka menu po kliknięciu poza obszarem menu
+   */
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    // Sprawdź czy kliknięto w obszarze menu
+    const isMenuArea = target.closest('.menu-bar') || 
+                       target.closest('.dropdown-menu');
+    // Jeśli kliknięto poza menu - zamknij
+    if (!isMenuArea) {
+      this.closeAllMenus();
+    }
+  }
+
+  /**
+   * Zamyka wszystkie menu
+   */
+  closeAllMenus(): void {
+    this.showMenu.set(false);
+    this.showEditMenu.set(false);
+    this.showFormatMenu.set(false);
+    this.showInsertMenu.set(false);
+    this.activeSubmenu.set(null);
     this.showTemplates.set(false);
+  }
+
+  /**
+   * Ustawia aktywne podmenu
+   */
+  setActiveSubmenu(submenu: string | null): void {
+    this.activeSubmenu.set(submenu);
+  }
+
+  // =====================
+  // MENU EDYTUJ
+  // =====================
+
+  /**
+   * Cofnij
+   */
+  undo(): void {
+    this.editor?.executeCommand('undo');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Ponów
+   */
+  redo(): void {
+    this.editor?.executeCommand('redo');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wytnij
+   */
+  cut(): void {
+    document.execCommand('cut');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Kopiuj
+   */
+  copy(): void {
+    document.execCommand('copy');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wklej
+   */
+  paste(): void {
+    navigator.clipboard.readText().then(text => {
+      this.editor?.insertText(text);
+    }).catch(() => {
+      document.execCommand('paste');
+    });
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wklej bez formatowania
+   */
+  pasteWithoutFormatting(): void {
+    navigator.clipboard.readText().then(text => {
+      this.editor?.insertText(text);
+    });
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zaznacz wszystko
+   */
+  selectAll(): void {
+    this.editor?.executeCommand('selectAll');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Usuń zaznaczenie
+   */
+  deleteSelection(): void {
+    document.execCommand('delete');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Otwiera dialog Znajdź i zamień
+   */
+  openFindReplace(): void {
+    this.showFindReplace.set(true);
+    this.closeAllMenus();
+  }
+
+  // =====================
+  // MENU FORMATUJ
+  // =====================
+
+  /**
+   * Pogrubienie
+   */
+  toggleBold(): void {
+    this.editor?.executeCommand('bold');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Kursywa
+   */
+  toggleItalic(): void {
+    this.editor?.executeCommand('italic');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Podkreślenie
+   */
+  toggleUnderline(): void {
+    this.editor?.executeCommand('underline');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Przekreślenie
+   */
+  toggleStrikethrough(): void {
+    this.editor?.executeCommand('strikethrough');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Indeks górny
+   */
+  toggleSuperscript(): void {
+    this.editor?.executeCommand('superscript');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Indeks dolny
+   */
+  toggleSubscript(): void {
+    this.editor?.executeCommand('subscript');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zwiększ rozmiar czcionki
+   */
+  increaseFontSize(): void {
+    const currentSize = this.editorState()?.fontSize || 11;
+    this.editor?.setFontSize(currentSize + 1);
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zmniejsz rozmiar czcionki
+   */
+  decreaseFontSize(): void {
+    const currentSize = this.editorState()?.fontSize || 11;
+    if (currentSize > 1) {
+      this.editor?.setFontSize(currentSize - 1);
+    }
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zmień na wielkie litery
+   */
+  toUpperCase(): void {
+    const selection = window.getSelection();
+    if (selection && selection.toString()) {
+      const text = selection.toString().toUpperCase();
+      document.execCommand('insertText', false, text);
+    }
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zmień na małe litery
+   */
+  toLowerCase(): void {
+    const selection = window.getSelection();
+    if (selection && selection.toString()) {
+      const text = selection.toString().toLowerCase();
+      document.execCommand('insertText', false, text);
+    }
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zmień na Kapitaliki (każde słowo z wielkiej litery)
+   */
+  toTitleCase(): void {
+    const selection = window.getSelection();
+    if (selection && selection.toString()) {
+      const text = selection.toString().replace(/\b\w/g, l => l.toUpperCase());
+      document.execCommand('insertText', false, text);
+    }
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wyrównaj do lewej
+   */
+  alignLeft(): void {
+    this.editor?.executeCommand('justifyLeft');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wyrównaj do środka
+   */
+  alignCenter(): void {
+    this.editor?.executeCommand('justifyCenter');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wyrównaj do prawej
+   */
+  alignRight(): void {
+    this.editor?.executeCommand('justifyRight');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wyjustuj
+   */
+  alignJustify(): void {
+    this.editor?.executeCommand('justifyFull');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zwiększ wcięcie
+   */
+  increaseIndent(): void {
+    this.editor?.executeCommand('indent');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zmniejsz wcięcie
+   */
+  decreaseIndent(): void {
+    this.editor?.executeCommand('outdent');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Interlinia pojedyncza
+   */
+  setLineSpacingSingle(): void {
+    this.setLineSpacing(1);
+  }
+
+  /**
+   * Interlinia 1.15
+   */
+  setLineSpacing115(): void {
+    this.setLineSpacing(1.15);
+  }
+
+  /**
+   * Interlinia 1.5
+   */
+  setLineSpacing15(): void {
+    this.setLineSpacing(1.5);
+  }
+
+  /**
+   * Interlinia podwójna
+   */
+  setLineSpacingDouble(): void {
+    this.setLineSpacing(2);
+  }
+
+  /**
+   * Ustawia interlinię
+   */
+  private setLineSpacing(value: number): void {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      let block = range.startContainer as Node;
+      if (block.nodeType === Node.TEXT_NODE) {
+        block = block.parentNode!;
+      }
+      // Znajdź blok
+      while (block && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'].includes((block as HTMLElement).tagName)) {
+        block = block.parentNode!;
+      }
+      if (block) {
+        (block as HTMLElement).style.lineHeight = value.toString();
+      }
+    }
+    this.closeAllMenus();
+  }
+
+  /**
+   * Dodaj odstęp przed akapitem
+   */
+  addSpaceBefore(): void {
+    this.setBlockSpacing('marginTop', '12pt');
+  }
+
+  /**
+   * Usuń odstęp przed akapitem
+   */
+  removeSpaceBefore(): void {
+    this.setBlockSpacing('marginTop', '0');
+  }
+
+  /**
+   * Dodaj odstęp po akapicie
+   */
+  addSpaceAfter(): void {
+    this.setBlockSpacing('marginBottom', '12pt');
+  }
+
+  /**
+   * Usuń odstęp po akapicie
+   */
+  removeSpaceAfter(): void {
+    this.setBlockSpacing('marginBottom', '0');
+  }
+
+  /**
+   * Ustawia odstęp bloku
+   */
+  private setBlockSpacing(property: 'marginTop' | 'marginBottom', value: string): void {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      let block = range.startContainer as Node;
+      if (block.nodeType === Node.TEXT_NODE) {
+        block = block.parentNode!;
+      }
+      while (block && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'].includes((block as HTMLElement).tagName)) {
+        block = block.parentNode!;
+      }
+      if (block) {
+        (block as HTMLElement).style[property] = value;
+      }
+    }
+    this.closeAllMenus();
+  }
+
+  /**
+   * Lista punktowana
+   */
+  insertBulletList(): void {
+    this.editor?.executeCommand('insertUnorderedList');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Lista numerowana
+   */
+  insertNumberedList(): void {
+    this.editor?.executeCommand('insertOrderedList');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wyczyść formatowanie
+   */
+  clearFormatting(): void {
+    this.editor?.executeCommand('removeFormat');
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wstawia linię poziomą
+   */
+  insertHorizontalLine(): void {
+    this.editor?.insertHorizontalRule();
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wstawia podział strony
+   */
+  insertPageBreak(): void {
+    this.editor?.insertPageBreak();
+    this.closeAllMenus();
+  }
+
+  /**
+   * Przełącza widok marginesów
+   */
+  toggleMarginGuides(): void {
+    this.showMarginGuides.update(v => !v);
+    this.closeAllMenus();
+  }
+
+  // =====================
+  // ZNAJDŹ I ZAMIEŃ
+  // =====================
+  findText = signal('');
+  replaceText = signal('');
+
+  /**
+   * Znajdź następny
+   */
+  findNext(): void {
+    const text = this.findText();
+    if (!text) return;
+
+    // Użyj natywnej funkcji window.find
+    (window as any).find(text);
+  }
+
+  /**
+   * Zamień
+   */
+  replaceOne(): void {
+    const findStr = this.findText();
+    const replaceStr = this.replaceText();
+    if (!findStr) return;
+
+    const selection = window.getSelection();
+    if (selection && selection.toString() === findStr) {
+      document.execCommand('insertText', false, replaceStr);
+      this.findNext();
+    } else {
+      this.findNext();
+    }
+  }
+
+  /**
+   * Zamień wszystko
+   */
+  replaceAll(): void {
+    const findStr = this.findText();
+    const replaceStr = this.replaceText();
+    if (!findStr) return;
+
+    const content = this.editor?.getContent() || '';
+    const newContent = content.split(findStr).join(replaceStr);
+    this.editor?.setContent(newContent);
+    this.showSuccess(`Zamieniono wszystkie wystąpienia "${findStr}"`);
   }
 
   /**

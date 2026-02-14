@@ -12,8 +12,9 @@
       
       <!-- Menu główne -->
       <nav class="main-menu">
+        <!-- PLIK -->
         <div class="menu-item-wrapper">
-          <button class="menu-item" (click)="toggleMenu()">Plik</button>
+          <button class="menu-item" (click)="toggleMenu(); $event.stopPropagation()">Plik</button>
           
           @if (showMenu()) {
             <div class="dropdown-menu" (click)="$event.stopPropagation()">
@@ -43,7 +44,7 @@
                 Zapisz jako...
               </button>
               <div class="dropdown-separator"></div>
-              <button class="dropdown-item" (click)="openPageSetup(); showMenu.set(false)">
+              <button class="dropdown-item" (click)="openPageSetup(); closeAllMenus()">
                 <svg viewBox="0 0 24 24" width="18" height="18">
                   <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z"/>
                 </svg>
@@ -52,13 +53,303 @@
             </div>
           }
         </div>
-        
-        <button class="menu-item" (click)="editor?.executeCommand('undo')" [disabled]="!editorState()?.canUndo">
-          Cofnij
-        </button>
-        <button class="menu-item" (click)="editor?.executeCommand('redo')" [disabled]="!editorState()?.canRedo">
-          Ponów
-        </button>
+
+        <!-- EDYTUJ -->
+        <div class="menu-item-wrapper">
+          <button class="menu-item" (click)="toggleEditMenu(); $event.stopPropagation()">Edytuj</button>
+          
+          @if (showEditMenu()) {
+            <div class="dropdown-menu" (click)="$event.stopPropagation()">
+              <button class="dropdown-item" (click)="undo()" [disabled]="!editorState()?.canUndo">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/>
+                </svg>
+                Cofnij
+                <span class="shortcut">Ctrl+Z</span>
+              </button>
+              <button class="dropdown-item" (click)="redo()" [disabled]="!editorState()?.canRedo">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/>
+                </svg>
+                Ponów
+                <span class="shortcut">Ctrl+Y</span>
+              </button>
+              <div class="dropdown-separator"></div>
+              <button class="dropdown-item" (click)="cut()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M9.64 7.64c.23-.5.36-1.05.36-1.64 0-2.21-1.79-4-4-4S2 3.79 2 6s1.79 4 4 4c.59 0 1.14-.13 1.64-.36L10 12l-2.36 2.36C7.14 14.13 6.59 14 6 14c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4c0-.59-.13-1.14-.36-1.64L12 14l7 7h3v-1L9.64 7.64zM6 8c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm0 12c-1.1 0-2-.89-2-2s.9-2 2-2 2 .89 2 2-.9 2-2 2zm6-7.5c-.28 0-.5-.22-.5-.5s.22-.5.5-.5.5.22.5.5-.22.5-.5.5zM19 3l-6 6 2 2 7-7V3h-3z"/>
+                </svg>
+                Wytnij
+                <span class="shortcut">Ctrl+X</span>
+              </button>
+              <button class="dropdown-item" (click)="copy()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+                </svg>
+                Kopiuj
+                <span class="shortcut">Ctrl+C</span>
+              </button>
+              <button class="dropdown-item" (click)="paste()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/>
+                </svg>
+                Wklej
+                <span class="shortcut">Ctrl+V</span>
+              </button>
+              <button class="dropdown-item" (click)="pasteWithoutFormatting()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/>
+                </svg>
+                Wklej bez formatowania
+                <span class="shortcut">Ctrl+Shift+V</span>
+              </button>
+              <div class="dropdown-separator"></div>
+              <button class="dropdown-item" (click)="selectAll()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2z"/>
+                </svg>
+                Zaznacz wszystko
+                <span class="shortcut">Ctrl+A</span>
+              </button>
+              <button class="dropdown-item" (click)="deleteSelection()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                </svg>
+                Usuń
+              </button>
+              <div class="dropdown-separator"></div>
+              <button class="dropdown-item" (click)="openFindReplace()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+                </svg>
+                Znajdź i zamień
+                <span class="shortcut">Ctrl+H</span>
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- WSTAW -->
+        <div class="menu-item-wrapper">
+          <button class="menu-item" (click)="toggleInsertMenu(); $event.stopPropagation()">Wstaw</button>
+          
+          @if (showInsertMenu()) {
+            <div class="dropdown-menu" (click)="$event.stopPropagation()">
+              <button class="dropdown-item" (click)="onInsertImage()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
+                </svg>
+                Obraz
+              </button>
+              <div class="menu-item-with-submenu" (mouseenter)="setActiveSubmenu('table')" (mouseleave)="setActiveSubmenu(null)">
+                <button class="dropdown-item">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M3 3v18h18V3H3zm8 16H5v-6h6v6zm0-8H5V5h6v6zm8 8h-6v-6h6v6zm0-8h-6V5h6v6z"/>
+                  </svg>
+                  Tabela
+                  <span class="submenu-arrow">▸</span>
+                </button>
+                @if (activeSubmenu() === 'table') {
+                  <div class="submenu">
+                    <button class="dropdown-item" (click)="onInsertTable('2x2')">Tabela 2×2</button>
+                    <button class="dropdown-item" (click)="onInsertTable('3x3')">Tabela 3×3</button>
+                    <button class="dropdown-item" (click)="onInsertTable('4x4')">Tabela 4×4</button>
+                    <button class="dropdown-item" (click)="onInsertTable('5x5')">Tabela 5×5</button>
+                  </div>
+                }
+              </div>
+              <div class="dropdown-separator"></div>
+              <button class="dropdown-item" (click)="insertHorizontalLine()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M4 11h16v2H4z"/>
+                </svg>
+                Linia pozioma
+              </button>
+              <button class="dropdown-item" (click)="insertPageBreak()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M18 20H6v-3H4v3c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-3h-2v3zM6 4h12v3h2V4c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v3h2V4zm5 8h2v2h-2v-2zm-4 0h2v2H7v-2zm8 0h2v2h-2v-2z"/>
+                </svg>
+                Podział strony
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- FORMATUJ -->
+        <div class="menu-item-wrapper">
+          <button class="menu-item" (click)="toggleFormatMenu(); $event.stopPropagation()">Formatuj</button>
+          
+          @if (showFormatMenu()) {
+            <div class="dropdown-menu dropdown-menu-wide" (click)="$event.stopPropagation()">
+              <!-- Tekst submenu -->
+              <div class="menu-item-with-submenu" (mouseenter)="setActiveSubmenu('text')" (mouseleave)="setActiveSubmenu(null)">
+                <button class="dropdown-item">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M9.93 13.5h4.14L12 7.98 9.93 13.5zM20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4.05 16.5l-1.14-3H9.17l-1.12 3H5.96l5.11-13h1.86l5.11 13h-2.09z"/>
+                  </svg>
+                  Tekst
+                  <span class="submenu-arrow">▸</span>
+                </button>
+                @if (activeSubmenu() === 'text') {
+                  <div class="submenu">
+                    <button class="dropdown-item" (click)="toggleBold()">
+                      <strong>B</strong> Pogrubienie
+                      <span class="shortcut">Ctrl+B</span>
+                    </button>
+                    <button class="dropdown-item" (click)="toggleItalic()">
+                      <em>I</em> Kursywa
+                      <span class="shortcut">Ctrl+I</span>
+                    </button>
+                    <button class="dropdown-item" (click)="toggleUnderline()">
+                      <u>U</u> Podkreślenie
+                      <span class="shortcut">Ctrl+U</span>
+                    </button>
+                    <button class="dropdown-item" (click)="toggleStrikethrough()">
+                      <s>S</s> Przekreślenie
+                      <span class="shortcut">Alt+Shift+5</span>
+                    </button>
+                    <button class="dropdown-item" (click)="toggleSuperscript()">
+                      X<sup>2</sup> Indeks górny
+                      <span class="shortcut">Ctrl+.</span>
+                    </button>
+                    <button class="dropdown-item" (click)="toggleSubscript()">
+                      X<sub>2</sub> Indeks dolny
+                      <span class="shortcut">Ctrl+,</span>
+                    </button>
+                    <div class="dropdown-separator"></div>
+                    <div class="submenu-header">Rozmiar</div>
+                    <button class="dropdown-item" (click)="increaseFontSize()">Zwiększ rozmiar</button>
+                    <button class="dropdown-item" (click)="decreaseFontSize()">Zmniejsz rozmiar</button>
+                    <div class="dropdown-separator"></div>
+                    <div class="submenu-header">Wielkość liter</div>
+                    <button class="dropdown-item" (click)="toUpperCase()">WIELKIE LITERY</button>
+                    <button class="dropdown-item" (click)="toLowerCase()">małe litery</button>
+                    <button class="dropdown-item" (click)="toTitleCase()">Jak W Tytule</button>
+                  </div>
+                }
+              </div>
+
+              <!-- Wyrównanie i wcięcia -->
+              <div class="menu-item-with-submenu" (mouseenter)="setActiveSubmenu('align')" (mouseleave)="setActiveSubmenu(null)">
+                <button class="dropdown-item">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M3 21h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18V7H3v2zm0-6v2h18V3H3z"/>
+                  </svg>
+                  Wyrównanie i wcięcia
+                  <span class="submenu-arrow">▸</span>
+                </button>
+                @if (activeSubmenu() === 'align') {
+                  <div class="submenu">
+                    <button class="dropdown-item" (click)="alignLeft()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zm0 8h18v-2H3v2zM3 3v2h18V3H3z"/></svg>
+                      Wyrównaj do lewej
+                    </button>
+                    <button class="dropdown-item" (click)="alignCenter()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/></svg>
+                      Wyrównaj do środka
+                    </button>
+                    <button class="dropdown-item" (click)="alignRight()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/></svg>
+                      Wyrównaj do prawej
+                    </button>
+                    <button class="dropdown-item" (click)="alignJustify()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 21h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18V7H3v2zm0-6v2h18V3H3z"/></svg>
+                      Wyjustuj
+                    </button>
+                    <div class="dropdown-separator"></div>
+                    <button class="dropdown-item" (click)="increaseIndent()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 21h18v-2H3v2zM3 8v8l4-4-4-4zm8 9h10v-2H11v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg>
+                      Zwiększ wcięcie
+                    </button>
+                    <button class="dropdown-item" (click)="decreaseIndent()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M11 17h10v-2H11v2zm-8-5l4 4V8l-4 4zm0 9h18v-2H3v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg>
+                      Zmniejsz wcięcie
+                    </button>
+                  </div>
+                }
+              </div>
+
+              <!-- Odstępy -->
+              <div class="menu-item-with-submenu" (mouseenter)="setActiveSubmenu('spacing')" (mouseleave)="setActiveSubmenu(null)">
+                <button class="dropdown-item">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M6 7h2.5L5 3.5 1.5 7H4v10H1.5L5 20.5 8.5 17H6V7zm4-2v2h12V5H10zm0 14h12v-2H10v2zm0-6h12v-2H10v2z"/>
+                  </svg>
+                  Odstępy między wierszami
+                  <span class="submenu-arrow">▸</span>
+                </button>
+                @if (activeSubmenu() === 'spacing') {
+                  <div class="submenu">
+                    <div class="submenu-header">Interlinia</div>
+                    <button class="dropdown-item" (click)="setLineSpacingSingle()">Pojedyncza</button>
+                    <button class="dropdown-item" (click)="setLineSpacing115()">1,15</button>
+                    <button class="dropdown-item" (click)="setLineSpacing15()">1,5</button>
+                    <button class="dropdown-item" (click)="setLineSpacingDouble()">Podwójna</button>
+                    <div class="dropdown-separator"></div>
+                    <div class="submenu-header">Odstęp przed akapitem</div>
+                    <button class="dropdown-item" (click)="addSpaceBefore()">Dodaj odstęp przed</button>
+                    <button class="dropdown-item" (click)="removeSpaceBefore()">Usuń odstęp przed</button>
+                    <div class="dropdown-separator"></div>
+                    <div class="submenu-header">Odstęp po akapicie</div>
+                    <button class="dropdown-item" (click)="addSpaceAfter()">Dodaj odstęp po</button>
+                    <button class="dropdown-item" (click)="removeSpaceAfter()">Usuń odstęp po</button>
+                  </div>
+                }
+              </div>
+
+              <!-- Listy -->
+              <div class="menu-item-with-submenu" (mouseenter)="setActiveSubmenu('lists')" (mouseleave)="setActiveSubmenu(null)">
+                <button class="dropdown-item">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+                  </svg>
+                  Listy punktowane i numerowane
+                  <span class="submenu-arrow">▸</span>
+                </button>
+                @if (activeSubmenu() === 'lists') {
+                  <div class="submenu">
+                    <button class="dropdown-item" (click)="insertBulletList()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 10.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5 1.5-.67 1.5-1.5-.67-1.5-1.5-1.5zm0-6c-.83 0-1.5.67-1.5 1.5S3.17 7.5 4 7.5 5.5 6.83 5.5 6 4.83 4.5 4 4.5zm0 12c-.83 0-1.5.68-1.5 1.5s.68 1.5 1.5 1.5 1.5-.68 1.5-1.5-.67-1.5-1.5-1.5zM7 19h14v-2H7v2zm0-6h14v-2H7v2zm0-8v2h14V5H7z"/></svg>
+                      Lista punktowana
+                    </button>
+                    <button class="dropdown-item" (click)="insertNumberedList()">
+                      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z"/></svg>
+                      Lista numerowana
+                    </button>
+                  </div>
+                }
+              </div>
+
+              <div class="dropdown-separator"></div>
+
+              <!-- Orientacja strony -->
+              <button class="dropdown-item" (click)="openPageSetup(); closeAllMenus()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14z"/>
+                </svg>
+                Orientacja strony
+              </button>
+
+              <button class="dropdown-item" (click)="toggleMarginGuides()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.99h18v14.02z"/>
+                </svg>
+                {{ showMarginGuides() ? 'Ukryj prowadnice marginesów' : 'Pokaż prowadnice marginesów' }}
+              </button>
+
+              <div class="dropdown-separator"></div>
+
+              <!-- Wyczyść formatowanie -->
+              <button class="dropdown-item" (click)="clearFormatting()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M3.27 5L2 6.27l6.97 6.97L6.5 19h3l1.57-3.66L16.73 21 18 19.73 3.55 5.27 3.27 5zM6 5v.18L8.82 8h2.4l-.72 1.68 2.1 2.1L14.21 8H20V5H6z"/>
+                </svg>
+                Wyczyść formatowanie
+                <span class="shortcut">Ctrl+\</span>
+              </button>
+            </div>
+          }
+        </div>
       </nav>
     </div>
     
@@ -71,17 +362,6 @@
     </div>
     
     <div class="header-right">
-      <!-- Zoom -->
-      <div class="zoom-control">
-        <button class="zoom-btn" (click)="setZoom(Math.max(50, zoomLevel() - 25))" [disabled]="zoomLevel() <= 50">−</button>
-        <select class="zoom-select" [value]="zoomLevel()" (change)="setZoom(+$any($event.target).value)">
-          @for (level of zoomLevels; track level) {
-            <option [value]="level">{{ level }}%</option>
-          }
-        </select>
-        <button class="zoom-btn" (click)="setZoom(Math.min(200, zoomLevel() + 25))" [disabled]="zoomLevel() >= 200">+</button>
-      </div>
-      
       <!-- Info button -->
       <button class="info-btn" (click)="showAbout.set(true)" title="O aplikacji">
         <svg viewBox="0 0 24 24" width="20" height="20">
@@ -108,7 +388,7 @@
 
   <!-- Main Editor Area -->
   <main class="editor-main">
-    <div class="editor-scroll-container">
+    <div class="editor-scroll-container" (scroll)="onEditorScroll($event)">
       <div class="editor-wrapper" [style.transform]="'scale(' + zoomLevel() / 100 + ')'" [style.transform-origin]="'top center'">
         <!-- Kartka dokumentu -->
         <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
@@ -119,6 +399,7 @@
             [showMarginGuides]="showMarginGuides()"
             (contentChange)="onContentChange($event)"
             (stateChange)="onStateChange($event)"
+            (pagesChange)="onPagesChange($event)"
           />
         </div>
       </div>
@@ -128,6 +409,13 @@
   <!-- Footer / Status Bar -->
   <footer class="editor-footer">
     <div class="status-left">
+      <span class="status-item page-info">
+        <svg viewBox="0 0 24 24" width="16" height="16">
+          <path fill="currentColor" d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/>
+        </svg>
+        Strona {{ currentPage() }} z {{ totalPages() }}
+      </span>
+      <span class="status-separator">|</span>
       @if (editorState()) {
         <span class="status-item">Słowa: {{ editorState()?.wordCount }}</span>
         <span class="status-separator">|</span>
@@ -136,10 +424,33 @@
     </div>
     <div class="status-right">
       @if (documentMetadata().modified) {
-        <span class="status-item">
+        <span class="status-item status-modified">
           Ostatnia modyfikacja: {{ documentMetadata().modified | date:'HH:mm:ss' }}
         </span>
       }
+      <span class="status-separator">|</span>
+      <!-- Zoom -->
+      <div class="zoom-control-footer">
+        <button class="zoom-btn-footer" (click)="setZoom(Math.max(50, zoomLevel() - 10))" [disabled]="zoomLevel() <= 50" title="Pomniejsz">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M19 13H5v-2h14v2z"/>
+          </svg>
+        </button>
+        <input type="range" 
+               class="zoom-slider" 
+               [value]="zoomLevel()" 
+               min="50" 
+               max="200" 
+               step="10"
+               (input)="setZoom(+$any($event.target).value)"
+               title="Powiększenie: {{ zoomLevel() }}%">
+        <button class="zoom-btn-footer" (click)="setZoom(Math.min(200, zoomLevel() + 10))" [disabled]="zoomLevel() >= 200" title="Powiększ">
+          <svg viewBox="0 0 24 24" width="14" height="14">
+            <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+          </svg>
+        </button>
+        <span class="zoom-value">{{ zoomLevel() }}%</span>
+      </div>
     </div>
   </footer>
 
@@ -191,6 +502,42 @@
                 <div class="template-desc">{{ template.description }}</div>
               </button>
             }
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Find and Replace Dialog -->
+  @if (showFindReplace()) {
+    <div class="dialog-overlay" (click)="showFindReplace.set(false)">
+      <div class="dialog find-replace-dialog" (click)="$event.stopPropagation()">
+        <div class="dialog-header">
+          <h3>Znajdź i zamień</h3>
+          <button class="dialog-close" (click)="showFindReplace.set(false)">×</button>
+        </div>
+        <div class="dialog-content">
+          <div class="form-group">
+            <label>Znajdź:</label>
+            <input type="text" 
+                   class="form-input" 
+                   [value]="findText()" 
+                   (input)="findText.set($any($event.target).value)"
+                   placeholder="Wpisz tekst do znalezienia"
+                   (keyup.enter)="findNext()">
+          </div>
+          <div class="form-group">
+            <label>Zamień na:</label>
+            <input type="text" 
+                   class="form-input" 
+                   [value]="replaceText()" 
+                   (input)="replaceText.set($any($event.target).value)"
+                   placeholder="Wpisz tekst zastępczy">
+          </div>
+          <div class="dialog-actions">
+            <button class="btn btn-secondary" (click)="findNext()">Znajdź następny</button>
+            <button class="btn btn-secondary" (click)="replaceOne()">Zamień</button>
+            <button class="btn btn-primary" (click)="replaceAll()">Zamień wszystko</button>
           </div>
         </div>
       </div>

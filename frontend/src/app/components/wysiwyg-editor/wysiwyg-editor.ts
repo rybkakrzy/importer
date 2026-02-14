@@ -56,6 +56,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Output() contentChange = new EventEmitter<string>();
   @Output() stateChange = new EventEmitter<EditorState>();
   @Output() selectionChange = new EventEmitter<Selection | null>();
+  @Output() pagesChange = new EventEmitter<number>();
 
   private _content = signal<string>('');
   private _isInternalUpdate = false;
@@ -63,6 +64,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private redoStack: string[] = [];
   private lastSavedContent = '';
   private autoSaveInterval?: ReturnType<typeof setInterval>;
+  private pageCheckInterval?: ReturnType<typeof setInterval>;
+
+  // Strony dokumentu - pierwsza strona to edytor, pozostałe to overflow
+  pages = signal<string[]>(['']);
+  
+  // Wysokość strony A4 w pikselach (bez marginesów)
+  private readonly PAGE_HEIGHT_PX = 1122; // ~29.7cm at 96 DPI
 
   // Stan edytora
   editorState = signal<EditorState>({
@@ -86,15 +94,51 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.initializeEditor();
     this.setupEventListeners();
     
+    // Oblicz strony przy starcie
+    setTimeout(() => {
+      this.calculatePages();
+      this.pagesChange.emit(this.pages().length);
+    }, 100);
+    
     // Autosave co 30 sekund (zapisuje do localStorage)
     this.autoSaveInterval = setInterval(() => {
       this.autoSave();
     }, 30000);
+    
+    // Sprawdzaj podział na strony co 500ms
+    this.pageCheckInterval = setInterval(() => {
+      this.calculatePages();
+    }, 500);
   }
 
   ngOnDestroy(): void {
     if (this.autoSaveInterval) {
       clearInterval(this.autoSaveInterval);
+    }
+    if (this.pageCheckInterval) {
+      clearInterval(this.pageCheckInterval);
+    }
+  }
+
+  /**
+   * Oblicza liczbę stron na podstawie wysokości zawartości
+   */
+  private calculatePages(): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+    
+    const contentHeight = editor.scrollHeight;
+    const marginTop = this.pageMargins.top * 37.8;
+    const marginBottom = this.pageMargins.bottom * 37.8;
+    const availableHeight = this.PAGE_HEIGHT_PX - marginTop - marginBottom;
+    
+    const pageCount = Math.max(1, Math.ceil(contentHeight / availableHeight));
+    
+    // Aktualizuj liczbę stron tylko jeśli się zmieniła
+    if (this.pages().length !== pageCount) {
+      const newPages = Array(pageCount).fill('');
+      this.pages.set(newPages);
+      this.pagesChange.emit(pageCount);
     }
   }
 
@@ -329,15 +373,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         document.execCommand('superscript', false);
         break;
       case 'alignLeft':
+      case 'justifyLeft':
         document.execCommand('justifyLeft', false);
         break;
       case 'alignCenter':
+      case 'justifyCenter':
         document.execCommand('justifyCenter', false);
         break;
       case 'alignRight':
+      case 'justifyRight':
         document.execCommand('justifyRight', false);
         break;
       case 'alignJustify':
+      case 'justifyFull':
         document.execCommand('justifyFull', false);
         break;
       case 'indent':
@@ -347,13 +395,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         document.execCommand('outdent', false);
         break;
       case 'bulletList':
+      case 'insertUnorderedList':
         document.execCommand('insertUnorderedList', false);
         break;
       case 'numberedList':
+      case 'insertOrderedList':
         document.execCommand('insertOrderedList', false);
         break;
       case 'removeFormat':
         document.execCommand('removeFormat', false);
+        break;
+      case 'selectAll':
+        document.execCommand('selectAll', false);
         break;
       case 'undo':
         this.undo();
@@ -465,6 +518,182 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     editor.focus();
     document.execCommand('hiliteColor', false, color);
+    this.onContentChange();
+  }
+
+  // Zapisana selekcja (do użycia gdy selekcja jest tracona przez kliknięcie na toolbar)
+  private savedSelection: Range | null = null;
+
+  /**
+   * Zapisuje aktualną selekcję - wywoływane przed focusout
+   */
+  saveSelection(): void {
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      const editor = this.editorContent?.nativeElement;
+      if (editor && editor.contains(range.commonAncestorContainer)) {
+        this.savedSelection = range.cloneRange();
+        console.log('[saveSelection] Zapisano selekcję:', range.toString());
+      }
+    }
+  }
+
+  /**
+   * Przywraca zapisaną selekcję
+   */
+  restoreSelection(): boolean {
+    if (!this.savedSelection) {
+      console.warn('[restoreSelection] Brak zapisanej selekcji');
+      return false;
+    }
+    
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(this.savedSelection);
+      console.log('[restoreSelection] Przywrócono selekcję:', this.savedSelection.toString());
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Aplikuje styl dokumentu TYLKO do zaznaczonego fragmentu tekstu.
+   * Jeśli nic nie jest zaznaczone, nie robi nic.
+   * Działa jak formatowanie w Word - aplikuje czcionkę, rozmiar, kolor, bold, italic, underline do selekcji.
+   */
+  applyDocumentStyle(style: {
+    id: string;
+    name: string;
+    fontFamily?: string;
+    fontSize?: number;
+    color?: string;
+    isBold?: boolean;
+    isItalic?: boolean;
+    isUnderline?: boolean;
+    alignment?: string;
+    outlineLevel?: number;
+  }): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) {
+      console.warn('[applyDocumentStyle] Brak elementu edytora');
+      return;
+    }
+
+    // Debug - sprawdź co przychodzi w stylu
+    console.log('[applyDocumentStyle] Otrzymany styl:', JSON.stringify(style, null, 2));
+
+    // Najpierw spróbuj przywrócić zapisaną selekcję (bo mogła być utracona przez kliknięcie na toolbar)
+    let selection = window.getSelection();
+    let range: Range | null = null;
+    
+    if (selection && selection.rangeCount > 0) {
+      range = selection.getRangeAt(0);
+      // Sprawdź czy selekcja jest w edytorze i nie jest pusta
+      if (!editor.contains(range.commonAncestorContainer) || range.collapsed) {
+        range = null;
+      }
+    }
+    
+    // Jeśli nie ma aktualnej selekcji, spróbuj użyć zapisanej
+    if (!range && this.savedSelection) {
+      console.log('[applyDocumentStyle] Używam zapisanej selekcji');
+      this.restoreSelection();
+      selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        range = selection.getRangeAt(0);
+      }
+    }
+    
+    if (!range || range.collapsed) {
+      console.warn('[applyDocumentStyle] Brak zaznaczonego tekstu');
+      return;
+    }
+
+    // Sprawdź czy selekcja jest wewnątrz edytora
+    if (!editor.contains(range.commonAncestorContainer)) {
+      console.warn('[applyDocumentStyle] Selekcja poza edytorem');
+      return;
+    }
+
+    editor.focus();
+
+    // Pobierz zaznaczony tekst
+    const selectedText = range.toString();
+    if (!selectedText || selectedText.trim().length === 0) {
+      console.warn('[applyDocumentStyle] Pusty zaznaczony tekst');
+      return;
+    }
+
+    console.log('[applyDocumentStyle] Zaznaczony tekst:', selectedText);
+
+    // Tworzę element SPAN z wszystkimi stylami
+    const styledSpan = document.createElement('span');
+    
+    // Buduj style inline
+    const styles: string[] = [];
+    
+    if (style.fontFamily) {
+      styles.push(`font-family: "${style.fontFamily}"`);
+      console.log('[applyDocumentStyle] Ustawiam font-family:', style.fontFamily);
+    }
+    
+    if (style.fontSize) {
+      styles.push(`font-size: ${style.fontSize}pt`);
+      console.log('[applyDocumentStyle] Ustawiam font-size:', style.fontSize + 'pt');
+    }
+    
+    if (style.color) {
+      styles.push(`color: ${style.color}`);
+      console.log('[applyDocumentStyle] Ustawiam color:', style.color);
+    }
+    
+    if (style.isBold === true) {
+      styles.push('font-weight: bold');
+      console.log('[applyDocumentStyle] Ustawiam bold');
+    } else if (style.isBold === false) {
+      styles.push('font-weight: normal');
+    }
+    
+    if (style.isItalic === true) {
+      styles.push('font-style: italic');
+      console.log('[applyDocumentStyle] Ustawiam italic');
+    } else if (style.isItalic === false) {
+      styles.push('font-style: normal');
+    }
+    
+    if (style.isUnderline === true) {
+      styles.push('text-decoration: underline');
+      console.log('[applyDocumentStyle] Ustawiam underline');
+    } else if (style.isUnderline === false) {
+      styles.push('text-decoration: none');
+    }
+    
+    // Zastosuj style do span
+    if (styles.length > 0) {
+      styledSpan.setAttribute('style', styles.join('; '));
+      console.log('[applyDocumentStyle] Finalne style:', styles.join('; '));
+    }
+    
+    // Wyodrębnij zawartość zaznaczenia i włóż do span
+    const fragment = range.extractContents();
+    styledSpan.appendChild(fragment);
+    
+    // Wstaw span w miejsce zaznaczenia
+    range.insertNode(styledSpan);
+    
+    // Ustaw kursor na końcu wstawionego elementu
+    const newRange = document.createRange();
+    newRange.selectNodeContents(styledSpan);
+    newRange.collapse(false);
+    selection!.removeAllRanges();
+    selection!.addRange(newRange);
+    
+    // Wyczyść zapisaną selekcję
+    this.savedSelection = null;
+
+    console.log('[applyDocumentStyle] Styl został zastosowany');
     this.onContentChange();
   }
 
