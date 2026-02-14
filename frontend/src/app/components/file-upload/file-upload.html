@@ -32,17 +32,32 @@
   </div>
 
   <div class="response-section" *ngIf="uploadResponse">
-    <h3>✅ {{ uploadResponse.message }}</h3>
-
-    <div class="info-box">
-      <p><strong>Nazwa pliku:</strong> {{ uploadResponse.fileName }}</p>
-      <p><strong>Rozmiar:</strong> {{ formatFileSize(uploadResponse.fileSize!) }}</p>
-      <p><strong>Liczba plików:</strong> {{ uploadResponse.filesCount }}</p>
-      <p><strong>Przetworzono:</strong> {{ uploadResponse.processedAt | date:'medium' }}</p>
+    <div class="success-header">
+      <span class="success-icon">✅</span>
+      <h3>{{ uploadResponse.message }}</h3>
     </div>
 
-    <div class="files-list">
-      <h4>Znalezione pliki:</h4>
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Nazwa pliku</div>
+        <div class="summary-value">{{ uploadResponse.fileName }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Rozmiar archiwum</div>
+        <div class="summary-value">{{ formatFileSize(uploadResponse.fileSize!) }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Liczba plików</div>
+        <div class="summary-value highlight">{{ uploadResponse.filesCount }}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Data przetworzenia</div>
+        <div class="summary-value">{{ uploadResponse.processedAt | date:'medium' }}</div>
+      </div>
+    </div>
+
+    <div class="files-list" *ngIf="uploadResponse.files && uploadResponse.files.length > 0">
+      <h4>📂 Zawartość archiwum ({{ uploadResponse.filesCount }} plików):</h4>
       <div class="file-item" *ngFor="let file of uploadResponse.files">
         <div class="file-header">
           <span class="file-icon">
@@ -52,16 +67,22 @@
           <span class="file-type-badge">{{ file.fileType }}</span>
         </div>
         <div class="file-details">
-          <span>Ścieżka: {{ file.fullPath }}</span>
-          <span>Rozmiar: {{ formatFileSize(file.fileSize) }}</span>
-          <span>Skompresowany: {{ formatFileSize(file.compressedSize) }}</span>
-          <span>Zmodyfikowano: {{ file.lastModified | date:'short' }}</span>
+          <span>📁 {{ file.fullPath }}</span>
+          <span>📏 {{ formatFileSize(file.fileSize) }}</span>
+          <span>🗜️ {{ formatFileSize(file.compressedSize) }}</span>
+          <span>📅 {{ file.lastModified | date:'short' }}</span>
         </div>
         <div class="file-content" *ngIf="file.content">
-          <strong>Zawartość JSON:</strong>
-          <pre>{{ file.content }}</pre>
+          <details>
+            <summary>📝 Podgląd zawartości JSON</summary>
+            <pre>{{ file.content | json }}</pre>
+          </details>
         </div>
       </div>
+    </div>
+
+    <div class="empty-archive" *ngIf="!uploadResponse.files || uploadResponse.files.length === 0">
+      <p>📭 Archiwum jest puste lub nie zawiera obsługiwanych plików.</p>
     </div>
   </div>
 </div>

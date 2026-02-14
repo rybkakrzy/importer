@@ -1,12 +1,10 @@
-import { Component, signal } from '@angular/core';
-import { FileUploadComponent } from './components/file-upload/file-upload';
+import { Component } from '@angular/core';
+import { DocumentEditorComponent } from './components/document-editor/document-editor';
 
 @Component({
   selector: 'app-root',
-  imports: [FileUploadComponent],
-  templateUrl: './app.html',
-  styleUrl: './app.css'
+  imports: [DocumentEditorComponent],
+  template: '<app-document-editor />',
+  styles: [':host { display: block; height: 100vh; }']
 })
-export class App {
-  protected readonly title = signal('Importer Parametryzacji');
-}
+export class App {}

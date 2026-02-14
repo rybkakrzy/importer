@@ -100,6 +100,99 @@ h3 {
   margin: 0.5rem 0;
 }
 
+.success-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+  border-radius: 8px;
+  border-left: 4px solid #28a745;
+}
+
+.success-header h3 {
+  margin: 0;
+  color: #155724;
+}
+
+.success-icon {
+  font-size: 2rem;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.summary-card {
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.summary-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.summary-label {
+  font-size: 0.85rem;
+  color: #666;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.summary-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #333;
+  word-break: break-all;
+}
+
+.summary-value.highlight {
+  font-size: 1.5rem;
+  color: #007bff;
+}
+
+.empty-archive {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 8px;
+  padding: 1.5rem;
+  text-align: center;
+  color: #856404;
+}
+
+.empty-archive p {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.file-content details {
+  margin-top: 0.5rem;
+}
+
+.file-content summary {
+  cursor: pointer;
+  color: #007bff;
+  font-weight: 500;
+  padding: 0.5rem;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.file-content summary:hover {
+  background: #f0f0f0;
+}
+
 .files-list h4 {
   color: #333;
   margin-bottom: 1rem;

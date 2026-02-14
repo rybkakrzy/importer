@@ -1,0 +1,36 @@
+<div class="wysiwyg-editor" [class.landscape]="pageOrientation === 'landscape'">
+  <!-- Linie marginesów na kartce -->
+  @if (showMarginGuides) {
+    <div class="margin-guides">
+      <div class="margin-guide margin-guide-top" [style.top.px]="pageMargins.top * 37.8"></div>
+      <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMargins.bottom * 37.8"></div>
+      <div class="margin-guide margin-guide-left" [style.left.px]="pageMargins.left * 37.8"></div>
+      <div class="margin-guide margin-guide-right" [style.right.px]="pageMargins.right * 37.8"></div>
+      <!-- Narożniki marginesów -->
+      <div class="margin-corner top-left" 
+           [style.top.px]="pageMargins.top * 37.8" 
+           [style.left.px]="pageMargins.left * 37.8"></div>
+      <div class="margin-corner top-right" 
+           [style.top.px]="pageMargins.top * 37.8" 
+           [style.right.px]="pageMargins.right * 37.8"></div>
+      <div class="margin-corner bottom-left" 
+           [style.bottom.px]="pageMargins.bottom * 37.8" 
+           [style.left.px]="pageMargins.left * 37.8"></div>
+      <div class="margin-corner bottom-right" 
+           [style.bottom.px]="pageMargins.bottom * 37.8" 
+           [style.right.px]="pageMargins.right * 37.8"></div>
+    </div>
+  }
+  
+  <div 
+    #editorContent
+    class="editor-content"
+    contenteditable="true"
+    spellcheck="true"
+    [attr.placeholder]="'Zacznij pisać...'"
+    [style.padding-top.px]="pageMargins.top * 37.8"
+    [style.padding-bottom.px]="pageMargins.bottom * 37.8"
+    [style.padding-left.px]="pageMargins.left * 37.8"
+    [style.padding-right.px]="pageMargins.right * 37.8"
+  ></div>
+</div>

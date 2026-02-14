@@ -1,8 +1,14 @@
+using ImporterApi.Services;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+
+// Register document converters
+builder.Services.AddScoped<DocxToHtmlConverter>();
+builder.Services.AddScoped<HtmlToDocxConverter>();
 
 // Add CORS
 builder.Services.AddCors(options =>

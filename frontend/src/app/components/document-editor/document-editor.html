@@ -1,0 +1,392 @@
+<div class="document-editor-container">
+  <!-- Header / Menu Bar -->
+  <header class="editor-header">
+    <div class="header-left">
+      <!-- Logo i nazwa -->
+      <div class="app-logo">
+        <svg viewBox="0 0 24 24" width="28" height="28">
+          <path fill="#2b579a" d="M6 2c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6H6zm7 7V3.5L18.5 9H13z"/>
+        </svg>
+        <span class="app-name">Doc2 Edytor</span>
+      </div>
+      
+      <!-- Menu główne -->
+      <nav class="main-menu">
+        <div class="menu-item-wrapper">
+          <button class="menu-item" (click)="toggleMenu()">Plik</button>
+          
+          @if (showMenu()) {
+            <div class="dropdown-menu" (click)="$event.stopPropagation()">
+              <button class="dropdown-item" (click)="newDocument()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/>
+                </svg>
+                Nowy
+              </button>
+              <button class="dropdown-item" (click)="openDocument()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/>
+                </svg>
+                Otwórz
+              </button>
+              <div class="dropdown-separator"></div>
+              <button class="dropdown-item" (click)="saveDocument()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+                </svg>
+                Zapisz
+              </button>
+              <button class="dropdown-item" (click)="saveDocumentAs()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+                </svg>
+                Zapisz jako...
+              </button>
+              <div class="dropdown-separator"></div>
+              <button class="dropdown-item" (click)="openPageSetup(); showMenu.set(false)">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z"/>
+                </svg>
+                Ustawienia strony
+              </button>
+            </div>
+          }
+        </div>
+        
+        <button class="menu-item" (click)="editor?.executeCommand('undo')" [disabled]="!editorState()?.canUndo">
+          Cofnij
+        </button>
+        <button class="menu-item" (click)="editor?.executeCommand('redo')" [disabled]="!editorState()?.canRedo">
+          Ponów
+        </button>
+      </nav>
+    </div>
+    
+    <div class="header-center">
+      <!-- Tytuł dokumentu na środku -->
+      <span class="document-title">{{ documentMetadata().title || 'Bez tytułu' }}</span>
+      @if (editorState()?.isModified) {
+        <span class="unsaved-indicator" title="Niezapisane zmiany">●</span>
+      }
+    </div>
+    
+    <div class="header-right">
+      <!-- Zoom -->
+      <div class="zoom-control">
+        <button class="zoom-btn" (click)="setZoom(Math.max(50, zoomLevel() - 25))" [disabled]="zoomLevel() <= 50">−</button>
+        <select class="zoom-select" [value]="zoomLevel()" (change)="setZoom(+$any($event.target).value)">
+          @for (level of zoomLevels; track level) {
+            <option [value]="level">{{ level }}%</option>
+          }
+        </select>
+        <button class="zoom-btn" (click)="setZoom(Math.min(200, zoomLevel() + 25))" [disabled]="zoomLevel() >= 200">+</button>
+      </div>
+      
+      <!-- Info button -->
+      <button class="info-btn" (click)="showAbout.set(true)" title="O aplikacji">
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Toolbar -->
+  <app-editor-toolbar 
+    [editorState]="editorState()"
+    [documentStyles]="documentStyles()"
+    (command)="onCommand($event)"
+    (fontSizeChange)="onFontSizeChange($event)"
+    (fontFamilyChange)="onFontFamilyChange($event)"
+    (textColorChange)="onTextColorChange($event)"
+    (backgroundColorChange)="onBackgroundColorChange($event)"
+    (insertLink)="onInsertLink($event)"
+    (insertImage)="onInsertImage()"
+    (insertTable)="onInsertTable($event)"
+    (styleChange)="onStyleChange($event)"
+  />
+
+  <!-- Main Editor Area -->
+  <main class="editor-main">
+    <div class="editor-scroll-container">
+      <div class="editor-wrapper" [style.transform]="'scale(' + zoomLevel() / 100 + ')'" [style.transform-origin]="'top center'">
+        <!-- Kartka dokumentu -->
+        <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
+          <app-wysiwyg-editor
+            [content]="documentContent()"
+            [pageMargins]="pageSettings().margins"
+            [pageOrientation]="pageSettings().orientation"
+            [showMarginGuides]="showMarginGuides()"
+            (contentChange)="onContentChange($event)"
+            (stateChange)="onStateChange($event)"
+          />
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer / Status Bar -->
+  <footer class="editor-footer">
+    <div class="status-left">
+      @if (editorState()) {
+        <span class="status-item">Słowa: {{ editorState()?.wordCount }}</span>
+        <span class="status-separator">|</span>
+        <span class="status-item">Znaki: {{ editorState()?.characterCount }}</span>
+      }
+    </div>
+    <div class="status-right">
+      @if (documentMetadata().modified) {
+        <span class="status-item">
+          Ostatnia modyfikacja: {{ documentMetadata().modified | date:'HH:mm:ss' }}
+        </span>
+      }
+    </div>
+  </footer>
+
+  <!-- Loading Overlay -->
+  @if (isLoading()) {
+    <div class="loading-overlay">
+      <div class="loading-spinner"></div>
+      <span>Przetwarzanie...</span>
+    </div>
+  }
+
+  <!-- Messages -->
+  @if (errorMessage()) {
+    <div class="message error-message">
+      <svg viewBox="0 0 24 24" width="20" height="20">
+        <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+      {{ errorMessage() }}
+    </div>
+  }
+
+  @if (successMessage()) {
+    <div class="message success-message">
+      <svg viewBox="0 0 24 24" width="20" height="20">
+        <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+      </svg>
+      {{ successMessage() }}
+    </div>
+  }
+
+  <!-- Templates Dialog -->
+  @if (showTemplates()) {
+    <div class="dialog-overlay" (click)="showTemplates.set(false)">
+      <div class="dialog templates-dialog" (click)="$event.stopPropagation()">
+        <div class="dialog-header">
+          <h3>Wybierz szablon</h3>
+          <button class="dialog-close" (click)="showTemplates.set(false)">×</button>
+        </div>
+        <div class="dialog-content">
+          <div class="templates-grid">
+            @for (template of templates(); track template.id) {
+              <button class="template-card" (click)="openTemplate(template.id)">
+                <div class="template-icon">
+                  <svg viewBox="0 0 24 24" width="48" height="48">
+                    <path fill="#2b579a" d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z"/>
+                  </svg>
+                </div>
+                <div class="template-name">{{ template.name }}</div>
+                <div class="template-desc">{{ template.description }}</div>
+              </button>
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- About Dialog -->
+  @if (showAbout()) {
+    <div class="dialog-overlay" (click)="showAbout.set(false)">
+      <div class="dialog about-dialog" (click)="$event.stopPropagation()">
+        <div class="dialog-header">
+          <h3>O aplikacji</h3>
+          <button class="dialog-close" (click)="showAbout.set(false)">×</button>
+        </div>
+        <div class="dialog-content about-content">
+          <div class="about-logo">
+            <svg viewBox="0 0 24 24" width="64" height="64">
+              <path fill="#2b579a" d="M6 2c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6H6zm7 7V3.5L18.5 9H13z"/>
+            </svg>
+          </div>
+          <h2>Word Online Editor</h2>
+          <p class="version">Wersja 1.0.0</p>
+          <p class="description">
+            Autorski edytor dokumentów Word online.<br>
+            Oparty na Angular i ASP.NET Core z biblioteką OpenXML.
+          </p>
+          <div class="features">
+            <h4>Funkcje:</h4>
+            <ul>
+              <li>Otwieranie i edycja plików DOCX</li>
+              <li>Formatowanie tekstu (pogrubienie, kursywa, podkreślenie)</li>
+              <li>Nagłówki i style paragrafów</li>
+              <li>Listy punktowane i numerowane</li>
+              <li>Wstawianie obrazów i tabel</li>
+              <li>Eksport do pliku DOCX</li>
+              <li>Autosave w przeglądarce</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Page Setup Dialog -->
+  @if (showPageSetup()) {
+    <div class="dialog-overlay" (click)="showPageSetup.set(false)">
+      <div class="dialog page-setup-dialog" (click)="$event.stopPropagation()">
+        <div class="dialog-header">
+          <h3>Ustawienia strony</h3>
+          <button class="dialog-close" (click)="showPageSetup.set(false)">×</button>
+        </div>
+        <div class="dialog-content page-setup-content">
+          <!-- Margin Presets -->
+          <div class="page-section">
+            <h4>Marginesy - szablony</h4>
+            <div class="margin-presets">
+              @for (preset of marginPresets; track preset.name) {
+                <button 
+                  class="preset-btn" 
+                  [class.active]="isPresetActive(preset)"
+                  (click)="applyMarginPreset(preset)">
+                  <div class="preset-preview">
+                    <div class="preset-page" [style]="getPresetPreviewStyle(preset)">
+                      <div class="preset-content"></div>
+                    </div>
+                  </div>
+                  <span class="preset-name">{{ preset.name }}</span>
+                </button>
+              }
+            </div>
+          </div>
+
+          <!-- Custom Margins -->
+          <div class="page-section">
+            <h4>Marginesy niestandardowe</h4>
+            <div class="margin-inputs">
+              <div class="margin-row">
+                <div class="margin-input-group">
+                  <label>Górny</label>
+                  <div class="input-with-unit">
+                    <input 
+                      type="number" 
+                      [value]="pageSettings().margins.top" 
+                      (change)="updateMargin('top', +$any($event.target).value)"
+                      step="0.1"
+                      min="0"
+                      max="10">
+                    <span class="unit">cm</span>
+                  </div>
+                </div>
+                <div class="margin-input-group">
+                  <label>Dolny</label>
+                  <div class="input-with-unit">
+                    <input 
+                      type="number" 
+                      [value]="pageSettings().margins.bottom" 
+                      (change)="updateMargin('bottom', +$any($event.target).value)"
+                      step="0.1"
+                      min="0"
+                      max="10">
+                    <span class="unit">cm</span>
+                  </div>
+                </div>
+              </div>
+              <div class="margin-row">
+                <div class="margin-input-group">
+                  <label>Lewy</label>
+                  <div class="input-with-unit">
+                    <input 
+                      type="number" 
+                      [value]="pageSettings().margins.left" 
+                      (change)="updateMargin('left', +$any($event.target).value)"
+                      step="0.1"
+                      min="0"
+                      max="10">
+                    <span class="unit">cm</span>
+                  </div>
+                </div>
+                <div class="margin-input-group">
+                  <label>Prawy</label>
+                  <div class="input-with-unit">
+                    <input 
+                      type="number" 
+                      [value]="pageSettings().margins.right" 
+                      (change)="updateMargin('right', +$any($event.target).value)"
+                      step="0.1"
+                      min="0"
+                      max="10">
+                    <span class="unit">cm</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Orientation -->
+          <div class="page-section">
+            <h4>Orientacja</h4>
+            <div class="orientation-buttons">
+              <button 
+                class="orientation-btn" 
+                [class.active]="pageSettings().orientation === 'portrait'"
+                (click)="setOrientation('portrait')">
+                <div class="orientation-icon portrait">
+                  <svg viewBox="0 0 24 32" width="24" height="32">
+                    <rect x="2" y="2" width="20" height="28" fill="none" stroke="currentColor" stroke-width="2" rx="1"/>
+                  </svg>
+                </div>
+                <span>Pionowa</span>
+              </button>
+              <button 
+                class="orientation-btn" 
+                [class.active]="pageSettings().orientation === 'landscape'"
+                (click)="setOrientation('landscape')">
+                <div class="orientation-icon landscape">
+                  <svg viewBox="0 0 32 24" width="32" height="24">
+                    <rect x="2" y="2" width="28" height="20" fill="none" stroke="currentColor" stroke-width="2" rx="1"/>
+                  </svg>
+                </div>
+                <span>Pozioma</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Preview -->
+          <div class="page-section">
+            <h4>Podgląd</h4>
+            <div class="page-preview-container">
+              <div class="page-preview" [style]="getPreviewStyle()">
+                <div class="page-content-preview" [style]="getContentPreviewStyle()">
+                  <div class="preview-line"></div>
+                  <div class="preview-line"></div>
+                  <div class="preview-line short"></div>
+                  <div class="preview-line"></div>
+                  <div class="preview-line"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Show margin guides -->
+          <div class="page-section">
+            <label class="checkbox-label">
+              <input 
+                type="checkbox" 
+                [checked]="showMarginGuides()" 
+                (change)="showMarginGuides.set($any($event.target).checked)">
+              <span class="checkbox-text">Pokaż linie marginesów</span>
+            </label>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" (click)="showPageSetup.set(false)">Anuluj</button>
+          <button class="btn btn-primary" (click)="applyPageSettings()">Zastosuj</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>
