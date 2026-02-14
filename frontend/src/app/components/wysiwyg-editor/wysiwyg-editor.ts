@@ -63,7 +63,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private lastSavedContent = '';
-  private autoSaveInterval?: ReturnType<typeof setInterval>;
   private pageCheckInterval?: ReturnType<typeof setInterval>;
 
   // Strony dokumentu - pierwsza strona to edytor, pozostałe to overflow
@@ -71,6 +70,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   
   // Wysokość strony A4 w pikselach (bez marginesów)
   private readonly PAGE_HEIGHT_PX = 1122; // ~29.7cm at 96 DPI
+
+  // Bieżący rozmiar czcionki (dla nowego tekstu gdy nie ma zaznaczenia)
+  private currentFontSize = 11;
+  private currentFontFamily = 'Calibri';
+  private pendingFontSize: number | null = null;
+  private pendingFontFamily: string | null = null;
 
   // Stan edytora
   editorState = signal<EditorState>({
@@ -100,11 +105,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.pagesChange.emit(this.pages().length);
     }, 100);
     
-    // Autosave co 30 sekund (zapisuje do localStorage)
-    this.autoSaveInterval = setInterval(() => {
-      this.autoSave();
-    }, 30000);
-    
     // Sprawdzaj podział na strony co 500ms
     this.pageCheckInterval = setInterval(() => {
       this.calculatePages();
@@ -112,9 +112,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    if (this.autoSaveInterval) {
-      clearInterval(this.autoSaveInterval);
-    }
     if (this.pageCheckInterval) {
       clearInterval(this.pageCheckInterval);
     }
@@ -454,35 +451,85 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
+    this.currentFontSize = size;
     editor.focus();
     
-    // execCommand fontSize używa wartości 1-7, więc używamy innego podejścia
     const selection = window.getSelection();
-    if (selection && selection.rangeCount > 0) {
-      const range = selection.getRangeAt(0);
-      
-      if (!range.collapsed) {
-        const span = document.createElement('span');
-        span.style.fontSize = `${size}pt`;
-        
-        try {
-          range.surroundContents(span);
-        } catch {
-          // Jeśli selekcja zawiera wiele elementów
-          document.execCommand('fontSize', false, '7');
-          // Znajdź i zamień font size
-          const fonts = editor.querySelectorAll('font[size="7"]');
-          fonts.forEach(font => {
-            const newSpan = document.createElement('span');
-            newSpan.style.fontSize = `${size}pt`;
-            newSpan.innerHTML = font.innerHTML;
-            font.parentNode?.replaceChild(newSpan, font);
-          });
-        }
-      }
+    if (!selection || selection.rangeCount === 0) {
+      // Brak selekcji - ustaw dla następnego tekstu
+      this.pendingFontSize = size;
+      return;
     }
 
+    const range = selection.getRangeAt(0);
+    
+    if (range.collapsed) {
+      // Kursor bez zaznaczenia - wstaw pusty span z rozmiarem dla kolejnego tekstu
+      this.pendingFontSize = size;
+      
+      // Wstaw zero-width space w span z odpowiednim rozmiarem
+      const span = document.createElement('span');
+      span.style.fontSize = `${size}pt`;
+      span.innerHTML = '\u200B'; // Zero-width space
+      
+      range.insertNode(span);
+      
+      // Ustaw kursor wewnątrz spana
+      const newRange = document.createRange();
+      newRange.setStart(span.firstChild!, 1);
+      newRange.setEnd(span.firstChild!, 1);
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+      
+      return;
+    }
+
+    // Jest zaznaczenie - zastosuj rozmiar do zaznaczonego tekstu
+    this.applyFontSizeToSelection(size, selection, range);
     this.onContentChange();
+  }
+
+  /**
+   * Aplikuje rozmiar czcionki do zaznaczenia
+   */
+  private applyFontSizeToSelection(size: number, selection: Selection, range: Range): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+
+    // Użyj execCommand fontSize z wartością 7, a potem zamień na właściwy rozmiar
+    document.execCommand('fontSize', false, '7');
+    
+    // Znajdź wszystkie elementy font[size="7"] i zamień na span z właściwym rozmiarem
+    const fonts = editor.querySelectorAll('font[size="7"]');
+    fonts.forEach((font: Element) => {
+      const span = document.createElement('span');
+      span.style.fontSize = `${size}pt`;
+      span.style.lineHeight = 'normal';
+      span.innerHTML = font.innerHTML;
+      font.parentNode?.replaceChild(span, font);
+    });
+    
+    // Usuń też duże elementy font które mogą zostać
+    const largeFonts = editor.querySelectorAll('font[size]');
+    largeFonts.forEach((font: Element) => {
+      const fontEl = font as HTMLFontElement;
+      const span = document.createElement('span');
+      const fontSize = this.fontSizeFromValue(fontEl.size);
+      span.style.fontSize = `${fontSize}pt`;
+      span.style.lineHeight = 'normal';
+      span.innerHTML = font.innerHTML;
+      font.parentNode?.replaceChild(span, font);
+    });
+  }
+
+  /**
+   * Konwertuje wartość font size (1-7) na pt
+   */
+  private fontSizeFromValue(value: string): number {
+    const map: Record<string, number> = {
+      '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36
+    };
+    return map[value] || this.currentFontSize;
   }
 
   /**
@@ -492,7 +539,36 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
+    this.currentFontFamily = fontFamily;
     editor.focus();
+    
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      this.pendingFontFamily = fontFamily;
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    
+    if (range.collapsed) {
+      // Kursor bez zaznaczenia - wstaw pusty span
+      this.pendingFontFamily = fontFamily;
+      
+      const span = document.createElement('span');
+      span.style.fontFamily = fontFamily;
+      span.innerHTML = '\u200B';
+      
+      range.insertNode(span);
+      
+      const newRange = document.createRange();
+      newRange.setStart(span.firstChild!, 1);
+      newRange.setEnd(span.firstChild!, 1);
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+      
+      return;
+    }
+
     document.execCommand('fontName', false, fontFamily);
     this.onContentChange();
   }
@@ -888,44 +964,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Autosave do localStorage
-   */
-  private autoSave(): void {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor) return;
-
-    const html = editor.innerHTML;
-    if (html && html !== '<p>&nbsp;</p>') {
-      localStorage.setItem('editor_autosave', html);
-      localStorage.setItem('editor_autosave_time', new Date().toISOString());
-    }
-  }
-
-  /**
-   * Przywraca z autosave
-   */
-  restoreFromAutoSave(): boolean {
-    const saved = localStorage.getItem('editor_autosave');
-    if (saved && this.editorContent?.nativeElement) {
-      this.editorContent.nativeElement.innerHTML = saved;
-      this._content.set(saved);
-      this.contentChange.emit(saved);
-      this.saveToUndoStack();
-      this.updateState();
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Czyści autosave
-   */
-  clearAutoSave(): void {
-    localStorage.removeItem('editor_autosave');
-    localStorage.removeItem('editor_autosave_time');
-  }
-
-  /**
    * Pobiera zawartość HTML
    */
   getContent(): string {
@@ -959,5 +997,115 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   focus(): void {
     this.editorContent?.nativeElement?.focus();
+  }
+
+  /**
+   * Pobiera aktualne formatowanie z zaznaczenia
+   */
+  getCurrentFormatting(): any {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+
+    // Pobierz element z którego kopiujemy formatowanie
+    let element = selection.anchorNode as HTMLElement;
+    if (element?.nodeType === Node.TEXT_NODE) {
+      element = element.parentElement!;
+    }
+
+    if (!element) return null;
+
+    const computedStyle = window.getComputedStyle(element);
+    
+    return {
+      bold: document.queryCommandState('bold'),
+      italic: document.queryCommandState('italic'),
+      underline: document.queryCommandState('underline'),
+      strikethrough: document.queryCommandState('strikeThrough'),
+      subscript: document.queryCommandState('subscript'),
+      superscript: document.queryCommandState('superscript'),
+      fontFamily: computedStyle.fontFamily.replace(/['"]/g, '').split(',')[0].trim(),
+      fontSize: parseInt(computedStyle.fontSize),
+      textColor: this.rgbToHex(computedStyle.color),
+      backgroundColor: computedStyle.backgroundColor === 'rgba(0, 0, 0, 0)' ? '' : this.rgbToHex(computedStyle.backgroundColor)
+    };
+  }
+
+  /**
+   * Aplikuje formatowanie do zaznaczenia
+   */
+  applyFormatting(format: any): void {
+    if (!format) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return;
+    }
+
+    // Aplikuj formatowanie tekstu
+    if (format.bold) document.execCommand('bold', false);
+    if (format.italic) document.execCommand('italic', false);
+    if (format.underline) document.execCommand('underline', false);
+    if (format.strikethrough) document.execCommand('strikeThrough', false);
+    if (format.subscript) document.execCommand('subscript', false);
+    if (format.superscript) document.execCommand('superscript', false);
+
+    // Aplikuj czcionkę i rozmiar
+    if (format.fontFamily) {
+      document.execCommand('fontName', false, format.fontFamily);
+    }
+    if (format.fontSize) {
+      // Zawijamy zaznaczenie w span z rozmiarem czcionki
+      const range = selection.getRangeAt(0);
+      const span = document.createElement('span');
+      span.style.fontSize = format.fontSize + 'px';
+      
+      try {
+        const contents = range.extractContents();
+        span.appendChild(contents);
+        range.insertNode(span);
+        selection.selectAllChildren(span);
+      } catch (e) {
+        // Fallback dla złożonych zakresów
+        document.execCommand('fontSize', false, '7');
+        const fontElements = this.editorContent?.nativeElement.querySelectorAll('font[size="7"]');
+        fontElements?.forEach((el: Element) => {
+          (el as HTMLElement).removeAttribute('size');
+          (el as HTMLElement).style.fontSize = format.fontSize + 'px';
+        });
+      }
+    }
+
+    // Aplikuj kolory
+    if (format.textColor) {
+      document.execCommand('foreColor', false, format.textColor);
+    }
+    if (format.backgroundColor) {
+      document.execCommand('hiliteColor', false, format.backgroundColor);
+    }
+
+    // Emituj zmiany
+    const html = this.editorContent?.nativeElement?.innerHTML || '';
+    this._content.set(html);
+    this.contentChange.emit(html);
+    this.updateFormattingState();
+  }
+
+  /**
+   * Konwertuje RGB na HEX
+   */
+  private rgbToHex(rgb: string): string {
+    if (rgb.startsWith('#')) return rgb;
+    if (rgb === 'transparent' || rgb === 'rgba(0, 0, 0, 0)') return '';
+    
+    const match = rgb.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!match) return '#000000';
+    
+    const r = parseInt(match[1]).toString(16).padStart(2, '0');
+    const g = parseInt(match[2]).toString(16).padStart(2, '0');
+    const b = parseInt(match[3]).toString(16).padStart(2, '0');
+    
+    return `#${r}${g}${b}`;
   }
 }

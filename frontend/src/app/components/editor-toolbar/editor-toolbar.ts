@@ -155,6 +155,8 @@ export class EditorToolbarComponent {
   @Output() insertImage = new EventEmitter<void>();
   @Output() insertTable = new EventEmitter<string>();
   @Output() styleChange = new EventEmitter<DocumentStyle>();
+  @Output() copyFormat = new EventEmitter<void>();
+  @Output() pasteFormat = new EventEmitter<void>();
 
   // Style dokumentu
   private _documentStyles = signal<DocumentStyle[]>(DEFAULT_WORD_STYLES);
@@ -191,6 +193,10 @@ export class EditorToolbarComponent {
   selectedFontSize = signal(11);
   selectedTextColor = signal('#000000');
   selectedBgColor = signal('#ffffff');
+
+  // Stan format painter
+  formatPainterActive = signal(false);
+  private copiedFormat: Partial<EditorState['currentFormatting']> | null = null;
 
   // Stan dialogów
   showLinkDialog = signal(false);
@@ -257,6 +263,88 @@ export class EditorToolbarComponent {
     const size = parseInt(select.value, 10);
     this.selectedFontSize.set(size);
     this.fontSizeChange.emit(size);
+  }
+
+  /**
+   * Zwiększa rozmiar czcionki
+   */
+  increaseFontSize(): void {
+    const currentSize = this.selectedFontSize();
+    const newSize = Math.min(currentSize + 1, 400);
+    this.selectedFontSize.set(newSize);
+    this.fontSizeChange.emit(newSize);
+  }
+
+  /**
+   * Zmniejsza rozmiar czcionki
+   */
+  decreaseFontSize(): void {
+    const currentSize = this.selectedFontSize();
+    const newSize = Math.max(currentSize - 1, 1);
+    this.selectedFontSize.set(newSize);
+    this.fontSizeChange.emit(newSize);
+  }
+
+  /**
+   * Obsługa Enter w input rozmiaru czcionki
+   */
+  onFontSizeInputEnter(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.applyFontSizeFromInput(input);
+    input.blur();
+  }
+
+  /**
+   * Obsługa blur w input rozmiaru czcionki
+   */
+  onFontSizeInputBlur(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.applyFontSizeFromInput(input);
+  }
+
+  /**
+   * Aplikuje rozmiar czcionki z inputa
+   */
+  private applyFontSizeFromInput(input: HTMLInputElement): void {
+    const value = parseInt(input.value, 10);
+    if (!isNaN(value) && value >= 1 && value <= 400) {
+      this.selectedFontSize.set(value);
+      this.fontSizeChange.emit(value);
+    } else {
+      // Przywróć poprzednią wartość
+      input.value = this.selectedFontSize().toString();
+    }
+  }
+
+  /**
+   * Przełącza tryb kopiowania formatowania
+   */
+  toggleFormatPainter(): void {
+    if (this.formatPainterActive()) {
+      // Wyłącz format painter
+      this.formatPainterActive.set(false);
+    } else {
+      // Kopiuj bieżące formatowanie
+      this.copyFormat.emit();
+      this.formatPainterActive.set(true);
+    }
+  }
+
+  /**
+   * Aplikuje skopiowane formatowanie
+   */
+  applyFormatPainter(): void {
+    if (this.formatPainterActive()) {
+      this.pasteFormat.emit();
+      this.formatPainterActive.set(false);
+    }
+  }
+
+  /**
+   * Wyłącza format painter
+   */
+  deactivateFormatPainter(): void {
+    this.formatPainterActive.set(false);
   }
 
   /**
@@ -344,5 +432,17 @@ export class EditorToolbarComponent {
    */
   isActive(format: keyof EditorState['currentFormatting']): boolean {
     return this.editorState?.currentFormatting?.[format] ?? false;
+  }
+
+  /**
+   * Zapobiega utracie fokusa z edytora przy klikaniu w toolbar
+   * (oprócz inputów, które muszą otrzymać fokus)
+   */
+  onToolbarMouseDown(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    // Pozwól na fokus tylko dla inputów i selectów
+    if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT') {
+      event.preventDefault();
+    }
   }
 }

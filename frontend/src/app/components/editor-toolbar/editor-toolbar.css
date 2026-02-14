@@ -93,6 +93,60 @@
   width: 65px;
 }
 
+/* Font size group with +/- buttons */
+.font-size-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.font-size-btn {
+  width: 26px;
+  height: 28px;
+  border-radius: 0;
+}
+
+.font-size-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.font-size-btn:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.font-size-input {
+  width: 40px;
+  height: 28px;
+  padding: 2px 4px;
+  border: 1px solid #ccc;
+  border-left: none;
+  border-right: none;
+  text-align: center;
+  font-size: 13px;
+  outline: none;
+  background: white;
+}
+
+.font-size-input:focus {
+  border-color: #0066cc;
+  background: #f0f8ff;
+}
+
+.font-size-input:hover {
+  border-color: #999;
+}
+
+/* Format painter active state */
+.toolbar-btn.active {
+  background: #d0e8ff;
+  color: #0066cc;
+}
+
+.toolbar-btn.format-painter-active {
+  background: #ffd700;
+  color: #333;
+}
+
 /* Color picker */
 .color-picker-wrapper {
   position: relative;

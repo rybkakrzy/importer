@@ -165,6 +165,18 @@
   outline: none;
 }
 
+/* Naprawienie problemów z font-size w spanach */
+.editor-content span[style*="font-size"] {
+  line-height: normal;
+  vertical-align: baseline;
+}
+
+/* Usuń domyślne style z elementów font */
+.editor-content font {
+  line-height: normal;
+  vertical-align: baseline;
+}
+
 /* Style dla elementów dokumentu */
 .editor-content h1 {
   font-size: 24pt;

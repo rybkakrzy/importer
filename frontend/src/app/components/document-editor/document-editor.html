@@ -353,14 +353,6 @@
       </nav>
     </div>
     
-    <div class="header-center">
-      <!-- Tytuł dokumentu na środku -->
-      <span class="document-title">{{ documentMetadata().title || 'Bez tytułu' }}</span>
-      @if (editorState()?.isModified) {
-        <span class="unsaved-indicator" title="Niezapisane zmiany">●</span>
-      }
-    </div>
-    
     <div class="header-right">
       <!-- Info button -->
       <button class="info-btn" (click)="showAbout.set(true)" title="O aplikacji">
@@ -384,6 +376,8 @@
     (insertImage)="onInsertImage()"
     (insertTable)="onInsertTable($event)"
     (styleChange)="onStyleChange($event)"
+    (copyFormat)="onCopyFormat()"
+    (pasteFormat)="onPasteFormat()"
   />
 
   <!-- Main Editor Area -->

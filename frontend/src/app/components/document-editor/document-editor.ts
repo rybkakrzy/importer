@@ -95,9 +95,6 @@ export class DocumentEditorComponent {
   constructor() {
     // Załaduj szablony
     this.loadTemplates();
-    
-    // Sprawdź autosave
-    this.checkAutoSave();
   }
 
   /**
@@ -119,35 +116,6 @@ export class DocumentEditorComponent {
   }
 
   /**
-   * Sprawdza czy jest zapisany autosave
-   */
-  private checkAutoSave(): void {
-    const autoSaveTime = localStorage.getItem('editor_autosave_time');
-    const autoSaveContent = localStorage.getItem('editor_autosave');
-    
-    if (autoSaveTime && autoSaveContent) {
-      const savedTime = new Date(autoSaveTime);
-      const now = new Date();
-      const hoursDiff = (now.getTime() - savedTime.getTime()) / (1000 * 60 * 60);
-      
-      // Jeśli zapisano w ciągu ostatnich 24 godzin
-      if (hoursDiff < 24) {
-        const restore = confirm(
-          `Znaleziono niezapisaną pracę z ${savedTime.toLocaleString()}.\n\nCzy chcesz ją przywrócić?`
-        );
-        
-        if (restore) {
-          this.documentContent.set(autoSaveContent);
-          this.showSuccess('Przywrócono niezapisaną pracę');
-        } else {
-          localStorage.removeItem('editor_autosave');
-          localStorage.removeItem('editor_autosave_time');
-        }
-      }
-    }
-  }
-
-  /**
    * Tworzy nowy dokument
    */
   newDocument(): void {
@@ -166,7 +134,6 @@ export class DocumentEditorComponent {
     this.documentStyles.set([]); // Reset stylów - toolbar użyje domyślnych
     this.originalFileName.set('');
     this.editor?.setContent('<p>&nbsp;</p>');
-    this.editor?.clearAutoSave();
     this.showMenu.set(false);
   }
 
@@ -205,7 +172,6 @@ export class DocumentEditorComponent {
         
         if (this.editor) {
           this.editor.setContent(content.html);
-          this.editor.clearAutoSave();
         }
         
         this.showSuccess(`Otwarto dokument: ${file.name}`);
@@ -237,7 +203,6 @@ export class DocumentEditorComponent {
     );
     
     this.editor?.markAsSaved();
-    this.editor?.clearAutoSave();
     this.showSuccess('Dokument został zapisany');
     this.isLoading.set(false);
     this.showMenu.set(false);
@@ -271,7 +236,6 @@ export class DocumentEditorComponent {
         
         if (this.editor) {
           this.editor.setContent(content.html);
-          this.editor.clearAutoSave();
         }
         
         this.isLoading.set(false);
@@ -372,6 +336,27 @@ export class DocumentEditorComponent {
     // Zastosuj pełny styl do zaznaczenia
     if (this.editor) {
       this.editor.applyDocumentStyle(style);
+    }
+  }
+
+  // Przechowywane formatowanie do kopiowania
+  private copiedFormat: any = null;
+
+  /**
+   * Kopiuje formatowanie z bieżącego zaznaczenia
+   */
+  onCopyFormat(): void {
+    if (this.editor) {
+      this.copiedFormat = this.editor.getCurrentFormatting();
+    }
+  }
+
+  /**
+   * Aplikuje skopiowane formatowanie do zaznaczenia
+   */
+  onPasteFormat(): void {
+    if (this.editor && this.copiedFormat) {
+      this.editor.applyFormatting(this.copiedFormat);
     }
   }
 
