@@ -199,6 +199,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this._isInternalUpdate = false;
     this.saveToUndoStack();
     this.updateState();
+    this.updateFormattingState(); // Aktualizuj też stan formatowania
   }
 
   /**
@@ -490,46 +491,96 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Aplikuje rozmiar czcionki do zaznaczenia
+   * Aplikuje rozmiar czcionki do zaznaczenia - bez execCommand
    */
   private applyFontSizeToSelection(size: number, selection: Selection, range: Range): void {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
-    // Użyj execCommand fontSize z wartością 7, a potem zamień na właściwy rozmiar
-    document.execCommand('fontSize', false, '7');
+    // Wyodrębnij zawartość zaznaczenia
+    const fragment = range.extractContents();
     
-    // Znajdź wszystkie elementy font[size="7"] i zamień na span z właściwym rozmiarem
-    const fonts = editor.querySelectorAll('font[size="7"]');
-    fonts.forEach((font: Element) => {
-      const span = document.createElement('span');
-      span.style.fontSize = `${size}pt`;
-      span.style.lineHeight = 'normal';
-      span.innerHTML = font.innerHTML;
-      font.parentNode?.replaceChild(span, font);
-    });
-    
-    // Usuń też duże elementy font które mogą zostać
-    const largeFonts = editor.querySelectorAll('font[size]');
-    largeFonts.forEach((font: Element) => {
-      const fontEl = font as HTMLFontElement;
-      const span = document.createElement('span');
-      const fontSize = this.fontSizeFromValue(fontEl.size);
-      span.style.fontSize = `${fontSize}pt`;
-      span.style.lineHeight = 'normal';
-      span.innerHTML = font.innerHTML;
-      font.parentNode?.replaceChild(span, font);
-    });
-  }
-
-  /**
-   * Konwertuje wartość font size (1-7) na pt
-   */
-  private fontSizeFromValue(value: string): number {
-    const map: Record<string, number> = {
-      '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36
+    // Funkcja pomocnicza do rekurencyjnego przetwarzania węzłów
+    const processNode = (node: Node): Node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        // Węzeł tekstowy - opakuj w span z nowym rozmiarem
+        const span = document.createElement('span');
+        span.style.fontSize = `${size}pt`;
+        span.textContent = node.textContent;
+        return span;
+      }
+      
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as HTMLElement;
+        
+        // Jeśli to span lub font - nadpisz font-size i zachowaj inne style
+        if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
+          const newSpan = document.createElement('span');
+          
+          // Skopiuj wszystkie style oprócz font-size
+          if (element.style.cssText) {
+            newSpan.style.cssText = element.style.cssText;
+          }
+          // Nadpisz font-size
+          newSpan.style.fontSize = `${size}pt`;
+          
+          // Kopiuj inne atrybuty font (face -> font-family, color)
+          if (element.tagName === 'FONT') {
+            const fontEl = element as HTMLFontElement;
+            if (fontEl.face) {
+              newSpan.style.fontFamily = fontEl.face;
+            }
+            if (fontEl.color) {
+              newSpan.style.color = fontEl.color;
+            }
+          }
+          
+          // Przetwórz dzieci
+          Array.from(element.childNodes).forEach(child => {
+            newSpan.appendChild(processNode(child));
+          });
+          
+          return newSpan;
+        }
+        
+        // Dla innych elementów (b, i, u, etc.) - zachowaj i przetwórz dzieci
+        const clone = element.cloneNode(false) as HTMLElement;
+        Array.from(element.childNodes).forEach(child => {
+          clone.appendChild(processNode(child));
+        });
+        return clone;
+      }
+      
+      return node.cloneNode(true);
     };
-    return map[value] || this.currentFontSize;
+    
+    // Przetwórz fragment - zbierz węzły do późniejszego zaznaczenia
+    const newFragment = document.createDocumentFragment();
+    const insertedNodes: Node[] = [];
+    Array.from(fragment.childNodes).forEach(child => {
+      const processed = processNode(child);
+      insertedNodes.push(processed);
+      newFragment.appendChild(processed);
+    });
+    
+    // Wstaw przetworzony fragment
+    range.insertNode(newFragment);
+    
+    // Przywróć zaznaczenie na wstawionej zawartości
+    if (insertedNodes.length > 0) {
+      const newRange = document.createRange();
+      const firstNode = insertedNodes[0];
+      const lastNode = insertedNodes[insertedNodes.length - 1];
+      
+      newRange.setStartBefore(firstNode);
+      newRange.setEndAfter(lastNode);
+      
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+    }
+    
+    // Normalizuj edytor (połącz sąsiadujące węzły tekstowe)
+    editor.normalize();
   }
 
   /**
@@ -569,8 +620,91 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
-    document.execCommand('fontName', false, fontFamily);
+    // Użyj tej samej logiki co dla font-size
+    this.applyFontFamilyToSelection(fontFamily, selection, range);
     this.onContentChange();
+  }
+
+  /**
+   * Aplikuje rodzinę czcionki do zaznaczenia
+   */
+  private applyFontFamilyToSelection(fontFamily: string, selection: Selection, range: Range): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+
+    // Wyodrębnij zawartość zaznaczenia
+    const fragment = range.extractContents();
+    
+    // Funkcja pomocnicza do rekurencyjnego przetwarzania węzłów
+    const processNode = (node: Node): Node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const span = document.createElement('span');
+        span.style.fontFamily = fontFamily;
+        span.textContent = node.textContent;
+        return span;
+      }
+      
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as HTMLElement;
+        
+        if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
+          const newSpan = document.createElement('span');
+          
+          if (element.style.cssText) {
+            newSpan.style.cssText = element.style.cssText;
+          }
+          newSpan.style.fontFamily = fontFamily;
+          
+          if (element.tagName === 'FONT') {
+            const fontEl = element as HTMLFontElement;
+            if (fontEl.size) {
+              const sizeMap: Record<string, number> = {
+                '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36
+              };
+              newSpan.style.fontSize = `${sizeMap[fontEl.size] || 11}pt`;
+            }
+            if (fontEl.color) {
+              newSpan.style.color = fontEl.color;
+            }
+          }
+          
+          Array.from(element.childNodes).forEach(child => {
+            newSpan.appendChild(processNode(child));
+          });
+          
+          return newSpan;
+        }
+        
+        const clone = element.cloneNode(false) as HTMLElement;
+        Array.from(element.childNodes).forEach(child => {
+          clone.appendChild(processNode(child));
+        });
+        return clone;
+      }
+      
+      return node.cloneNode(true);
+    };
+    
+    const newFragment = document.createDocumentFragment();
+    const insertedNodes: Node[] = [];
+    Array.from(fragment.childNodes).forEach(child => {
+      const processed = processNode(child);
+      insertedNodes.push(processed);
+      newFragment.appendChild(processed);
+    });
+    
+    range.insertNode(newFragment);
+    
+    // Przywróć zaznaczenie
+    if (insertedNodes.length > 0) {
+      const newRange = document.createRange();
+      newRange.setStartBefore(insertedNodes[0]);
+      newRange.setEndAfter(insertedNodes[insertedNodes.length - 1]);
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+    }
+    
+    editor.normalize();
   }
 
   /**
@@ -581,8 +715,95 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (!editor) return;
 
     editor.focus();
-    document.execCommand('foreColor', false, color);
+    
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) return;
+    
+    this.applyColorToSelection(color, selection, range);
     this.onContentChange();
+  }
+
+  /**
+   * Aplikuje kolor do zaznaczenia
+   */
+  private applyColorToSelection(color: string, selection: Selection, range: Range): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+
+    const fragment = range.extractContents();
+    
+    const processNode = (node: Node): Node => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const span = document.createElement('span');
+        span.style.color = color;
+        span.textContent = node.textContent;
+        return span;
+      }
+      
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node as HTMLElement;
+        
+        if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
+          const newSpan = document.createElement('span');
+          
+          if (element.style.cssText) {
+            newSpan.style.cssText = element.style.cssText;
+          }
+          newSpan.style.color = color;
+          
+          if (element.tagName === 'FONT') {
+            const fontEl = element as HTMLFontElement;
+            if (fontEl.size) {
+              const sizeMap: Record<string, number> = {
+                '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36
+              };
+              newSpan.style.fontSize = `${sizeMap[fontEl.size] || 11}pt`;
+            }
+            if (fontEl.face) {
+              newSpan.style.fontFamily = fontEl.face;
+            }
+          }
+          
+          Array.from(element.childNodes).forEach(child => {
+            newSpan.appendChild(processNode(child));
+          });
+          
+          return newSpan;
+        }
+        
+        const clone = element.cloneNode(false) as HTMLElement;
+        Array.from(element.childNodes).forEach(child => {
+          clone.appendChild(processNode(child));
+        });
+        return clone;
+      }
+      
+      return node.cloneNode(true);
+    };
+    
+    const newFragment = document.createDocumentFragment();
+    const insertedNodes: Node[] = [];
+    Array.from(fragment.childNodes).forEach(child => {
+      const processed = processNode(child);
+      insertedNodes.push(processed);
+      newFragment.appendChild(processed);
+    });
+    
+    range.insertNode(newFragment);
+    
+    // Przywróć zaznaczenie
+    if (insertedNodes.length > 0) {
+      const newRange = document.createRange();
+      newRange.setStartBefore(insertedNodes[0]);
+      newRange.setEndAfter(insertedNodes[insertedNodes.length - 1]);
+      selection.removeAllRanges();
+      selection.addRange(newRange);
+    }
+    
+    editor.normalize();
   }
 
   /**
@@ -704,6 +925,22 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     console.log('[applyDocumentStyle] Zaznaczony tekst:', selectedText);
 
+    // Wyodrębnij zawartość zaznaczenia
+    const fragment = range.extractContents();
+    
+    // Spłaszcz zagnieżdżone elementy - wyciągnij tylko tekst
+    const flattenFragment = (node: Node): string => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent || '';
+      }
+      let text = '';
+      node.childNodes.forEach(child => {
+        text += flattenFragment(child);
+      });
+      return text;
+    };
+    const plainText = flattenFragment(fragment);
+    
     // Tworzę element SPAN z wszystkimi stylami
     const styledSpan = document.createElement('span');
     
@@ -752,9 +989,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       console.log('[applyDocumentStyle] Finalne style:', styles.join('; '));
     }
     
-    // Wyodrębnij zawartość zaznaczenia i włóż do span
-    const fragment = range.extractContents();
-    styledSpan.appendChild(fragment);
+    // Wstaw czysty tekst do span (bez zagnieżdżonych elementów)
+    styledSpan.textContent = plainText;
     
     // Wstaw span w miejsce zaznaczenia
     range.insertNode(styledSpan);
@@ -923,18 +1159,54 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       superscript: document.queryCommandState('superscript')
     };
 
-    const currentBlock = document.queryCommandValue('formatBlock');
-    const fontSize = document.queryCommandValue('fontSize');
-    const fontName = document.queryCommandValue('fontName');
-    const foreColor = document.queryCommandValue('foreColor');
+    // Pobierz rzeczywisty rozmiar i czcionkę z computed styles
+    const selection = window.getSelection();
+    let fontSize = 11;
+    let fontFamily = 'Calibri';
+    let textColor = '#000000';
+    let currentBlockFormat = 'p';
+
+    if (selection && selection.rangeCount > 0) {
+      let element = selection.anchorNode as HTMLElement;
+      if (element?.nodeType === Node.TEXT_NODE) {
+        element = element.parentElement!;
+      }
+
+      if (element) {
+        const computedStyle = window.getComputedStyle(element);
+        
+        // Rozmiar czcionki - konwersja px na pt
+        const fontSizePx = parseFloat(computedStyle.fontSize);
+        fontSize = Math.round(fontSizePx * 0.75); // px to pt (96dpi / 72pt)
+        
+        // Czcionka - usuń cudzysłowy i weź pierwszą
+        fontFamily = computedStyle.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+        
+        // Kolor tekstu
+        textColor = this.rgbToHex(computedStyle.color);
+
+        // Znajdź blok nadrzędny (p, h1, h2, etc.)
+        let blockElement = element;
+        while (blockElement && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'LI'].includes(blockElement.tagName)) {
+          blockElement = blockElement.parentElement!;
+        }
+        if (blockElement) {
+          currentBlockFormat = blockElement.tagName.toLowerCase();
+        }
+      }
+    }
+
+    // Debug log
+    console.log('[updateFormattingState] fontSize:', fontSize, 'fontFamily:', fontFamily, 'blockFormat:', currentBlockFormat);
 
     this.editorState.update(state => ({
       ...state,
       currentFormatting: formatting,
       currentStyle: {
-        fontFamily: fontName || 'Calibri',
-        fontSize: fontSize ? parseInt(fontSize) : 11,
-        textColor: foreColor || '#000000'
+        fontFamily: fontFamily,
+        fontSize: fontSize,
+        textColor: textColor,
+        blockFormat: currentBlockFormat
       }
     }));
 

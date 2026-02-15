@@ -5,7 +5,8 @@ import {
   Output,
   signal,
   computed,
-  effect
+  effect,
+  HostListener
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -137,7 +138,22 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
   styleUrl: './editor-toolbar.css'
 })
 export class EditorToolbarComponent {
-  @Input() editorState: EditorState | null = null;
+  private _editorState: EditorState | null = null;
+
+  @HostListener('document:click')
+  onDocumentClick(): void {
+    this.showStyleDropdown.set(false);
+  }
+  
+  @Input() set editorState(state: EditorState | null) {
+    this._editorState = state;
+    this.updateFromEditorState(state);
+  }
+  
+  get editorState(): EditorState | null {
+    return this._editorState;
+  }
+  
   @Input() set documentStyles(styles: DocumentStyle[] | null) {
     if (styles && styles.length > 0) {
       this._documentStyles.set(styles);
@@ -201,12 +217,159 @@ export class EditorToolbarComponent {
   // Stan dialogów
   showLinkDialog = signal(false);
   showTableDialog = signal(false);
+  showStyleDropdown = signal(false);
   linkUrl = '';
   linkText = '';
   tableRows = 3;
   tableCols = 3;
 
   selectedBlockFormat = signal('paragraph');
+
+  /**
+   * Pobiera label wybranego stylu
+   */
+  getSelectedStyleLabel(): string {
+    const format = this.blockFormats().find(f => f.value === this.selectedBlockFormat());
+    return format?.label || 'Normalny';
+  }
+
+  /**
+   * Przełącza dropdown stylów
+   */
+  toggleStyleDropdown(): void {
+    this.showStyleDropdown.update(v => !v);
+  }
+
+  /**
+   * Zamyka dropdown stylów
+   */
+  closeStyleDropdown(): void {
+    this.showStyleDropdown.set(false);
+  }
+
+  /**
+   * Wybiera styl z dropdown
+   */
+  selectStyle(format: { value: string; label: string; style: DocumentStyle }): void {
+    this.selectedBlockFormat.set(format.value);
+    this.styleChange.emit(format.style);
+    this.showStyleDropdown.set(false);
+  }
+
+  /**
+   * Oblicza rozmiar podglądu stylu (skalowany dla dropdown)
+   */
+  getStylePreviewSize(originalSize: number | undefined): number {
+    if (!originalSize) return 11;
+    // Skaluj rozmiary aby zmieściły się w dropdown
+    // Tytuł (28pt) -> 18pt, Normalny (11pt) -> 11pt
+    if (originalSize >= 24) return 18;
+    if (originalSize >= 16) return 14;
+    if (originalSize >= 13) return 12;
+    return 11;
+  }
+
+  /**
+   * Aktualizuje toolbar na podstawie stanu edytora
+   */
+  private updateFromEditorState(state: EditorState | null): void {
+    if (!state?.currentStyle) return;
+
+    // Aktualizuj rozmiar czcionki
+    if (state.currentStyle.fontSize && state.currentStyle.fontSize > 0) {
+      this.selectedFontSize.set(state.currentStyle.fontSize);
+    }
+
+    // Aktualizuj czcionkę
+    if (state.currentStyle.fontFamily) {
+      // Normalizuj nazwę czcionki
+      const fontFamily = state.currentStyle.fontFamily;
+      const matchedFont = this.fontFamilies.find(f => 
+        fontFamily.toLowerCase().includes(f.toLowerCase())
+      );
+      if (matchedFont) {
+        this.selectedFontFamily.set(matchedFont);
+      }
+    }
+
+    // Aktualizuj kolor tekstu
+    if (state.currentStyle.textColor) {
+      this.selectedTextColor.set(state.currentStyle.textColor);
+    }
+
+    // Aktualizuj format bloku - dopasuj na podstawie tagu LUB właściwości stylu
+    this.updateBlockFormatFromState(state);
+  }
+
+  /**
+   * Dopasowuje format bloku na podstawie stanu edytora
+   */
+  private updateBlockFormatFromState(state: EditorState): void {
+    const blockFormat = state.currentStyle?.blockFormat;
+    const fontSize = state.currentStyle?.fontSize || 11;
+    const isBold = state.currentFormatting?.bold || false;
+    const isItalic = state.currentFormatting?.italic || false;
+
+    // Debug log
+    console.log('[updateBlockFormatFromState] fontSize:', fontSize, 'bold:', isBold, 'italic:', isItalic, 'blockFormat:', blockFormat);
+
+    let format = 'paragraph';
+
+    // Najpierw sprawdź tag HTML dla nagłówków
+    if (blockFormat === 'h1') {
+      format = 'heading1';
+    } else if (blockFormat === 'h2') {
+      format = 'heading2';
+    } else if (blockFormat === 'h3') {
+      format = 'heading3';
+    } else if (blockFormat === 'h4') {
+      format = 'heading4';
+    } else if (blockFormat === 'h5') {
+      format = 'heading5';
+    } else if (blockFormat === 'h6') {
+      format = 'heading6';
+    } else {
+      // Dopasuj styl na podstawie porównania z definicjami stylów
+      // Używamy tolerancji ±2pt dla fontSize
+      const tolerance = 2;
+      
+      // Tytuł: fontSize ~28pt (26-30)
+      if (fontSize >= 26) {
+        format = 'title';
+      }
+      // Nagłówek 1: fontSize ~16pt, bold, kolor niebieski
+      else if (fontSize >= 15 && fontSize <= 18 && isBold) {
+        format = 'heading1';
+      }
+      // Podtytuł: fontSize ~14pt, italic, nie bold
+      else if (fontSize >= 13 && fontSize <= 15 && isItalic && !isBold) {
+        format = 'subtitle';
+      }
+      // Nagłówek 2: fontSize ~13pt, bold
+      else if (fontSize >= 12 && fontSize <= 14 && isBold && !isItalic) {
+        format = 'heading2';
+      }
+      // Nagłówek 3: fontSize ~12pt, bold
+      else if (fontSize >= 11 && fontSize <= 13 && isBold && !isItalic) {
+        format = 'heading3';
+      }
+      // Nagłówek 4: fontSize ~11pt, bold i italic
+      else if (fontSize >= 10 && fontSize <= 12 && isBold && isItalic) {
+        format = 'heading4';
+      }
+      // Dla tekstu większego niż normalny (>14pt) ale bez innych cech - traktuj jako Tytuł
+      else if (fontSize >= 18) {
+        format = 'title';
+      }
+      // Normalny: fontSize ~11pt lub inne
+      else {
+        format = 'paragraph';
+      }
+    }
+
+    console.log('[updateBlockFormatFromState] Wybrany format:', format);
+    this.selectedBlockFormat.set(format);
+  }
 
   /**
    * Konwertuje ID stylu na komendę edytora
@@ -231,11 +394,9 @@ export class EditorToolbarComponent {
   }
 
   /**
-   * Zmienia format bloku
+   * Zmienia format bloku (ngModel)
    */
-  onBlockFormatChange(event: Event): void {
-    const select = event.target as HTMLSelectElement;
-    const format = select.value as EditorCommand;
+  onBlockFormatSelect(format: string): void {
     this.selectedBlockFormat.set(format);
     
     // Znajdź styl i wyemituj go - applyDocumentStyle zajmie się wszystkim
@@ -243,16 +404,30 @@ export class EditorToolbarComponent {
     if (selectedFormat) {
       this.styleChange.emit(selectedFormat.style);
     }
-    // Nie emitujemy już executeCommand - applyDocumentStyle robi wszystko
   }
 
   /**
-   * Zmienia rodzinę czcionki
+   * Zmienia format bloku (event)
+   */
+  onBlockFormatChange(event: Event): void {
+    const select = event.target as HTMLSelectElement;
+    this.onBlockFormatSelect(select.value);
+  }
+
+  /**
+   * Zmienia rodzinę czcionki (ngModel)
+   */
+  onFontFamilySelect(fontFamily: string): void {
+    this.selectedFontFamily.set(fontFamily);
+    this.fontFamilyChange.emit(fontFamily);
+  }
+
+  /**
+   * Zmienia rodzinę czcionki (event)
    */
   onFontFamilyChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
-    this.selectedFontFamily.set(select.value);
-    this.fontFamilyChange.emit(select.value);
+    this.onFontFamilySelect(select.value);
   }
 
   /**

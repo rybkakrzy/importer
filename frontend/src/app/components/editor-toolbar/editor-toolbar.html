@@ -23,17 +23,36 @@
 
   <div class="toolbar-separator"></div>
 
-  <!-- Grupa: Format bloku -->
+  <!-- Grupa: Format bloku - Custom Dropdown -->
   <div class="toolbar-group">
-    <select 
-      class="toolbar-select format-select"
-      [value]="selectedBlockFormat()"
-      (change)="onBlockFormatChange($event)"
-      title="Format bloku">
-      @for (format of blockFormats(); track format.value) {
-        <option [value]="format.value">{{ format.label }}</option>
+    <div class="style-dropdown" [class.open]="showStyleDropdown()">
+      <button 
+        class="style-dropdown-trigger"
+        (click)="toggleStyleDropdown(); $event.stopPropagation()"
+        title="Format bloku">
+        <span class="selected-style-label">{{ getSelectedStyleLabel() }}</span>
+        <svg class="dropdown-arrow" viewBox="0 0 24 24" width="12" height="12">
+          <path fill="currentColor" d="M7 10l5 5 5-5z"/>
+        </svg>
+      </button>
+      @if (showStyleDropdown()) {
+        <div class="style-dropdown-menu" (click)="$event.stopPropagation()">
+          @for (format of blockFormats(); track format.value) {
+            <button 
+              class="style-option"
+              [class.selected]="format.value === selectedBlockFormat()"
+              [style.font-family]="format.style.fontFamily"
+              [style.font-size.pt]="getStylePreviewSize(format.style.fontSize)"
+              [style.font-weight]="format.style.isBold ? 'bold' : 'normal'"
+              [style.font-style]="format.style.isItalic ? 'italic' : 'normal'"
+              [style.color]="format.style.color || '#000000'"
+              (click)="selectStyle(format)">
+              {{ format.label }}
+            </button>
+          }
+        </div>
       }
-    </select>
+    </div>
   </div>
 
   <div class="toolbar-separator"></div>
@@ -57,11 +76,10 @@
   <div class="toolbar-group">
     <select 
       class="toolbar-select font-family-select"
-      [value]="selectedFontFamily()"
       (change)="onFontFamilyChange($event)"
       title="Czcionka">
       @for (font of fontFamilies; track font) {
-        <option [value]="font" [style.font-family]="font">{{ font }}</option>
+        <option [value]="font" [selected]="font === selectedFontFamily()" [style.font-family]="font">{{ font }}</option>
       }
     </select>
   </div>

@@ -120,6 +120,7 @@ export interface ParagraphStyle {
   backgroundColor: string;
   alignment: 'left' | 'center' | 'right' | 'justify';
   lineHeight: number;
+  blockFormat?: string;
 }
 
 /** Stan edytora */
