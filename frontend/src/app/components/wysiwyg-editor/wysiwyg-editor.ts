@@ -62,12 +62,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Input() set headerContent(value: HeaderFooterContent | undefined) {
     if (value) {
       this._headerHtml.set(value.html || '');
-      this._headerHeight.set(value.height || 1.25);
+      this._headerHeight.set(value.height || 1.27);
       if (value.differentFirstPage !== undefined) {
         this._differentFirstPage.set(value.differentFirstPage);
       }
       if (value.firstPageHtml !== undefined) {
         this._headerFirstPageHtml.set(value.firstPageHtml);
+      }
+      if (value.differentOddEven !== undefined) {
+        this._differentOddEven.set(value.differentOddEven);
+      }
+      if (value.oddHtml !== undefined) {
+        this._headerOddHtml.set(value.oddHtml);
+      }
+      if (value.evenHtml !== undefined) {
+        this._headerEvenHtml.set(value.evenHtml);
       }
     }
   }
@@ -75,12 +84,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Input() set footerContent(value: HeaderFooterContent | undefined) {
     if (value) {
       this._footerHtml.set(value.html || '');
-      this._footerHeight.set(value.height || 1.25);
+      this._footerHeight.set(value.height || 1.27);
       if (value.differentFirstPage !== undefined) {
         this._differentFirstPage.set(value.differentFirstPage);
       }
       if (value.firstPageHtml !== undefined) {
         this._footerFirstPageHtml.set(value.firstPageHtml);
+      }
+      if (value.differentOddEven !== undefined) {
+        this._differentOddEven.set(value.differentOddEven);
+      }
+      if (value.oddHtml !== undefined) {
+        this._footerOddHtml.set(value.oddHtml);
+      }
+      if (value.evenHtml !== undefined) {
+        this._footerEvenHtml.set(value.evenHtml);
       }
     }
   }
@@ -91,6 +109,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Output() pagesChange = new EventEmitter<number>();
   @Output() headerChange = new EventEmitter<HeaderFooterContent>();
   @Output() footerChange = new EventEmitter<HeaderFooterContent>();
+  @Output() openHeaderFooterSettings = new EventEmitter<{
+    headerMargin: number;
+    footerMargin: number;
+    differentFirstPage: boolean;
+    differentOddEven: boolean;
+  }>();
 
   private _content = signal<string>('');
   private _isInternalUpdate = false;
@@ -116,9 +140,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private _footerHtml = signal<string>('');
   private _headerFirstPageHtml = signal<string>('');
   private _footerFirstPageHtml = signal<string>('');
-  private _headerHeight = signal<number>(1.25); // domyślnie 1.25 cm
-  private _footerHeight = signal<number>(1.25); // domyślnie 1.25 cm
+  private _headerOddHtml = signal<string>('');
+  private _headerEvenHtml = signal<string>('');
+  private _footerOddHtml = signal<string>('');
+  private _footerEvenHtml = signal<string>('');
+  private _headerHeight = signal<number>(1.27); // domyślnie 1.27 cm (jak w Google Docs)
+  private _footerHeight = signal<number>(1.27); // domyślnie 1.27 cm
   private _differentFirstPage = signal<boolean>(false);
+  private _differentOddEven = signal<boolean>(false);
   editingSection = signal<'header' | 'footer' | 'body'>('body');
   
   // Menu opcji nagłówka/stopki
@@ -129,6 +158,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   headerHeight = computed(() => this._headerHeight());
   footerHeight = computed(() => this._footerHeight());
   differentFirstPage = computed(() => this._differentFirstPage());
+  differentOddEven = computed(() => this._differentOddEven());
 
   // Stan edytora
   editorState = signal<EditorState>({
@@ -1519,8 +1549,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Pobiera zawartość nagłówka dla danej strony
    */
   getHeaderContent(pageIndex: number): string {
+    // Pierwsza strona z inną treścią
     if (this._differentFirstPage() && pageIndex === 0) {
       return this._headerFirstPageHtml();
+    }
+    // Różne parzyste/nieparzyste
+    if (this._differentOddEven()) {
+      const isOdd = (pageIndex + 1) % 2 === 1;
+      return isOdd ? this._headerOddHtml() : this._headerEvenHtml();
     }
     return this._headerHtml();
   }
@@ -1530,8 +1566,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   getFooterContent(pageIndex: number): string {
     let content: string;
+    // Pierwsza strona z inną treścią
     if (this._differentFirstPage() && pageIndex === 0) {
       content = this._footerFirstPageHtml();
+    } 
+    // Różne parzyste/nieparzyste
+    else if (this._differentOddEven()) {
+      const isOdd = (pageIndex + 1) % 2 === 1;
+      content = isOdd ? this._footerOddHtml() : this._footerEvenHtml();
     } else {
       content = this._footerHtml();
     }
@@ -1650,9 +1692,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   openHeaderFormatDialog(): void {
     this.showHeaderOptionsMenu.set(false);
-    // Emituj zdarzenie do rodzica aby otworzył dialog
-    // Na razie wyświetl alert - można rozbudować o właściwy dialog
-    alert('Format nagłówka - funkcja w przygotowaniu.\nMożesz ustawić margines górny i wysokość nagłówka w ustawieniach strony.');
+    this.openHeaderFooterFormatDialog();
   }
 
   /**
@@ -1660,7 +1700,37 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   openFooterFormatDialog(): void {
     this.showFooterOptionsMenu.set(false);
-    alert('Format stopki - funkcja w przygotowaniu.\nMożesz ustawić margines dolny i wysokość stopki w ustawieniach strony.');
+    this.openHeaderFooterFormatDialog();
+  }
+
+  /**
+   * Otwiera dialog formatowania nagłówka i stopki
+   */
+  openHeaderFooterFormatDialog(): void {
+    // Emituj event do rodzica - dialog zostanie wyświetlony w document-editor
+    this.openHeaderFooterSettings.emit({
+      headerMargin: this._headerHeight(),
+      footerMargin: this._footerHeight(),
+      differentFirstPage: this._differentFirstPage(),
+      differentOddEven: this._differentOddEven()
+    });
+  }
+
+  /**
+   * Aplikuje ustawienia nagłówka/stopki z zewnątrz (z document-editor)
+   */
+  applyHeaderFooterSettings(settings: {
+    headerMargin: number;
+    footerMargin: number;
+    differentFirstPage: boolean;
+    differentOddEven: boolean;
+  }): void {
+    this._headerHeight.set(settings.headerMargin);
+    this._footerHeight.set(settings.footerMargin);
+    this._differentFirstPage.set(settings.differentFirstPage);
+    this._differentOddEven.set(settings.differentOddEven);
+    
+    this.emitHeaderFooterChanges();
   }
 
   /**
@@ -1727,13 +1797,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       html: this._headerHtml(),
       height: this._headerHeight(),
       differentFirstPage: this._differentFirstPage(),
-      firstPageHtml: this._headerFirstPageHtml()
+      firstPageHtml: this._headerFirstPageHtml(),
+      differentOddEven: this._differentOddEven(),
+      oddHtml: this._headerOddHtml(),
+      evenHtml: this._headerEvenHtml()
     });
     this.footerChange.emit({
       html: this._footerHtml(),
       height: this._footerHeight(),
       differentFirstPage: this._differentFirstPage(),
-      firstPageHtml: this._footerFirstPageHtml()
+      firstPageHtml: this._footerFirstPageHtml(),
+      differentOddEven: this._differentOddEven(),
+      oddHtml: this._footerOddHtml(),
+      evenHtml: this._footerEvenHtml()
     });
   }
 }

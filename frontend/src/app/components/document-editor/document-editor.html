@@ -411,9 +411,17 @@
             (pagesChange)="onPagesChange($event)"
             (headerChange)="onHeaderChange($event)"
             (footerChange)="onFooterChange($event)"
+            (openHeaderFooterSettings)="onOpenHeaderFooterSettings($event)"
           />
         </div>
       </div>
+      
+      <!-- Wskaźnik stron przy scrollowaniu -->
+      @if (showPageIndicator() && totalPages() > 1) {
+        <div class="page-indicator">
+          {{ currentPage() }} z {{ totalPages() }}
+        </div>
+      }
     </div>
   </main>
 
@@ -743,6 +751,73 @@
         <div class="dialog-footer">
           <button class="btn btn-secondary" (click)="showPageSetup.set(false)">Anuluj</button>
           <button class="btn btn-primary" (click)="applyPageSettings()">Zastosuj</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Dialog nagłówka i stopki -->
+  @if (showHeaderFooterDialog()) {
+    <div class="dialog-overlay" (click)="closeHeaderFooterDialog()">
+      <div class="dialog header-footer-dialog" (click)="$event.stopPropagation()">
+        <div class="dialog-header">
+          <h3>Nagłówki i stopki</h3>
+          <button class="dialog-close" (click)="closeHeaderFooterDialog()">×</button>
+        </div>
+        <div class="dialog-content">
+          <div class="hf-section">
+            <h4>Marginesy</h4>
+            
+            <div class="hf-form-field">
+              <label>Nagłówek (w centymetrach od góry)</label>
+              <input 
+                type="number" 
+                step="0.01"
+                min="0"
+                max="10"
+                [value]="headerFooterDialogData().headerMargin"
+                (input)="updateHeaderFooterDialogData('headerMargin', $any($event.target).valueAsNumber)"
+              >
+            </div>
+            
+            <div class="hf-form-field">
+              <label>Stopka (w centymetrach od dołu)</label>
+              <input 
+                type="number"
+                step="0.01"
+                min="0"
+                max="10"
+                [value]="headerFooterDialogData().footerMargin"
+                (input)="updateHeaderFooterDialogData('footerMargin', $any($event.target).valueAsNumber)"
+              >
+            </div>
+          </div>
+          
+          <div class="hf-section">
+            <h4>Układ</h4>
+            
+            <label class="hf-checkbox">
+              <input 
+                type="checkbox"
+                [checked]="headerFooterDialogData().differentFirstPage"
+                (change)="updateHeaderFooterDialogData('differentFirstPage', $any($event.target).checked)"
+              >
+              <span>Inna pierwsza strona</span>
+            </label>
+            
+            <label class="hf-checkbox">
+              <input 
+                type="checkbox"
+                [checked]="headerFooterDialogData().differentOddEven"
+                (change)="updateHeaderFooterDialogData('differentOddEven', $any($event.target).checked)"
+              >
+              <span>Różne nieparzyste i parzyste</span>
+            </label>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" (click)="closeHeaderFooterDialog()">Anuluj</button>
+          <button class="btn btn-primary" (click)="applyHeaderFooterSettings()">Zastosuj</button>
         </div>
       </div>
     </div>

@@ -8,6 +8,9 @@ export interface HeaderFooterContent {
   height: number; // wysokość w cm
   differentFirstPage?: boolean; // inna treść na pierwszej stronie
   firstPageHtml?: string;
+  differentOddEven?: boolean; // różne parzyste i nieparzyste
+  oddHtml?: string;
+  evenHtml?: string;
 }
 
 /** Zawartość dokumentu z konwersji DOCX */

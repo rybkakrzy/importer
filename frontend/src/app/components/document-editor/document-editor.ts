@@ -83,6 +83,10 @@ export class DocumentEditorComponent {
   // Strony
   currentPage = signal(1);
   totalPages = signal(1);
+  
+  // Tooltip ze stronami przy scrollowaniu
+  showPageIndicator = signal(false);
+  private pageIndicatorTimeout?: ReturnType<typeof setTimeout>;
 
   // Ustawienia strony
   showPageSetup = signal(false);
@@ -93,6 +97,20 @@ export class DocumentEditorComponent {
     paperSize: 'a4'
   });
   marginPresets = MARGIN_PRESETS;
+
+  // Dialog nagłówka i stopki
+  showHeaderFooterDialog = signal(false);
+  headerFooterDialogData = signal<{
+    headerMargin: number;
+    footerMargin: number;
+    differentFirstPage: boolean;
+    differentOddEven: boolean;
+  }>({
+    headerMargin: 1.27,
+    footerMargin: 1.27,
+    differentFirstPage: false,
+    differentOddEven: false
+  });
 
   // Math dla template
   protected readonly Math = Math;
@@ -453,6 +471,19 @@ export class DocumentEditorComponent {
     const maxPages = this.totalPages();
     
     this.currentPage.set(Math.min(Math.max(1, currentPageNum), maxPages));
+    
+    // Pokaż wskaźnik stron przy scrollowaniu (jeśli jest więcej niż 1 strona)
+    if (maxPages > 1) {
+      this.showPageIndicator.set(true);
+      
+      // Ukryj wskaźnik po 1.5 sekundy bez scrollowania
+      if (this.pageIndicatorTimeout) {
+        clearTimeout(this.pageIndicatorTimeout);
+      }
+      this.pageIndicatorTimeout = setTimeout(() => {
+        this.showPageIndicator.set(false);
+      }, 1500);
+    }
   }
 
   /**
@@ -1121,5 +1152,48 @@ export class DocumentEditorComponent {
     // Marginesy zostaną przekazane do edytora przez style
     this.showPageSetup.set(false);
     this.showSuccess('Zastosowano ustawienia strony');
+  }
+
+  // ================================
+  // Dialog Nagłówka i Stopki
+  // ================================
+
+  /**
+   * Otwiera dialog nagłówka i stopki
+   */
+  onOpenHeaderFooterSettings(data: {
+    headerMargin: number;
+    footerMargin: number;
+    differentFirstPage: boolean;
+    differentOddEven: boolean;
+  }): void {
+    this.headerFooterDialogData.set(data);
+    this.showHeaderFooterDialog.set(true);
+  }
+
+  /**
+   * Zamyka dialog nagłówka i stopki
+   */
+  closeHeaderFooterDialog(): void {
+    this.showHeaderFooterDialog.set(false);
+  }
+
+  /**
+   * Aktualizuje dane dialogu
+   */
+  updateHeaderFooterDialogData(field: string, value: number | boolean): void {
+    this.headerFooterDialogData.update(data => ({
+      ...data,
+      [field]: value
+    }));
+  }
+
+  /**
+   * Zatwierdza ustawienia nagłówka i stopki
+   */
+  applyHeaderFooterSettings(): void {
+    const data = this.headerFooterDialogData();
+    this.editor?.applyHeaderFooterSettings(data);
+    this.closeHeaderFooterDialog();
   }
 }

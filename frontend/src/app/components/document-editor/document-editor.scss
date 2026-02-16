@@ -320,10 +320,40 @@
   flex-direction: column;
   align-items: center;
   padding: 20px;
+  position: relative;
 }
 
 .editor-wrapper {
   transition: transform 0.2s ease;
+}
+
+/* Wskaźnik stron przy scrollowaniu */
+.page-indicator {
+  position: fixed;
+  top: 50%;
+  right: 24px;
+  transform: translateY(-50%);
+  background: #3c4043;
+  color: white;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  animation: fadeIn 0.15s ease;
+  pointer-events: none;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
 }
 
 /* ===== KARTKA DOKUMENTU ===== */
@@ -1102,4 +1132,83 @@
 .checkbox-text {
   font-size: 14px;
   color: #333;
+}
+
+/* Header Footer Dialog */
+.header-footer-dialog {
+  width: 420px;
+}
+
+.hf-section {
+  margin-bottom: 24px;
+}
+
+.hf-section:last-child {
+  margin-bottom: 0;
+}
+
+.hf-section h4 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.hf-form-field {
+  margin-bottom: 16px;
+}
+
+.hf-form-field:last-child {
+  margin-bottom: 0;
+}
+
+.hf-form-field label {
+  display: block;
+  font-size: 12px;
+  color: #5f6368;
+  margin-bottom: 8px;
+}
+
+.hf-form-field input[type="number"] {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 16px;
+  color: #202124;
+  background: white;
+  box-sizing: border-box;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.hf-form-field input[type="number"]:focus {
+  outline: none;
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+}
+
+.hf-form-field input[type="number"]:hover:not(:focus) {
+  border-color: #bdc1c6;
+}
+
+.hf-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hf-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #1a73e8;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hf-checkbox span {
+  font-size: 14px;
+  color: #202124;
 }
