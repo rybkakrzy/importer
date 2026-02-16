@@ -6,7 +6,7 @@ import { FileUpload as FileUploadService, ZipUploadResponse } from '../../servic
   selector: 'app-file-upload',
   imports: [CommonModule],
   templateUrl: './file-upload.html',
-  styleUrl: './file-upload.css',
+  styleUrl: './file-upload.scss',
 })
 export class FileUploadComponent {
   selectedFile: File | null = null;

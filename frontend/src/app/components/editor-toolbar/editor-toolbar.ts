@@ -135,7 +135,7 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './editor-toolbar.html',
-  styleUrl: './editor-toolbar.css'
+  styleUrl: './editor-toolbar.scss'
 })
 export class EditorToolbarComponent {
   private _editorState: EditorState | null = null;

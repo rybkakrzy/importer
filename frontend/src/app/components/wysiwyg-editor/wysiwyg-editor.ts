@@ -34,7 +34,7 @@ import {
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './wysiwyg-editor.html',
-  styleUrl: './wysiwyg-editor.css'
+  styleUrl: './wysiwyg-editor.scss'
 })
 export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @ViewChild('editorContent') editorContent!: ElementRef<HTMLDivElement>;

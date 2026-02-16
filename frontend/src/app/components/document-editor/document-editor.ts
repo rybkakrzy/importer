@@ -36,7 +36,7 @@ import {
     EditorToolbarComponent
   ],
   templateUrl: './document-editor.html',
-  styleUrl: './document-editor.css'
+  styleUrl: './document-editor.scss'
 })
 export class DocumentEditorComponent {
   @ViewChild(WysiwygEditorComponent) editor!: WysiwygEditorComponent;
