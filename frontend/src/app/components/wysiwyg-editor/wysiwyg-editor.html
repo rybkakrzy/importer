@@ -10,7 +10,7 @@
           <!-- Nagłówek strony -->
           <div class="page-header"
                [class.editing]="editingSection() === 'header'"
-               [style.height.cm]="headerHeight()"
+               [style.min-height.cm]="headerHeight()"
                [style.padding-left.px]="pageMargins.left * 37.8"
                [style.padding-right.px]="pageMargins.right * 37.8"
                (click)="startEditingHeader()"
@@ -21,10 +21,41 @@
                 class="header-editor-content"
                 contenteditable="true"
                 spellcheck="true"
-                [attr.placeholder]="'Kliknij, aby edytować nagłówek'"
-                (blur)="onHeaderBlur()"
+                [attr.placeholder]="''"
                 (input)="onHeaderInput($event)"
               ></div>
+              <!-- Pasek nagłówka w stylu Google Docs -->
+              <div class="header-toolbar" (click)="$event.stopPropagation()">
+                <span class="header-toolbar-label">Nagłówek</span>
+                <div class="header-toolbar-spacer"></div>
+                <label class="header-toolbar-checkbox">
+                  <input type="checkbox" 
+                         [checked]="differentFirstPage()" 
+                         (change)="toggleDifferentFirstPage()">
+                  <span>Inna pierwsza strona</span>
+                </label>
+                <div class="header-toolbar-options">
+                  <button class="header-options-btn" (click)="toggleHeaderOptionsMenu($event)">
+                    Opcje
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M7 10l5 5 5-5z"/>
+                    </svg>
+                  </button>
+                  @if (showHeaderOptionsMenu()) {
+                    <div class="header-options-menu" (click)="$event.stopPropagation()">
+                      <button class="menu-item" (click)="openHeaderFormatDialog()">
+                        Format nagłówka
+                      </button>
+                      <button class="menu-item" (click)="insertPageNumbers()">
+                        Numery stron
+                      </button>
+                      <button class="menu-item" (click)="removeHeader()">
+                        Usuń nagłówek
+                      </button>
+                    </div>
+                  }
+                </div>
+              </div>
             } @else {
               <div class="header-display" [innerHTML]="getHeaderContent($index)"></div>
             }
@@ -59,19 +90,50 @@
           <!-- Stopka strony -->
           <div class="page-footer"
                [class.editing]="editingSection() === 'footer'"
-               [style.height.cm]="footerHeight()"
+               [style.min-height.cm]="footerHeight()"
                [style.padding-left.px]="pageMargins.left * 37.8"
                [style.padding-right.px]="pageMargins.right * 37.8"
                (click)="startEditingFooter()"
                (dblclick)="startEditingFooter()">
             @if (editingSection() === 'footer' && $index === 0) {
+              <!-- Pasek stopki w stylu Google Docs -->
+              <div class="footer-toolbar" (click)="$event.stopPropagation()">
+                <span class="footer-toolbar-label">Stopka</span>
+                <div class="footer-toolbar-spacer"></div>
+                <label class="footer-toolbar-checkbox">
+                  <input type="checkbox" 
+                         [checked]="differentFirstPage()" 
+                         (change)="toggleDifferentFirstPage()">
+                  <span>Inna pierwsza strona</span>
+                </label>
+                <div class="footer-toolbar-options">
+                  <button class="footer-options-btn" (click)="toggleFooterOptionsMenu($event)">
+                    Opcje
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M7 10l5 5 5-5z"/>
+                    </svg>
+                  </button>
+                  @if (showFooterOptionsMenu()) {
+                    <div class="footer-options-menu" (click)="$event.stopPropagation()">
+                      <button class="menu-item" (click)="openFooterFormatDialog()">
+                        Format stopki
+                      </button>
+                      <button class="menu-item" (click)="insertPageNumbersFooter()">
+                        Numery stron
+                      </button>
+                      <button class="menu-item" (click)="removeFooter()">
+                        Usuń stopkę
+                      </button>
+                    </div>
+                  }
+                </div>
+              </div>
               <div 
                 #footerContent
                 class="footer-editor-content"
                 contenteditable="true"
                 spellcheck="true"
-                [attr.placeholder]="'Kliknij, aby edytować stopkę'"
-                (blur)="onFooterBlur()"
+                [attr.placeholder]="''"
                 (input)="onFooterInput($event)"
               ></div>
             } @else {

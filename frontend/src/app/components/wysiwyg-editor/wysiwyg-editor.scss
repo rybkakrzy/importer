@@ -30,6 +30,7 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  overflow: visible; /* Pozwala na wyświetlanie pasków narzędzi poza stroną */
 }
 
 .page.landscape {
@@ -402,6 +403,7 @@
   z-index: 5;
   position: relative;
   box-sizing: border-box;
+  overflow: visible; /* Pozwala na wyświetlanie pasków narzędzi */
 }
 
 .page-header {
@@ -488,24 +490,140 @@
   outline: none;
 }
 
-/* Wskaźnik edycji nagłówka/stopki */
-.page-header.editing::after,
-.page-footer.editing::after {
-  content: '';
+/* Wskaźnik edycji nagłówka/stopki - ukryty gdy jest pasek narzędzi */
+/* Pasek toolbar jest teraz głównym wskaźnikiem edycji */
+
+/* ==================== */
+/* Pasek Nagłówka/Stopki - styl Google Docs */
+/* ==================== */
+
+.header-toolbar,
+.footer-toolbar {
   position: absolute;
-  left: 8px;
-  width: 3px;
-  height: 60%;
-  background: #4285f4;
-  border-radius: 2px;
+  left: 0;
+  right: 0;
+  height: 36px;
+  background: white;
+  border: 1px solid #dadce0;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  z-index: 100;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.page-header.editing::after {
-  top: 20%;
+.header-toolbar {
+  bottom: 0;
+  transform: translateY(100%);
 }
 
-.page-footer.editing::after {
-  bottom: 20%;
+.footer-toolbar {
+  top: 0;
+  transform: translateY(-100%);
+}
+
+.header-toolbar-label,
+.footer-toolbar-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #202124;
+  white-space: nowrap;
+}
+
+.header-toolbar-spacer,
+.footer-toolbar-spacer {
+  flex: 1;
+}
+
+.header-toolbar-checkbox,
+.footer-toolbar-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #5f6368;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.header-toolbar-checkbox input,
+.footer-toolbar-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: #1a73e8;
+  cursor: pointer;
+}
+
+.header-toolbar-checkbox:hover,
+.footer-toolbar-checkbox:hover {
+  color: #202124;
+}
+
+.header-toolbar-options,
+.footer-toolbar-options {
+  position: relative;
+}
+
+.header-options-btn,
+.footer-options-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1a73e8;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.header-options-btn:hover,
+.footer-options-btn:hover {
+  background: rgba(26, 115, 232, 0.08);
+}
+
+.header-options-btn svg,
+.footer-options-btn svg {
+  transition: transform 0.15s;
+}
+
+.header-options-menu,
+.footer-options-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 160px;
+  background: white;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.header-options-menu .menu-item,
+.footer-options-menu .menu-item {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  font-size: 13px;
+  color: #202124;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.header-options-menu .menu-item:hover,
+.footer-options-menu .menu-item:hover {
+  background: #f1f3f4;
 }
 
 /* Etykieta sekcji - ukryta żeby nie przesłaniać zawartości */

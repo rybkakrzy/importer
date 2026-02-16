@@ -63,6 +63,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (value) {
       this._headerHtml.set(value.html || '');
       this._headerHeight.set(value.height || 1.25);
+      if (value.differentFirstPage !== undefined) {
+        this._differentFirstPage.set(value.differentFirstPage);
+      }
+      if (value.firstPageHtml !== undefined) {
+        this._headerFirstPageHtml.set(value.firstPageHtml);
+      }
     }
   }
   
@@ -70,6 +76,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (value) {
       this._footerHtml.set(value.html || '');
       this._footerHeight.set(value.height || 1.25);
+      if (value.differentFirstPage !== undefined) {
+        this._differentFirstPage.set(value.differentFirstPage);
+      }
+      if (value.firstPageHtml !== undefined) {
+        this._footerFirstPageHtml.set(value.firstPageHtml);
+      }
     }
   }
   
@@ -102,13 +114,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // Nagłówek i stopka - stan
   private _headerHtml = signal<string>('');
   private _footerHtml = signal<string>('');
+  private _headerFirstPageHtml = signal<string>('');
+  private _footerFirstPageHtml = signal<string>('');
   private _headerHeight = signal<number>(1.25); // domyślnie 1.25 cm
   private _footerHeight = signal<number>(1.25); // domyślnie 1.25 cm
+  private _differentFirstPage = signal<boolean>(false);
   editingSection = signal<'header' | 'footer' | 'body'>('body');
+  
+  // Menu opcji nagłówka/stopki
+  showHeaderOptionsMenu = signal<boolean>(false);
+  showFooterOptionsMenu = signal<boolean>(false);
   
   // Publiczne gettery dla template
   headerHeight = computed(() => this._headerHeight());
   footerHeight = computed(() => this._footerHeight());
+  differentFirstPage = computed(() => this._differentFirstPage());
 
   // Stan edytora
   editorState = signal<EditorState>({
@@ -1499,6 +1519,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Pobiera zawartość nagłówka dla danej strony
    */
   getHeaderContent(pageIndex: number): string {
+    if (this._differentFirstPage() && pageIndex === 0) {
+      return this._headerFirstPageHtml();
+    }
     return this._headerHtml();
   }
 
@@ -1506,8 +1529,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Pobiera zawartość stopki dla danej strony
    */
   getFooterContent(pageIndex: number): string {
-    // Można tu dodać logikę dla numerowania stron
-    let content = this._footerHtml();
+    let content: string;
+    if (this._differentFirstPage() && pageIndex === 0) {
+      content = this._footerFirstPageHtml();
+    } else {
+      content = this._footerHtml();
+    }
     // Zamień placeholder na numer strony
     content = content.replace(/\{page\}/gi, String(pageIndex + 1));
     content = content.replace(/\{pages\}/gi, String(this.pages().length));
@@ -1554,12 +1581,159 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       body: this.editorContent?.nativeElement?.innerHTML || '',
       header: {
         html: this._headerHtml(),
-        height: this._headerHeight()
+        height: this._headerHeight(),
+        differentFirstPage: this._differentFirstPage(),
+        firstPageHtml: this._headerFirstPageHtml()
       },
       footer: {
         html: this._footerHtml(),
-        height: this._footerHeight()
+        height: this._footerHeight(),
+        differentFirstPage: this._differentFirstPage(),
+        firstPageHtml: this._footerFirstPageHtml()
       }
     };
+  }
+
+  // ================================
+  // Menu Opcji Nagłówka/Stopki (styl Google Docs)
+  // ================================
+
+  /**
+   * Toggle menu opcji nagłówka
+   */
+  toggleHeaderOptionsMenu(event: Event): void {
+    event.stopPropagation();
+    this.showHeaderOptionsMenu.update(v => !v);
+    this.showFooterOptionsMenu.set(false);
+    
+    if (this.showHeaderOptionsMenu()) {
+      // Zamknij menu po kliknięciu poza nim
+      setTimeout(() => {
+        const closeHandler = () => {
+          this.showHeaderOptionsMenu.set(false);
+          document.removeEventListener('click', closeHandler);
+        };
+        document.addEventListener('click', closeHandler);
+      }, 0);
+    }
+  }
+
+  /**
+   * Toggle menu opcji stopki
+   */
+  toggleFooterOptionsMenu(event: Event): void {
+    event.stopPropagation();
+    this.showFooterOptionsMenu.update(v => !v);
+    this.showHeaderOptionsMenu.set(false);
+    
+    if (this.showFooterOptionsMenu()) {
+      setTimeout(() => {
+        const closeHandler = () => {
+          this.showFooterOptionsMenu.set(false);
+          document.removeEventListener('click', closeHandler);
+        };
+        document.addEventListener('click', closeHandler);
+      }, 0);
+    }
+  }
+
+  /**
+   * Toggle "Inna pierwsza strona"
+   */
+  toggleDifferentFirstPage(): void {
+    this._differentFirstPage.update(v => !v);
+    this.emitHeaderFooterChanges();
+  }
+
+  /**
+   * Otwiera dialog formatu nagłówka
+   */
+  openHeaderFormatDialog(): void {
+    this.showHeaderOptionsMenu.set(false);
+    // Emituj zdarzenie do rodzica aby otworzył dialog
+    // Na razie wyświetl alert - można rozbudować o właściwy dialog
+    alert('Format nagłówka - funkcja w przygotowaniu.\nMożesz ustawić margines górny i wysokość nagłówka w ustawieniach strony.');
+  }
+
+  /**
+   * Otwiera dialog formatu stopki
+   */
+  openFooterFormatDialog(): void {
+    this.showFooterOptionsMenu.set(false);
+    alert('Format stopki - funkcja w przygotowaniu.\nMożesz ustawić margines dolny i wysokość stopki w ustawieniach strony.');
+  }
+
+  /**
+   * Wstawia numer strony do nagłówka
+   */
+  insertPageNumbers(): void {
+    this.showHeaderOptionsMenu.set(false);
+    
+    if (this.headerContentEl?.nativeElement) {
+      const pageNumber = '<span class="page-number">{page}</span>';
+      this.headerContentEl.nativeElement.focus();
+      document.execCommand('insertHTML', false, pageNumber);
+      this.onHeaderInput({ target: this.headerContentEl.nativeElement } as any);
+    }
+  }
+
+  /**
+   * Wstawia numer strony do stopki
+   */
+  insertPageNumbersFooter(): void {
+    this.showFooterOptionsMenu.set(false);
+    
+    if (this.footerContentEl?.nativeElement) {
+      const pageNumber = '<span class="page-number">{page}</span>';
+      this.footerContentEl.nativeElement.focus();
+      document.execCommand('insertHTML', false, pageNumber);
+      this.onFooterInput({ target: this.footerContentEl.nativeElement } as any);
+    }
+  }
+
+  /**
+   * Usuwa nagłówek
+   */
+  removeHeader(): void {
+    this.showHeaderOptionsMenu.set(false);
+    this._headerHtml.set('');
+    this._headerFirstPageHtml.set('');
+    if (this.headerContentEl?.nativeElement) {
+      this.headerContentEl.nativeElement.innerHTML = '';
+    }
+    this.emitHeaderFooterChanges();
+    this.stopEditingHeaderFooter();
+  }
+
+  /**
+   * Usuwa stopkę
+   */
+  removeFooter(): void {
+    this.showFooterOptionsMenu.set(false);
+    this._footerHtml.set('');
+    this._footerFirstPageHtml.set('');
+    if (this.footerContentEl?.nativeElement) {
+      this.footerContentEl.nativeElement.innerHTML = '';
+    }
+    this.emitHeaderFooterChanges();
+    this.stopEditingHeaderFooter();
+  }
+
+  /**
+   * Emituje zmiany nagłówka i stopki
+   */
+  private emitHeaderFooterChanges(): void {
+    this.headerChange.emit({
+      html: this._headerHtml(),
+      height: this._headerHeight(),
+      differentFirstPage: this._differentFirstPage(),
+      firstPageHtml: this._headerFirstPageHtml()
+    });
+    this.footerChange.emit({
+      html: this._footerHtml(),
+      height: this._footerHeight(),
+      differentFirstPage: this._differentFirstPage(),
+      firstPageHtml: this._footerFirstPageHtml()
+    });
   }
 }
