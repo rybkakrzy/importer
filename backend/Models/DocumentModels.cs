@@ -1,6 +1,17 @@
 namespace ImporterApi.Models;
 
 /// <summary>
+/// Nagłówek lub stopka dokumentu
+/// </summary>
+public class HeaderFooterContent
+{
+    public string Html { get; set; } = string.Empty;
+    public double Height { get; set; } = 1.25; // w cm
+    public bool DifferentFirstPage { get; set; }
+    public string? FirstPageHtml { get; set; }
+}
+
+/// <summary>
 /// Reprezentuje dokument z konwersji DOCX do HTML
 /// </summary>
 public class DocumentContent
@@ -9,6 +20,8 @@ public class DocumentContent
     public DocumentMetadata Metadata { get; set; } = new();
     public List<DocumentImage> Images { get; set; } = new();
     public List<DocumentStyle> Styles { get; set; } = new();
+    public HeaderFooterContent? Header { get; set; }
+    public HeaderFooterContent? Footer { get; set; }
 }
 
 /// <summary>
@@ -43,6 +56,8 @@ public class SaveDocumentRequest
     public string Html { get; set; } = string.Empty;
     public string? OriginalFileName { get; set; }
     public DocumentMetadata? Metadata { get; set; }
+    public HeaderFooterContent? Header { get; set; }
+    public HeaderFooterContent? Footer { get; set; }
 }
 
 /// <summary>

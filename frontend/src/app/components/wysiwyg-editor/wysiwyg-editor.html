@@ -6,28 +6,29 @@
         <div class="page" 
              [class.landscape]="pageOrientation === 'landscape'"
              [attr.data-page-number]="$index + 1">
-          <!-- Linie marginesów na kartce -->
-          @if (showMarginGuides && $index === 0) {
-            <div class="margin-guides">
-              <div class="margin-guide margin-guide-top" [style.top.px]="pageMargins.top * 37.8"></div>
-              <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMargins.bottom * 37.8"></div>
-              <div class="margin-guide margin-guide-left" [style.left.px]="pageMargins.left * 37.8"></div>
-              <div class="margin-guide margin-guide-right" [style.right.px]="pageMargins.right * 37.8"></div>
-              <!-- Narożniki marginesów -->
-              <div class="margin-corner top-left" 
-                   [style.top.px]="pageMargins.top * 37.8" 
-                   [style.left.px]="pageMargins.left * 37.8"></div>
-              <div class="margin-corner top-right" 
-                   [style.top.px]="pageMargins.top * 37.8" 
-                   [style.right.px]="pageMargins.right * 37.8"></div>
-              <div class="margin-corner bottom-left" 
-                   [style.bottom.px]="pageMargins.bottom * 37.8" 
-                   [style.left.px]="pageMargins.left * 37.8"></div>
-              <div class="margin-corner bottom-right" 
-                   [style.bottom.px]="pageMargins.bottom * 37.8" 
-                   [style.right.px]="pageMargins.right * 37.8"></div>
-            </div>
-          }
+          
+          <!-- Nagłówek strony -->
+          <div class="page-header"
+               [class.editing]="editingSection() === 'header'"
+               [style.height.cm]="headerHeight()"
+               [style.padding-left.px]="pageMargins.left * 37.8"
+               [style.padding-right.px]="pageMargins.right * 37.8"
+               (click)="startEditingHeader()"
+               (dblclick)="startEditingHeader()">
+            @if (editingSection() === 'header' && $index === 0) {
+              <div 
+                #headerContent
+                class="header-editor-content"
+                contenteditable="true"
+                spellcheck="true"
+                [attr.placeholder]="'Kliknij, aby edytować nagłówek'"
+                (blur)="onHeaderBlur()"
+                (input)="onHeaderInput($event)"
+              ></div>
+            } @else {
+              <div class="header-display" [innerHTML]="getHeaderContent($index)"></div>
+            }
+          </div>
           
           @if ($index === 0) {
             <div 
@@ -36,22 +37,47 @@
               contenteditable="true"
               spellcheck="true"
               [attr.placeholder]="'Zacznij pisać...'"
-              [style.padding-top.px]="pageMargins.top * 37.8"
-              [style.padding-bottom.px]="pageMargins.bottom * 37.8"
               [style.padding-left.px]="pageMargins.left * 37.8"
               [style.padding-right.px]="pageMargins.right * 37.8"
+              [style.padding-top.px]="8"
+              [style.padding-bottom.px]="8"
               (mouseup)="saveSelection()"
               (keyup)="saveSelection()"
+              (click)="stopEditingHeaderFooter()"
             ></div>
           } @else {
             <div class="page-overflow-content"
-                 [style.padding-top.px]="pageMargins.top * 37.8"
-                 [style.padding-bottom.px]="pageMargins.bottom * 37.8"
                  [style.padding-left.px]="pageMargins.left * 37.8"
                  [style.padding-right.px]="pageMargins.right * 37.8"
-                 [innerHTML]="page">
+                 [style.padding-top.px]="8"
+                 [style.padding-bottom.px]="8"
+                 [innerHTML]="page"
+                 (click)="stopEditingHeaderFooter()">
             </div>
           }
+
+          <!-- Stopka strony -->
+          <div class="page-footer"
+               [class.editing]="editingSection() === 'footer'"
+               [style.height.cm]="footerHeight()"
+               [style.padding-left.px]="pageMargins.left * 37.8"
+               [style.padding-right.px]="pageMargins.right * 37.8"
+               (click)="startEditingFooter()"
+               (dblclick)="startEditingFooter()">
+            @if (editingSection() === 'footer' && $index === 0) {
+              <div 
+                #footerContent
+                class="footer-editor-content"
+                contenteditable="true"
+                spellcheck="true"
+                [attr.placeholder]="'Kliknij, aby edytować stopkę'"
+                (blur)="onFooterBlur()"
+                (input)="onFooterInput($event)"
+              ></div>
+            } @else {
+              <div class="footer-display" [innerHTML]="getFooterContent($index)"></div>
+            }
+          </div>
         </div>
         
         <!-- Separator między stronami - styl Google Docs -->

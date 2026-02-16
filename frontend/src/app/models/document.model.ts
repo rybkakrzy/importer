@@ -2,12 +2,22 @@
  * Modele dla edytora dokumentów Word
  */
 
+/** Nagłówek/Stopka dokumentu */
+export interface HeaderFooterContent {
+  html: string;
+  height: number; // wysokość w cm
+  differentFirstPage?: boolean; // inna treść na pierwszej stronie
+  firstPageHtml?: string;
+}
+
 /** Zawartość dokumentu z konwersji DOCX */
 export interface DocumentContent {
   html: string;
   metadata: DocumentMetadata;
   images: DocumentImage[];
   styles: DocumentStyle[];
+  header?: HeaderFooterContent;
+  footer?: HeaderFooterContent;
 }
 
 /** Metadane dokumentu */
@@ -86,6 +96,8 @@ export interface SaveDocumentRequest {
   html: string;
   originalFileName?: string;
   metadata?: DocumentMetadata;
+  header?: HeaderFooterContent;
+  footer?: HeaderFooterContent;
 }
 
 /** Szablon dokumentu */

@@ -9,7 +9,9 @@ import {
   OnDestroy,
   inject,
   signal,
-  computed
+  computed,
+  ViewChildren,
+  QueryList
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -19,7 +21,8 @@ import {
   HeadingLevel, 
   TextFormatting,
   ParagraphStyle,
-  PageMargins
+  PageMargins,
+  HeaderFooterContent
 } from '../../models/document.model';
 
 /**
@@ -35,6 +38,8 @@ import {
 })
 export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @ViewChild('editorContent') editorContent!: ElementRef<HTMLDivElement>;
+  @ViewChild('headerContent') headerContentEl?: ElementRef<HTMLDivElement>;
+  @ViewChild('footerContent') footerContentEl?: ElementRef<HTMLDivElement>;
   
   @Input() set content(value: string) {
     // Nie aktualizuj innerHTML jeśli wartość pochodzi z tego samego edytora
@@ -53,10 +58,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Input() pageOrientation: 'portrait' | 'landscape' = 'portrait';
   @Input() showMarginGuides = true;
   
+  // Nagłówek i stopka
+  @Input() set headerContent(value: HeaderFooterContent | undefined) {
+    if (value) {
+      this._headerHtml.set(value.html || '');
+      this._headerHeight.set(value.height || 1.25);
+    }
+  }
+  
+  @Input() set footerContent(value: HeaderFooterContent | undefined) {
+    if (value) {
+      this._footerHtml.set(value.html || '');
+      this._footerHeight.set(value.height || 1.25);
+    }
+  }
+  
   @Output() contentChange = new EventEmitter<string>();
   @Output() stateChange = new EventEmitter<EditorState>();
   @Output() selectionChange = new EventEmitter<Selection | null>();
   @Output() pagesChange = new EventEmitter<number>();
+  @Output() headerChange = new EventEmitter<HeaderFooterContent>();
+  @Output() footerChange = new EventEmitter<HeaderFooterContent>();
 
   private _content = signal<string>('');
   private _isInternalUpdate = false;
@@ -76,6 +98,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private currentFontFamily = 'Calibri';
   private pendingFontSize: number | null = null;
   private pendingFontFamily: string | null = null;
+
+  // Nagłówek i stopka - stan
+  private _headerHtml = signal<string>('');
+  private _footerHtml = signal<string>('');
+  private _headerHeight = signal<number>(1.25); // domyślnie 1.25 cm
+  private _footerHeight = signal<number>(1.25); // domyślnie 1.25 cm
+  editingSection = signal<'header' | 'footer' | 'body'>('body');
+  
+  // Publiczne gettery dla template
+  headerHeight = computed(() => this._headerHeight());
+  footerHeight = computed(() => this._footerHeight());
 
   // Stan edytora
   editorState = signal<EditorState>({
@@ -1379,5 +1412,154 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const b = parseInt(match[3]).toString(16).padStart(2, '0');
     
     return `#${r}${g}${b}`;
+  }
+
+  // ================================
+  // Nagłówek i Stopka
+  // ================================
+
+  /**
+   * Rozpoczyna edycję nagłówka
+   */
+  startEditingHeader(): void {
+    this.editingSection.set('header');
+    // Ustaw focus na edytorze nagłówka po renderowaniu
+    setTimeout(() => {
+      if (this.headerContentEl?.nativeElement) {
+        this.headerContentEl.nativeElement.innerHTML = this._headerHtml();
+        this.headerContentEl.nativeElement.focus();
+      }
+    }, 0);
+  }
+
+  /**
+   * Rozpoczyna edycję stopki
+   */
+  startEditingFooter(): void {
+    this.editingSection.set('footer');
+    setTimeout(() => {
+      if (this.footerContentEl?.nativeElement) {
+        this.footerContentEl.nativeElement.innerHTML = this._footerHtml();
+        this.footerContentEl.nativeElement.focus();
+      }
+    }, 0);
+  }
+
+  /**
+   * Kończy edycję nagłówka/stopki i wraca do głównej treści
+   */
+  stopEditingHeaderFooter(): void {
+    if (this.editingSection() !== 'body') {
+      this.editingSection.set('body');
+    }
+  }
+
+  /**
+   * Obsługa blur nagłówka
+   */
+  onHeaderBlur(): void {
+    const content = this.headerContentEl?.nativeElement?.innerHTML || '';
+    this._headerHtml.set(content);
+    this.headerChange.emit({
+      html: content,
+      height: this._headerHeight()
+    });
+    // Nie kończymy edycji od razu, pozwalamy na kliknięcie poza nagłówkiem
+  }
+
+  /**
+   * Obsługa input nagłówka
+   */
+  onHeaderInput(event: Event): void {
+    const content = (event.target as HTMLDivElement).innerHTML;
+    this._headerHtml.set(content);
+  }
+
+  /**
+   * Obsługa blur stopki
+   */
+  onFooterBlur(): void {
+    const content = this.footerContentEl?.nativeElement?.innerHTML || '';
+    this._footerHtml.set(content);
+    this.footerChange.emit({
+      html: content,
+      height: this._footerHeight()
+    });
+  }
+
+  /**
+   * Obsługa input stopki
+   */
+  onFooterInput(event: Event): void {
+    const content = (event.target as HTMLDivElement).innerHTML;
+    this._footerHtml.set(content);
+  }
+
+  /**
+   * Pobiera zawartość nagłówka dla danej strony
+   */
+  getHeaderContent(pageIndex: number): string {
+    return this._headerHtml();
+  }
+
+  /**
+   * Pobiera zawartość stopki dla danej strony
+   */
+  getFooterContent(pageIndex: number): string {
+    // Można tu dodać logikę dla numerowania stron
+    let content = this._footerHtml();
+    // Zamień placeholder na numer strony
+    content = content.replace(/\{page\}/gi, String(pageIndex + 1));
+    content = content.replace(/\{pages\}/gi, String(this.pages().length));
+    return content;
+  }
+
+  /**
+   * Oblicza dostępną wysokość dla treści głównej (bez nagłówka i stopki)
+   */
+  getContentAreaHeight(): number {
+    const pageHeight = this.pageOrientation === 'landscape' ? 816 : 1122;
+    const headerHeightPx = this._headerHeight() * 37.8;
+    const footerHeightPx = this._footerHeight() * 37.8;
+    return pageHeight - headerHeightPx - footerHeightPx;
+  }
+
+  /**
+   * Ustawia wysokość nagłówka
+   */
+  setHeaderHeight(heightCm: number): void {
+    this._headerHeight.set(Math.max(0.5, Math.min(5, heightCm)));
+    this.headerChange.emit({
+      html: this._headerHtml(),
+      height: this._headerHeight()
+    });
+  }
+
+  /**
+   * Ustawia wysokość stopki
+   */
+  setFooterHeight(heightCm: number): void {
+    this._footerHeight.set(Math.max(0.5, Math.min(5, heightCm)));
+    this.footerChange.emit({
+      html: this._footerHtml(),
+      height: this._footerHeight()
+    });
+  }
+
+  /**
+   * Pobiera pełną zawartość dokumentu z nagłówkiem i stopką
+   */
+  getFullDocumentContent(): { body: string; header: HeaderFooterContent; footer: HeaderFooterContent } {
+    return {
+      body: this.editorContent?.nativeElement?.innerHTML || '',
+      header: {
+        html: this._headerHtml(),
+        height: this._headerHeight()
+      },
+      footer: {
+        html: this._footerHtml(),
+        height: this._footerHeight()
+      }
+    };
   }
 }

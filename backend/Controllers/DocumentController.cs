@@ -81,7 +81,7 @@ public class DocumentController : ControllerBase
 
         try
         {
-            var docxBytes = _htmlToDocx.Convert(request.Html, request.Metadata);
+            var docxBytes = _htmlToDocx.Convert(request.Html, request.Metadata, request.Header, request.Footer);
             
             var fileName = !string.IsNullOrEmpty(request.OriginalFileName) 
                 ? request.OriginalFileName 

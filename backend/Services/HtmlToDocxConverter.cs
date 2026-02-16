@@ -20,7 +20,7 @@ public class HtmlToDocxConverter
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -46,13 +46,161 @@ public class HtmlToDocxConverter
                 SetDocumentMetadata(document, metadata);
             }
 
+            // Dodaj nagłówek i stopkę
+            AddHeaderAndFooter(document, header, footer);
+
             // Dodaj ustawienia strony
-            AddPageSettings(body);
+            AddPageSettings(body, header, footer);
 
             document.Save();
         }
 
         return memoryStream.ToArray();
+    }
+
+    /// <summary>
+    /// Dodaje nagłówek i stopkę do dokumentu
+    /// </summary>
+    private void AddHeaderAndFooter(WordprocessingDocument document, HeaderFooterContent? header, HeaderFooterContent? footer)
+    {
+        if (_mainPart == null) return;
+
+        // Dodaj nagłówek
+        if (header != null && !string.IsNullOrWhiteSpace(header.Html))
+        {
+            var headerPart = _mainPart.AddNewPart<HeaderPart>();
+            var headerElement = new Header();
+            
+            var htmlDoc = new HtmlDocument();
+            htmlDoc.LoadHtml(header.Html);
+            ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, headerElement);
+            
+            headerPart.Header = headerElement;
+            headerPart.Header.Save();
+            
+            var headerPartId = _mainPart.GetIdOfPart(headerPart);
+            AddHeaderReference(headerPartId);
+        }
+
+        // Dodaj stopkę
+        if (footer != null && !string.IsNullOrWhiteSpace(footer.Html))
+        {
+            var footerPart = _mainPart.AddNewPart<FooterPart>();
+            var footerElement = new Footer();
+            
+            var htmlDoc = new HtmlDocument();
+            // Zamień placeholdery {page} i {pages} na pola Word
+            var footerHtml = footer.Html
+                .Replace("{page}", "<span class=\"field-page\"></span>")
+                .Replace("{pages}", "<span class=\"field-numpages\"></span>");
+            htmlDoc.LoadHtml(footerHtml);
+            ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, footerElement);
+            
+            footerPart.Footer = footerElement;
+            footerPart.Footer.Save();
+            
+            var footerPartId = _mainPart.GetIdOfPart(footerPart);
+            AddFooterReference(footerPartId);
+        }
+    }
+
+    /// <summary>
+    /// Konwertuje HTML na elementy nagłówka/stopki
+    /// </summary>
+    private void ConvertHtmlToHeaderFooter(HtmlNode node, OpenXmlCompositeElement parent)
+    {
+        foreach (var child in node.ChildNodes)
+        {
+            switch (child.Name.ToLower())
+            {
+                case "p":
+                    var para = ConvertParagraphElement(child);
+                    parent.Append(para);
+                    break;
+                case "span":
+                    if (child.HasClass("field-page"))
+                    {
+                        // Dodaj pole PAGE
+                        var pagePara = new Paragraph(new Run(
+                            new SimpleField { Instruction = " PAGE " }
+                        ));
+                        parent.Append(pagePara);
+                    }
+                    else if (child.HasClass("field-numpages"))
+                    {
+                        // Dodaj pole NUMPAGES
+                        var numPagesPara = new Paragraph(new Run(
+                            new SimpleField { Instruction = " NUMPAGES " }
+                        ));
+                        parent.Append(numPagesPara);
+                    }
+                    else
+                    {
+                        // Zwykły span - traktuj jak tekst
+                        ConvertHtmlToHeaderFooter(child, parent);
+                    }
+                    break;
+                case "table":
+                    var table = ConvertTableElement(child);
+                    parent.Append(table);
+                    break;
+                case "#text":
+                    var text = child.InnerText.Trim();
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        var textPara = new Paragraph(new Run(new Text(text)));
+                        parent.Append(textPara);
+                    }
+                    break;
+                default:
+                    ConvertHtmlToHeaderFooter(child, parent);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Dodaje referencję do nagłówka w SectionProperties
+    /// </summary>
+    private void AddHeaderReference(string headerPartId)
+    {
+        var body = _mainPart?.Document?.Body;
+        if (body == null) return;
+
+        var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
+        if (sectionProps == null)
+        {
+            sectionProps = new SectionProperties();
+            body.Append(sectionProps);
+        }
+
+        sectionProps.InsertAt(new HeaderReference
+        {
+            Type = HeaderFooterValues.Default,
+            Id = headerPartId
+        }, 0);
+    }
+
+    /// <summary>
+    /// Dodaje referencję do stopki w SectionProperties
+    /// </summary>
+    private void AddFooterReference(string footerPartId)
+    {
+        var body = _mainPart?.Document?.Body;
+        if (body == null) return;
+
+        var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
+        if (sectionProps == null)
+        {
+            sectionProps = new SectionProperties();
+            body.Append(sectionProps);
+        }
+
+        sectionProps.InsertAt(new FooterReference
+        {
+            Type = HeaderFooterValues.Default,
+            Id = footerPartId
+        }, 0);
     }
 
     /// <summary>
@@ -987,29 +1135,47 @@ public class HtmlToDocxConverter
     /// <summary>
     /// Dodaje ustawienia strony (marginesy itp.)
     /// </summary>
-    private void AddPageSettings(Body body)
+    private void AddPageSettings(Body body, HeaderFooterContent? header = null, HeaderFooterContent? footer = null)
     {
-        var sectionProps = new SectionProperties();
+        // Sprawdź czy już istnieją SectionProperties (mogły być dodane przez AddHeaderAndFooter)
+        var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
+        if (sectionProps == null)
+        {
+            sectionProps = new SectionProperties();
+            body.Append(sectionProps);
+        }
         
         // Ustawienia strony A4
-        sectionProps.Append(new PageSize 
-        { 
-            Width = 11906, // A4 width in twips
-            Height = 16838 // A4 height in twips
-        });
+        if (!sectionProps.Elements<PageSize>().Any())
+        {
+            sectionProps.Append(new PageSize 
+            { 
+                Width = 11906, // A4 width in twips
+                Height = 16838 // A4 height in twips
+            });
+        }
+        
+        // Oblicz marginesy na podstawie wysokości nagłówka i stopki
+        var headerHeightTwips = header != null ? (int)(header.Height * 1440 / 2.54) : 720;
+        var footerHeightTwips = footer != null ? (int)(footer.Height * 1440 / 2.54) : 720;
+        
+        // Top margin powinien uwzględniać wysokość nagłówka
+        var topMargin = Math.Max(1440, headerHeightTwips + 720);
+        var bottomMargin = Math.Max(1440, footerHeightTwips + 720);
         
         // Marginesy
-        sectionProps.Append(new PageMargin
+        if (!sectionProps.Elements<PageMargin>().Any())
         {
-            Top = 1440,    // 1 inch
-            Right = 1440,
-            Bottom = 1440,
-            Left = 1440,
-            Header = 720,
-            Footer = 720
-        });
-
-        body.Append(sectionProps);
+            sectionProps.Append(new PageMargin
+            {
+                Top = topMargin,
+                Right = 1440,
+                Bottom = bottomMargin,
+                Left = 1440,
+                Header = 720,  // 0.5 inch od krawędzi
+                Footer = 720
+            });
+        }
     }
 
     /// <summary>

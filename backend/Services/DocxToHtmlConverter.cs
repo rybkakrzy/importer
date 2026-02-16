@@ -38,10 +38,156 @@ public class DocxToHtmlConverter
             Metadata = ExtractMetadata(document),
             Html = ConvertBodyToHtml(document),
             Images = _images.Values.ToList(),
-            Styles = stylesLoaded.Count > 0 ? stylesLoaded : DefaultWordStyles.GetDefaultStyles()
+            Styles = stylesLoaded.Count > 0 ? stylesLoaded : DefaultWordStyles.GetDefaultStyles(),
+            Header = ExtractHeader(document),
+            Footer = ExtractFooter(document)
         };
 
         return content;
+    }
+
+    /// <summary>
+    /// Wyciąga nagłówek z dokumentu
+    /// </summary>
+    private HeaderFooterContent? ExtractHeader(WordprocessingDocument document)
+    {
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return null;
+
+        // Szukaj domyślnego nagłówka
+        var headerPart = mainPart.HeaderParts.FirstOrDefault();
+        if (headerPart?.Header == null) return null;
+
+        // Załaduj obrazy z nagłówka
+        foreach (var imagePart in headerPart.ImageParts)
+        {
+            LoadImageFromPart(headerPart, imagePart);
+        }
+
+        var html = ConvertHeaderFooterToHtml(headerPart.Header, headerPart, document);
+        if (string.IsNullOrWhiteSpace(html)) return null;
+
+        // Pobierz wysokość nagłówka z ustawień sekcji
+        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        double headerHeight = 1.5; // domyślnie 1.5 cm
+        
+        var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
+        if (pgMar != null)
+        {
+            // pgMar.Top to margines górny w twips - to określa przestrzeń na nagłówek
+            // pgMar.Header to odległość od krawędzi strony do nagłówka
+            int topMargin = 0;
+            int headerMargin = 720; // domyślnie 0.5 cala
+            
+            if (pgMar.Top?.Value != null)
+            {
+                topMargin = Math.Abs(pgMar.Top.Value);
+            }
+            if (pgMar.Header?.Value != null)
+            {
+                headerMargin = (int)pgMar.Header.Value;
+            }
+            
+            // Wysokość nagłówka to różnica między marginesem górnym a pozycją nagłówka
+            if (topMargin > headerMargin)
+            {
+                headerHeight = (topMargin - headerMargin) / 1440.0 * 2.54;
+            }
+            else
+            {
+                // Fallback - użyj samego marginesu górnego
+                headerHeight = topMargin / 1440.0 * 2.54;
+            }
+        }
+
+        return new HeaderFooterContent
+        {
+            Html = html,
+            Height = Math.Max(0.8, Math.Min(8, headerHeight))
+        };
+    }
+
+    /// <summary>
+    /// Wyciąga stopkę z dokumentu
+    /// </summary>
+    private HeaderFooterContent? ExtractFooter(WordprocessingDocument document)
+    {
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return null;
+
+        // Szukaj domyślnej stopki
+        var footerPart = mainPart.FooterParts.FirstOrDefault();
+        if (footerPart?.Footer == null) return null;
+
+        // Załaduj obrazy ze stopki
+        foreach (var imagePart in footerPart.ImageParts)
+        {
+            LoadImageFromPart(footerPart, imagePart);
+        }
+
+        var html = ConvertHeaderFooterToHtml(footerPart.Footer, footerPart, document);
+        if (string.IsNullOrWhiteSpace(html)) return null;
+
+        // Pobierz wysokość stopki z ustawień sekcji
+        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        double footerHeight = 1.5; // domyślnie 1.5 cm
+        
+        var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
+        if (pgMar != null)
+        {
+            // pgMar.Bottom to margines dolny w twips - to określa przestrzeń na stopkę
+            // pgMar.Footer to odległość od krawędzi strony do stopki
+            int bottomMargin = 0;
+            int footerMargin = 720; // domyślnie 0.5 cala
+            
+            if (pgMar.Bottom?.Value != null)
+            {
+                bottomMargin = Math.Abs(pgMar.Bottom.Value);
+            }
+            if (pgMar.Footer?.Value != null)
+            {
+                footerMargin = (int)pgMar.Footer.Value;
+            }
+            
+            // Wysokość stopki to różnica między marginesem dolnym a pozycją stopki
+            if (bottomMargin > footerMargin)
+            {
+                footerHeight = (bottomMargin - footerMargin) / 1440.0 * 2.54;
+            }
+            else
+            {
+                // Fallback - użyj samego marginesu dolnego
+                footerHeight = bottomMargin / 1440.0 * 2.54;
+            }
+        }
+
+        return new HeaderFooterContent
+        {
+            Html = html,
+            Height = Math.Max(0.8, Math.Min(8, footerHeight))
+        };
+    }
+
+    /// <summary>
+    /// Konwertuje zawartość nagłówka/stopki na HTML
+    /// </summary>
+    private string ConvertHeaderFooterToHtml(OpenXmlCompositeElement headerFooter, OpenXmlPart part, WordprocessingDocument document)
+    {
+        var html = new StringBuilder();
+
+        foreach (var element in headerFooter.Elements())
+        {
+            if (element is Paragraph para)
+            {
+                html.Append(ConvertParagraphToHtml(para, document, part));
+            }
+            else if (element is Table table)
+            {
+                html.Append(ConvertTableToHtml(table, document, part));
+            }
+        }
+
+        return html.ToString();
     }
 
     /// <summary>
@@ -329,24 +475,54 @@ public class DocxToHtmlConverter
         var mainPart = document.MainDocumentPart;
         if (mainPart == null) return;
 
+        // Ładuj obrazy z głównej części dokumentu
         foreach (var imagePart in mainPart.ImageParts)
         {
-            var relationshipId = mainPart.GetIdOfPart(imagePart);
-            
-            using var stream = imagePart.GetStream();
-            using var memoryStream = new MemoryStream();
-            stream.CopyTo(memoryStream);
-            
-            var base64 = System.Convert.ToBase64String(memoryStream.ToArray());
-            var contentType = imagePart.ContentType;
-
-            _images[relationshipId] = new DocumentImage
-            {
-                Id = relationshipId,
-                ContentType = contentType,
-                Base64Data = base64
-            };
+            LoadImageFromPart(mainPart, imagePart);
         }
+
+        // Ładuj obrazy z nagłówków
+        foreach (var headerPart in mainPart.HeaderParts)
+        {
+            foreach (var imagePart in headerPart.ImageParts)
+            {
+                LoadImageFromPart(headerPart, imagePart);
+            }
+        }
+
+        // Ładuj obrazy ze stopek
+        foreach (var footerPart in mainPart.FooterParts)
+        {
+            foreach (var imagePart in footerPart.ImageParts)
+            {
+                LoadImageFromPart(footerPart, imagePart);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ładuje pojedynczy obraz z danej części dokumentu
+    /// </summary>
+    private void LoadImageFromPart(OpenXmlPart part, ImagePart imagePart)
+    {
+        var relationshipId = part.GetIdOfPart(imagePart);
+        
+        // Unikaj duplikatów
+        if (_images.ContainsKey(relationshipId)) return;
+        
+        using var stream = imagePart.GetStream();
+        using var memoryStream = new MemoryStream();
+        stream.CopyTo(memoryStream);
+        
+        var base64 = System.Convert.ToBase64String(memoryStream.ToArray());
+        var contentType = imagePart.ContentType;
+
+        _images[relationshipId] = new DocumentImage
+        {
+            Id = relationshipId,
+            ContentType = contentType,
+            Base64Data = base64
+        };
     }
 
     /// <summary>
@@ -366,7 +542,7 @@ public class DocxToHtmlConverter
     /// <summary>
     /// Konwertuje paragraf na HTML
     /// </summary>
-    private string ConvertParagraphToHtml(Paragraph paragraph, WordprocessingDocument document)
+    private string ConvertParagraphToHtml(Paragraph paragraph, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var html = new StringBuilder();
         var paraProps = paragraph.ParagraphProperties;
@@ -398,10 +574,13 @@ public class DocxToHtmlConverter
             switch (child)
             {
                 case Run run:
-                    html.Append(ConvertRunToHtml(run, document));
+                    html.Append(ConvertRunToHtml(run, document, sourcePart));
                     break;
                 case Hyperlink hyperlink:
                     html.Append(ConvertHyperlinkToHtml(hyperlink, document));
+                    break;
+                case SimpleField simpleField:
+                    html.Append(ConvertSimpleFieldToHtml(simpleField));
                     break;
                 case BookmarkStart _:
                 case BookmarkEnd _:
@@ -537,7 +716,7 @@ public class DocxToHtmlConverter
     /// <summary>
     /// Konwertuje Run (fragment tekstu) na HTML
     /// </summary>
-    private string ConvertRunToHtml(Run run, WordprocessingDocument document)
+    private string ConvertRunToHtml(Run run, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var html = new StringBuilder();
         var runProps = run.RunProperties;
@@ -559,10 +738,10 @@ public class DocxToHtmlConverter
                     html.Append("&emsp;");
                     break;
                 case Drawing drawing:
-                    html.Append(ConvertDrawingToHtml(drawing, document));
+                    html.Append(ConvertDrawingToHtml(drawing, document, sourcePart));
                     break;
                 case Picture picture:
-                    html.Append(ConvertPictureToHtml(picture, document));
+                    html.Append(ConvertPictureToHtml(picture, document, sourcePart));
                     break;
             }
         }
@@ -721,15 +900,47 @@ public class DocxToHtmlConverter
     }
 
     /// <summary>
+    /// Konwertuje pole SimpleField (PAGE, NUMPAGES, DATE itp.) na HTML
+    /// </summary>
+    private string ConvertSimpleFieldToHtml(SimpleField simpleField)
+    {
+        var instruction = simpleField.Instruction?.Value?.Trim().ToUpperInvariant() ?? "";
+        
+        // Sprawdź typ pola
+        if (instruction.Contains("PAGE"))
+        {
+            // Pole numeru strony - użyj placeholder który frontend zamieni
+            return "<span class=\"field-page\">{page}</span>";
+        }
+        else if (instruction.Contains("NUMPAGES") || instruction.Contains("SECTIONPAGES"))
+        {
+            // Pole liczby stron
+            return "<span class=\"field-numpages\">{pages}</span>";
+        }
+        else if (instruction.Contains("DATE") || instruction.Contains("TIME"))
+        {
+            // Pole daty/czasu - zwróć bieżącą datę
+            return $"<span class=\"field-date\">{DateTime.Now:dd.MM.yyyy}</span>";
+        }
+        else
+        {
+            // Inne pola - spróbuj zwrócić tekst z Run wewnątrz
+            var text = string.Join("", simpleField.Descendants<Text>().Select(t => t.Text));
+            return !string.IsNullOrEmpty(text) ? text : "";
+        }
+    }
+
+    /// <summary>
     /// Konwertuje Drawing (obraz) na HTML
     /// </summary>
-    private string ConvertDrawingToHtml(Drawing drawing, WordprocessingDocument document)
+    private string ConvertDrawingToHtml(Drawing drawing, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
         if (blip?.Embed?.Value == null) return string.Empty;
 
         var relationshipId = blip.Embed.Value;
         
+        // Najpierw sprawdź w cache
         if (_images.TryGetValue(relationshipId, out var image))
         {
             // Pobierz wymiary
@@ -742,13 +953,45 @@ public class DocxToHtmlConverter
                    $"data-image-id=\"{image.Id}\" />";
         }
 
+        // Jeśli nie znaleziono, spróbuj załadować bezpośrednio z parta źródłowego
+        if (sourcePart != null)
+        {
+            var imagePart = sourcePart.GetPartById(relationshipId) as ImagePart;
+            if (imagePart != null)
+            {
+                using var stream = imagePart.GetStream();
+                using var memoryStream = new MemoryStream();
+                stream.CopyTo(memoryStream);
+                
+                var base64 = System.Convert.ToBase64String(memoryStream.ToArray());
+                var contentType = imagePart.ContentType;
+
+                // Pobierz wymiary
+                var extent = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
+                var width = extent?.Cx != null ? EmuToPx(extent.Cx.Value) : 200;
+                var height = extent?.Cy != null ? EmuToPx(extent.Cy.Value) : 200;
+
+                // Cache dla przyszłych użyć
+                _images[relationshipId] = new DocumentImage
+                {
+                    Id = relationshipId,
+                    ContentType = contentType,
+                    Base64Data = base64
+                };
+
+                return $"<img src=\"data:{contentType};base64,{base64}\" " +
+                       $"style=\"max-width:100%;width:{width}px;height:auto;\" " +
+                       $"data-image-id=\"{relationshipId}\" />";
+            }
+        }
+
         return string.Empty;
     }
 
     /// <summary>
     /// Konwertuje Picture (stary format obrazu) na HTML
     /// </summary>
-    private string ConvertPictureToHtml(Picture picture, WordprocessingDocument document)
+    private string ConvertPictureToHtml(Picture picture, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var imageData = picture.Descendants<DocumentFormat.OpenXml.Vml.ImageData>().FirstOrDefault();
         if (imageData?.RelationshipId?.Value == null) return string.Empty;
@@ -761,13 +1004,39 @@ public class DocxToHtmlConverter
                    $"style=\"max-width:100%;\" data-image-id=\"{image.Id}\" />";
         }
 
+        // Jeśli nie znaleziono, spróbuj załadować bezpośrednio z parta źródłowego
+        if (sourcePart != null)
+        {
+            var imagePart = sourcePart.GetPartById(relationshipId) as ImagePart;
+            if (imagePart != null)
+            {
+                using var stream = imagePart.GetStream();
+                using var memoryStream = new MemoryStream();
+                stream.CopyTo(memoryStream);
+                
+                var base64 = System.Convert.ToBase64String(memoryStream.ToArray());
+                var contentType = imagePart.ContentType;
+
+                // Cache dla przyszłych użyć
+                _images[relationshipId] = new DocumentImage
+                {
+                    Id = relationshipId,
+                    ContentType = contentType,
+                    Base64Data = base64
+                };
+
+                return $"<img src=\"data:{contentType};base64,{base64}\" " +
+                       $"style=\"max-width:100%;\" data-image-id=\"{relationshipId}\" />";
+            }
+        }
+
         return string.Empty;
     }
 
     /// <summary>
     /// Konwertuje tabelę na HTML
     /// </summary>
-    private string ConvertTableToHtml(Table table, WordprocessingDocument document)
+    private string ConvertTableToHtml(Table table, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var html = new StringBuilder();
         
@@ -830,7 +1099,7 @@ public class DocxToHtmlConverter
                 
                 foreach (var para in cell.Elements<Paragraph>())
                 {
-                    html.Append(ConvertParagraphToHtml(para, document));
+                    html.Append(ConvertParagraphToHtml(para, document, sourcePart));
                 }
                 
                 html.Append("</td>");

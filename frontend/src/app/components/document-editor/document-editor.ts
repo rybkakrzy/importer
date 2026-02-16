@@ -19,7 +19,8 @@ import {
   PageMargins,
   PageSettings,
   MARGIN_PRESETS,
-  DocumentStyle
+  DocumentStyle,
+  HeaderFooterContent
 } from '../../models/document.model';
 
 /**
@@ -51,6 +52,10 @@ export class DocumentEditorComponent {
   });
   documentStyles = signal<DocumentStyle[]>([]);
   originalFileName = signal<string>('');
+  
+  // Nagłówek i stopka
+  headerContent = signal<HeaderFooterContent>({ html: '', height: 1.25 });
+  footerContent = signal<HeaderFooterContent>({ html: '', height: 1.25 });
   
   // Stan edytora
   editorState = signal<EditorState | null>(null);
@@ -170,6 +175,20 @@ export class DocumentEditorComponent {
         this.documentStyles.set(content.styles || []);
         this.originalFileName.set(file.name);
         
+        // Wczytaj nagłówek i stopkę
+        if (content.header) {
+          this.headerContent.set({
+            html: content.header.html || '',
+            height: content.header.height || 1.25
+          });
+        }
+        if (content.footer) {
+          this.footerContent.set({
+            html: content.footer.html || '',
+            height: content.footer.height || 1.25
+          });
+        }
+        
         if (this.editor) {
           this.editor.setContent(content.html);
         }
@@ -197,7 +216,9 @@ export class DocumentEditorComponent {
       {
         html,
         originalFileName: fileName,
-        metadata: this.documentMetadata()
+        metadata: this.documentMetadata(),
+        header: this.headerContent(),
+        footer: this.footerContent()
       },
       fileName
     );
@@ -365,6 +386,28 @@ export class DocumentEditorComponent {
    */
   onContentChange(html: string): void {
     this.documentContent.set(html);
+    this.documentMetadata.update(m => ({
+      ...m,
+      modified: new Date().toISOString()
+    }));
+  }
+
+  /**
+   * Obsługa zmiany nagłówka
+   */
+  onHeaderChange(header: HeaderFooterContent): void {
+    this.headerContent.set(header);
+    this.documentMetadata.update(m => ({
+      ...m,
+      modified: new Date().toISOString()
+    }));
+  }
+
+  /**
+   * Obsługa zmiany stopki
+   */
+  onFooterChange(footer: HeaderFooterContent): void {
+    this.footerContent.set(footer);
     this.documentMetadata.update(m => ({
       ...m,
       modified: new Date().toISOString()
@@ -892,6 +935,20 @@ export class DocumentEditorComponent {
   insertPageBreak(): void {
     this.editor?.insertPageBreak();
     this.closeAllMenus();
+  }
+
+  /**
+   * Rozpoczyna edycję nagłówka
+   */
+  editHeader(): void {
+    this.editor?.startEditingHeader();
+  }
+
+  /**
+   * Rozpoczyna edycję stopki
+   */
+  editFooter(): void {
+    this.editor?.startEditingFooter();
   }
 
   /**
