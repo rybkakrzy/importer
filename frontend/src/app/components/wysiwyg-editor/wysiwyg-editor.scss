@@ -276,19 +276,81 @@
   background: #fafafa;
 }
 
-.editor-content img {
+.editor-content .editor-image-wrapper {
+  display: inline-block;
+  position: relative;
   max-width: 100%;
-  height: auto;
   margin: 10px 0;
-  cursor: pointer;
+  cursor: move;
+  line-height: 0;
+  vertical-align: top;
 }
 
-.editor-content img:hover {
+.editor-content .editor-image-wrapper img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  pointer-events: none;
+}
+
+.editor-content .editor-image-wrapper:hover {
   outline: 2px solid #0066cc;
 }
 
-.editor-content img.selected {
+.editor-content .editor-image-wrapper.selected {
   outline: 3px solid #0066cc;
+}
+
+/* Wspólne style uchwytów resize */
+.editor-content .image-resize-handle {
+  position: absolute;
+  display: none;
+  pointer-events: auto;
+  z-index: 2;
+}
+
+.editor-content .editor-image-wrapper.selected .image-resize-handle {
+  display: block;
+}
+
+/* Prawy uchwyt - zmiana szerokości */
+.editor-content .resize-handle-right {
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 30px;
+  border-radius: 3px;
+  background: #0066cc;
+  border: 1px solid #fff;
+  cursor: ew-resize;
+}
+
+/* Dolny uchwyt - zmiana wysokości */
+.editor-content .resize-handle-bottom {
+  bottom: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 6px;
+  border-radius: 3px;
+  background: #0066cc;
+  border: 1px solid #fff;
+  cursor: ns-resize;
+}
+
+/* Narożnik - zmiana proporcjonalna */
+.editor-content .resize-handle-corner {
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #0066cc;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #0066cc;
+  cursor: nwse-resize;
 }
 
 .editor-content blockquote {

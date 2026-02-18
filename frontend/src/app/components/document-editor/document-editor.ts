@@ -335,6 +335,9 @@ export class DocumentEditorComponent {
    * Wstawia obraz
    */
   onInsertImage(): void {
+    // Zapisz selekcję edytora przed otwarciem dialogu pliku (który zabiera focus)
+    this.editor?.saveSelection();
+
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -357,8 +360,11 @@ export class DocumentEditorComponent {
     const reader = new FileReader();
     reader.onload = (e) => {
       const base64 = e.target?.result as string;
-      if (base64) {
-        this.editor?.insertImage(base64, file.name);
+      if (base64 && this.editor) {
+        // Przywróć fokus i selekcję w edytorze przed wstawieniem
+        this.editor.focus();
+        this.editor.restoreSelection();
+        this.editor.insertImage(base64, file.name);
       }
     };
     reader.readAsDataURL(file);

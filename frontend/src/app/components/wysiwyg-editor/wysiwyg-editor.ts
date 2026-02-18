@@ -11,7 +11,8 @@ import {
   signal,
   computed,
   ViewChildren,
-  QueryList
+  QueryList,
+  ViewEncapsulation
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -34,7 +35,8 @@ import {
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './wysiwyg-editor.html',
-  styleUrl: './wysiwyg-editor.scss'
+  styleUrl: './wysiwyg-editor.scss',
+  encapsulation: ViewEncapsulation.None
 })
 export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @ViewChild('editorContent') editorContent!: ElementRef<HTMLDivElement>;
@@ -122,6 +124,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private redoStack: string[] = [];
   private lastSavedContent = '';
   private pageCheckInterval?: ReturnType<typeof setInterval>;
+  private selectedImageWrapper: HTMLElement | null = null;
+  private draggedImageWrapper: HTMLElement | null = null;
+  private imageResizeState: {
+    wrapper: HTMLElement;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+    axis: 'x' | 'y' | 'both';
+  } | null = null;
 
   // Strony dokumentu - pierwsza strona to edytor, pozostałe to overflow
   pages = signal<string[]>(['']);
@@ -243,6 +255,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (!editor) return;
 
     editor.innerHTML = this._content() || '<p></p>';
+    this.wrapExistingImages();
     this.lastSavedContent = editor.innerHTML;
     this.saveToUndoStack();
     this.updateState();
@@ -279,6 +292,199 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     editor.addEventListener('drop', (e) => {
       this.handleDrop(e);
     });
+
+    // Kliknięcia w obrazy (zaznaczanie)
+    editor.addEventListener('click', (e) => {
+      this.handleEditorClick(e);
+    });
+
+    // Resize obrazów
+    editor.addEventListener('mousedown', (e) => {
+      this.handleEditorMouseDown(e);
+    });
+
+    // Drag&drop obrazów wewnątrz dokumentu
+    editor.addEventListener('dragstart', (e) => {
+      this.handleEditorDragStart(e);
+    });
+
+    editor.addEventListener('dragover', (e) => {
+      this.handleEditorDragOver(e);
+    });
+
+    editor.addEventListener('dragend', () => {
+      this.draggedImageWrapper = null;
+    });
+  }
+
+  private handleEditorClick(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    const imageWrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
+
+    if (imageWrapper) {
+      // Kliknięcie na wrapper - nie rób nic, selekcja jest obsługiwana w mousedown
+      return;
+    }
+
+    this.clearSelectedImage();
+  }
+
+  private handleEditorMouseDown(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+
+    // Sprawdź czy kliknięto na wrapper obrazu lub jego zawartość
+    const wrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
+    if (!wrapper) {
+      return;
+    }
+
+    // Resize handle
+    if (target.classList.contains('image-resize-handle')) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      this.selectImageWrapper(wrapper);
+      wrapper.setAttribute('draggable', 'false');
+
+      const rect = wrapper.getBoundingClientRect();
+      const img = wrapper.querySelector('img') as HTMLImageElement | null;
+      let axis: 'x' | 'y' | 'both' = 'both';
+      if (target.classList.contains('resize-handle-right')) {
+        axis = 'x';
+      } else if (target.classList.contains('resize-handle-bottom')) {
+        axis = 'y';
+      }
+
+      this.imageResizeState = {
+        wrapper,
+        startX: event.clientX,
+        startY: event.clientY,
+        startWidth: rect.width,
+        startHeight: rect.height,
+        axis
+      };
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        if (!this.imageResizeState) return;
+
+        const editor = this.editorContent?.nativeElement;
+        const editorMaxWidth = (editor?.clientWidth || 900) - 30;
+        const st = this.imageResizeState;
+        const currentImg = st.wrapper.querySelector('img') as HTMLImageElement | null;
+        if (!currentImg) return;
+
+        if (st.axis === 'x') {
+          // Rozciąganie tylko szerokości — wysokość zostaje stała
+          const deltaX = moveEvent.clientX - st.startX;
+          const newWidth = Math.max(60, Math.min(editorMaxWidth, st.startWidth + deltaX));
+          st.wrapper.style.width = `${newWidth}px`;
+          st.wrapper.style.maxWidth = '100%';
+          currentImg.style.width = '100%';
+          currentImg.style.height = `${st.startHeight}px`;
+        } else if (st.axis === 'y') {
+          // Rozciąganie tylko wysokości — szerokość zostaje stała
+          const deltaY = moveEvent.clientY - st.startY;
+          const newHeight = Math.max(30, st.startHeight + deltaY);
+          st.wrapper.style.width = `${st.startWidth}px`;
+          st.wrapper.style.maxWidth = '100%';
+          currentImg.style.width = '100%';
+          currentImg.style.height = `${newHeight}px`;
+        } else {
+          // Proporcjonalne skalowanie z narożnika
+          const deltaX = moveEvent.clientX - st.startX;
+          const newWidth = Math.max(60, Math.min(editorMaxWidth, st.startWidth + deltaX));
+          st.wrapper.style.width = `${newWidth}px`;
+          st.wrapper.style.maxWidth = '100%';
+          currentImg.style.width = '100%';
+          currentImg.style.height = 'auto';
+        }
+      };
+
+      const onMouseUp = () => {
+        if (this.imageResizeState?.wrapper) {
+          this.imageResizeState.wrapper.setAttribute('draggable', 'true');
+        }
+
+        this.imageResizeState = null;
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        this.onContentChange();
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      return;
+    }
+
+    // Kliknięcie na wrapper obrazu (nie resize handle) - zaznacz obraz
+    event.preventDefault();
+    this.selectImageWrapper(wrapper);
+  }
+
+  private handleEditorDragStart(event: DragEvent): void {
+    const target = event.target as HTMLElement;
+    const wrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
+    if (!wrapper) {
+      return;
+    }
+
+    this.draggedImageWrapper = wrapper;
+    this.selectImageWrapper(wrapper);
+
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/editor-image', '1');
+    }
+  }
+
+  private handleEditorDragOver(event: DragEvent): void {
+    if (!this.draggedImageWrapper) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'move';
+    }
+  }
+
+  private selectImageWrapper(wrapper: HTMLElement): void {
+    if (this.selectedImageWrapper && this.selectedImageWrapper !== wrapper) {
+      this.selectedImageWrapper.classList.remove('selected');
+    }
+
+    this.selectedImageWrapper = wrapper;
+    this.selectedImageWrapper.classList.add('selected');
+  }
+
+  private clearSelectedImage(): void {
+    if (this.selectedImageWrapper) {
+      this.selectedImageWrapper.classList.remove('selected');
+      this.selectedImageWrapper = null;
+    }
+  }
+
+  private getRangeFromPoint(x: number, y: number): Range | null {
+    const docWithCaret = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    };
+
+    if (docWithCaret.caretRangeFromPoint) {
+      return docWithCaret.caretRangeFromPoint(x, y);
+    }
+
+    if (docWithCaret.caretPositionFromPoint) {
+      const pos = docWithCaret.caretPositionFromPoint(x, y);
+      if (pos) {
+        const range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+        range.collapse(true);
+        return range;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -362,6 +568,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Obsługa skrótów klawiszowych
    */
   private handleKeyboard(e: KeyboardEvent): void {
+    if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedImageWrapper) {
+      e.preventDefault();
+      this.selectedImageWrapper.remove();
+      this.selectedImageWrapper = null;
+      this.onContentChange();
+      return;
+    }
+
+    if (e.key === 'Escape' && this.selectedImageWrapper) {
+      e.preventDefault();
+      this.clearSelectedImage();
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey) {
       switch (e.key.toLowerCase()) {
         case 'b':
@@ -411,11 +631,28 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private handleDrop(e: DragEvent): void {
     e.preventDefault();
-    
+
+    // Przenoszenie obrazu wewnątrz dokumentu
+    if (this.draggedImageWrapper) {
+      const editor = this.editorContent?.nativeElement;
+      if (!editor) return;
+
+      const dropRange = this.getRangeFromPoint(e.clientX, e.clientY);
+      if (dropRange && editor.contains(dropRange.startContainer) && !this.draggedImageWrapper.contains(dropRange.startContainer)) {
+        this.draggedImageWrapper.remove();
+        dropRange.insertNode(this.draggedImageWrapper);
+        this.selectImageWrapper(this.draggedImageWrapper);
+        this.onContentChange();
+      }
+
+      this.draggedImageWrapper = null;
+      return;
+    }
+
     const files = e.dataTransfer?.files;
     if (!files || files.length === 0) return;
 
-    // Obsłuż obrazy
+    // Obsłuż obrazy z systemu
     Array.from(files).forEach(file => {
       if (file.type.startsWith('image/')) {
         this.insertImageFromFile(file);
@@ -1132,8 +1369,84 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wstawia obraz
    */
   insertImage(src: string, alt: string = ''): void {
-    const img = `<img src="${src}" alt="${alt}" style="max-width:100%;height:auto;" />`;
-    this.insertHtml(img);
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+
+    const imageId = `img-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+    // Buduj DOM bezpośrednio zamiast insertHTML (które nie działa po utracie focusu)
+    const wrapper = document.createElement('span');
+    wrapper.className = 'editor-image-wrapper';
+    wrapper.setAttribute('data-image-id', imageId);
+    wrapper.setAttribute('contenteditable', 'false');
+    wrapper.setAttribute('draggable', 'true');
+    wrapper.style.maxWidth = '100%';
+
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = alt;
+    img.style.maxWidth = '100%';
+    img.style.height = 'auto';
+    img.setAttribute('draggable', 'false');
+    wrapper.appendChild(img);
+
+    // Uchwyty resize: prawy (szerokość), dolny (wysokość), narożnik (proporcjonalnie)
+    ['right', 'bottom', 'corner'].forEach(type => {
+      const h = document.createElement('span');
+      h.className = `image-resize-handle resize-handle-${type}`;
+      h.title = type === 'right' ? 'Zmień szerokość' : type === 'bottom' ? 'Zmień wysokość' : 'Zmień rozmiar';
+      wrapper.appendChild(h);
+    });
+
+    // Spróbuj wstawić w miejsce kursora / zapisanej selekcji
+    let inserted = false;
+
+    // Najpierw próbuj przywrócić selekcję
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (editor.contains(range.commonAncestorContainer)) {
+        range.deleteContents();
+        range.insertNode(wrapper);
+        // Ustaw kursor za wstawionym obrazem
+        range.setStartAfter(wrapper);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        inserted = true;
+      }
+    }
+
+    // Jeśli nie udało się wstawić w selekcji, próbuj savedSelection
+    if (!inserted && this.savedSelection) {
+      editor.focus();
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(this.savedSelection);
+        const range = sel.getRangeAt(0);
+        if (editor.contains(range.commonAncestorContainer)) {
+          range.deleteContents();
+          range.insertNode(wrapper);
+          range.setStartAfter(wrapper);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          inserted = true;
+        }
+      }
+    }
+
+    // Fallback: dołącz na koniec edytora
+    if (!inserted) {
+      editor.focus();
+      const p = document.createElement('p');
+      p.appendChild(wrapper);
+      editor.appendChild(p);
+    }
+
+    this.selectImageWrapper(wrapper);
+    this.onContentChange();
   }
 
   /**
@@ -1342,7 +1655,37 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Pobiera zawartość HTML
    */
   getContent(): string {
-    return this.editorContent?.nativeElement?.innerHTML || '';
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return '';
+
+    const clone = editor.cloneNode(true) as HTMLDivElement;
+
+    clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
+      const wrapper = wrapperEl as HTMLElement;
+      wrapper.classList.remove('selected');
+      wrapper.removeAttribute('contenteditable');
+      wrapper.removeAttribute('draggable');
+
+      wrapper.querySelectorAll('.image-resize-handle').forEach(h => h.remove());
+
+      const img = wrapper.querySelector('img');
+      if (img) {
+        const imgEl = img as HTMLImageElement;
+        const wrapperWidth = wrapper.style.width;
+        if (wrapperWidth && wrapperWidth !== 'auto') {
+          imgEl.style.width = wrapperWidth;
+        }
+        imgEl.style.maxWidth = '100%';
+        // Zachowaj height jeśli był ustawiony (nie 'auto')
+        if (!imgEl.style.height || imgEl.style.height === 'auto') {
+          imgEl.style.height = 'auto';
+        }
+        imgEl.removeAttribute('draggable');
+        wrapper.replaceWith(imgEl);
+      }
+    });
+
+    return clone.innerHTML;
   }
 
   /**
@@ -1351,12 +1694,57 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   setContent(html: string): void {
     if (this.editorContent?.nativeElement) {
       this.editorContent.nativeElement.innerHTML = html;
-      this._content.set(html);
-      this.lastSavedContent = html;
-      this.undoStack = [html];
+      this.wrapExistingImages();
+      this._content.set(this.editorContent.nativeElement.innerHTML);
+      this.lastSavedContent = this.editorContent.nativeElement.innerHTML;
+      this.undoStack = [this.editorContent.nativeElement.innerHTML];
       this.redoStack = [];
       this.updateState();
     }
+  }
+
+  /**
+   * Opakowuje istniejące elementy <img> (bez wrappera) w editor-image-wrapper
+   */
+  private wrapExistingImages(): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+
+    const images = editor.querySelectorAll('img');
+    images.forEach((img: HTMLImageElement) => {
+      // Pomiń obrazy które już mają wrapper
+      if (img.parentElement?.classList.contains('editor-image-wrapper')) {
+        return;
+      }
+
+      const imageId = `img-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+      const wrapper = document.createElement('span');
+      wrapper.className = 'editor-image-wrapper';
+      wrapper.setAttribute('data-image-id', imageId);
+      wrapper.setAttribute('contenteditable', 'false');
+      wrapper.setAttribute('draggable', 'true');
+
+      // Przenieś width z img na wrapper
+      if (img.style.width) {
+        wrapper.style.width = img.style.width;
+      }
+      wrapper.style.maxWidth = '100%';
+
+      img.style.maxWidth = '100%';
+      img.style.height = 'auto';
+      img.setAttribute('draggable', 'false');
+
+      img.parentNode?.insertBefore(wrapper, img);
+      wrapper.appendChild(img);
+
+      ['right', 'bottom', 'corner'].forEach(type => {
+        const h = document.createElement('span');
+        h.className = `image-resize-handle resize-handle-${type}`;
+        h.title = type === 'right' ? 'Zmień szerokość' : type === 'bottom' ? 'Zmień wysokość' : 'Zmień rozmiar';
+        wrapper.appendChild(h);
+      });
+    });
   }
 
   /**
