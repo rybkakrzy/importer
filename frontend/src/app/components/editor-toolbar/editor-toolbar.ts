@@ -170,6 +170,7 @@ export class EditorToolbarComponent {
   @Output() insertLink = new EventEmitter<{ url: string; text?: string }>();
   @Output() insertImage = new EventEmitter<void>();
   @Output() insertTable = new EventEmitter<string>();
+  @Output() insertBarcode = new EventEmitter<void>();
   @Output() styleChange = new EventEmitter<DocumentStyle>();
   @Output() copyFormat = new EventEmitter<void>();
   @Output() pasteFormat = new EventEmitter<void>();
@@ -600,6 +601,13 @@ export class EditorToolbarComponent {
    */
   onInsertImage(): void {
     this.insertImage.emit();
+  }
+
+  /**
+   * Otwiera dialog wstawiania kodu kreskowego / QR
+   */
+  onInsertBarcode(): void {
+    this.insertBarcode.emit();
   }
 
   /**

@@ -11,6 +11,9 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddScoped<DocxToHtmlConverter>();
 builder.Services.AddScoped<HtmlToDocxConverter>();
 
+// Register barcode generator
+builder.Services.AddSingleton<BarcodeGeneratorService>();
+
 // Add CORS
 builder.Services.AddCors(options =>
 {

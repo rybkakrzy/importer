@@ -9,6 +9,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
+import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
 import { DocumentService } from '../../services/document.service';
 import { 
   DocumentContent, 
@@ -33,7 +34,8 @@ import {
     CommonModule,
     FormsModule,
     WysiwygEditorComponent,
-    EditorToolbarComponent
+    EditorToolbarComponent,
+    BarcodeDialogComponent
   ],
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
@@ -70,6 +72,7 @@ export class DocumentEditorComponent {
   showTemplates = signal(false);
   showAbout = signal(false);
   showFindReplace = signal(false);
+  showBarcodeDialog = signal(false);
   errorMessage = signal<string | null>(null);
   successMessage = signal<string | null>(null);
   
@@ -950,6 +953,36 @@ export class DocumentEditorComponent {
   clearFormatting(): void {
     this.editor?.executeCommand('removeFormat');
     this.closeAllMenus();
+  }
+
+  /**
+   * Otwiera dialog wstawiania kodu kreskowego / QR
+   */
+  openBarcodeDialog(): void {
+    // Zapisz selekcję przed otwarciem dialogu - dialog zabierze fokus z edytora
+    this.editor?.saveSelection();
+    this.showBarcodeDialog.set(true);
+    this.closeAllMenus();
+  }
+
+  /**
+   * Wstawia kod kreskowy / QR do edytora
+   */
+  onInsertBarcode(base64Image: string): void {
+    if (this.editor) {
+      // Przywróć fokus i selekcję w edytorze przed wstawieniem
+      this.editor.focus();
+      this.editor.restoreSelection();
+      this.editor.insertImage(base64Image, 'barcode');
+    }
+    this.showBarcodeDialog.set(false);
+  }
+
+  /**
+   * Zamyka dialog kodu kreskowego
+   */
+  closeBarcodeDialog(): void {
+    this.showBarcodeDialog.set(false);
   }
 
   /**

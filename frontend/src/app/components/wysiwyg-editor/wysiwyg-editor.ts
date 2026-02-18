@@ -905,6 +905,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private savedSelection: Range | null = null;
 
   /**
+   * Ustawia fokus na edytorze
+   */
+  focus(): void {
+    this.editorContent?.nativeElement?.focus();
+  }
+
+  /**
    * Zapisuje aktualną selekcję - wywoływane przed focusout
    */
   saveSelection(): void {
@@ -1345,13 +1352,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   markAsSaved(): void {
     this.lastSavedContent = this.getContent();
     this.updateState();
-  }
-
-  /**
-   * Focus na edytorze
-   */
-  focus(): void {
-    this.editorContent?.nativeElement?.focus();
   }
 
   /**

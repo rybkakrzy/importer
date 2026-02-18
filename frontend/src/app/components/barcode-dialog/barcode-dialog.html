@@ -1,0 +1,106 @@
+<div class="dialog-overlay" (click)="onCancel()">
+  <div class="dialog barcode-dialog" (click)="$event.stopPropagation()">
+    <div class="dialog-header">
+      <h3>Wstaw kod kreskowy / QR</h3>
+      <button class="dialog-close" (click)="onCancel()">×</button>
+    </div>
+
+    <div class="dialog-content dialog-content-grid">
+      <div class="form-column">
+        <!-- Typ kodu -->
+        <div class="form-group">
+          <label for="barcodeType">Typ kodu:</label>
+          <select
+            id="barcodeType"
+            class="form-select"
+            [value]="selectedType()"
+            (change)="onTypeChange($event)">
+            @for (type of barcodeTypes; track type.value) {
+              <option [value]="type.value">{{ type.label }}</option>
+            }
+          </select>
+        </div>
+
+        <!-- Treść -->
+        <div class="form-group">
+          <label for="barcodeContent">Treść kodu:</label>
+          <input
+            type="text"
+            id="barcodeContent"
+            class="form-input"
+            [value]="content()"
+            (input)="onContentChange($event)"
+            placeholder="Wpisz tekst do zakodowania..."
+          />
+        </div>
+
+        <!-- Wymiary -->
+        <div class="form-row">
+          <div class="form-group">
+            <label for="barcodeWidth">Szerokość (px):</label>
+            <input
+              type="number"
+              id="barcodeWidth"
+              class="form-input"
+              [value]="width()"
+              (input)="onWidthChange($event)"
+              min="50"
+              max="1000"
+              step="50"
+            />
+          </div>
+          <div class="form-group">
+            <label for="barcodeHeight">Wysokość (px):</label>
+            <input
+              type="number"
+              id="barcodeHeight"
+              class="form-input"
+              [value]="height()"
+              (input)="onHeightChange($event)"
+              min="50"
+              max="1000"
+              step="50"
+            />
+          </div>
+        </div>
+
+      </div>
+
+      <div class="preview-column">
+        <!-- Podgląd -->
+        <div class="preview-section">
+          <div class="preview-header">
+            <label>Podgląd:</label>
+          </div>
+          <div class="preview-area">
+            @if (preview()) {
+              <img [src]="preview()" alt="Podgląd kodu" class="barcode-preview-img" />
+            } @else if (errorMessage()) {
+              <div class="preview-error">{{ errorMessage() }}</div>
+            } @else {
+              <div class="preview-placeholder">
+                <svg viewBox="0 0 24 24" width="48" height="48" fill="#ccc">
+                  <path d="M3 11h8V3H3v8zm2-6h4v4H5V5zm8-2v8h8V3h-8zm6 6h-4V5h4v4zM3 21h8v-8H3v8zm2-6h4v4H5v-4zm13-2h-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/>
+                </svg>
+                <span>Podgląd pojawi się automatycznie po wpisaniu treści</span>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" (click)="onCancel()">Anuluj</button>
+      <button
+        class="btn btn-primary"
+        (click)="onInsert()"
+        [disabled]="isLoading() || !content()">
+        @if (isLoading()) {
+          <span class="spinner spinner-light"></span>
+        }
+        Wstaw
+      </button>
+    </div>
+  </div>
+</div>
