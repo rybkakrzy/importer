@@ -46,7 +46,7 @@ export class DocumentEditorComponent {
   private documentService = inject(DocumentService);
 
   // Stan dokumentu
-  documentContent = signal<string>('<p>&nbsp;</p>');
+  documentContent = signal<string>('<p></p>');
   documentMetadata = signal<DocumentMetadata>({
     title: 'Nowy dokument',
     created: new Date().toISOString(),
@@ -151,7 +151,7 @@ export class DocumentEditorComponent {
       }
     }
     
-    this.documentContent.set('<p>&nbsp;</p>');
+    this.documentContent.set('<p></p>');
     this.documentMetadata.set({
       title: 'Nowy dokument',
       created: new Date().toISOString(),
@@ -159,7 +159,7 @@ export class DocumentEditorComponent {
     });
     this.documentStyles.set([]); // Reset stylów - toolbar użyje domyślnych
     this.originalFileName.set('');
-    this.editor?.setContent('<p>&nbsp;</p>');
+    this.editor?.setContent('<p></p>');
     this.showMenu.set(false);
   }
 

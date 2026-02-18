@@ -206,13 +206,26 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private calculatePages(): void {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
+
+    // Dla pustego dokumentu zawsze pokazuj 1 stronę
+    const plainText = (editor.textContent || '').replace(/\u00A0/g, '').trim();
+    const hasMedia = editor.querySelector('img, table, hr, .page-break') !== null;
+    if (!plainText && !hasMedia) {
+      if (this.pages().length !== 1) {
+        this.pages.set(['']);
+        this.pagesChange.emit(1);
+      }
+      return;
+    }
     
     const contentHeight = editor.scrollHeight;
     const marginTop = this.pageMargins.top * 37.8;
     const marginBottom = this.pageMargins.bottom * 37.8;
     const availableHeight = this.PAGE_HEIGHT_PX - marginTop - marginBottom;
-    
-    const pageCount = Math.max(1, Math.ceil(contentHeight / availableHeight));
+
+    // Tolerancja na różnice renderowania (1-4px), które potrafią sztucznie dodać stronę
+    const adjustedHeight = Math.max(0, contentHeight - 4);
+    const pageCount = Math.max(1, Math.ceil(adjustedHeight / availableHeight));
     
     // Aktualizuj liczbę stron tylko jeśli się zmieniła
     if (this.pages().length !== pageCount) {
@@ -229,7 +242,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
-    editor.innerHTML = this._content() || '<p>&nbsp;</p>';
+    editor.innerHTML = this._content() || '<p></p>';
     this.lastSavedContent = editor.innerHTML;
     this.saveToUndoStack();
     this.updateState();

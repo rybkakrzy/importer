@@ -229,6 +229,10 @@
   margin: 0 0 10px 0;
 }
 
+.editor-content > p:last-child {
+  margin-bottom: 0;
+}
+
 .editor-content ul,
 .editor-content ol {
   margin: 10px 0;
