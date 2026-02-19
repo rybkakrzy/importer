@@ -2608,4 +2608,166 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       evenHtml: this._footerEvenHtml()
     });
   }
+
+  // ========== Wyszukiwanie i zamiana ==========
+
+  private searchHighlights: HTMLElement[] = [];
+  private currentHighlightIndex = -1;
+
+  /**
+   * Wyszukuje tekst w dokumencie i podświetla wyniki
+   */
+  searchText(text: string, direction: 'next' | 'previous'): { count: number; currentIndex: number } {
+    this.clearSearchHighlights();
+    
+    const editor = this.editorContent?.nativeElement;
+    if (!editor || !text) return { count: 0, currentIndex: -1 };
+
+    const searchLower = text.toLowerCase();
+    const treeWalker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+    const matches: { node: Text; index: number }[] = [];
+
+    while (treeWalker.nextNode()) {
+      const node = treeWalker.currentNode as Text;
+      const content = node.textContent || '';
+      let idx = content.toLowerCase().indexOf(searchLower);
+      while (idx !== -1) {
+        matches.push({ node, index: idx });
+        idx = content.toLowerCase().indexOf(searchLower, idx + 1);
+      }
+    }
+
+    if (matches.length === 0) return { count: 0, currentIndex: -1 };
+
+    // Podświetl wszystkie wyniki (od końca żeby nie psuć indeksów)
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const { node, index } = matches[i];
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + text.length);
+
+      const highlight = document.createElement('mark');
+      highlight.className = 'search-highlight';
+      highlight.style.backgroundColor = '#fff3a8';
+      highlight.style.color = 'inherit';
+      highlight.style.padding = '0';
+      highlight.dataset['searchHighlight'] = 'true';
+
+      try {
+        range.surroundContents(highlight);
+        this.searchHighlights.unshift(highlight);
+      } catch {
+        // Jeśli range obejmuje wiele elementów, pomiń
+      }
+    }
+
+    // Ustaw aktualny indeks
+    if (this.searchHighlights.length > 0) {
+      this.currentHighlightIndex = 0;
+      if (direction === 'previous') {
+        this.currentHighlightIndex = this.searchHighlights.length - 1;
+      }
+      this.highlightCurrent();
+    }
+
+    return { count: this.searchHighlights.length, currentIndex: this.currentHighlightIndex };
+  }
+
+  /**
+   * Przechodzi do następnego wyniku wyszukiwania
+   */
+  findNext(): { count: number; currentIndex: number } {
+    if (this.searchHighlights.length === 0) return { count: 0, currentIndex: -1 };
+    this.currentHighlightIndex = (this.currentHighlightIndex + 1) % this.searchHighlights.length;
+    this.highlightCurrent();
+    return { count: this.searchHighlights.length, currentIndex: this.currentHighlightIndex };
+  }
+
+  /**
+   * Przechodzi do poprzedniego wyniku wyszukiwania
+   */
+  findPrevious(): { count: number; currentIndex: number } {
+    if (this.searchHighlights.length === 0) return { count: 0, currentIndex: -1 };
+    this.currentHighlightIndex = (this.currentHighlightIndex - 1 + this.searchHighlights.length) % this.searchHighlights.length;
+    this.highlightCurrent();
+    return { count: this.searchHighlights.length, currentIndex: this.currentHighlightIndex };
+  }
+
+  /**
+   * Podświetla aktualny wynik wyszukiwania
+   */
+  private highlightCurrent(): void {
+    this.searchHighlights.forEach((el, i) => {
+      if (i === this.currentHighlightIndex) {
+        el.style.backgroundColor = '#ff9632';
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        el.style.backgroundColor = '#fff3a8';
+      }
+    });
+  }
+
+  /**
+   * Zamienia bieżący wynik wyszukiwania
+   */
+  replaceCurrentMatch(replaceText: string): { count: number; currentIndex: number } {
+    if (this.searchHighlights.length === 0 || this.currentHighlightIndex < 0) {
+      return { count: 0, currentIndex: -1 };
+    }
+
+    const highlight = this.searchHighlights[this.currentHighlightIndex];
+    const textNode = document.createTextNode(replaceText);
+    highlight.parentNode?.replaceChild(textNode, highlight);
+    this.searchHighlights.splice(this.currentHighlightIndex, 1);
+
+    if (this.currentHighlightIndex >= this.searchHighlights.length) {
+      this.currentHighlightIndex = 0;
+    }
+    if (this.searchHighlights.length > 0) {
+      this.highlightCurrent();
+    }
+
+    this.emitContentChange();
+    return { count: this.searchHighlights.length, currentIndex: this.currentHighlightIndex };
+  }
+
+  /**
+   * Zamienia wszystkie wyniki wyszukiwania
+   */
+  replaceAllMatches(replaceText: string): { count: number; currentIndex: number } {
+    for (const highlight of this.searchHighlights) {
+      const textNode = document.createTextNode(replaceText);
+      highlight.parentNode?.replaceChild(textNode, highlight);
+    }
+    this.searchHighlights = [];
+    this.currentHighlightIndex = -1;
+    this.emitContentChange();
+    return { count: 0, currentIndex: -1 };
+  }
+
+  /**
+   * Czyści podświetlenia wyszukiwania
+   */
+  clearSearchHighlights(): void {
+    for (const highlight of this.searchHighlights) {
+      const parent = highlight.parentNode;
+      if (parent) {
+        while (highlight.firstChild) {
+          parent.insertBefore(highlight.firstChild, highlight);
+        }
+        parent.removeChild(highlight);
+        parent.normalize();
+      }
+    }
+    this.searchHighlights = [];
+    this.currentHighlightIndex = -1;
+  }
+
+  private emitContentChange(): void {
+    const editor = this.editorContent?.nativeElement;
+    if (editor) {
+      this._content.set(editor.innerHTML);
+      this.contentChange.emit(editor.innerHTML);
+    }
+  }
 }

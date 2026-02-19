@@ -174,6 +174,9 @@ export class EditorToolbarComponent {
   @Output() styleChange = new EventEmitter<DocumentStyle>();
   @Output() copyFormat = new EventEmitter<void>();
   @Output() pasteFormat = new EventEmitter<void>();
+  @Output() searchInDocument = new EventEmitter<{ text: string; direction: 'next' | 'previous' }>();
+  @Output() replaceInDocument = new EventEmitter<{ searchText: string; replaceText: string; all: boolean }>();
+  @Output() clearSearch = new EventEmitter<void>();
 
   // Style dokumentu
   private _documentStyles = signal<DocumentStyle[]>(DEFAULT_WORD_STYLES);
@@ -219,6 +222,12 @@ export class EditorToolbarComponent {
   showLinkDialog = signal(false);
   showTableDialog = signal(false);
   showStyleDropdown = signal(false);
+  showSearchBar = signal(false);
+  showReplaceRow = signal(false);
+  searchText = '';
+  replaceText = '';
+  searchResultCount = signal(0);
+  currentSearchIndex = signal(0);
   linkUrl = '';
   linkText = '';
   tableRows = 3;
@@ -615,6 +624,99 @@ export class EditorToolbarComponent {
    */
   isActive(format: keyof EditorState['currentFormatting']): boolean {
     return this.editorState?.currentFormatting?.[format] ?? false;
+  }
+
+  /**
+   * Przełącza pasek wyszukiwania
+   */
+  toggleSearchBar(): void {
+    const newValue = !this.showSearchBar();
+    this.showSearchBar.set(newValue);
+    if (!newValue) {
+      this.searchText = '';
+      this.replaceText = '';
+      this.searchResultCount.set(0);
+      this.currentSearchIndex.set(0);
+      this.showReplaceRow.set(false);
+      this.clearSearch.emit();
+    }
+  }
+
+  /**
+   * Zamyka pasek wyszukiwania
+   */
+  closeSearchBar(): void {
+    this.showSearchBar.set(false);
+    this.searchText = '';
+    this.replaceText = '';
+    this.searchResultCount.set(0);
+    this.currentSearchIndex.set(0);
+    this.showReplaceRow.set(false);
+    this.clearSearch.emit();
+  }
+
+  /**
+   * Przełącza wiersz zamiany
+   */
+  toggleReplaceRow(): void {
+    this.showReplaceRow.update(v => !v);
+  }
+
+  /**
+   * Reaguje na zmianę tekstu w polu wyszukiwania
+   */
+  onSearchInput(): void {
+    if (this.searchText.length > 0) {
+      this.searchInDocument.emit({ text: this.searchText, direction: 'next' });
+    } else {
+      this.searchResultCount.set(0);
+      this.currentSearchIndex.set(0);
+      this.clearSearch.emit();
+    }
+  }
+
+  /**
+   * Znajduje następne wystąpienie
+   */
+  findNext(): void {
+    if (this.searchText) {
+      this.searchInDocument.emit({ text: this.searchText, direction: 'next' });
+    }
+  }
+
+  /**
+   * Znajduje poprzednie wystąpienie
+   */
+  findPrevious(): void {
+    if (this.searchText) {
+      this.searchInDocument.emit({ text: this.searchText, direction: 'previous' });
+    }
+  }
+
+  /**
+   * Zamienia następne wystąpienie
+   */
+  replaceNext(): void {
+    if (this.searchText) {
+      this.replaceInDocument.emit({ searchText: this.searchText, replaceText: this.replaceText, all: false });
+    }
+  }
+
+  /**
+   * Zamienia wszystkie wystąpienia
+   */
+  replaceAll(): void {
+    if (this.searchText) {
+      this.replaceInDocument.emit({ searchText: this.searchText, replaceText: this.replaceText, all: true });
+    }
+  }
+
+  /**
+   * Aktualizuje wyniki wyszukiwania (wywoływane z zewnątrz)
+   */
+  updateSearchResults(count: number, currentIndex: number): void {
+    this.searchResultCount.set(count);
+    this.currentSearchIndex.set(currentIndex);
   }
 
   /**

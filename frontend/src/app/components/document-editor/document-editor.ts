@@ -42,6 +42,7 @@ import {
 })
 export class DocumentEditorComponent {
   @ViewChild(WysiwygEditorComponent) editor!: WysiwygEditorComponent;
+  @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
 
   private documentService = inject(DocumentService);
 
@@ -406,6 +407,53 @@ export class DocumentEditorComponent {
     if (this.editor && this.copiedFormat) {
       this.editor.applyFormatting(this.copiedFormat);
     }
+  }
+
+  /**
+   * Wyszukiwanie tekstu w dokumencie
+   */
+  private lastSearchText = '';
+
+  onSearchInDocument(event: { text: string; direction: 'next' | 'previous' }): void {
+    if (!this.editor) return;
+
+    let result: { count: number; currentIndex: number };
+
+    if (event.text !== this.lastSearchText) {
+      // Nowe wyszukiwanie
+      this.lastSearchText = event.text;
+      result = this.editor.searchText(event.text, event.direction);
+    } else {
+      // Nawigacja po istniejących wynikach
+      result = event.direction === 'next' ? this.editor.findNext() : this.editor.findPrevious();
+    }
+
+    if (this.toolbar) {
+      this.toolbar.updateSearchResults(result.count, result.currentIndex);
+    }
+  }
+
+  onReplaceInDocument(event: { searchText: string; replaceText: string; all: boolean }): void {
+    if (!this.editor) return;
+
+    let result: { count: number; currentIndex: number };
+
+    if (event.all) {
+      result = this.editor.replaceAllMatches(event.replaceText);
+    } else {
+      result = this.editor.replaceCurrentMatch(event.replaceText);
+    }
+
+    if (this.toolbar) {
+      this.toolbar.updateSearchResults(result.count, result.currentIndex);
+    }
+  }
+
+  onClearSearch(): void {
+    if (this.editor) {
+      this.editor.clearSearchHighlights();
+    }
+    this.lastSearchText = '';
   }
 
   /**
