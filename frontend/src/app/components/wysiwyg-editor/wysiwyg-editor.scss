@@ -256,6 +256,7 @@
   border-collapse: collapse;
   width: 100%;
   margin: 15px 0;
+  position: relative;
 }
 
 .editor-content table td,
@@ -264,7 +265,7 @@
   padding: 8px 12px;
   text-align: left;
   vertical-align: top;
-  min-width: 80px;
+  min-width: 30px;
 }
 
 .editor-content table th {
@@ -274,6 +275,35 @@
 
 .editor-content table tr:hover td {
   background: #fafafa;
+}
+
+/* Narożnik tabeli - uchwyt resize całej tabeli */
+.editor-content table::after {
+  content: '';
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: #0066cc;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #0066cc;
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+
+.editor-content table:hover::after {
+  opacity: 1;
+}
+
+/* Blokada zaznaczania tekstu podczas resize tabeli */
+body.table-resizing,
+body.table-resizing * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }
 
 .editor-content .editor-image-wrapper {

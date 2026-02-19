@@ -135,6 +135,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     axis: 'x' | 'y' | 'both';
   } | null = null;
 
+  // Stan resize tabeli
+  private tableResizeState: {
+    type: 'col' | 'row' | 'table';
+    table: HTMLTableElement;
+    startX: number;
+    startY: number;
+    colIndex: number;
+    rowIndex: number;
+    startWidths: number[];
+    startHeight: number;
+    startTableWidth: number;
+  } | null = null;
+
   // Strony dokumentu - pierwsza strona to edytor, pozostałe to overflow
   pages = signal<string[]>(['']);
   
@@ -315,6 +328,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     editor.addEventListener('dragend', () => {
       this.draggedImageWrapper = null;
     });
+
+    // Kursor resize tabel (wykrywanie krawędzi kolumn/wierszy)
+    editor.addEventListener('mousemove', (e) => {
+      this.handleTableResizeCursor(e);
+    });
   }
 
   private handleEditorClick(event: MouseEvent): void {
@@ -331,6 +349,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   private handleEditorMouseDown(event: MouseEvent): void {
     const target = event.target as HTMLElement;
+
+    // --- Resize tabeli ---
+    const tableHit = this.detectTableResizeHit(event);
+    if (tableHit) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.startTableResize(tableHit, event);
+      return;
+    }
 
     // Sprawdź czy kliknięto na wrapper obrazu lub jego zawartość
     const wrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
@@ -420,6 +447,285 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     event.preventDefault();
     this.selectImageWrapper(wrapper);
   }
+
+  // ======= RESIZE TABEL =======
+
+  private readonly TABLE_EDGE_THRESHOLD = 6; // px od krawędzi
+
+  /**
+   * Wykrywa czy kursor jest nad krawędzią kolumny, wiersza lub narożnikiem tabeli
+   */
+  private detectTableResizeHit(event: MouseEvent): {
+    type: 'col' | 'row' | 'table';
+    table: HTMLTableElement;
+    colIndex: number;
+    rowIndex: number;
+  } | null {
+    const target = event.target as HTMLElement;
+    const td = target.closest('td, th') as HTMLTableCellElement | null;
+    const table = target.closest('table') as HTMLTableElement | null;
+
+    if (!table) return null;
+
+    const t = this.TABLE_EDGE_THRESHOLD;
+
+    // Sprawdź narożnik tabeli (prawy dolny)
+    const tableRect = table.getBoundingClientRect();
+    if (
+      Math.abs(event.clientX - tableRect.right) < t + 2 &&
+      Math.abs(event.clientY - tableRect.bottom) < t + 2
+    ) {
+      return { type: 'table', table, colIndex: -1, rowIndex: -1 };
+    }
+
+    if (!td) return null;
+    const cellRect = td.getBoundingClientRect();
+
+    // Prawa krawędź komórki = granica kolumny
+    if (Math.abs(event.clientX - cellRect.right) < t) {
+      return {
+        type: 'col',
+        table,
+        colIndex: td.cellIndex,
+        rowIndex: (td.parentElement as HTMLTableRowElement).rowIndex
+      };
+    }
+
+    // Lewa krawędź (granica z poprzednią kolumną)
+    if (td.cellIndex > 0 && Math.abs(event.clientX - cellRect.left) < t) {
+      return {
+        type: 'col',
+        table,
+        colIndex: td.cellIndex - 1,
+        rowIndex: (td.parentElement as HTMLTableRowElement).rowIndex
+      };
+    }
+
+    // Dolna krawędź komórki = granica wiersza
+    if (Math.abs(event.clientY - cellRect.bottom) < t) {
+      return {
+        type: 'row',
+        table,
+        colIndex: td.cellIndex,
+        rowIndex: (td.parentElement as HTMLTableRowElement).rowIndex
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Zmienia kursor nad krawędziami tabeli
+   */
+  private handleTableResizeCursor(event: MouseEvent): void {
+    // Nie zmieniaj kursora podczas aktywnego resize
+    if (this.tableResizeState || this.imageResizeState) return;
+
+    const target = event.target as HTMLElement;
+    const td = target.closest('td, th') as HTMLTableCellElement | null;
+    const table = target.closest('table') as HTMLTableElement | null;
+
+    if (!table || !td) {
+      // Reset kursora na komórkach które miały zmieniony kursor
+      if (this._lastCursorCell) {
+        this._lastCursorCell.style.cursor = '';
+        this._lastCursorCell = null;
+      }
+      return;
+    }
+
+    const hit = this.detectTableResizeHit(event);
+
+    // Wyczyść poprzednią komórkę
+    if (this._lastCursorCell && this._lastCursorCell !== td) {
+      this._lastCursorCell.style.cursor = '';
+    }
+
+    if (hit) {
+      if (hit.type === 'col') {
+        td.style.cursor = 'col-resize';
+      } else if (hit.type === 'row') {
+        td.style.cursor = 'row-resize';
+      } else {
+        td.style.cursor = 'nwse-resize';
+      }
+      this._lastCursorCell = td;
+    } else {
+      td.style.cursor = '';
+      this._lastCursorCell = null;
+    }
+  }
+
+  private _lastCursorCell: HTMLElement | null = null;
+
+  /**
+   * Normalizuje tabele - ustawia stałe szerokości kolumn jeśli brak
+   */
+  private ensureTableColWidths(table: HTMLTableElement): void {
+    const firstRow = table.rows[0];
+    if (!firstRow) return;
+
+    // Sprawdź czy kolumny mają już ustawione szerokości
+    const hasWidths = Array.from(firstRow.cells).every(c => !!c.style.width);
+    if (hasWidths) return;
+
+    // Zmierz aktualne i ustaw px
+    const cells = Array.from(firstRow.cells);
+    const widths = cells.map(c => c.getBoundingClientRect().width);
+    cells.forEach((c, i) => {
+      c.style.width = `${widths[i]}px`;
+    });
+
+    // Ustaw table-layout: fixed
+    table.style.tableLayout = 'fixed';
+  }
+
+  /**
+   * Rozpoczyna resize tabeli
+   */
+  private startTableResize(
+    hit: { type: 'col' | 'row' | 'table'; table: HTMLTableElement; colIndex: number; rowIndex: number },
+    event: MouseEvent
+  ): void {
+    const table = hit.table;
+    this.ensureTableColWidths(table);
+
+    const firstRow = table.rows[0];
+    const startWidths = firstRow ? Array.from(firstRow.cells).map(c => c.getBoundingClientRect().width) : [];
+    const startTableWidth = table.getBoundingClientRect().width;
+
+    let startHeight = 0;
+    if (hit.type === 'row' && table.rows[hit.rowIndex]) {
+      startHeight = table.rows[hit.rowIndex].getBoundingClientRect().height;
+    }
+
+    this.tableResizeState = {
+      type: hit.type,
+      table,
+      startX: event.clientX,
+      startY: event.clientY,
+      colIndex: hit.colIndex,
+      rowIndex: hit.rowIndex,
+      startWidths,
+      startHeight,
+      startTableWidth
+    };
+
+    // Zablokuj zaznaczanie tekstu i wymusz kursor na całym dokumencie
+    document.body.classList.add('table-resizing');
+    const cursorType = hit.type === 'col' ? 'col-resize' : hit.type === 'row' ? 'row-resize' : 'nwse-resize';
+    document.body.style.cursor = cursorType;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      moveEvent.preventDefault();
+      if (!this.tableResizeState) return;
+      const st = this.tableResizeState;
+
+      if (st.type === 'col') {
+        this.resizeTableColumn(st, moveEvent);
+      } else if (st.type === 'row') {
+        this.resizeTableRow(st, moveEvent);
+      } else {
+        this.resizeWholeTable(st, moveEvent);
+      }
+    };
+
+    const onMouseUp = () => {
+      this.tableResizeState = null;
+      document.body.classList.remove('table-resizing');
+      document.body.style.cursor = '';
+      if (this._lastCursorCell) {
+        this._lastCursorCell.style.cursor = '';
+        this._lastCursorCell = null;
+      }
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      this.onContentChange();
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }
+
+  /**
+   * Resize kolumny - przesuwa granicę między kolumnami
+   */
+  private resizeTableColumn(
+    st: NonNullable<typeof this.tableResizeState>,
+    moveEvent: MouseEvent
+  ): void {
+    const deltaX = moveEvent.clientX - st.startX;
+    const ci = st.colIndex;
+    const totalCols = st.startWidths.length;
+
+    // Rozszerzamy kolumnę ci, zwężamy ci+1 (lub rozszerzamy tabelę jeśli ostatnia)
+    const minW = 40;
+    const newLeft = Math.max(minW, st.startWidths[ci] + deltaX);
+
+    const allRows = st.table.rows;
+
+    if (ci < totalCols - 1) {
+      // Środkowa kolumna - zabierz z sąsiedniej
+      const newRight = Math.max(minW, st.startWidths[ci + 1] - deltaX);
+      for (let r = 0; r < allRows.length; r++) {
+        const cells = allRows[r].cells;
+        if (cells[ci]) cells[ci].style.width = `${newLeft}px`;
+        if (cells[ci + 1]) cells[ci + 1].style.width = `${newRight}px`;
+      }
+    } else {
+      // Ostatnia kolumna - zmień szerokość tabeli
+      for (let r = 0; r < allRows.length; r++) {
+        const cells = allRows[r].cells;
+        if (cells[ci]) cells[ci].style.width = `${newLeft}px`;
+      }
+      const totalWidth = st.startWidths.reduce((s, w, i) => s + (i === ci ? newLeft : w), 0);
+      st.table.style.width = `${totalWidth}px`;
+    }
+  }
+
+  /**
+   * Resize wiersza - zmienia wysokość
+   */
+  private resizeTableRow(
+    st: NonNullable<typeof this.tableResizeState>,
+    moveEvent: MouseEvent
+  ): void {
+    const deltaY = moveEvent.clientY - st.startY;
+    const newHeight = Math.max(20, Math.round(st.startHeight + deltaY));
+    const row = st.table.rows[st.rowIndex];
+    if (row) {
+      row.style.height = `${newHeight}px`;
+    }
+  }
+
+  /**
+   * Resize całej tabeli - skaluje proporcjonalnie
+   */
+  private resizeWholeTable(
+    st: NonNullable<typeof this.tableResizeState>,
+    moveEvent: MouseEvent
+  ): void {
+    const deltaX = moveEvent.clientX - st.startX;
+    const editor = this.editorContent?.nativeElement;
+    const maxW = (editor?.clientWidth || 900) - 20;
+    const newTableWidth = Math.max(200, Math.min(maxW, st.startTableWidth + deltaX));
+    const ratio = newTableWidth / st.startTableWidth;
+
+    st.table.style.width = `${newTableWidth}px`;
+
+    const firstRow = st.table.rows[0];
+    if (firstRow) {
+      const allRows = st.table.rows;
+      for (let r = 0; r < allRows.length; r++) {
+        const cells = allRows[r].cells;
+        for (let c = 0; c < cells.length && c < st.startWidths.length; c++) {
+          cells[c].style.width = `${st.startWidths[c] * ratio}px`;
+        }
+      }
+    }
+  }
+
+  // ======= KONIEC RESIZE TABEL =======
 
   private handleEditorDragStart(event: DragEvent): void {
     const target = event.target as HTMLElement;
@@ -1454,19 +1760,81 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   insertTable(config: string): void {
     const [rows, cols] = config.split('x').map(Number);
-    
-    let tableHtml = '<table style="border-collapse:collapse;width:100%;margin:10px 0;">';
-    
+    const editor = this.editorContent?.nativeElement;
+    if (!editor || rows <= 0 || cols <= 0) return;
+
+    const colWidth = Math.floor(100 / cols);
+
+    // Buduj tabelę jako element DOM (zamiast execCommand insertHTML, który nie działa bez focusu)
+    const table = document.createElement('table');
+    table.style.cssText = 'border-collapse:collapse;width:100%;margin:10px 0;table-layout:fixed;position:relative;';
+
     for (let i = 0; i < rows; i++) {
-      tableHtml += '<tr>';
+      const tr = document.createElement('tr');
       for (let j = 0; j < cols; j++) {
-        tableHtml += '<td style="border:1px solid #ccc;padding:8px;min-width:50px;">&nbsp;</td>';
+        const td = document.createElement('td');
+        td.style.cssText = `border:1px solid #ccc;padding:8px;min-width:30px;width:${colWidth}%;`;
+        td.innerHTML = '&nbsp;';
+        tr.appendChild(td);
       }
-      tableHtml += '</tr>';
+      table.appendChild(tr);
     }
-    
-    tableHtml += '</table><p>&nbsp;</p>';
-    this.insertHtml(tableHtml);
+
+    const afterParagraph = document.createElement('p');
+    afterParagraph.innerHTML = '&nbsp;';
+
+    const fragment = document.createDocumentFragment();
+    fragment.appendChild(table);
+    fragment.appendChild(afterParagraph);
+
+    // Próbuj wstawić w miejsce kursora / selekcji
+    let inserted = false;
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (editor.contains(range.commonAncestorContainer)) {
+        range.deleteContents();
+        range.insertNode(fragment);
+        const newRange = document.createRange();
+        newRange.setStartAfter(afterParagraph);
+        newRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+        inserted = true;
+      }
+    }
+
+    // Fallback: użyj zapisanej selekcji (utraconej przez kliknięcie dialogu)
+    if (!inserted && this.savedSelection) {
+      editor.focus();
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(this.savedSelection);
+        const range = sel.getRangeAt(0);
+        if (editor.contains(range.commonAncestorContainer)) {
+          range.deleteContents();
+          range.insertNode(fragment);
+          const newRange = document.createRange();
+          newRange.setStartAfter(afterParagraph);
+          newRange.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(newRange);
+          inserted = true;
+        }
+      }
+    }
+
+    // Fallback: dołącz na koniec edytora
+    if (!inserted) {
+      editor.focus();
+      editor.appendChild(table);
+      editor.appendChild(afterParagraph);
+    }
+
+    this.savedSelection = null;
+    this.onContentChange();
   }
 
   /**
@@ -1658,7 +2026,34 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return '';
 
+    // Przechwytuj rzeczywiste wysokości wierszy tabel z DOM (przed klonowaniem)
+    // Dzięki temu wysokości są ZAWSZE w HTML - niezależnie czy pochodzą z drag-resize czy z treści
+    const tableRowHeights: Map<number, { heights: number[] }>  = new Map();
+    const liveTables = editor.querySelectorAll('table');
+    liveTables.forEach((table, tableIdx) => {
+      const rows = table.querySelectorAll('tr');
+      const heights: number[] = [];
+      rows.forEach(tr => {
+        heights.push(Math.round((tr as HTMLElement).getBoundingClientRect().height));
+      });
+      tableRowHeights.set(tableIdx, { heights });
+    });
+
     const clone = editor.cloneNode(true) as HTMLDivElement;
+
+    // Zastosuj przechwycone wysokości do sklonowanych wierszy
+    const cloneTables = clone.querySelectorAll('table');
+    cloneTables.forEach((table, tableIdx) => {
+      const data = tableRowHeights.get(tableIdx);
+      if (!data) return;
+      const rows = table.querySelectorAll('tr');
+      rows.forEach((tr, rowIdx) => {
+        const h = data.heights[rowIdx];
+        if (h && h > 0) {
+          (tr as HTMLElement).style.height = `${h}px`;
+        }
+      });
+    });
 
     clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;

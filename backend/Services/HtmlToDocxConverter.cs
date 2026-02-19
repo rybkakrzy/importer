@@ -777,10 +777,11 @@ public class HtmlToDocxConverter
                 
                 // Wysokość wiersza
                 var rowStyle = rowNode.GetAttributeValue("style", "");
-                var rowHeightMatch = Regex.Match(rowStyle, @"(?:min-)?height:\s*(\d+)px");
+                var rowHeightMatch = Regex.Match(rowStyle, @"(?:min-)?height:\s*([\d.]+)px");
                 if (rowHeightMatch.Success)
                 {
-                    var heightTwips = PxToTwips(int.Parse(rowHeightMatch.Groups[1].Value));
+                    var heightPx = (int)Math.Round(double.Parse(rowHeightMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+                    var heightTwips = PxToTwips(heightPx);
                     var rowProps = new TableRowProperties(
                         new TableRowHeight { Val = (uint)heightTwips, HeightType = HeightRuleValues.AtLeast }
                     );
