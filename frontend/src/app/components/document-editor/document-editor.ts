@@ -1022,12 +1022,16 @@ export class DocumentEditorComponent {
   /**
    * Wstawia kod kreskowy / QR do edytora
    */
-  onInsertBarcode(base64Image: string): void {
+  onInsertBarcode(event: { base64Image: string; content: string; showValueBelow: boolean }): void {
     if (this.editor) {
       // Przywróć fokus i selekcję w edytorze przed wstawieniem
       this.editor.focus();
       this.editor.restoreSelection();
-      this.editor.insertImage(base64Image, 'barcode');
+      if (event.showValueBelow) {
+        this.editor.insertBarcodeWithValue(event.base64Image, event.content);
+      } else {
+        this.editor.insertImage(event.base64Image, 'barcode');
+      }
     }
     this.showBarcodeDialog.set(false);
   }

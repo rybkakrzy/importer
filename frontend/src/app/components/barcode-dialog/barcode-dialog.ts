@@ -15,7 +15,7 @@ export class BarcodeDialogComponent {
   private previewDebounce?: ReturnType<typeof setTimeout>;
   private previewRequestId = 0;
 
-  @Output() insertBarcode = new EventEmitter<string>();
+  @Output() insertBarcode = new EventEmitter<{ base64Image: string; content: string; showValueBelow: boolean }>();
   @Output() close = new EventEmitter<void>();
 
   barcodeTypes = this.barcodeService.barcodeTypes;
@@ -24,6 +24,7 @@ export class BarcodeDialogComponent {
   content = signal('');
   width = signal(300);
   height = signal(300);
+  showValueBelow = signal(false);
   preview = signal<string | null>(null);
   isLoading = signal(false);
   errorMessage = signal<string | null>(null);
@@ -55,7 +56,8 @@ export class BarcodeDialogComponent {
       content: contentValue,
       barcodeType: this.selectedType(),
       width: this.width(),
-      height: this.height()
+      height: this.height(),
+      showText: this.showValueBelow()
     }).subscribe({
       next: (response: BarcodeResponse) => {
         if (requestId !== this.previewRequestId) return;
@@ -102,10 +104,15 @@ export class BarcodeDialogComponent {
       content: contentValue,
       barcodeType: this.selectedType(),
       width: this.width(),
-      height: this.height()
+      height: this.height(),
+      showText: this.showValueBelow()
     }).subscribe({
       next: (response: BarcodeResponse) => {
-        this.insertBarcode.emit(response.base64Image);
+        this.insertBarcode.emit({
+          base64Image: response.base64Image,
+          content: this.content(),
+          showValueBelow: this.showValueBelow()
+        });
         this.isLoading.set(false);
       },
       error: (err) => {
@@ -114,6 +121,15 @@ export class BarcodeDialogComponent {
         this.isLoading.set(false);
       }
     });
+  }
+
+  /**
+   * Aktualizuje checkbox wartości pod spodem
+   */
+  onShowValueBelowChange(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.showValueBelow.set(input.checked);
+    this.scheduleAutoPreview();
   }
 
   /**

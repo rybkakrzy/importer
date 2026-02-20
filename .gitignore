@@ -1,6 +1,6 @@
 # Backend
-backend/bin/
-backend/obj/
+**/bin/
+**/obj/
 backend/*.user
 backend/.vs/
 backend/.vscode/

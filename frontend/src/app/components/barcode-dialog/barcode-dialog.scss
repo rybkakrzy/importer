@@ -259,3 +259,27 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Checkbox */
+.form-group-checkbox {
+  margin-top: 4px;
+}
+
+.checkbox-label {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 400 !important;
+  color: #444;
+  user-select: none;
+
+  input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #0066cc;
+    margin: 0;
+  }
+}

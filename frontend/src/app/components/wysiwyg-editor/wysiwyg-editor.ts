@@ -1756,6 +1756,101 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Wstawia kod kreskowy z wartością tekstową pod spodem
+   */
+  insertBarcodeWithValue(src: string, valueText: string): void {
+    const editor = this.editorContent?.nativeElement;
+    if (!editor) return;
+
+    const imageId = `img-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+    // Kontener na kod kreskowy z wartością
+    const container = document.createElement('div');
+    container.className = 'barcode-container';
+    container.setAttribute('contenteditable', 'false');
+    container.style.display = 'inline-block';
+    container.style.textAlign = 'center';
+
+    const wrapper = document.createElement('span');
+    wrapper.className = 'editor-image-wrapper';
+    wrapper.setAttribute('data-image-id', imageId);
+    wrapper.setAttribute('contenteditable', 'false');
+    wrapper.setAttribute('draggable', 'true');
+    wrapper.style.maxWidth = '100%';
+    wrapper.style.display = 'block';
+
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = 'barcode';
+    img.style.maxWidth = '100%';
+    img.style.height = 'auto';
+    img.setAttribute('draggable', 'false');
+    wrapper.appendChild(img);
+
+    // Uchwyty resize
+    ['right', 'bottom', 'corner'].forEach(type => {
+      const h = document.createElement('span');
+      h.className = `image-resize-handle resize-handle-${type}`;
+      h.title = type === 'right' ? 'Zmień szerokość' : type === 'bottom' ? 'Zmień wysokość' : 'Zmień rozmiar';
+      wrapper.appendChild(h);
+    });
+
+    container.appendChild(wrapper);
+
+    // Tekst wartości pod kodem
+    const valueDiv = document.createElement('div');
+    valueDiv.className = 'barcode-value-text';
+    valueDiv.style.cssText = 'font-size: 12px; font-family: monospace; color: #333; margin-top: 4px; text-align: center; word-break: break-all;';
+    valueDiv.textContent = valueText;
+    container.appendChild(valueDiv);
+
+    // Wstaw w miejsce kursora
+    let inserted = false;
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (editor.contains(range.commonAncestorContainer)) {
+        range.deleteContents();
+        range.insertNode(container);
+        range.setStartAfter(container);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        inserted = true;
+      }
+    }
+
+    if (!inserted && this.savedSelection) {
+      editor.focus();
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(this.savedSelection);
+        const range = sel.getRangeAt(0);
+        if (editor.contains(range.commonAncestorContainer)) {
+          range.deleteContents();
+          range.insertNode(container);
+          range.setStartAfter(container);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          inserted = true;
+        }
+      }
+    }
+
+    if (!inserted) {
+      editor.focus();
+      const p = document.createElement('p');
+      p.appendChild(container);
+      editor.appendChild(p);
+    }
+
+    this.selectImageWrapper(wrapper);
+    this.onContentChange();
+  }
+
+  /**
    * Wstawia tabelę
    */
   insertTable(config: string): void {

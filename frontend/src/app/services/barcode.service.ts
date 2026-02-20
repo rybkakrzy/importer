@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { catchError } from 'rxjs/operators';
+import { ApiConfigService } from '../core/services/api-config.service';
 
 /** Request do generowania kodu */
 export interface BarcodeRequest {
@@ -9,6 +10,7 @@ export interface BarcodeRequest {
   barcodeType: string;
   width?: number;
   height?: number;
+  showText?: boolean;
 }
 
 /** Odpowiedź z wygenerowanym kodem */
@@ -26,7 +28,11 @@ export interface BarcodeResponse {
 })
 export class BarcodeService {
   private http = inject(HttpClient);
-  private apiUrl = 'http://localhost:5190/api/barcode';
+  private apiConfig = inject(ApiConfigService);
+
+  private get apiUrl(): string {
+    return this.apiConfig.barcodeUrl;
+  }
 
   /** Lista obsługiwanych typów kodów */
   readonly barcodeTypes: { value: string; label: string; is2D: boolean }[] = [
@@ -54,7 +60,8 @@ export class BarcodeService {
       content: request.content,
       barcodeType: request.barcodeType,
       width: request.width || 300,
-      height: request.height || 300
+      height: request.height || 300,
+      showText: request.showText ?? false
     }).pipe(
       catchError(error => {
         console.error('Błąd generowania kodu:', error);

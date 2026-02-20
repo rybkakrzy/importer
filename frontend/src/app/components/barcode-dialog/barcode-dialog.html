@@ -64,6 +64,18 @@
           </div>
         </div>
 
+        <!-- Checkbox: wartość pod spodem -->
+        <div class="form-group form-group-checkbox">
+          <label class="checkbox-label">
+            <input
+              type="checkbox"
+              [checked]="showValueBelow()"
+              (change)="onShowValueBelowChange($event)"
+            />
+            <span>Umieść wartość pod spodem</span>
+          </label>
+        </div>
+
       </div>
 
       <div class="preview-column">

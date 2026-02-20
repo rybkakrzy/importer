@@ -8,6 +8,7 @@ import {
   DocumentTemplate, 
   ImageUploadResponse 
 } from '../models/document.model';
+import { ApiConfigService } from '../core/services/api-config.service';
 
 /**
  * Serwis do komunikacji z API dokumentów
@@ -17,7 +18,11 @@ import {
 })
 export class DocumentService {
   private http = inject(HttpClient);
-  private apiUrl = 'http://localhost:5190/api/document';
+  private apiConfig = inject(ApiConfigService);
+
+  private get apiUrl(): string {
+    return this.apiConfig.documentUrl;
+  }
 
   /**
    * Otwiera dokument DOCX
