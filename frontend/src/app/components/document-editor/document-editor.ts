@@ -76,6 +76,37 @@ export class DocumentEditorComponent {
   showBarcodeDialog = signal(false);
   errorMessage = signal<string | null>(null);
   successMessage = signal<string | null>(null);
+
+  // Menu kontekstowe
+  showContextMenu = signal(false);
+  contextMenuX = signal(0);
+  contextMenuY = signal(0);
+  contextSubmenu = signal<string | null>(null);
+
+  // Menu Narzędzia
+  showToolsMenu = signal(false);
+
+  // Dialog Akapit
+  showParagraphDialog = signal(false);
+  paragraphDialogTab = signal<'indents' | 'breaks'>('indents');
+  paragraphData = {
+    alignment: 'left' as string,
+    outlineLevel: 'body' as string,
+    indentLeft: 0,
+    indentRight: 0,
+    specialIndent: 'none' as string,
+    specialIndentBy: 1.27,
+    mirrorIndents: false,
+    spaceBefore: 0,
+    spaceAfter: 8,
+    lineSpacingType: 'multiple' as string,
+    lineSpacingValue: 1.08,
+    dontAddSpaceBetweenSameStyle: false,
+    widowOrphanControl: true,
+    keepWithNext: false,
+    keepLinesTogether: false,
+    pageBreakBefore: false
+  };
   
   // Szablony
   templates = signal<DocumentTemplate[]>([]);
@@ -630,6 +661,39 @@ export class DocumentEditorComponent {
   }
 
   /**
+   * Obsługuje prawy przycisk myszy - menu kontekstowe
+   */
+  @HostListener('contextmenu', ['$event'])
+  onContextMenu(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    // Pokaż menu kontekstowe tylko w obszarze edytora
+    const isEditorArea = target.closest('.editor-main') || 
+                         target.closest('app-wysiwyg-editor') ||
+                         target.closest('.paper-container');
+    if (isEditorArea) {
+      event.preventDefault();
+      this.closeAllMenus();
+      this.contextSubmenu.set(null);
+
+      // Oblicz pozycję — upewnij się, że menu nie wychodzi poza ekran
+      const menuWidth = 260;
+      const menuHeight = 420;
+      let x = event.clientX;
+      let y = event.clientY;
+      if (x + menuWidth > window.innerWidth) {
+        x = window.innerWidth - menuWidth - 8;
+      }
+      if (y + menuHeight > window.innerHeight) {
+        y = window.innerHeight - menuHeight - 8;
+      }
+
+      this.contextMenuX.set(x);
+      this.contextMenuY.set(y);
+      this.showContextMenu.set(true);
+    }
+  }
+
+  /**
    * Zamyka wszystkie menu
    */
   closeAllMenus(): void {
@@ -637,8 +701,11 @@ export class DocumentEditorComponent {
     this.showEditMenu.set(false);
     this.showFormatMenu.set(false);
     this.showInsertMenu.set(false);
+    this.showToolsMenu.set(false);
     this.activeSubmenu.set(null);
     this.showTemplates.set(false);
+    this.showContextMenu.set(false);
+    this.contextSubmenu.set(null);
   }
 
   /**
@@ -1286,5 +1353,281 @@ export class DocumentEditorComponent {
     const data = this.headerFooterDialogData();
     this.editor?.applyHeaderFooterSettings(data);
     this.closeHeaderFooterDialog();
+  }
+
+  // =====================
+  // MENU KONTEKSTOWE
+  // =====================
+
+  closeContextMenu(): void {
+    this.showContextMenu.set(false);
+    this.contextSubmenu.set(null);
+  }
+
+  contextMenuToggleBold(): void {
+    this.editor?.executeCommand('bold');
+    this.closeContextMenu();
+  }
+
+  contextMenuToggleItalic(): void {
+    this.editor?.executeCommand('italic');
+    this.closeContextMenu();
+  }
+
+  contextMenuToggleUnderline(): void {
+    this.editor?.executeCommand('underline');
+    this.closeContextMenu();
+  }
+
+  contextMenuAlignLeft(): void {
+    this.editor?.executeCommand('justifyLeft');
+    this.closeContextMenu();
+  }
+
+  contextMenuAlignCenter(): void {
+    this.editor?.executeCommand('justifyCenter');
+    this.closeContextMenu();
+  }
+
+  contextMenuAlignRight(): void {
+    this.editor?.executeCommand('justifyRight');
+    this.closeContextMenu();
+  }
+
+  contextMenuAlignJustify(): void {
+    this.editor?.executeCommand('justifyFull');
+    this.closeContextMenu();
+  }
+
+  contextMenuSetLineSpacing(value: number): void {
+    this.setLineSpacing(value);
+    this.closeContextMenu();
+  }
+
+  contextMenuIncreaseIndent(): void {
+    this.editor?.executeCommand('indent');
+    this.closeContextMenu();
+  }
+
+  contextMenuDecreaseIndent(): void {
+    this.editor?.executeCommand('outdent');
+    this.closeContextMenu();
+  }
+
+  // =====================
+  // MENU NARZĘDZIA
+  // =====================
+
+  toggleToolsMenu(): void {
+    const wasOpen = this.showToolsMenu();
+    this.closeAllMenus();
+    this.showToolsMenu.set(!wasOpen);
+  }
+
+  // =====================
+  // DIALOG AKAPIT
+  // =====================
+
+  openParagraphDialog(): void {
+    this.closeAllMenus();
+    this.readCurrentParagraphSettings();
+    this.paragraphDialogTab.set('indents');
+    this.showParagraphDialog.set(true);
+  }
+
+  closeParagraphDialog(): void {
+    this.showParagraphDialog.set(false);
+  }
+
+  /**
+   * Odczytuje bieżące ustawienia akapitu z zaznaczenia
+   */
+  private readCurrentParagraphSettings(): void {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    let block = range.startContainer as Node;
+    if (block.nodeType === Node.TEXT_NODE) {
+      block = block.parentNode!;
+    }
+    while (block && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'].includes((block as HTMLElement).tagName)) {
+      block = block.parentNode!;
+    }
+
+    if (block) {
+      const el = block as HTMLElement;
+      const style = window.getComputedStyle(el);
+
+      // Wyrównanie
+      const textAlign = style.textAlign;
+      if (textAlign === 'center') this.paragraphData.alignment = 'center';
+      else if (textAlign === 'right' || textAlign === 'end') this.paragraphData.alignment = 'right';
+      else if (textAlign === 'justify') this.paragraphData.alignment = 'justify';
+      else this.paragraphData.alignment = 'left';
+
+      // Wcięcia (px -> cm, 1cm ≈ 37.8px)
+      const pxToCm = (px: number) => Math.round(px / 37.8 * 10) / 10;
+      this.paragraphData.indentLeft = pxToCm(parseFloat(style.paddingLeft) || 0);
+      this.paragraphData.indentRight = pxToCm(parseFloat(style.paddingRight) || 0);
+
+      // Text-indent (wcięcie specjalne)
+      const textIndent = parseFloat(style.textIndent) || 0;
+      if (textIndent > 0) {
+        this.paragraphData.specialIndent = 'firstLine';
+        this.paragraphData.specialIndentBy = pxToCm(textIndent);
+      } else if (textIndent < 0) {
+        this.paragraphData.specialIndent = 'hanging';
+        this.paragraphData.specialIndentBy = pxToCm(Math.abs(textIndent));
+      } else {
+        this.paragraphData.specialIndent = 'none';
+      }
+
+      // Odstępy (px -> pt, 1pt ≈ 1.333px)
+      const pxToPt = (px: number) => Math.round(px / 1.333);
+      this.paragraphData.spaceBefore = pxToPt(parseFloat(style.marginTop) || 0);
+      this.paragraphData.spaceAfter = pxToPt(parseFloat(style.marginBottom) || 0);
+
+      // Interlinia
+      const lineHeight = style.lineHeight;
+      if (lineHeight === 'normal') {
+        this.paragraphData.lineSpacingType = 'single';
+        this.paragraphData.lineSpacingValue = 1;
+      } else {
+        const lhValue = parseFloat(lineHeight);
+        const fontSize = parseFloat(style.fontSize);
+        const ratio = Math.round(lhValue / fontSize * 100) / 100;
+        this.paragraphData.lineSpacingType = 'multiple';
+        this.paragraphData.lineSpacingValue = ratio;
+      }
+    }
+  }
+
+  /**
+   * Stosuje ustawienia akapitu
+   */
+  applyParagraphSettings(): void {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      this.closeParagraphDialog();
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    let block = range.startContainer as Node;
+    if (block.nodeType === Node.TEXT_NODE) {
+      block = block.parentNode!;
+    }
+    while (block && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'].includes((block as HTMLElement).tagName)) {
+      block = block.parentNode!;
+    }
+
+    if (block) {
+      const el = block as HTMLElement;
+      const cmToPx = (cm: number) => cm * 37.8;
+
+      // Wyrównanie
+      el.style.textAlign = this.paragraphData.alignment;
+
+      // Wcięcia
+      el.style.paddingLeft = cmToPx(this.paragraphData.indentLeft) + 'px';
+      el.style.paddingRight = cmToPx(this.paragraphData.indentRight) + 'px';
+
+      // Wcięcie specjalne
+      if (this.paragraphData.specialIndent === 'firstLine') {
+        el.style.textIndent = cmToPx(this.paragraphData.specialIndentBy) + 'px';
+      } else if (this.paragraphData.specialIndent === 'hanging') {
+        el.style.textIndent = '-' + cmToPx(this.paragraphData.specialIndentBy) + 'px';
+        el.style.paddingLeft = cmToPx(this.paragraphData.indentLeft + this.paragraphData.specialIndentBy) + 'px';
+      } else {
+        el.style.textIndent = '0';
+      }
+
+      // Odstępy
+      const ptToPx = (pt: number) => pt * 1.333;
+      el.style.marginTop = ptToPx(this.paragraphData.spaceBefore) + 'px';
+      el.style.marginBottom = ptToPx(this.paragraphData.spaceAfter) + 'px';
+
+      // Interlinia
+      switch (this.paragraphData.lineSpacingType) {
+        case 'single':
+          el.style.lineHeight = '1';
+          break;
+        case '1.5':
+          el.style.lineHeight = '1.5';
+          break;
+        case 'double':
+          el.style.lineHeight = '2';
+          break;
+        case 'multiple':
+          el.style.lineHeight = this.paragraphData.lineSpacingValue.toString();
+          break;
+        case 'atLeast':
+          el.style.lineHeight = this.paragraphData.lineSpacingValue + 'pt';
+          break;
+        case 'exactly':
+          el.style.lineHeight = this.paragraphData.lineSpacingValue + 'pt';
+          break;
+      }
+
+      // Podziały strony
+      if (this.paragraphData.pageBreakBefore) {
+        el.style.pageBreakBefore = 'always';
+      } else {
+        el.style.pageBreakBefore = 'auto';
+      }
+    }
+
+    this.closeParagraphDialog();
+  }
+
+  /**
+   * Resetuje do domyślnych
+   */
+  resetParagraphDefaults(): void {
+    this.paragraphData.alignment = 'left';
+    this.paragraphData.outlineLevel = 'body';
+    this.paragraphData.indentLeft = 0;
+    this.paragraphData.indentRight = 0;
+    this.paragraphData.specialIndent = 'none';
+    this.paragraphData.specialIndentBy = 1.27;
+    this.paragraphData.mirrorIndents = false;
+    this.paragraphData.spaceBefore = 0;
+    this.paragraphData.spaceAfter = 8;
+    this.paragraphData.lineSpacingType = 'multiple';
+    this.paragraphData.lineSpacingValue = 1.08;
+    this.paragraphData.dontAddSpaceBetweenSameStyle = false;
+    this.paragraphData.widowOrphanControl = true;
+    this.paragraphData.keepWithNext = false;
+    this.paragraphData.keepLinesTogether = false;
+    this.paragraphData.pageBreakBefore = false;
+  }
+
+  /**
+   * Jednostka interlinii
+   */
+  getLineSpacingUnit(): string {
+    switch (this.paragraphData.lineSpacingType) {
+      case 'atLeast':
+      case 'exactly':
+        return 'pkt';
+      case 'multiple':
+        return '';
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * Interlinia dla podglądu
+   */
+  getPreviewLineHeight(): string {
+    switch (this.paragraphData.lineSpacingType) {
+      case 'single': return '1';
+      case '1.5': return '1.5';
+      case 'double': return '2';
+      case 'multiple': return this.paragraphData.lineSpacingValue.toString();
+      default: return '1.15';
+    }
   }
 }

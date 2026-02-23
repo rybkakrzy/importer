@@ -1210,3 +1210,315 @@
   font-size: 14px;
   color: #202124;
 }
+
+/* ========================
+   Menu kontekstowe (prawy przycisk)
+   ======================== */
+
+.context-menu-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 999;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.08);
+  padding: 4px 0;
+  min-width: 240px;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  animation: contextMenuFadeIn 0.1s ease;
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 24px 6px 12px;
+  background: transparent;
+  border: none;
+  color: #1c1c1c;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  line-height: 1.4;
+  position: relative;
+  white-space: nowrap;
+}
+
+.context-menu-item:hover {
+  background: #e8e8e8;
+}
+
+.context-menu-item svg {
+  flex-shrink: 0;
+  color: #505050;
+}
+
+.context-menu-shortcut {
+  margin-left: auto;
+  font-size: 12px;
+  color: #888;
+  padding-left: 24px;
+}
+
+.context-menu-arrow {
+  margin-left: auto;
+  font-size: 8px;
+  color: #888;
+  padding-left: 24px;
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: #e0e0e0;
+  margin: 4px 0;
+}
+
+/* Podmenu kontekstowe */
+.context-menu-submenu-trigger {
+  position: relative;
+}
+
+.context-submenu {
+  position: absolute;
+  left: 100%;
+  top: -4px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.08);
+  padding: 4px 0;
+  min-width: 180px;
+  z-index: 1001;
+  animation: contextMenuFadeIn 0.1s ease;
+}
+
+.context-submenu .context-menu-item {
+  padding: 6px 16px;
+}
+
+/* ========================
+   Dialog Akapit (Paragraph)
+   ======================== */
+
+.paragraph-dialog {
+  width: 560px;
+  max-height: 85vh;
+}
+
+.paragraph-dialog-content {
+  padding: 0 24px 16px !important;
+}
+
+/* Zakładki */
+.paragraph-tabs {
+  display: flex;
+  border-bottom: 1px solid #d0d0d0;
+  margin-bottom: 16px;
+  padding: 0;
+}
+
+.paragraph-tab {
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  color: #555;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.paragraph-tab:hover {
+  color: #333;
+  background: #f5f5f5;
+}
+
+.paragraph-tab.active {
+  color: #2b579a;
+  border-bottom-color: #2b579a;
+  font-weight: 600;
+}
+
+/* Fieldset */
+.paragraph-fieldset {
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 12px 16px 14px;
+  margin-bottom: 14px;
+}
+
+.paragraph-fieldset legend {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  padding: 0 6px;
+}
+
+/* Wiersze pól */
+.paragraph-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+  align-items: flex-end;
+}
+
+.paragraph-row:last-child {
+  margin-bottom: 0;
+}
+
+.paragraph-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.paragraph-field label {
+  font-size: 12px;
+  color: #555;
+  white-space: nowrap;
+}
+
+/* Inputy */
+.paragraph-select {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #ababab;
+  border-radius: 3px;
+  font-size: 13px;
+  color: #333;
+  background: #fff;
+  cursor: pointer;
+}
+
+.paragraph-select:focus {
+  outline: none;
+  border-color: #2b579a;
+}
+
+.paragraph-spinner {
+  display: flex;
+  align-items: center;
+  border: 1px solid #ababab;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.paragraph-spinner:focus-within {
+  border-color: #2b579a;
+}
+
+.paragraph-input {
+  width: 100%;
+  border: none;
+  padding: 5px 8px;
+  font-size: 13px;
+  color: #333;
+  outline: none;
+  background: transparent;
+  -moz-appearance: textfield;
+}
+
+.paragraph-input::-webkit-outer-spin-button,
+.paragraph-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.paragraph-input:disabled {
+  background: #f0f0f0;
+  color: #999;
+}
+
+.paragraph-unit {
+  font-size: 12px;
+  color: #777;
+  padding-right: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Checkbox */
+.paragraph-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  margin-top: 8px;
+}
+
+.paragraph-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #2b579a;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.paragraph-checkbox span {
+  font-size: 13px;
+  color: #333;
+}
+
+/* Podgląd */
+.paragraph-preview {
+  background: #fff;
+  border: 1px solid #c0c0c0;
+  padding: 12px 16px;
+  min-height: 100px;
+  font-size: 8px;
+  color: #444;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.preview-para {
+  margin: 0;
+  word-wrap: break-word;
+}
+
+.preview-before,
+.preview-after {
+  color: #999;
+}
+
+.preview-current {
+  color: #333;
+}
+
+/* Dialog Footer modyfikacja dla Akapit */
+.paragraph-dialog-footer {
+  display: flex;
+  justify-content: space-between !important;
+  align-items: center;
+}
+
+.dialog-footer-right {
+  display: flex;
+  gap: 8px;
+}
