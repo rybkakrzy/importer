@@ -82,6 +82,7 @@ export class DocumentEditorComponent {
   contextMenuX = signal(0);
   contextMenuY = signal(0);
   contextSubmenu = signal<string | null>(null);
+  contextMenuTargetCell = signal<HTMLElement | null>(null);
 
   // Menu Narzędzia
   showToolsMenu = signal(false);
@@ -125,6 +126,19 @@ export class DocumentEditorComponent {
   // Zoom
   zoomLevel = signal(100);
   zoomLevels = [50, 75, 100, 125, 150, 200];
+
+  // Toolbar tabeli
+  isInTable = signal(false);
+  activeTableCell = signal<HTMLTableCellElement | null>(null);
+  activeTable = signal<HTMLTableElement | null>(null);
+
+  // Zaznaczanie komórek tabeli (custom cell selection)
+  selectedCells = signal<Set<HTMLTableCellElement>>(new Set());
+  private cellSelectionStartCell: HTMLTableCellElement | null = null;
+  private isCellSelecting = false;
+
+  // Cieniowanie (shading) dropdown w toolbarze tabeli
+  showShadingDropdown = signal(false);
 
   // Strony
   currentPage = signal(1);
@@ -539,6 +553,35 @@ export class DocumentEditorComponent {
    */
   onStateChange(state: EditorState): void {
     this.editorState.set(state);
+    this.detectTableContext();
+  }
+
+  /**
+   * Wykrywa czy kursor jest wewnątrz tabeli
+   */
+  private detectTableContext(): void {
+    const selection = window.getSelection();
+    const editorEl = this.editor?.editorContent?.nativeElement;
+    if (!selection || !editorEl || !selection.anchorNode) {
+      this.isInTable.set(false);
+      this.activeTableCell.set(null);
+      this.activeTable.set(null);
+      return;
+    }
+    const node = selection.anchorNode instanceof HTMLElement
+      ? selection.anchorNode
+      : selection.anchorNode.parentElement;
+    if (!node || !editorEl.contains(node)) {
+      this.isInTable.set(false);
+      this.activeTableCell.set(null);
+      this.activeTable.set(null);
+      return;
+    }
+    const cell = node.closest('td, th') as HTMLTableCellElement | null;
+    const table = node.closest('table') as HTMLTableElement | null;
+    this.isInTable.set(!!cell && !!table);
+    this.activeTableCell.set(cell);
+    this.activeTable.set(table);
   }
 
   /**
@@ -668,10 +711,121 @@ export class DocumentEditorComponent {
     // Sprawdź czy kliknięto w obszarze menu
     const isMenuArea = target.closest('.menu-bar') || 
                        target.closest('.dropdown-menu');
-    // Jeśli kliknięto poza menu - zamknij
-    if (!isMenuArea) {
+    const isShadingArea = target.closest('.shading-dropdown') || target.closest('.table-toolbar-btn-shading');
+    // Jeśli kliknięto poza menu i poza cieniowaniem - zamknij
+    if (!isMenuArea && !isShadingArea) {
       this.closeAllMenus();
     }
+    // Zamknij dropdown cieniowania jeśli kliknięto poza nim
+    if (!isShadingArea) {
+      this.showShadingDropdown.set(false);
+    }
+  }
+
+  // =====================
+  // ZAZNACZANIE KOMÓREK TABELI (MULTI-CELL SELECTION)
+  // =====================
+
+  @HostListener('mousedown', ['$event'])
+  onCellMouseDown(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    const editorEl = this.editor?.editorContent?.nativeElement;
+    if (!editorEl) return;
+
+    const cell = target.closest('td, th') as HTMLTableCellElement | null;
+    if (cell && editorEl.contains(cell)) {
+      this.cellSelectionStartCell = cell;
+      this.isCellSelecting = false;
+      // Wyczyść zaznaczenie jeśli nie trzymamy Shift
+      if (!event.shiftKey) {
+        this.clearCellSelection();
+      }
+    } else if (!target.closest('.table-toolbar') && !target.closest('.context-menu') && !target.closest('.shading-dropdown')) {
+      this.cellSelectionStartCell = null;
+      this.clearCellSelection();
+    }
+  }
+
+  @HostListener('document:mousemove', ['$event'])
+  onCellMouseMove(event: MouseEvent): void {
+    if (!this.cellSelectionStartCell || !(event.buttons & 1)) return;
+
+    const target = event.target as HTMLElement;
+    const cell = target.closest('td, th') as HTMLTableCellElement | null;
+    const editorEl = this.editor?.editorContent?.nativeElement;
+
+    if (cell && editorEl && editorEl.contains(cell) && cell !== this.cellSelectionStartCell) {
+      // Sprawdź czy obie komórki są w tej samej tabeli
+      const startTable = this.cellSelectionStartCell.closest('table');
+      const endTable = cell.closest('table');
+      if (startTable && startTable === endTable) {
+        this.isCellSelecting = true;
+        event.preventDefault();
+        // Wyczyść selekcję tekstową przeglądarki
+        window.getSelection()?.removeAllRanges();
+        this.selectCellRange(this.cellSelectionStartCell, cell);
+      }
+    }
+  }
+
+  @HostListener('document:mouseup', ['$event'])
+  onCellMouseUp(event: MouseEvent): void {
+    if (this.isCellSelecting) {
+      this.isCellSelecting = false;
+      // Wyczyść selekcję tekstową przeglądarki - zostawiamy custom cell selection
+      window.getSelection()?.removeAllRanges();
+    }
+    this.cellSelectionStartCell = null;
+  }
+
+  /**
+   * Zaznacza prostokątny zakres komórek od start do end
+   */
+  private selectCellRange(start: HTMLTableCellElement, end: HTMLTableCellElement): void {
+    const table = start.closest('table') as HTMLTableElement;
+    if (!table) return;
+
+    const startPos = this.getCellPosition(start);
+    const endPos = this.getCellPosition(end);
+    if (!startPos || !endPos) return;
+
+    const minRow = Math.min(startPos.rowIndex, endPos.rowIndex);
+    const maxRow = Math.max(startPos.rowIndex, endPos.rowIndex);
+    const minCol = Math.min(startPos.colIndex, endPos.colIndex);
+    const maxCol = Math.max(startPos.colIndex, endPos.colIndex);
+
+    const newSelection = new Set<HTMLTableCellElement>();
+    for (let r = minRow; r <= maxRow; r++) {
+      const row = table.rows[r];
+      if (!row) continue;
+      for (let c = minCol; c <= maxCol; c++) {
+        if (c < row.cells.length) {
+          newSelection.add(row.cells[c]);
+        }
+      }
+    }
+    this.applyCellSelection(newSelection);
+  }
+
+  /**
+   * Stosuje wizualne zaznaczenie na podanych komórkach
+   */
+  private applyCellSelection(cells: Set<HTMLTableCellElement>): void {
+    // Usuń stare zaznaczenie
+    const prev = this.selectedCells();
+    prev.forEach(c => c.classList.remove('table-cell-selected'));
+    // Zaznacz nowe
+    cells.forEach(c => c.classList.add('table-cell-selected'));
+    this.selectedCells.set(cells);
+  }
+
+  /**
+   * Czyści zaznaczenie komórek
+   */
+  clearCellSelection(): void {
+    const prev = this.selectedCells();
+    prev.forEach(c => c.classList.remove('table-cell-selected'));
+    this.selectedCells.set(new Set());
   }
 
   /**
@@ -688,6 +842,10 @@ export class DocumentEditorComponent {
       event.preventDefault();
       this.closeAllMenus();
       this.contextSubmenu.set(null);
+
+      // Wykryj czy kliknięto w komórkę tabeli
+      const cellTarget = target.closest('td, th') as HTMLElement | null;
+      this.contextMenuTargetCell.set(cellTarget);
 
       // Oblicz pozycję — upewnij się, że menu nie wychodzi poza ekran
       const menuWidth = 260;
@@ -720,6 +878,7 @@ export class DocumentEditorComponent {
     this.showTemplates.set(false);
     this.showContextMenu.set(false);
     this.contextSubmenu.set(null);
+    this.showShadingDropdown.set(false);
   }
 
   /**
@@ -1428,6 +1587,58 @@ export class DocumentEditorComponent {
     this.closeContextMenu();
   }
 
+  /**
+   * Ustawia kolor tła komórki tabeli (context menu + toolbar)
+   */
+  setCellColor(color: string): void {
+    // Użyj custom zaznaczenia lub aktywnej/target komórki
+    const customSelected = this.selectedCells();
+    if (customSelected.size > 0) {
+      customSelected.forEach(c => (c as HTMLElement).style.backgroundColor = color);
+    } else {
+      const cell = this.contextMenuTargetCell() || this.activeTableCell();
+      if (cell) {
+        (cell as HTMLElement).style.backgroundColor = color;
+      }
+    }
+    this.closeContextMenu();
+    this.showShadingDropdown.set(false);
+    this.notifyEditorChange();
+  }
+
+  /**
+   * Czyści kolor tła komórki tabeli
+   */
+  clearCellColor(): void {
+    const customSelected = this.selectedCells();
+    if (customSelected.size > 0) {
+      customSelected.forEach(c => (c as HTMLElement).style.backgroundColor = '');
+    } else {
+      const cell = this.contextMenuTargetCell() || this.activeTableCell();
+      if (cell) {
+        (cell as HTMLElement).style.backgroundColor = '';
+      }
+    }
+    this.closeContextMenu();
+    this.showShadingDropdown.set(false);
+    this.notifyEditorChange();
+  }
+
+  /**
+   * Pobiera zaznaczone komórki tabeli (z custom cell selection)
+   */
+  private getSelectedCells(selection: Selection, editor: HTMLElement): HTMLElement[] {
+    // Użyj custom zaznaczenia komórek
+    const customSelected = this.selectedCells();
+    if (customSelected.size > 0) {
+      return Array.from(customSelected);
+    }
+
+    // Fallback: aktywna komórka
+    const cell = this.activeTableCell();
+    return cell ? [cell] : [];
+  }
+
   // =====================
   // MENU NARZĘDZIA
   // =====================
@@ -1695,6 +1906,381 @@ export class DocumentEditorComponent {
 
     this.closeInsertTableDialog();
   }
+
+  // =====================
+  // TOOLBAR TABELI - OPERACJE
+  // =====================
+
+  /**
+   * Powiadamia edytor o zmianach w DOM (wywołuje contentChange)
+   */
+  private notifyEditorChange(): void {
+    const el = this.editor?.editorContent?.nativeElement;
+    if (el) {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
+  /** Pobiera indeks wiersza i kolumny aktywnej komórki */
+  private getCellPosition(cell: HTMLTableCellElement): { rowIndex: number; colIndex: number } | null {
+    const row = cell.parentElement as HTMLTableRowElement;
+    if (!row) return null;
+    const table = row.closest('table');
+    if (!table) return null;
+    const rows = Array.from(table.rows);
+    const rowIndex = rows.indexOf(row);
+    const colIndex = Array.from(row.cells).indexOf(cell);
+    return { rowIndex, colIndex };
+  }
+
+  /** Wstaw wiersz powyżej */
+  tableInsertRowAbove(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos) return;
+    const colCount = table.rows[pos.rowIndex]?.cells.length || 1;
+    const newRow = table.insertRow(pos.rowIndex);
+    for (let i = 0; i < colCount; i++) {
+      const td = newRow.insertCell();
+      td.innerHTML = '&nbsp;';
+      td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+    }
+    this.notifyEditorChange();
+  }
+
+  /** Wstaw wiersz poniżej */
+  tableInsertRowBelow(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos) return;
+    const colCount = table.rows[pos.rowIndex]?.cells.length || 1;
+    const insertAt = pos.rowIndex + 1;
+    const newRow = table.insertRow(insertAt < table.rows.length ? insertAt : -1);
+    for (let i = 0; i < colCount; i++) {
+      const td = newRow.insertCell();
+      td.innerHTML = '&nbsp;';
+      td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+    }
+    this.notifyEditorChange();
+  }
+
+  /** Wstaw kolumnę z lewej */
+  tableInsertColLeft(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos) return;
+    Array.from(table.rows).forEach(row => {
+      const td = row.insertCell(Math.min(pos.colIndex, row.cells.length));
+      td.innerHTML = '&nbsp;';
+      td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Wstaw kolumnę z prawej */
+  tableInsertColRight(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos) return;
+    const insertAt = pos.colIndex + 1;
+    Array.from(table.rows).forEach(row => {
+      const td = row.insertCell(Math.min(insertAt, row.cells.length));
+      td.innerHTML = '&nbsp;';
+      td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Usuń wiersz */
+  tableDeleteRow(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos) return;
+    if (table.rows.length <= 1) {
+      this.tableDeleteTable();
+      return;
+    }
+    table.deleteRow(pos.rowIndex);
+    this.notifyEditorChange();
+  }
+
+  /** Usuń kolumnę */
+  tableDeleteCol(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos) return;
+    if (table.rows[0]?.cells.length <= 1) {
+      this.tableDeleteTable();
+      return;
+    }
+    Array.from(table.rows).forEach(row => {
+      if (pos.colIndex < row.cells.length) {
+        row.deleteCell(pos.colIndex);
+      }
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Usuń tabelę */
+  tableDeleteTable(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    table.parentNode?.removeChild(table);
+    this.isInTable.set(false);
+    this.activeTableCell.set(null);
+    this.activeTable.set(null);
+    this.notifyEditorChange();
+  }
+
+  /** Scal zaznaczone komórki */
+  tableMergeCells(): void {
+    const customSelected = this.selectedCells();
+    const cells = customSelected.size > 0
+      ? Array.from(customSelected)
+      : (() => {
+          const selection = window.getSelection();
+          const editorEl = this.editor?.editorContent?.nativeElement;
+          return (selection && editorEl) ? this.getSelectedCells(selection, editorEl) : [];
+        })();
+    if (cells.length < 2) return;
+
+    // Zbierz treść i usuń komórki oprócz pierwszej
+    const firstCell = cells[0] as HTMLTableCellElement;
+    let mergedContent = '';
+    let minRow = Infinity, maxRow = -1, minCol = Infinity, maxCol = -1;
+
+    cells.forEach((c) => {
+      const td = c as HTMLTableCellElement;
+      const row = td.parentElement as HTMLTableRowElement;
+      const table = row.closest('table')!;
+      const ri = Array.from(table.rows).indexOf(row);
+      const ci = Array.from(row.cells).indexOf(td);
+      minRow = Math.min(minRow, ri);
+      maxRow = Math.max(maxRow, ri);
+      minCol = Math.min(minCol, ci);
+      maxCol = Math.max(maxCol, ci + (td.colSpan || 1) - 1);
+    });
+
+    // Zbierz treści
+    cells.forEach(c => {
+      const txt = c.innerHTML.trim();
+      if (txt && txt !== '&nbsp;' && txt !== '<br>') {
+        mergedContent += (mergedContent ? ' ' : '') + txt;
+      }
+    });
+
+    // Ustaw colspan/rowspan na pierwszej komórce
+    const colSpan = maxCol - minCol + 1;
+    const rowSpan = maxRow - minRow + 1;
+    firstCell.colSpan = colSpan;
+    firstCell.rowSpan = rowSpan;
+    firstCell.innerHTML = mergedContent || '&nbsp;';
+
+    // Usuń nadmiarowe komórki
+    const table = this.activeTable();
+    if (!table) return;
+    for (let r = minRow; r <= maxRow; r++) {
+      const row = table.rows[r];
+      if (!row) continue;
+      for (let c = row.cells.length - 1; c >= 0; c--) {
+        const cell = row.cells[c];
+        if (cell !== firstCell && cells.includes(cell)) {
+          row.removeChild(cell);
+        }
+      }
+    }
+    this.clearCellSelection();
+    this.notifyEditorChange();
+  }
+
+  /** Podziel komórkę */
+  tableSplitCell(): void {
+    const cell = this.activeTableCell();
+    if (!cell) return;
+    const table = this.activeTable();
+    if (!table) return;
+
+    const cs = cell.colSpan || 1;
+    const rs = cell.rowSpan || 1;
+
+    if (cs <= 1 && rs <= 1) {
+      // Komórka nie jest scalona - podziel na 2 kolumny
+      const pos = this.getCellPosition(cell);
+      if (!pos) return;
+      cell.colSpan = 1;
+      Array.from(table.rows).forEach((row, ri) => {
+        if (ri === pos.rowIndex) {
+          const newTd = row.insertCell(pos.colIndex + 1);
+          newTd.innerHTML = '&nbsp;';
+          newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+        } else {
+          const newTd = row.insertCell(Math.min(pos.colIndex + 1, row.cells.length));
+          newTd.innerHTML = '&nbsp;';
+          newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+        }
+      });
+    } else {
+      // Komórka jest scalona - cofnij scalenie
+      const pos = this.getCellPosition(cell);
+      if (!pos) return;
+      cell.colSpan = 1;
+      cell.rowSpan = 1;
+      // Dodaj brakujące komórki w bieżącym wierszu
+      const row = cell.parentElement as HTMLTableRowElement;
+      for (let c = 1; c < cs; c++) {
+        const newTd = row.insertCell(Array.from(row.cells).indexOf(cell) + 1);
+        newTd.innerHTML = '&nbsp;';
+        newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+      }
+      // Dodaj brakujące komórki w kolejnych wierszach
+      for (let r = 1; r < rs; r++) {
+        const targetRow = table.rows[pos.rowIndex + r];
+        if (!targetRow) continue;
+        for (let c = 0; c < cs; c++) {
+          const insertIdx = Math.min(pos.colIndex, targetRow.cells.length);
+          const newTd = targetRow.insertCell(insertIdx);
+          newTd.innerHTML = '&nbsp;';
+          newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
+        }
+      }
+    }
+    this.notifyEditorChange();
+  }
+
+  /** Podziel tabelę (dzieli nad bieżącym wierszem) */
+  tableSplitTable(): void {
+    const cell = this.activeTableCell();
+    const table = this.activeTable();
+    if (!cell || !table) return;
+    const pos = this.getCellPosition(cell);
+    if (!pos || pos.rowIndex === 0) return;
+
+    // Utwórz nową tabelę z wierszami od bieżącego w dół
+    const newTable = document.createElement('table');
+    newTable.style.cssText = table.style.cssText;
+    const rowsToMove = Array.from(table.rows).slice(pos.rowIndex);
+    rowsToMove.forEach(row => newTable.appendChild(row));
+
+    // Wstaw paragraf separator i nową tabelę po starej
+    const separator = document.createElement('p');
+    separator.innerHTML = '&nbsp;';
+    table.parentNode?.insertBefore(separator, table.nextSibling);
+    separator.parentNode?.insertBefore(newTable, separator.nextSibling);
+    this.notifyEditorChange();
+  }
+
+  /** Autodopasowanie - do zawartości */
+  tableAutoFitContents(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    table.style.width = 'auto';
+    table.style.tableLayout = 'auto';
+    table.querySelectorAll('td, th').forEach(c => {
+      (c as HTMLElement).style.width = '';
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Autodopasowanie - do okna */
+  tableAutoFitWindow(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    table.style.width = '100%';
+    table.style.tableLayout = 'auto';
+    table.querySelectorAll('td, th').forEach(c => {
+      (c as HTMLElement).style.width = '';
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Stała szerokość kolumn */
+  tableFixedWidth(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    table.style.width = '100%';
+    table.style.tableLayout = 'fixed';
+    this.notifyEditorChange();
+  }
+
+  /** Rozłóż wiersze równomiernie */
+  tableDistributeRows(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    Array.from(table.rows).forEach(row => {
+      row.style.height = '';
+      Array.from(row.cells).forEach(cell => {
+        cell.style.height = '';
+      });
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Rozłóż kolumny równomiernie */
+  tableDistributeCols(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    const colCount = table.rows[0]?.cells.length || 1;
+    const w = Math.floor(100 / colCount);
+    Array.from(table.rows).forEach(row => {
+      Array.from(row.cells).forEach(cell => {
+        cell.style.width = w + '%';
+      });
+    });
+    this.notifyEditorChange();
+  }
+
+  /** Wyświetl/ukryj linie siatki */
+  showTableGridLines = signal(true);
+  tableToggleGridLines(): void {
+    this.showTableGridLines.update(v => !v);
+    const table = this.activeTable();
+    if (!table) return;
+    if (this.showTableGridLines()) {
+      table.querySelectorAll('td, th').forEach(c => {
+        (c as HTMLElement).style.borderColor = '#ccc';
+      });
+    } else {
+      table.querySelectorAll('td, th').forEach(c => {
+        (c as HTMLElement).style.borderColor = 'transparent';
+      });
+    }
+  }
+
+  /** Pozycja dropdown cieniowania */
+  shadingDropdownX = signal(0);
+  shadingDropdownY = signal(0);
+
+  /** Toggle dropdown cieniowania w toolbarze tabeli */
+  toggleShadingDropdown(event: MouseEvent): void {
+    const btn = (event.target as HTMLElement).closest('.table-toolbar-btn-shading') as HTMLElement;
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      this.shadingDropdownX.set(rect.left);
+      this.shadingDropdownY.set(rect.bottom + 4);
+    }
+    this.showShadingDropdown.update(v => !v);
+  }
+
+  /** Kolory do palety cieniowania */
+  shadingColors = [
+    '#FFFFFF', '#F2F2F2', '#D9D9D9', '#BFBFBF', '#A6A6A6', '#808080', '#595959', '#404040', '#262626', '#000000',
+    '#FFF2CC', '#FFE599', '#FFD966', '#FFC000', '#BF9000', '#806000', '#FCE4D6', '#F8CBAD', '#F4B084', '#ED7D31',
+    '#C55A11', '#833C0B', '#D6E4F0', '#B4C6E7', '#8DB4E2', '#4472C4', '#2F5597', '#1F3864', '#E2EFDA', '#C6EFCE',
+    '#A9D18E', '#70AD47', '#548235', '#375623', '#F8D7DA', '#F5C6CB', '#E8A0A0', '#FF0000', '#C00000', '#800000',
+    '#E6D5F5', '#D0B8E8', '#B490D0', '#7030A0', '#5B259A', '#3B1770'
+  ];
 
   /**
    * Stosuje autodopasowanie do ostatnio wstawionej tabeli

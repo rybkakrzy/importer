@@ -300,6 +300,210 @@
   background: rgba(0, 0, 0, 0.08);
 }
 
+/* ========================
+   Toolbar Tabeli
+   ======================== */
+
+.table-toolbar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 12px;
+  background: #f0f4f8;
+  border-bottom: 1px solid #d0d0d0;
+  flex-shrink: 0;
+  overflow-x: auto;
+  min-height: 52px;
+}
+
+.table-toolbar-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+}
+
+.table-toolbar-group-label {
+  font-size: 10px;
+  color: #666;
+  white-space: nowrap;
+  user-select: none;
+  letter-spacing: 0.02em;
+}
+
+.table-toolbar-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+}
+
+.table-toolbar-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+  transition: all 0.12s ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.table-toolbar-btn:hover {
+  background: #dce6f1;
+  border-color: #b0c4de;
+  color: #2b579a;
+}
+
+.table-toolbar-btn:active {
+  background: #c8d8ea;
+}
+
+.table-toolbar-btn.active {
+  background: #d0dff0;
+  border-color: #8faecf;
+  color: #2b579a;
+}
+
+.table-toolbar-btn-danger:hover {
+  background: #fde8e8;
+  border-color: #f0b0b0;
+  color: #c00000;
+}
+
+.table-toolbar-btn-danger:active {
+  background: #f8d0d0;
+}
+
+.table-toolbar-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.table-toolbar-separator {
+  width: 1px;
+  background: #c8c8c8;
+  margin: 4px 4px;
+  align-self: stretch;
+}
+
+/* ========================
+   Custom Cell Selection Highlight
+   ======================== */
+
+:host ::ng-deep .table-cell-selected {
+  background-color: rgba(43, 87, 154, 0.15) !important;
+  outline: 2px solid #2b579a;
+  outline-offset: -2px;
+}
+
+/* ========================
+   Shading Dropdown (table toolbar)
+   ======================== */
+
+.table-toolbar-btn-shading {
+  position: relative;
+}
+
+.shading-dropdown-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+}
+
+.shading-dropdown {
+  position: fixed;
+  z-index: 1000;
+  background: #fff;
+  border: 1px solid #c0c0c0;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 6px;
+  width: 230px;
+}
+
+.shading-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  color: #333;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.shading-dropdown-item:hover {
+  background: #e8f0fe;
+}
+
+.shading-dropdown-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.shading-dropdown-separator {
+  height: 1px;
+  background: #e0e0e0;
+  margin: 4px 0;
+}
+
+.shading-color-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  padding: 4px 2px;
+}
+
+.shading-color-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #ccc;
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease;
+}
+
+.shading-color-swatch:hover {
+  transform: scale(1.3);
+  border-color: #666;
+  z-index: 1;
+  position: relative;
+}
+
+.shading-custom-color {
+  padding: 2px 0 0;
+}
+
+.shading-custom-label {
+  position: relative;
+  cursor: pointer;
+}
+
+.shading-hidden-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 /* Editor Main Area */
 .editor-main {
   flex: 1;
@@ -1557,4 +1761,55 @@
 .autofit-width-input {
   width: 90px;
   flex-shrink: 0;
+}
+
+/* ========================
+   Cell Color Picker (context menu)
+   ======================== */
+
+.cell-color-submenu {
+  width: 230px;
+  padding: 6px !important;
+}
+
+.cell-color-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  padding: 6px 4px;
+}
+
+.cell-color-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #ccc;
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s ease;
+}
+
+.cell-color-swatch:hover {
+  transform: scale(1.3);
+  border-color: #666;
+  z-index: 1;
+  position: relative;
+}
+
+.cell-color-custom {
+  padding: 2px 0 0;
+}
+
+.cell-color-custom-label {
+  position: relative;
+  cursor: pointer;
+}
+
+.cell-color-hidden-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
