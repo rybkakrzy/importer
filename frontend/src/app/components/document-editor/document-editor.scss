@@ -12,10 +12,10 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 16px;
-  background: #FF6200;
-  color: white;
+  background: #ffffff;
+  color: #333;
   min-height: 48px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid #e0e0e0;
   position: relative;
 }
 
@@ -50,10 +50,8 @@
   gap: 8px;
 }
 
-.app-logo svg {
-  background: white;
+.app-logo img {
   border-radius: 4px;
-  padding: 2px;
   flex-shrink: 0;
   display: block;
 }
@@ -69,7 +67,7 @@
 .document-title {
   font-size: 14px;
   font-weight: 500;
-  color: white;
+  color: #333;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -80,7 +78,7 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: 4px;
-  color: white;
+  color: #333;
   font-size: 14px;
   padding: 6px 10px;
   min-width: 200px;
@@ -88,18 +86,18 @@
 }
 
 .document-title-input:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.15);
 }
 
 .document-title-input:focus {
   outline: none;
-  background: rgba(255, 255, 255, 0.15);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.2);
 }
 
 .unsaved-indicator {
-  color: #ffc107;
+  color: #FF6200;
   font-size: 16px;
   animation: pulse 2s infinite;
 }
@@ -125,7 +123,7 @@
   padding: 6px 14px;
   background: transparent;
   border: none;
-  color: white;
+  color: #333;
   font-size: 14px;
   cursor: pointer;
   border-radius: 4px;
@@ -134,7 +132,7 @@
 }
 
 .menu-item:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .menu-item:disabled {
@@ -242,7 +240,7 @@
 .zoom-control {
   display: flex;
   align-items: center;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.05);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -252,7 +250,7 @@
   height: 28px;
   background: transparent;
   border: none;
-  color: white;
+  color: #333;
   font-size: 16px;
   cursor: pointer;
   display: flex;
@@ -261,7 +259,7 @@
 }
 
 .zoom-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .zoom-btn:disabled {
@@ -272,7 +270,7 @@
 .zoom-select {
   background: transparent;
   border: none;
-  color: white;
+  color: #333;
   font-size: 12px;
   padding: 4px 8px;
   cursor: pointer;
@@ -290,7 +288,7 @@
   height: 36px;
   background: transparent;
   border: none;
-  color: white;
+  color: #333;
   cursor: pointer;
   border-radius: 50%;
   display: flex;
@@ -299,7 +297,7 @@
 }
 
 .info-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 /* Editor Main Area */
@@ -755,7 +753,7 @@
 .about-content h2 {
   margin: 0 0 8px 0;
   font-size: 24px;
-  color: #2b579a;
+  color: #FF6200;
 }
 
 .about-content .version {
