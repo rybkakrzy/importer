@@ -153,6 +153,13 @@
                     <button class="dropdown-item" (click)="onInsertTable('3x3')">Tabela 3×3</button>
                     <button class="dropdown-item" (click)="onInsertTable('4x4')">Tabela 4×4</button>
                     <button class="dropdown-item" (click)="onInsertTable('5x5')">Tabela 5×5</button>
+                    <div class="dropdown-separator"></div>
+                    <button class="dropdown-item" (click)="openInsertTableDialog()">
+                      <svg viewBox="0 0 24 24" width="18" height="18">
+                        <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z"/>
+                      </svg>
+                      Wstawianie tabeli...
+                    </button>
                   </div>
                 }
               </div>
@@ -438,6 +445,7 @@
     (insertLink)="onInsertLink($event)"
     (insertImage)="onInsertImage()"
     (insertTable)="onInsertTable($event)"
+    (openTableDialog)="openInsertTableDialog()"
     (insertBarcode)="openBarcodeDialog()"
     (styleChange)="onStyleChange($event)"
     (copyFormat)="onCopyFormat()"
@@ -1187,6 +1195,75 @@
             <button class="btn btn-primary" (click)="applyParagraphSettings()">OK</button>
             <button class="btn btn-secondary" (click)="closeParagraphDialog()">Anuluj</button>
           </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- Dialog Wstawianie tabeli -->
+  @if (showInsertTableDialog()) {
+    <div class="dialog-overlay" (click)="closeInsertTableDialog()">
+      <div class="dialog insert-table-dialog" (click)="$event.stopPropagation()">
+        <div class="dialog-header">
+          <h3>Wstawianie tabeli</h3>
+          <button class="dialog-close" (click)="closeInsertTableDialog()">×</button>
+        </div>
+
+        <div class="dialog-content insert-table-dialog-content">
+          <!-- Rozmiar tabeli -->
+          <fieldset class="paragraph-fieldset">
+            <legend>Rozmiar tabeli</legend>
+            <div class="paragraph-row">
+              <div class="paragraph-field">
+                <label>Liczba kolumn:</label>
+                <div class="paragraph-spinner">
+                  <input type="number" [(ngModel)]="tableDialogData.columns" min="1" max="63" step="1" class="paragraph-input">
+                </div>
+              </div>
+              <div class="paragraph-field">
+                <label>Liczba wierszy:</label>
+                <div class="paragraph-spinner">
+                  <input type="number" [(ngModel)]="tableDialogData.rows" min="1" max="500" step="1" class="paragraph-input">
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Zachowanie autodopasowania -->
+          <fieldset class="paragraph-fieldset">
+            <legend>Zachowanie autodopasowania</legend>
+            <div class="autofit-option">
+              <label class="paragraph-checkbox">
+                <input type="radio" name="autoFit" value="fixed" [(ngModel)]="tableDialogData.autoFitBehavior">
+                <span>Stała szerokość kolumn:</span>
+              </label>
+              <div class="paragraph-spinner autofit-width-input">
+                <input type="text" [ngModel]="tableDialogData.autoFitBehavior === 'fixed' ? (tableDialogData.fixedWidth === 0 ? 'Auto' : tableDialogData.fixedWidth + ' cm') : 'Auto'" class="paragraph-input" [disabled]="tableDialogData.autoFitBehavior !== 'fixed'" (ngModelChange)="onFixedWidthChange($event)">
+              </div>
+            </div>
+            <div class="autofit-option">
+              <label class="paragraph-checkbox">
+                <input type="radio" name="autoFit" value="contents" [(ngModel)]="tableDialogData.autoFitBehavior">
+                <span>Autodopasowanie do zawartości</span>
+              </label>
+            </div>
+            <div class="autofit-option">
+              <label class="paragraph-checkbox">
+                <input type="radio" name="autoFit" value="window" [(ngModel)]="tableDialogData.autoFitBehavior">
+                <span>Autodopasowanie do okna</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <label class="paragraph-checkbox">
+            <input type="checkbox" [(ngModel)]="tableDialogData.rememberDimensions">
+            <span>Zapamiętaj rozmiary nowych tabel</span>
+          </label>
+        </div>
+
+        <div class="dialog-footer">
+          <button class="btn btn-primary" (click)="applyInsertTable()">Wstaw</button>
+          <button class="btn btn-secondary" (click)="closeInsertTableDialog()">Anuluj</button>
         </div>
       </div>
     </div>

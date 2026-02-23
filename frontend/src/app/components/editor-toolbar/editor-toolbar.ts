@@ -170,6 +170,7 @@ export class EditorToolbarComponent {
   @Output() insertLink = new EventEmitter<{ url: string; text?: string }>();
   @Output() insertImage = new EventEmitter<void>();
   @Output() insertTable = new EventEmitter<string>();
+  @Output() openTableDialog = new EventEmitter<void>();
   @Output() insertBarcode = new EventEmitter<void>();
   @Output() styleChange = new EventEmitter<DocumentStyle>();
   @Output() copyFormat = new EventEmitter<void>();
@@ -220,7 +221,6 @@ export class EditorToolbarComponent {
 
   // Stan dialogów
   showLinkDialog = signal(false);
-  showTableDialog = signal(false);
   showStyleDropdown = signal(false);
   showSearchBar = signal(false);
   showReplaceRow = signal(false);
@@ -230,8 +230,6 @@ export class EditorToolbarComponent {
   currentSearchIndex = signal(0);
   linkUrl = '';
   linkText = '';
-  tableRows = 3;
-  tableCols = 3;
 
   selectedBlockFormat = signal('paragraph');
 
@@ -580,29 +578,10 @@ export class EditorToolbarComponent {
   }
 
   /**
-   * Otwiera dialog tabeli
+   * Otwiera dialog tabeli (deleguje do document-editor)
    */
-  openTableDialog(): void {
-    this.tableRows = 3;
-    this.tableCols = 3;
-    this.showTableDialog.set(true);
-  }
-
-  /**
-   * Zamyka dialog tabeli
-   */
-  closeTableDialog(): void {
-    this.showTableDialog.set(false);
-  }
-
-  /**
-   * Wstawia tabelę
-   */
-  confirmInsertTable(): void {
-    if (this.tableRows > 0 && this.tableCols > 0) {
-      this.insertTable.emit(`${this.tableRows}x${this.tableCols}`);
-    }
-    this.closeTableDialog();
+  onOpenTableDialog(): void {
+    this.openTableDialog.emit();
   }
 
   /**

@@ -1522,3 +1522,39 @@
   display: flex;
   gap: 8px;
 }
+
+/* ========================
+   Dialog Wstawianie tabeli
+   ======================== */
+
+.insert-table-dialog {
+  width: 420px;
+}
+
+.insert-table-dialog-content {
+  padding: 16px 24px !important;
+}
+
+.insert-table-dialog .paragraph-checkbox input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #2b579a;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.autofit-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.autofit-option:last-child {
+  margin-bottom: 0;
+}
+
+.autofit-width-input {
+  width: 90px;
+  flex-shrink: 0;
+}

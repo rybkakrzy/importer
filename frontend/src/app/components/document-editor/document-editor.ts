@@ -107,6 +107,17 @@ export class DocumentEditorComponent {
     keepLinesTogether: false,
     pageBreakBefore: false
   };
+
+  // Dialog Wstawianie tabeli
+  showInsertTableDialog = signal(false);
+  tableDialogData = {
+    columns: 5,
+    rows: 2,
+    autoFitBehavior: 'fixed' as string,
+    fixedWidth: 0, // 0 = Auto
+    rememberDimensions: false
+  };
+  private savedTableDimensions: { columns: number; rows: number } | null = null;
   
   // Szablony
   templates = signal<DocumentTemplate[]>([]);
@@ -403,10 +414,13 @@ export class DocumentEditorComponent {
   }
 
   /**
-   * Wstawia tabelę
+   * Wstawia tabelę (szybkie wstawianie z podmenu)
    */
   onInsertTable(config: string): void {
-    this.editor?.insertTable(config);
+    if (this.editor) {
+      this.editor.insertTable(config);
+      this.applyTableAutoFit(this.tableDialogData.autoFitBehavior, this.tableDialogData.fixedWidth);
+    }
   }
 
   /**
@@ -1629,5 +1643,92 @@ export class DocumentEditorComponent {
       case 'multiple': return this.paragraphData.lineSpacingValue.toString();
       default: return '1.15';
     }
+  }
+
+  // =====================
+  // DIALOG WSTAWIANIE TABELI
+  // =====================
+
+  openInsertTableDialog(): void {
+    this.closeAllMenus();
+    if (this.savedTableDimensions) {
+      this.tableDialogData.columns = this.savedTableDimensions.columns;
+      this.tableDialogData.rows = this.savedTableDimensions.rows;
+    } else {
+      this.tableDialogData.columns = 5;
+      this.tableDialogData.rows = 2;
+    }
+    this.tableDialogData.autoFitBehavior = 'fixed';
+    this.tableDialogData.fixedWidth = 0;
+    this.showInsertTableDialog.set(true);
+  }
+
+  closeInsertTableDialog(): void {
+    this.showInsertTableDialog.set(false);
+  }
+
+  onFixedWidthChange(value: string): void {
+    if (value.toLowerCase() === 'auto' || value === '') {
+      this.tableDialogData.fixedWidth = 0;
+    } else {
+      const num = parseFloat(value);
+      if (!isNaN(num)) {
+        this.tableDialogData.fixedWidth = num;
+      }
+    }
+  }
+
+  applyInsertTable(): void {
+    const cols = Math.max(1, Math.min(63, this.tableDialogData.columns));
+    const rows = Math.max(1, Math.min(500, this.tableDialogData.rows));
+
+    if (this.tableDialogData.rememberDimensions) {
+      this.savedTableDimensions = { columns: cols, rows: rows };
+    }
+
+    const config = `${cols}x${rows}`;
+
+    if (this.editor) {
+      this.editor.insertTable(config);
+      this.applyTableAutoFit(this.tableDialogData.autoFitBehavior, this.tableDialogData.fixedWidth);
+    }
+
+    this.closeInsertTableDialog();
+  }
+
+  /**
+   * Stosuje autodopasowanie do ostatnio wstawionej tabeli
+   */
+  private applyTableAutoFit(behavior: string, fixedWidth: number): void {
+    setTimeout(() => {
+      const editorEl = this.editor?.editorContent?.nativeElement;
+      const tables = editorEl?.querySelectorAll('table');
+      if (tables && tables.length > 0) {
+        const lastTable = tables[tables.length - 1] as HTMLTableElement;
+        switch (behavior) {
+          case 'fixed':
+            if (fixedWidth > 0) {
+              lastTable.style.width = '';
+              lastTable.style.tableLayout = 'fixed';
+              const widthPx = fixedWidth * 37.8;
+              lastTable.querySelectorAll('td, th').forEach((cell) => {
+                (cell as HTMLElement).style.width = widthPx + 'px';
+              });
+            } else {
+              lastTable.style.width = '100%';
+              lastTable.style.tableLayout = 'fixed';
+            }
+            break;
+          case 'contents':
+            lastTable.style.width = 'auto';
+            lastTable.style.tableLayout = 'auto';
+            break;
+          case 'window':
+            lastTable.style.width = '100%';
+            lastTable.style.tableLayout = 'auto';
+            break;
+        }
+      }
+    }, 50);
   }
 }
