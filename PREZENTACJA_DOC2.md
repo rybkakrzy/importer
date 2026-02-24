@@ -1033,7 +1033,7 @@ Porównanie Doc2 z innymi rozwiązaniami do edycji dokumentów w przeglądarce:
 - ⚠️ **Trudna integracja** — wymaga zakupu całej suite
 
 #### 4️⃣ Apryse (PDFTron) — SDK premium
-- ✅ **Najlepsza jakość** — doskonała renderowanie PDF/DOCX
+- ✅ **Najlepsza jakość** — doskonałe renderowanie PDF/DOCX
 - ✅ **Zaawansowane funkcje** — annotacje, formularze, OCR
 - ✅ **Wsparcie enterprise** — dedykowane dla korporacji
 - ❌ **Bardzo drogie** — od $3,000+/rok + runtime fees
