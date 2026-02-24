@@ -41,7 +41,7 @@ Poniżej propozycje funkcji i kierunków rozwoju, które mogą zwiększyć podob
 ## 7. Bezpieczeństwo i zgodność
 - Skanowanie makr, osadzonych obiektów i linków pod kątem ryzyk bezpieczeństwa.
 - Klasyfikacja treści (PII, dane wrażliwe) oraz polityki DLP.
-- Szyfrowanie dokumentów, granularne audyty zmian i zgodność z RODO/ISO.
+- Szyfrowanie dokumentów, granularne audyty zmian i zgodność z RODO oraz ISO 27001/27701.
 - Podpisy kwalifikowane i niepodważalność historii zmian (audit trail).
 
 ## 8. Proponowany plan wdrożenia (iteracyjnie)
