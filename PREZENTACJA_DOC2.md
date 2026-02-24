@@ -965,6 +965,114 @@ Dziękuję za uwagę!
 
 ---
 
+## Slajd 27 — Porównanie: Doc2 vs alternatywne edytory
+
+### Nagłówek
+Doc2 kontra konkurencyjne edytory dokumentów
+
+### Wprowadzenie
+Porównanie Doc2 z innymi rozwiązaniami do edycji dokumentów w przeglądarce:
+- **ONLYOFFICE** — open-source suite biurowy
+- **Syncfusion** — komercyjna biblioteka UI
+- **Apryse (dawniej PDFTron)** — SDK do dokumentów PDF/Office
+- **CKEditor 5** — edytor rich-text z pluginami
+- **TinyMCE** — popularny edytor WYSIWYG
+
+### Tabela porównawcza
+
+| Funkcja / Cecha | **Doc2** | **ONLYOFFICE** | **Syncfusion** | **Apryse** | **CKEditor 5** | **TinyMCE** |
+|----------------|----------|----------------|----------------|------------|----------------|-------------|
+| **Typ rozwiązania** | Pełny edytor DOCX | Suite biurowy | Biblioteka UI | PDF/Office SDK | Edytor rich-text | Edytor WYSIWYG |
+| **Licencjonowanie** | ✅ Brak kosztów | ⚠️ AGPL v3 (open-source) / €1,500+ (commercial) | ❌ Płatna (od $995/dev/rok) | ❌ Płatna (od $3,000+/rok) | ⚠️ GPL / Płatna (od $3,499/rok) | ⚠️ MIT (core) / Płatna (premium od $69/mc) |
+| **Hosting** | ✅ On-premises lub chmura | ✅ On-premises lub chmura | ✅ On-premises lub chmura | ✅ On-premises lub chmura | ✅ Dowolny | ✅ Dowolny |
+| **Format natywny** | ✅ DOCX (OOXML) | ✅ DOCX, XLSX, PPTX | ✅ DOCX, PDF, itp. | ✅ PDF, DOCX, PPT | ❌ HTML tylko | ❌ HTML tylko |
+| **Konwersja DOCX↔HTML** | ✅ Pełna dwukierunkowa | ✅ Pełna dwukierunkowa | ✅ Dobra | ✅ Bardzo dobra | ⚠️ Import przez plugin | ⚠️ Import przez plugin |
+| **Zachowanie formatowania** | ✅ 100% kompatybilność z Word | ✅ Bardzo dobra (~95%) | ✅ Bardzo dobra | ✅ Doskonała | ❌ Ograniczone | ❌ Ograniczone |
+| **Podpisy cyfrowe X.509** | ✅ Natywne (RSA-SHA256) | ✅ Obsługiwane | ⚠️ Wymaga custom impl. | ✅ Pełne wsparcie PDF | ❌ Brak | ❌ Brak |
+| **Kody QR/kreskowe** | ✅ 13 formatów (ZXing.Net) | ❌ Wymaga dodatków | ⚠️ Wymaga custom impl. | ✅ Możliwe przez API | ❌ Wymaga pluginów | ❌ Wymaga pluginów |
+| **Metadane OOXML** | ✅ Pełne (Core + Extended) | ✅ Pełne | ✅ Pełne | ✅ Pełne | ❌ Brak | ❌ Brak |
+| **Nagłówki/stopki** | ✅ Pełna edycja | ✅ Pełna edycja | ✅ Pełna edycja | ✅ Pełna edycja | ❌ Brak natywnego | ❌ Brak natywnego |
+| **Tabele zaawansowane** | ✅ Scalanie, 46 kolorów | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ⚠️ Podstawowe | ⚠️ Podstawowe |
+| **Kolaboracja real-time** | 🚧 Roadmap (WebSocket) | ✅ Natywna (WebSocket) | ✅ Obsługiwana | ✅ Możliwa | ✅ Przez plugin | ✅ Przez plugin |
+| **Track Changes** | 🚧 Roadmap | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ⚠️ Przez plugin | ⚠️ Przez plugin |
+| **Export do PDF** | 🚧 W przygotowaniu | ✅ Natywny | ✅ Natywny | ✅ Natywny (core) | ⚠️ Wymaga backend | ⚠️ Wymaga backend |
+| **Komentarze** | 🚧 Roadmap | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Natywne | ✅ Natywne |
+| **API REST** | ✅ Pełne (Swagger) | ✅ Dostępne | ✅ Dostępne | ✅ Rozbudowane | ⚠️ Ograniczone | ⚠️ Ograniczone |
+| **Responsywność** | ✅ Skalowanie 50%-200% | ✅ Pełna | ✅ Pełna | ✅ Pełna | ✅ Pełna | ✅ Pełna |
+| **Wielojęzyczność** | ✅ Polish + English | ✅ 40+ języków | ✅ Lokalizowalne | ✅ Lokalizowalne | ✅ Lokalizowalne | ✅ 50+ języków |
+| **Wymagania backend** | .NET Core 8 | Node.js / Java / .NET | .NET / Java / JS | Różne platformy | Node.js (opcja) | PHP/Node (opcja) |
+| **Wymagania frontend** | Angular 19 | Vanilla JS | Angular/React/Vue | Vanilla JS / React | Vanilla JS / React | Vanilla JS / React |
+| **Rozmiar paczki (frontend)** | ~2.5 MB (gzip) | ~5 MB (gzip) | ~3 MB (gzip) | ~8 MB+ (gzip) | ~200 KB (core) | ~150 KB (core) |
+| **Obsługa makr VBA** | ❌ Brak | ⚠️ Ograniczona | ❌ Brak | ⚠️ Częściowa | ❌ Brak | ❌ Brak |
+| **Obsługa OLE** | 🚧 Roadmap | ✅ Częściowa | ✅ Częściowa | ✅ Dobra | ❌ Brak | ❌ Brak |
+
+### Kluczowe różnice
+
+#### 1️⃣ Doc2 — Autorskie rozwiązanie
+- ✅ **Zero kosztów licencjonowania** — bez opłat za użytkownika
+- ✅ **Pełna kontrola nad kodem** — możliwość customizacji
+- ✅ **Dedykowany dla DOCX** — 100% focus na Word documents
+- ✅ **Unikalne funkcje** — podpisy X.509, kody QR/kreskowe
+- ✅ **Branding ING** — dostosowane do potrzeb korporacyjnych
+- ⚠️ **Mniej dojrzałe** — brak niektórych zaawansowanych funkcji (track changes, kolaboracja)
+
+#### 2️⃣ ONLYOFFICE — Kompleksowy suite
+- ✅ **Pełny suite biurowy** — Word, Excel, PowerPoint
+- ✅ **Dojrzały produkt** — rozwijany od 2009 roku
+- ✅ **Kolaboracja** — real-time editing z wieloma użytkownikami
+- ⚠️ **Licencja AGPL** — wymaga open-source całego projektu lub płatnej licencji commercial
+- ⚠️ **Większe wymagania** — więcej zasobów serwera
+- ⚠️ **Mniejsza elastyczność** — trudniejsza customizacja UI
+
+#### 3️⃣ Syncfusion — Biblioteka komercyjna
+- ✅ **Profesjonalne wsparcie** — płatna pomoc techniczna
+- ✅ **Bogaty ekosystem** — 1,800+ komponentów UI
+- ✅ **Dojrzałość** — stabilny produkt enterprise-grade
+- ❌ **Wysokie koszty** — $995/developer/rok (minimum)
+- ❌ **Vendor lock-in** — uzależnienie od dostawcy
+- ⚠️ **Trudna integracja** — wymaga zakupu całej suite
+
+#### 4️⃣ Apryse (PDFTron) — SDK premium
+- ✅ **Najlepsza jakość** — doskonała renderowanie PDF/DOCX
+- ✅ **Zaawansowane funkcje** — annotacje, formularze, OCR
+- ✅ **Wsparcie enterprise** — dedykowane dla korporacji
+- ❌ **Bardzo drogie** — od $3,000+/rok + runtime fees
+- ❌ **Licencjonowanie runtime** — opłaty za użytkowników końcowych
+- ⚠️ **Over-engineering** — zbyt rozbudowane dla prostych przypadków
+
+#### 5️⃣ CKEditor 5 — Edytor rich-text
+- ✅ **Lekki i szybki** — mała paczka (~200 KB)
+- ✅ **Popularne** — używane przez Wikipedia, GitHub
+- ✅ **Modułowe** — pluginowa architektura
+- ❌ **Nie DOCX-native** — tylko HTML z konwerterami
+- ❌ **Ograniczone formatowanie** — brak pełnej kompatybilności Word
+- ⚠️ **Wymaga pluginów** — większość funkcji to płatne dodatki
+
+#### 6️⃣ TinyMCE — Edytor WYSIWYG
+- ✅ **Najpopularniejszy** — używany przez WordPress, Jira
+- ✅ **Łatwa integracja** — prosty setup (kilka linii JS)
+- ✅ **Licencja MIT (core)** — darmowy dla podstawowych funkcji
+- ❌ **Nie DOCX-native** — tylko HTML editor
+- ❌ **Funkcje premium płatne** — PowerPaste, MergeFields (od $69/mc)
+- ⚠️ **Brak zaawansowanych tabel** — ograniczone scalanie, formatowanie
+
+### Podsumowanie
+
+**Doc2 jest najlepszym wyborem gdy:**
+- ✅ Potrzebujesz **pełnej kompatybilności z Word** (DOCX native)
+- ✅ Chcesz **uniknąć kosztów licencjonowania** (zero per-user fees)
+- ✅ Wymagasz **pełnej kontroli** nad hostingiem i kodem
+- ✅ Potrzebujesz **unikalnych funkcji** (podpisy X.509, kody QR)
+- ✅ Akceptujesz **roadmap** dla niektórych funkcji (kolaboracja, track changes)
+
+**Alternatywy są lepsze gdy:**
+- ONLYOFFICE — potrzebujesz **pełnego suite** (Excel, PowerPoint) z **kolaboracją** już teraz
+- Syncfusion — potrzebujesz **wsparcia enterprise** i **SLA**
+- Apryse — wymagana **najwyższa jakość** renderowania i **zaawansowane PDF**
+- CKEditor 5 / TinyMCE — wystarcza **prosty edytor HTML** bez pełnej kompatybilności DOCX
+
+---
+
 > **Wskazówki do PPTX:**
 > - Slajdy 3, 7 — idealnie nadają się na diagramy / schematy blokowe
 > - Slajdy 8 — umieść screenshot aplikacji z numerowanymi strzałkami
@@ -972,4 +1080,5 @@ Dziękuję za uwagę!
 > - Slajdy 17 — wizualizacja flow podpisywania (strzałki: upload cert → hash → sign → download)
 > - Slajdy 19 — tabela skrótów dobrze wygląda na ciemnym tle
 > - Slajd 24 — ikony ✅ przy każdym punkcie dają efekt „checklisty"
+> - Slajd 27 — tabela porównawcza idealnie nadaje się na wykres radarowy lub heatmap z kolorami (zielony=✅, żółty=⚠️, czerwony=❌)
 > - Kolorystyka sugerowana: pomarańczowy ING (#FF6200) jako kolor akcentu, białe tło, ciemnoszary tekst
