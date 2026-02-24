@@ -1,0 +1,12 @@
+# Ignorowane pliki
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+test-results/
+*.egg-info/
+dist/
+build/
+.allure/
