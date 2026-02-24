@@ -36,6 +36,93 @@ Dlaczego Doc2?
 
 ---
 
+## Slajd 2A — Zalety rozwiązania Doc2
+
+### Nagłówek
+Kluczowe zalety Doc2
+
+### Zalety techniczne
+- ✅ **Niezależność od licencji Microsoft** — brak kosztów Office 365 dla każdego użytkownika
+- ✅ **Pełna kontrola nad infrastrukturą** — hosting on-premises lub w dowolnej chmurze
+- ✅ **Bezpieczeństwo danych** — dokumenty nie opuszczają infrastruktury firmy
+- ✅ **Elastyczność wdrożenia** — konteneryzacja Docker, skalowanie horyzontalne
+- ✅ **Niskie wymagania klienckie** — tylko nowoczesna przeglądarka, brak instalacji
+- ✅ **Cross-platform** — działa na Windows, Linux, macOS
+- ✅ **API-first design** — łatwa integracja z istniejącymi systemami
+- ✅ **Kod otwarty** — pełna kontrola nad rozwojem i customizacją
+
+### Zalety biznesowe
+- 💰 **Redukcja kosztów TCO** — brak licencji SharePoint Premium, Office 365 E5
+- 📈 **Szybkie wdrożenie** — gotowe do użycia po skonfigurowaniu
+- 🔒 **Compliance** — pełna kontrola nad lokalizacją danych (RODO, GDPR)
+- 🎨 **Branding korporacyjny** — dostosowanie UI do identyfikacji wizualnej firmy
+- 🚀 **Innowacyjność** — funkcje niedostępne w Word Online (kody QR, podpisy X.509)
+- 📊 **Audytowalność** — pełne logi operacji w systemie
+
+### Zalety użytkownika końcowego
+- ⚡ **Szybkość działania** — brak opóźnień Office Online
+- 🎯 **Intuicyjny interfejs** — znajome menu i skróty klawiszowe jak w Word
+- 📱 **Dostępność** — z każdego miejsca przez przeglądarkę
+- 💾 **Offline-first ready** — możliwość dodania trybu offline (PWA)
+- 🔍 **Zaawansowane wyszukiwanie** — Znajdź i zamień z licznikiem wyników
+
+---
+
+## Slajd 2B — Porównanie: Doc2 vs MS Office Word w SharePoint
+
+### Nagłówek
+Doc2 kontra Microsoft Word Online (SharePoint)
+
+### Tabela porównawcza
+
+| Funkcja | Doc2 | Word Online (SharePoint) |
+|---------|------|--------------------------|
+| **Licencjonowanie** | Brak dodatkowych kosztów | Wymaga SharePoint + Office 365 (od €12.50/użytkownik/mc) |
+| **Hosting** | On-premises lub dowolna chmura | Tylko Microsoft Cloud (Azure) |
+| **Prywatność danych** | 100% kontrola, dane w firmie | Dane w chmurze Microsoft |
+| **Podpisy cyfrowe** | ✅ X.509 (RSA-SHA256) z weryfikacją | ❌ Brak natywnego wsparcia w Word Online |
+| **Kody QR/kreskowe** | ✅ 13 formatów, generowane na żądanie | ❌ Wymaga dodatków (płatnych) |
+| **Konwersja DOCX↔HTML** | ✅ Pełna dwukierunkowa, 100% wierność | ⚠️ Ograniczona, utrata formatowania |
+| **Metadane OOXML** | ✅ Pełne (Core + Extended Properties) | ✅ Podstawowe (Core Properties) |
+| **Nagłówki/stopki** | ✅ Edytowalne z marginesami | ✅ Obsługiwane |
+| **Tabele zaawansowane** | ✅ Scalanie, cieniowanie 46 kolorów | ⚠️ Ograniczone formatowanie |
+| **Właściwości dokumentu** | ✅ 15+ pól (firma, kierownik, status) | ⚠️ Ograniczone pola |
+| **Znajdź i zamień** | ✅ Z licznikiem wyników | ✅ Podstawowe |
+| **Skróty klawiszowe** | ✅ 15+ skrótów (Ctrl+B/I/U, itp.) | ✅ Częściowe wsparcie |
+| **Wielostronicowy podgląd** | ✅ Automatyczna paginacja A4 | ✅ Obsługiwane |
+| **Zoom** | ✅ 50%-200% z suwakiem | ✅ Skalowanie |
+| **Dialog akapitu** | ✅ Pełny (wcięcia, interlinia, wdowy) | ⚠️ Uproszczony |
+| **Format Painter** | ✅ Kopiowanie formatowania | ✅ Obsługiwane |
+| **Style dokumentu** | ✅ 10+ stylów (Normal, Heading 1-6) | ✅ Pełne wsparcie |
+| **Export do PDF** | 🚧 W przygotowaniu (endpoint gotowy) | ✅ Natywny |
+| **Kolaboracja real-time** | 🚧 Roadmap (WebSocket) | ✅ Natywna (multiple users) |
+| **Track Changes** | 🚧 Roadmap | ✅ Pełne wsparcie |
+| **Komentarze** | 🚧 Roadmap | ✅ Pełne wsparcie |
+| **Integracja API** | ✅ REST API, Swagger docs | ⚠️ Microsoft Graph (skomplikowane) |
+| **Customizacja UI** | ✅ Pełna kontrola (Angular components) | ❌ Brak możliwości |
+| **Tryb offline** | 🚧 Możliwy (PWA) | ❌ Wymaga połączenia |
+| **Czas ładowania** | ⚡ <2s (localhost), <5s (production) | ⚠️ 5-10s (zależne od Azure) |
+
+### Legenda
+- ✅ — Pełne wsparcie
+- ⚠️ — Ograniczone wsparcie
+- ❌ — Brak wsparcia
+- 🚧 — W przygotowaniu
+
+### Kluczowe przewagi Doc2
+1. **Unikalne funkcje**: Podpisy X.509, kody QR/kreskowe, pełne metadane OOXML
+2. **Bezpieczeństwo**: Dane w infrastrukturze firmy, brak zależności od Microsoft Cloud
+3. **Koszty**: Zero licencji, hosting na własnych serwerach
+4. **Kontrola**: Pełna customizacja, API-first, integracja z dowolnymi systemami
+
+### Kluczowe przewagi Word Online
+1. **Kolaboracja**: Natywny real-time editing dla wielu użytkowników
+2. **Ekosystem**: Głęboka integracja z Microsoft 365 (Teams, OneDrive, Outlook)
+3. **Track Changes**: Śledzenie zmian z komentarzami
+4. **Dojrzałość**: Wieloletnie doświadczenie, stabilność
+
+---
+
 ## Slajd 3 — Architektura systemu (diagram)
 
 ### Nagłówek
@@ -209,21 +296,37 @@ Interlinia (predefiniowana + niestandardowa) · Dialog akapitu (pełny Word-styl
 Pełne formatowanie jak w Microsoft Word
 
 ### Styl tekstu
-- **Pogrubienie**, *Kursywa*, <u>Podkreślenie</u>, ~~Przekreślenie~~
-- Indeks górny (x²), Indeks dolny (H₂O)
-- Kolor tekstu · Kolor tła / podświetlenie
+- **Pogrubienie** (`Ctrl+B`) — zwiększa wagę czcionki (font-weight: bold)
+- *Kursywa* (`Ctrl+I`) — pochylenie tekstu (font-style: italic)
+- <u>Podkreślenie</u> (`Ctrl+U`) — linia pod tekstem (text-decoration: underline)
+- ~~Przekreślenie~~ (`Alt+Shift+5`) — przekreślenie środkowe (text-decoration: line-through)
+- Indeks górny (`Ctrl+.`) — tekst powyżej linii bazowej (x², E=mc²)
+- Indeks dolny (`Ctrl+,`) — tekst poniżej linii bazowej (H₂O, CO₂)
+- **Kolor tekstu** — paleta 46 kolorów + picker RGB
+- **Kolor tła** — podświetlenie tekstu (background-color)
 
 ### Czcionka
-- Wybór rodziny czcionki z dropdown
-- Wybór rozmiaru + zwiększanie / zmniejszanie z menu
+- **Rodzina czcionki** — dropdown z systemowymi czcionkami (Arial, Times New Roman, Calibri, Courier, Verdana, Georgia, Tahoma, Trebuchet)
+- **Rozmiar czcionki** — od 8pt do 72pt, regulacja +/- krok 2pt
+- **Zwiększ/Zmniejsz czcionkę** — przyciski toolbar do szybkiej zmiany
 
 ### Zmiana wielkości liter
-- WIELKIE LITERY · małe litery · Jak W Tytule
+- **WIELKIE LITERY** — uppercase transformation
+- **małe litery** — lowercase transformation
+- **Jak W Tytule** — capitalize każde słowo (Title Case)
+- **zAmIaNa** — toggle case (inverse transformation)
 
 ### Inne
-- **Format Painter** — kopiuj i wklej formatowanie
-- **Wyczyść formatowanie** (`Ctrl+\`)
-- Style dokumentu — Normalny, Nagłówek 1–6, Tytuł, Podtytuł, Cytat, Akapit listy
+- **Format Painter** — kopiuj formatowanie z zaznaczenia i zastosuj do innego tekstu
+  - Kliknij Format Painter → zaznacz tekst źródłowy → zaznacz tekst docelowy
+- **Wyczyść formatowanie** (`Ctrl+\`) — usuń wszystkie style inline, przywróć domyślne
+- **Style dokumentu** — predefiniowane style OOXML:
+  - Normal (domyślny akapit)
+  - Heading 1-6 (nagłówki hierarchiczne)
+  - Title (tytuł dokumentu)
+  - Subtitle (podtytuł)
+  - Quote (blok cytatu)
+  - ListParagraph (akapit listy numerowanej/wypunktowanej)
 
 ---
 
@@ -233,22 +336,43 @@ Pełne formatowanie jak w Microsoft Word
 Zaawansowane ustawienia akapitów
 
 ### Wyrównanie
-Do lewej · Do środka · Do prawej · Wyjustuj
+- **Do lewej** (`Ctrl+L`) — tekst wyrównany do lewego marginesu (text-align: left)
+- **Do środka** (`Ctrl+E`) — wyśrodkowanie tekstu (text-align: center)
+- **Do prawej** (`Ctrl+R`) — tekst wyrównany do prawego marginesu (text-align: right)
+- **Wyjustuj** (`Ctrl+J`) — rozciągnięcie tekstu do obu marginesów (text-align: justify)
 
 ### Wcięcia
-- Z lewej / z prawej (w cm)
-- Specjalne: Pierwszy wiersz / Wiszący
-- Wcięcia lustrzane (do druku dwustronnego)
+- **Z lewej** — odsunięcie całego akapitu od lewego marginesu (0-10 cm)
+- **Z prawej** — odsunięcie całego akapitu od prawego marginesu (0-10 cm)
+- **Pierwszy wiersz** — wcięcie tylko pierwszej linii akapitu (typografia książkowa)
+- **Wiszący** — pierwszy wiersz na marginesie, reszta wcięta (listy bibliograficzne)
+- **Wcięcia lustrzane** — automatyczna zamiana lewy↔prawy dla stron parzystych (druk dwustronny)
 
-### Interlinia
-Pojedyncza · 1,15 · 1,5 · Podwójna · Co najmniej · Dokładnie · Wielokrotność
+### Interlinia (line-height)
+- **Pojedyncza** — 1.0 (standardowa wysokość linii)
+- **1,15** — domyślna w Word 2007+ (15% więcej przestrzeni)
+- **1,5** — półtora wiersza (lepsza czytelność)
+- **Podwójna** — 2.0 (wymóg akademicki)
+- **Co najmniej** — minimalna wartość w pt (auto-adjust dla różnych czcionek)
+- **Dokładnie** — fixed wartość w pt (bez auto-adjust)
+- **Wielokrotność** — niestandardowy mnożnik (np. 1.25, 2.5)
 
-### Odstępy
-Przed akapitem / Po akapicie (w pt)
+### Odstępy między akapitami
+- **Przed akapitem** — space-before w punktach (0-72pt)
+- **Po akapicie** — space-after w punktach (0-72pt)
+- Przydatne do separacji sekcji bez pustych linii
 
-### Dialog akapitu (styl Word)
-- Zakładka 1: Wcięcia i odstępy — z podglądem na żywo (3 akapity próbne!)
-- Zakładka 2: Podziały wiersza i strony — kontrola wdów/sierot, „trzymaj z następnym", łamanie strony
+### Dialog akapitu (styl Microsoft Word)
+**Zakładka 1: Wcięcia i odstępy**
+- Wizualny konfigurator z trzema akapitami podglądu
+- Slider dla każdego parametru z wartościami liczbowymi
+- **Podgląd na żywo** — zmiany widoczne natychmiast w przykładowym tekście
+
+**Zakładka 2: Podziały wiersza i strony**
+- **Wdowy/sieroty** — zapobieganie samotnym liniom na początku/końcu strony
+- **Trzymaj z następnym** — akapit nie rozdziela się od kolejnego (np. nagłówek + treść)
+- **Trzymaj wiersze razem** — cały akapit na jednej stronie
+- **Podział strony przed** — wymuszenie nowej strony przed akapitem
 
 ---
 
@@ -258,28 +382,44 @@ Przed akapitem / Po akapicie (w pt)
 Zaawansowana obsługa tabel
 
 ### Wstawianie
-- Szybkie wstawienie: 2×2, 3×3, 4×4, 5×5
-- Dialog: do 63 kolumn × 500 wierszy
-- Autodopasowanie: do zawartości / do okna / stała szerokość
+- **Szybkie wstawienie** — siatka 5×5 z podglądem na żywo (2×2, 3×3, 4×4, 5×5)
+- **Dialog niestandardowy** — do 63 kolumn × 500 wierszy (ograniczenie HTML)
+- **Autodopasowanie**:
+  - Do zawartości — kolumny rozszerzają się według tekstu
+  - Do okna — tabela wypełnia szerokość strony (100%)
+  - Stała szerokość — manualna kontrola szerokości kolumn
 
 ### Operacje na wierszach i kolumnach
-- Wstaw wiersz powyżej / poniżej
-- Wstaw kolumnę z lewej / z prawej
-- Usuń wiersz / kolumnę / całą tabelę
+- **Wstaw wiersz powyżej** — dodaj nowy wiersz nad kursorem
+- **Wstaw wiersz poniżej** — dodaj nowy wiersz pod kursorem
+- **Wstaw kolumnę z lewej** — dodaj kolumnę po lewej stronie
+- **Wstaw kolumnę z prawej** — dodaj kolumnę po prawej stronie
+- **Usuń wiersz** — usuń wiersz zawierający kursor
+- **Usuń kolumnę** — usuń kolumnę zawierającą kursor
+- **Usuń tabelę** — usuń całą tabelę
 
-### Scalanie i dzielenie
-- **Scalanie komórek** — zaznacz prostokątny zakres myszką, scal jednym kliknięciem (obsługuje colspan + rowspan)
-- **Dzielenie komórek** — rozdziel scaloną lub podziel na 2 kolumny
-- **Dzielenie tabeli** — rozcina tabelę w miejscu kursora
+### Scalanie i dzielenie komórek
+- **Scalanie komórek** — zaznacz prostokątny zakres myszką (mousedown→mousemove), kliknij „Scal komórki"
+  - Obsługa **colspan** (scalanie poziome)
+  - Obsługa **rowspan** (scalanie pionowe)
+  - Możliwość scalania wielokomórkowych zakresów (np. 3×2)
+- **Dzielenie komórek** — rozdziel scaloną komórkę lub podziel na 2 kolumny
+- **Dzielenie tabeli** — rozcina tabelę w miejscu kursora, tworząc dwie osobne tabele
 
-### Wygląd
-- Cieniowanie komórek — 46 kolorów + niestandardowy picker
-- Siatka tabeli — pokaż / ukryj linie
-- Równomierne rozkładanie wierszy / kolumn
+### Wygląd i formatowanie
+- **Cieniowanie komórek** — paleta 46 predefiniowanych kolorów + niestandardowy color picker RGB
+  - Kolory ING: pomarańczowy (#FF6200), szary (#4D4D4D), niebieski (#1F1F7A)
+  - Standardowe: czerwony, zielony, niebieski, żółty, fioletowy, turkusowy, różowy
+- **Siatka tabeli** — przełącznik Pokaż/Ukryj linie obramowania (border visibility)
+- **Równomierne rozkładanie**:
+  - Wierszy — wszystkie wiersze tej samej wysokości
+  - Kolumn — wszystkie kolumny tej samej szerokości
 
-### Zaznaczanie komórek
-- Niestandardowy mechanizm: przeciągnij myszką prostokątny zakres (mousedown → mousemove)
-- Zaznaczenie wielokomórkowe z wizualnym podświetleniem
+### Zaznaczanie komórek (unikalna funkcja)
+- **Niestandardowy mechanizm** — przeciągnij myszką prostokątny zakres (mousedown → mousemove)
+- Zaznaczenie wielokomórkowe z wizualnym podświetleniem (background-color overlay)
+- Działa cross-browser (bez standardowych kontrolek tabel HTML)
+- Umożliwia zaznaczenie dowolnego prostokątnego bloku do scalenia
 
 ---
 
@@ -316,20 +456,48 @@ Układ dokumentu
 Obrazy, kody kreskowe i QR
 
 ### Obrazy
-- Wstawianie z pliku (konwersja do Base64 po stronie klienta)
-- Osadzone bezpośrednio w HTML jako data URI
-- Zachowane przy konwersji HTML ↔ DOCX
+- **Wstawianie z pliku** — upload pliku obrazu (JPG, PNG, GIF, BMP)
+- **Konwersja do Base64** — po stronie klienta przed wysłaniem na backend
+- **Osadzone jako data URI** — `<img src="data:image/png;base64,...">`
+- **Zachowane przy konwersji** — DOCX→HTML: ekstrahowane z ImagePart; HTML→DOCX: osadzane jako nowy ImagePart
+- **Limit rozmiaru** — maksymalnie 10 MB na obraz (walidacja FluentValidation)
+- **Kompresja** — opcjonalna kompresja przed osadzeniem (do implementacji)
 
-### Kody kreskowe i QR
-- Generowane na backendzie (ZXing.Net + SkiaSharp)
-- Typy: QR Code, Code128, EAN-13, i inne
-- Opcja: pokaż wartość pod kodem
-- Wstawiane jako obraz Base64
+### Kody kreskowe i QR (13 formatów)
+**Generowane na backendzie** — ZXing.Net + SkiaSharp (cross-platform)
+
+**Obsługiwane formaty**:
+1. **QR Code** — dwuwymiarowy kod, do 4296 znaków alfanumerycznych
+2. **Code128** — wysokogęsty kod liniowy, alfanumeryczny
+3. **EAN-13** — 13-cyfrowy kod produktowy (europejski standard)
+4. **EAN-8** — 8-cyfrowy skrócony EAN
+5. **UPC-A** — 12-cyfrowy kod produktowy (USA/Kanada)
+6. **Code39** — alfanumeryczny, stosowany w logistyce
+7. **Code93** — kompaktowa wersja Code39
+8. **Aztec** — 2D kod o wysokiej gęstości
+9. **Data Matrix** — 2D kod do małych przedmiotów
+10. **PDF417** — 2D wielowierszowy kod (paszporty, bilety)
+11. **Interleaved 2of5** — numeryczny, przemysł/magazyny
+12. **Maxicode** — 2D kod UPS (logistyka)
+13. **Codabar** — biblioteki, banki krwi, przesyłki
+
+**Opcje generowania**:
+- **Wartość** — tekst do zakodowania (walidacja długości per format)
+- **Szerokość/wysokość** — rozmiar obrazu w pikselach (default: 300×150)
+- **Pokaż wartość** — opcjonalny tekst pod kodem (human-readable)
+- **Format wyjściowy** — Base64 PNG
+
+**Wstawianie** — wygenerowany kod jako `<img>` element w dokumencie
 
 ### Inne elementy
-- **Linia pozioma** (`<hr>`)
-- **Podział strony** — manualny page break
-- **Linia podpisu** — wizualny placeholder z imieniem, stanowiskiem, datą, markerem „✕ Podpis"
+- **Linia pozioma** (`<hr>`) — separator sekcji dokumentu (border-top: 1px solid)
+- **Podział strony** — manualny page break (`<div style="page-break-after: always">`)
+  - Wymusza nową stronę w wielostronicowym podglądzie
+  - Zachowywany w DOCX jako `<w:br w:type="page"/>`
+- **Linia podpisu** — wizualny placeholder podpisu elektronicznego
+  - Pola: Imię i nazwisko, Stanowisko, Data, Marker „✕ Podpis"
+  - Stylizowana ramka z kropkowaną linią
+  - Używana w połączeniu z funkcją podpisu cyfrowego
 
 ---
 
@@ -339,14 +507,34 @@ Obrazy, kody kreskowe i QR
 Wyszukiwanie w dokumencie
 
 ### Toolbar — zintegrowane wyszukiwanie
-- Pole szukania wbudowane w pasek narzędzi
-- Nawigacja: następny / poprzedni wynik
-- Licznik: „3 z 15 wyników"
-- Podświetlanie dopasowań w dokumencie
+- **Pole szukania** — input wbudowany w pasek narzędzi (zawsze dostępny)
+- **Nawigacja wyników**:
+  - Przycisk „Poprzedni" (←) — przejdź do poprzedniego dopasowania
+  - Przycisk „Następny" (→) — przejdź do następnego dopasowania
+- **Licznik dopasowań** — „3 z 15 wyników" (aktualizacja na żywo)
+- **Podświetlanie** — wszystkie dopasowania podświetlone w dokumencie (background: yellow)
+- **Aktywne dopasowanie** — obecnie wyświetlane wyróżnione innym kolorem (background: orange)
+- **Wrap around** — automatyczny powrót do początku/końca dokumentu przy osiągnięciu krańca
 
 ### Dialog Znajdź i zamień (`Ctrl+H`)
-- Pole „Znajdź" + pole „Zamień na"
-- Akcje: **Znajdź następny** · **Zamień** · **Zamień wszystko**
+- **Pole „Znajdź"** — tekst do wyszukania (case-sensitive default)
+- **Pole „Zamień na"** — tekst zastępczy
+- **Opcje**:
+  - Wielkość liter ma znaczenie (case-sensitive toggle)
+  - Tylko całe wyrazy (word boundaries)
+- **Akcje**:
+  - **Znajdź następny** — przejdź do kolejnego dopasowania (highlight + scroll)
+  - **Zamień** — zamień aktualnie wyświetlone dopasowanie i przejdź do następnego
+  - **Zamień wszystko** — zamień wszystkie dopasowania jednym kliknięciem (z potwierdzeniem)
+- **Licznik** — „Znaleziono X wystąpień" po zakończeniu operacji
+- **Historia wyszukiwań** — dropdown z ostatnimi 10 frazami (localStorage)
+
+### Implementacja techniczna
+- **TreeWalker API** — przechodzenie przez tekstowe węzły DOM
+- **Regex matching** — wyrażenia regularne dla zaawansowanych wzorców
+- **Highlight z `<mark>`** — owinięcie dopasowań w tagi `<mark>` z klasami CSS
+- **ScrollIntoView** — automatyczne przewijanie do aktywnego dopasowania
+- **Undo/Redo support** — zamiany można cofnąć (`Ctrl+Z`)
 
 ---
 
@@ -355,24 +543,75 @@ Wyszukiwanie w dokumencie
 ### Nagłówek
 Zarządzanie metadanymi DOCX
 
-### Dialog właściwości — dwie kolumny
+### Dialog właściwości — dwie kolumny (layout)
 
-**Informacje ogólne:**
-- Tytuł · Autor · Temat · Słowa kluczowe (oddzielane przecinkami) · Opis / Komentarze · Kategoria
+**Kolumna lewa — Informacje ogólne:**
+- **Tytuł** — tytuł dokumentu (Core.Title)
+  - Przykład: „Raport kwartalny Q4 2025"
+  - Maksymalnie 255 znaków
+- **Autor** — główny autor (Core.Creator)
+  - Przykład: „Jan Kowalski"
+  - Auto-wypełniane z systemu (opcjonalne)
+- **Temat** — krótki opis tematu (Core.Subject)
+  - Przykład: „Wyniki finansowe"
+- **Słowa kluczowe** — tagi do wyszukiwania (Core.Keywords)
+  - Przykład: „finanse, raport, Q4, 2025"
+  - Oddzielane przecinkami
+- **Opis / Komentarze** — dłuższy opis (Core.Description)
+  - Pole tekstowe wieloliniowe (textarea)
+  - Maksymalnie 1000 znaków
+- **Kategoria** — klasyfikacja dokumentu (Core.Category)
+  - Przykład: „Raporty finansowe"
 
-**Organizacja:**
-- Firma · Kierownik · Status (np. „Wersja robocza", „Zatwierdzony")
+**Kolumna prawa — Organizacja i wersjonowanie:**
+- **Firma** — nazwa organizacji (Extended.Company)
+  - Przykład: „ING Bank Śląski S.A."
+- **Kierownik** — menedżer odpowiedzialny (Extended.Manager)
+  - Przykład: „Anna Nowak"
+- **Status** — stan dokumentu (Extended.DocSecurity jako tekst)
+  - Dropdown: „Wersja robocza", „Weryfikacja", „Zatwierdzony", „Finalny"
+- **Ostatnia modyfikacja przez** — user (Core.LastModifiedBy)
+  - Auto-wypełniane przy zapisie
+- **Rewizja** — numer wersji (Core.Revision)
+  - Przykład: „3"
+  - Auto-inkrementacja przy zapisie (opcjonalne)
+- **Wersja** — semantyczna wersja (Extended.AppVersion)
+  - Przykład: „1.2.0"
 
-**Wersjonowanie:**
-- Ostatnia modyfikacja przez · Rewizja · Wersja
+**Statystyki — tylko do odczytu (read-only):**
+- **Data utworzenia** — timestamp (Core.Created)
+  - Format: „24.02.2026 15:22:00"
+- **Data modyfikacji** — ostatni zapis (Core.Modified)
+  - Format: „24.02.2026 16:45:30"
+- **Liczba słów** — word count (Extended.Words)
+  - Obliczane przy zapisie
+  - Przykład: „2847 słów"
 
-**Statystyki (tylko do odczytu):**
-- Data utworzenia · Data modyfikacji · Liczba słów
+### Zapis do DOCX — mapowanie OOXML
+**Core Properties** (`/docProps/core.xml` — PackageProperties):
+- `dc:title` ← Tytuł
+- `dc:creator` ← Autor
+- `dc:subject` ← Temat
+- `cp:keywords` ← Słowa kluczowe
+- `dc:description` ← Opis
+- `cp:category` ← Kategoria
+- `cp:lastModifiedBy` ← Ostatnia modyfikacja przez
+- `cp:revision` ← Rewizja
+- `dcterms:created` ← Data utworzenia
+- `dcterms:modified` ← Data modyfikacji
 
-### Zapis do DOCX
-- Core Properties → `PackageProperties` (tytuł, autor, temat, słowa kluczowe, opis, kategoria, rewizja...)
-- Extended Properties → `app.xml` (firma, kierownik, aplikacja)
-- Wszystko zapisywane **1:1** — otwiera się prawidłowo w Microsoft Word
+**Extended Properties** (`/docProps/app.xml` — ExtendedFilePropertiesPart):
+- `Company` ← Firma
+- `Manager` ← Kierownik
+- `AppVersion` ← Wersja
+- `Application` ← „Doc2" (automatyczne)
+- `Words` ← Liczba słów (auto-obliczane)
+
+### Zgodność z Microsoft Word
+- **100% zgodność** — wszystkie pola zapisywane w standardowych lokacjach OOXML
+- **Otwieranie w Word** — właściwości widoczne w Plik → Informacje → Właściwości
+- **Edycja w Word** — zmiany w Word zachowane przy ponownym otwarciu w Doc2
+- **Search integration** — SharePoint/Windows Search indeksuje metadane
 
 ---
 
@@ -381,28 +620,76 @@ Zarządzanie metadanymi DOCX
 ### Nagłówek
 Podpisy elektroniczne X.509
 
-### Przegląd podpisów
-- Baner informacyjny: „Ten dokument zawiera N podpis(y) cyfrowy(e)"
-- Lista kart podpisów z kolorowym statusem:
-  - ✅ Ważny (zielony) / ❌ Nieważny (czerwony)
-  - Dane: imię, stanowisko, email, powód, certyfikat, wystawca, ważność
+### Przegląd podpisów (Signature Verification)
+- **Baner informacyjny** — „Ten dokument zawiera N podpis(y) cyfrowy(e)"
+- **Lista kart podpisów** z kolorowym statusem:
+  - ✅ **Ważny** (zielony) — hash dokumentu zgodny z podpisem, certyfikat zweryfikowany
+  - ❌ **Nieważny** (czerwony) — hash niezgodny lub certyfikat nieprawidłowy
+- **Dane wyświetlane na karcie**:
+  - Imię i nazwisko podpisującego
+  - Stanowisko (Title)
+  - Email
+  - Powód podpisania (Reason)
+  - Data podpisania (timestamp ISO 8601)
+  - Nazwa certyfikatu (Subject CN)
+  - Wystawca certyfikatu (Issuer CN)
+  - Ważność certyfikatu (NotBefore — NotAfter)
+  - Algorytm: RSA-SHA256
+- **Paginacja** — jeśli więcej niż 10 podpisów
 
-### Podpisywanie dokumentu
-- Upload certyfikatu `.pfx` / `.p12`
-- Hasło do certyfikatu
-- Dane podpisującego: imię, stanowisko, email, powód
-- Kliknięcie → dokument podpisany i pobrany
+### Podpisywanie dokumentu (Digital Signing)
+**Kroki**:
+1. **Upload certyfikatu** — plik `.pfx` lub `.p12` z kluczem prywatnym
+2. **Hasło certyfikatu** — input type="password" (wymagane dla pfx)
+3. **Dane podpisującego** — formularz:
+   - Imię i nazwisko (required, max 100 znaków)
+   - Stanowisko (optional, max 100 znaków)
+   - Email (optional, format validation)
+   - Powód podpisania (optional, max 200 znaków, np. "Zatwierdzenie faktury")
+4. **Podpisz i pobierz** — kliknięcie wysyła żądanie, zwraca podpisany DOCX
 
-### Jak to działa (backend)
-1. HTML → DOCX (konwersja)
-2. Obliczenie SHA-256 hash z `MainDocumentPart`
-3. Podpis RSA (`X509Certificate2`)
-4. Zapis podpisu jako **Custom XML Part** w DOCX (namespace: `schemas.importer.app/digitalsignatures`)
-5. Weryfikacja: odczyt XML → walidacja hash + certyfikat
+### Jak to działa — backend (DigitalSignatureService)
+**Proces podpisywania**:
+1. **Konwersja HTML→DOCX** — najpierw tworzymy dokument DOCX z aktualnej treści
+2. **Obliczenie hash** — SHA-256 z `MainDocumentPart.GetStream()`
+   - Hash z treści dokumentu (body.xml)
+   - Nie hash całego pliku ZIP (nie zależy od metadanych)
+3. **Podpis RSA** — użycie `X509Certificate2.GetRSAPrivateKey().SignData()`
+   - Algorytm: RSA z padding PKCS#1
+   - Hash: SHA-256
+4. **Serializacja do XML** — Custom XML Part:
+   ```xml
+   <DigitalSignature xmlns="schemas.importer.app/digitalsignatures">
+     <SignerName>Jan Kowalski</SignerName>
+     <SignerTitle>Dyrektor Finansowy</SignerTitle>
+     <SignerEmail>jan.kowalski@ing.pl</SignerEmail>
+     <Reason>Zatwierdzenie dokumentu</Reason>
+     <SignedDate>2026-02-24T15:22:00Z</SignedDate>
+     <CertificateSubject>CN=Jan Kowalski, O=ING Bank</CertificateSubject>
+     <CertificateIssuer>CN=ING Root CA, O=ING Bank</CertificateIssuer>
+     <CertificateValidFrom>2025-01-01T00:00:00Z</CertificateValidFrom>
+     <CertificateValidTo>2030-01-01T00:00:00Z</CertificateValidTo>
+     <SignatureValue>base64-encoded-signature</SignatureValue>
+     <DocumentHash>sha256-hash-hex</DocumentHash>
+   </DigitalSignature>
+   ```
+5. **Osadzenie w DOCX** — CustomXmlPart dodany do WordprocessingDocument
+6. **Zwrot pliku** — podpisany DOCX gotowy do pobrania
 
-### Linia podpisu
-- Wizualny blok w dokumencie: imię, stanowisko, data, marker „✕ Podpis"
-- Wstawiana bezpośrednio w treść HTML
+**Proces weryfikacji**:
+1. **Odczyt Custom XML Part** — parsowanie XML z namespace `schemas.importer.app/digitalsignatures`
+2. **Rekonstrukcja certyfikatu** — X509Certificate2 z CertificateSubject/Issuer
+3. **Obliczenie aktualnego hash** — SHA-256 z MainDocumentPart
+4. **Weryfikacja podpisu** — RSA.VerifyData() porównuje hash z SignatureValue
+5. **Walidacja certyfikatu** — sprawdzenie dat ważności (NotBefore/NotAfter)
+6. **Zwrot wyniku** — lista SignatureVerificationResult (Valid/Invalid)
+
+### Linia podpisu w dokumencie
+- **Wizualny element** — ramka z przeznaczeniem na podpis
+- **Pola**: Imię i nazwisko, Stanowisko, Data, Marker „✕ Podpis"
+- **Wstawiana przez menu** — Wstaw → Linia podpisu
+- **Renderowana jako HTML** — stylizowany `<div>` z border-top: dotted
+- **Związek z podpisem cyfrowym** — linia podpisu jest wizualna, podpis X.509 jest kryptograficzny (osobne funkcje)
 
 ---
 
@@ -539,21 +826,111 @@ Bezpieczeństwo
 ### Nagłówek
 Doc2 — kompletny edytor DOCX w przeglądarce
 
-### Podsumowanie w punktach
-✅ Pełne formatowanie tekstu (B/I/U, kolory, czcionki, style)
-✅ Zaawansowane tabele (scalanie, cieniowanie, wielokomórkowe zaznaczanie)
-✅ Nagłówki i stopki z konfiguracją
-✅ Wielostronicowy podgląd A4 z paginacją
-✅ Ustawienia strony (marginesy, orientacja, prowadnice)
-✅ Obrazy, kody kreskowe, QR
-✅ Znajdź i zamień
-✅ Właściwości dokumentu (pełne metadane OOXML)
-✅ Podpisy cyfrowe X.509
-✅ Menu kontekstowe
-✅ 15 skrótów klawiaturowych
-✅ Dwukierunkowa konwersja DOCX ↔ HTML
-✅ Clean Architecture + CQRS na backendzie
-✅ Obsługa błędów RFC 7807
+### Formatowanie i edycja tekstu
+✅ **Pełne formatowanie tekstu** — Bold/Italic/Underline, kolory (46 predefiniowanych + picker), czcionki (8 rodzin), rozmiary (8-72pt)
+✅ **Style dokumentu** — 10 predefiniowanych stylów OOXML (Normal, Heading 1-6, Title, Subtitle, Quote)
+✅ **Format Painter** — kopiowanie formatowania między fragmentami tekstu
+✅ **Zmiana wielkości liter** — UPPERCASE, lowercase, Title Case, toggle
+✅ **Indeksy** — górny (x²) i dolny (H₂O)
+
+### Akapity i układ strony
+✅ **Zaawansowane akapity** — wyrównanie (4 typy), wcięcia (lewe/prawe/pierwsze/wiszące), interlinia (7 trybów), odstępy przed/po
+✅ **Dialog akapitu** — pełny konfigurator z podglądem na żywo (3 akapity próbne) + kontrola wdów/sierot
+✅ **Ustawienia strony** — marginesy (predefiniowane + niestandardowe 0.1cm krok), orientacja (pionowa/pozioma), prowadnice
+✅ **Wielostronicowy podgląd** — automatyczna paginacja A4 (1122px), licznik „Strona X z Y"
+✅ **Zoom** — 50%-200% z suwakiem i przyciskami +/−
+
+### Tabele
+✅ **Zaawansowane tabele** — wstawianie (szybkie 5×5 + niestandardowe do 63×500), scalanie/dzielenie komórek (colspan+rowspan)
+✅ **Operacje wierszy/kolumn** — wstawianie, usuwanie, równomierne rozkładanie
+✅ **Cieniowanie komórek** — 46 kolorów + picker RGB, siatka tabeli (pokaż/ukryj)
+✅ **Niestandardowe zaznaczanie** — przeciągnij myszką prostokątny zakres (mousedown→mousemove)
+
+### Nagłówki, stopki i multimedia
+✅ **Nagłówki i stopki** — edytowalne regiony z konfigurowalnymi marginesami, opcja różnych dla pierwszej strony
+✅ **Obrazy** — wstawianie z pliku (max 10MB), konwersja Base64, zachowane przy DOCX↔HTML
+✅ **Kody kreskowe i QR** — 13 formatów (QR, Code128, EAN-13, UPC-A, Aztec, PDF417...), generowane backend (ZXing+SkiaSharp)
+✅ **Linia podpisu** — wizualny placeholder z imieniem, stanowiskiem, datą, markerem „✕ Podpis"
+
+### Wyszukiwanie i narzędzia
+✅ **Znajdź i zamień** — toolbar search + dialog (`Ctrl+H`), licznik wyników, podświetlanie, wrap-around
+✅ **Menu kontekstowe** — prawy przycisk myszy, 15+ opcji kontekstowych, kolor wypełnienia komórek w tabelach
+✅ **15 skrótów klawiaturowych** — Ctrl+B/I/U, Ctrl+Z/Y, Ctrl+H, Ctrl+\, Ctrl+./,, Alt+Shift+5
+
+### Metadane i podpisy
+✅ **Właściwości dokumentu** — pełne metadane OOXML (15+ pól: tytuł, autor, firma, kierownik, rewizja, status, kategoria)
+✅ **Podpisy cyfrowe X.509** — podpisywanie RSA-SHA256, weryfikacja certyfikatów, Custom XML Part storage
+✅ **Weryfikacja podpisów** — kolorowe karty statusu (✅ Ważny / ❌ Nieważny), dane certyfikatu, issuer, ważność
+
+### Konwersja i architektura
+✅ **Dwukierunkowa konwersja DOCX ↔ HTML** — pełna wierność, zachowanie stylów, tabel, obrazów, metadanych, nagłówków/stopek
+✅ **Clean Architecture** — 4 warstwy z unidirectional dependency flow (Domain → Application → Infrastructure)
+✅ **CQRS + MediatR** — Commands/Queries pattern, Pipeline Behaviours (logging + validation)
+✅ **Result Pattern** — Result<T> zamiast wyjątków, railway-oriented error handling
+✅ **Obsługa błędów RFC 7807** — standardowe ProblemDetails, globalny middleware, mapowanie statusów HTTP
+
+### Pasek statusu i UX
+✅ **Pasek statusu** — strona X/Y, liczba słów, liczba znaków, timestamp ostatniej modyfikacji
+✅ **Overlay ładowania** — spinner + „Przetwarzanie..." podczas async operations
+✅ **Toast notifications** — sukces (zielony, 3s) i błąd (czerwony, 5s)
+
+---
+
+## Slajd 24A — Unikalne funkcje Doc2 (przewaga konkurencyjna)
+
+### Nagłówek
+Funkcje niedostępne w konkurencji
+
+### 1. Podpisy cyfrowe X.509 (RSA-SHA256)
+- **Standardy kryptograficzne** — NIST-approved algorithm
+- **Custom XML storage** — podpisy osadzone w DOCX (namespace: schemas.importer.app/digitalsignatures)
+- **Pełna weryfikacja** — hash dokumentu + validacja certyfikatu
+- **Karty podpisów** — wizualizacja z danymi certyfikatu, issuer, ważnością
+- ❌ **Brak w Word Online** — wymaga desktop Word + dodatków
+
+### 2. Generowanie kodów kreskowych i QR (13 formatów)
+- **ZXing.Net + SkiaSharp** — cross-platform, działa na Linux/GCP
+- **13 formatów** — QR, Code128, EAN-13, Aztec, PDF417, Data Matrix, UPC-A, Code39...
+- **Backend rendering** — Base64 PNG, opcja show-value-below
+- **Bezproblemowe osadzanie** — jako `<img>` w HTML/DOCX
+- ❌ **Brak w Word Online** — wymaga płatnych dodatków z Marketplace
+
+### 3. Pełne metadane OOXML (Core + Extended Properties)
+- **15+ pól metadanych** — tytuł, autor, firma, kierownik, rewizja, status, kategoria, wersja...
+- **Extended Properties** — firma, kierownik, aplikacja (app.xml)
+- **Zgodność 100%** — otwiera się w Word z pełnymi właściwościami
+- ⚠️ **Word Online** — tylko podstawowe Core Properties
+
+### 4. Dialog akapitu z podglądem na żywo
+- **3 akapity próbne** — wizualizacja zmian w czasie rzeczywistym
+- **Pełna kontrola** — wcięcia, interlinia, odstępy, podziały strony
+- **Zakładka 2** — wdowy/sieroty, trzymaj z następnym, podział strony przed
+- ⚠️ **Word Online** — uproszczony dialog bez podglądu
+
+### 5. Niestandardowe zaznaczanie komórek tabel
+- **Mousedown→mousemove** — przeciągnij prostokątny zakres
+- **Cross-browser** — działa bez standardowych kontrolek HTML table
+- **Wizualne podświetlenie** — overlay background-color
+- ⚠️ **Word Online** — standardowe zaznaczanie, czasem buggy
+
+### 6. API-first design z Swagger
+- **REST API** — wszystkie funkcje dostępne jako HTTP endpoints
+- **Swagger UI** — interaktywna dokumentacja (localhost:5190/swagger)
+- **Integracja** — łatwa integracja z istniejącymi systemami
+- ⚠️ **Microsoft Graph** — skomplikowane API, wymaga OAuth
+
+### 7. Pełna kontrola nad hostingiem
+- **On-premises** — hosting na własnych serwerach
+- **Dowolna chmura** — GCP, AWS, Azure, DigitalOcean...
+- **Docker** — konteneryzacja, skalowanie horyzontalne
+- **Kubernetes** — orkiestracja, auto-scaling
+- ❌ **Word Online** — tylko Microsoft Cloud (Azure)
+
+### 8. Zero kosztów licencjonowania
+- **Brak Office 365** — nie wymaga subskrypcji Microsoft
+- **Brak SharePoint** — działa samodzielnie
+- **Open Source możliwy** — kod może być udostępniony wewnętrznie
+- 💰 **Word Online** — wymaga od €12.50/użytkownik/miesiąc
 
 ---
 
@@ -588,6 +965,114 @@ Dziękuję za uwagę!
 
 ---
 
+## Slajd 27 — Porównanie: Doc2 vs alternatywne edytory
+
+### Nagłówek
+Doc2 kontra konkurencyjne edytory dokumentów
+
+### Wprowadzenie
+Porównanie Doc2 z innymi rozwiązaniami do edycji dokumentów w przeglądarce:
+- **ONLYOFFICE** — open-source suite biurowy
+- **Syncfusion** — komercyjna biblioteka UI
+- **Apryse (dawniej PDFTron)** — SDK do dokumentów PDF/Office
+- **CKEditor 5** — edytor rich-text z pluginami
+- **TinyMCE** — popularny edytor WYSIWYG
+
+### Tabela porównawcza
+
+| Funkcja / Cecha | **Doc2** | **ONLYOFFICE** | **Syncfusion** | **Apryse** | **CKEditor 5** | **TinyMCE** |
+|----------------|----------|----------------|----------------|------------|----------------|-------------|
+| **Typ rozwiązania** | Pełny edytor DOCX | Suite biurowy | Biblioteka UI | PDF/Office SDK | Edytor rich-text | Edytor WYSIWYG |
+| **Licencjonowanie** | ✅ Brak kosztów | ⚠️ AGPL v3 (open-source) / €1,500+ (commercial) | ❌ Płatna (od $995/dev/rok) | ❌ Płatna (od $3,000+/rok) | ⚠️ GPL / Płatna (od $3,499/rok) | ⚠️ MIT (core) / Płatna (premium od $69/mc) |
+| **Hosting** | ✅ On-premises lub chmura | ✅ On-premises lub chmura | ✅ On-premises lub chmura | ✅ On-premises lub chmura | ✅ Dowolny | ✅ Dowolny |
+| **Format natywny** | ✅ DOCX (OOXML) | ✅ DOCX, XLSX, PPTX | ✅ DOCX, PDF, itp. | ✅ PDF, DOCX, PPT | ❌ HTML tylko | ❌ HTML tylko |
+| **Konwersja DOCX↔HTML** | ✅ Pełna dwukierunkowa | ✅ Pełna dwukierunkowa | ✅ Dobra | ✅ Bardzo dobra | ⚠️ Import przez plugin | ⚠️ Import przez plugin |
+| **Zachowanie formatowania** | ✅ 100% kompatybilność z Word | ✅ Bardzo dobra (~95%) | ✅ Bardzo dobra | ✅ Doskonała | ❌ Ograniczone | ❌ Ograniczone |
+| **Podpisy cyfrowe X.509** | ✅ Natywne (RSA-SHA256) | ✅ Obsługiwane | ⚠️ Wymaga custom impl. | ✅ Pełne wsparcie PDF | ❌ Brak | ❌ Brak |
+| **Kody QR/kreskowe** | ✅ 13 formatów (ZXing.Net) | ❌ Wymaga dodatków | ⚠️ Wymaga custom impl. | ✅ Możliwe przez API | ❌ Wymaga pluginów | ❌ Wymaga pluginów |
+| **Metadane OOXML** | ✅ Pełne (Core + Extended) | ✅ Pełne | ✅ Pełne | ✅ Pełne | ❌ Brak | ❌ Brak |
+| **Nagłówki/stopki** | ✅ Pełna edycja | ✅ Pełna edycja | ✅ Pełna edycja | ✅ Pełna edycja | ❌ Brak natywnego | ❌ Brak natywnego |
+| **Tabele zaawansowane** | ✅ Scalanie, 46 kolorów | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ⚠️ Podstawowe | ⚠️ Podstawowe |
+| **Kolaboracja real-time** | 🚧 Roadmap (WebSocket) | ✅ Natywna (WebSocket) | ✅ Obsługiwana | ✅ Możliwa | ✅ Przez plugin | ✅ Przez plugin |
+| **Track Changes** | 🚧 Roadmap | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ⚠️ Przez plugin | ⚠️ Przez plugin |
+| **Export do PDF** | 🚧 W przygotowaniu | ✅ Natywny | ✅ Natywny | ✅ Natywny (core) | ⚠️ Wymaga backend | ⚠️ Wymaga backend |
+| **Komentarze** | 🚧 Roadmap | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Pełne wsparcie | ✅ Natywne | ✅ Natywne |
+| **API REST** | ✅ Pełne (Swagger) | ✅ Dostępne | ✅ Dostępne | ✅ Rozbudowane | ⚠️ Ograniczone | ⚠️ Ograniczone |
+| **Responsywność** | ✅ Skalowanie 50%-200% | ✅ Pełna | ✅ Pełna | ✅ Pełna | ✅ Pełna | ✅ Pełna |
+| **Wielojęzyczność** | ✅ Polish + English | ✅ 40+ języków | ✅ Lokalizowalne | ✅ Lokalizowalne | ✅ Lokalizowalne | ✅ 50+ języków |
+| **Wymagania backend** | .NET Core 8 | Node.js / Java / .NET | .NET / Java / JS | Różne platformy | Node.js (opcja) | PHP/Node (opcja) |
+| **Wymagania frontend** | Angular 19 | Vanilla JS | Angular/React/Vue | Vanilla JS / React | Vanilla JS / React | Vanilla JS / React |
+| **Rozmiar paczki (frontend)** | ~2.5 MB (gzip) | ~5 MB (gzip) | ~3 MB (gzip) | ~8 MB+ (gzip) | ~200 KB (core) | ~150 KB (core) |
+| **Obsługa makr VBA** | ❌ Brak | ⚠️ Ograniczona | ❌ Brak | ⚠️ Częściowa | ❌ Brak | ❌ Brak |
+| **Obsługa OLE** | 🚧 Roadmap | ✅ Częściowa | ✅ Częściowa | ✅ Dobra | ❌ Brak | ❌ Brak |
+
+### Kluczowe różnice
+
+#### 1️⃣ Doc2 — Autorskie rozwiązanie
+- ✅ **Zero kosztów licencjonowania** — bez opłat za użytkownika
+- ✅ **Pełna kontrola nad kodem** — możliwość customizacji
+- ✅ **Dedykowany dla DOCX** — 100% focus na Word documents
+- ✅ **Unikalne funkcje** — podpisy X.509, kody QR/kreskowe
+- ✅ **Branding ING** — dostosowane do potrzeb korporacyjnych
+- ⚠️ **Mniej dojrzałe** — brak niektórych zaawansowanych funkcji (track changes, kolaboracja)
+
+#### 2️⃣ ONLYOFFICE — Kompleksowy suite
+- ✅ **Pełny suite biurowy** — Word, Excel, PowerPoint
+- ✅ **Dojrzały produkt** — rozwijany od 2009 roku
+- ✅ **Kolaboracja** — real-time editing z wieloma użytkownikami
+- ⚠️ **Licencja AGPL** — wymaga open-source całego projektu lub płatnej licencji commercial
+- ⚠️ **Większe wymagania** — więcej zasobów serwera
+- ⚠️ **Mniejsza elastyczność** — trudniejsza customizacja UI
+
+#### 3️⃣ Syncfusion — Biblioteka komercyjna
+- ✅ **Profesjonalne wsparcie** — płatna pomoc techniczna
+- ✅ **Bogaty ekosystem** — 1,800+ komponentów UI
+- ✅ **Dojrzałość** — stabilny produkt enterprise-grade
+- ❌ **Wysokie koszty** — $995/developer/rok (minimum)
+- ❌ **Vendor lock-in** — uzależnienie od dostawcy
+- ⚠️ **Trudna integracja** — wymaga zakupu całej suite
+
+#### 4️⃣ Apryse (PDFTron) — SDK premium
+- ✅ **Najlepsza jakość** — doskonałe renderowanie PDF/DOCX
+- ✅ **Zaawansowane funkcje** — annotacje, formularze, OCR
+- ✅ **Wsparcie enterprise** — dedykowane dla korporacji
+- ❌ **Bardzo drogie** — od $3,000+/rok + runtime fees
+- ❌ **Licencjonowanie runtime** — opłaty za użytkowników końcowych
+- ⚠️ **Over-engineering** — zbyt rozbudowane dla prostych przypadków
+
+#### 5️⃣ CKEditor 5 — Edytor rich-text
+- ✅ **Lekki i szybki** — mała paczka (~200 KB)
+- ✅ **Popularne** — używane przez Wikipedia, GitHub
+- ✅ **Modułowe** — pluginowa architektura
+- ❌ **Nie DOCX-native** — tylko HTML z konwerterami
+- ❌ **Ograniczone formatowanie** — brak pełnej kompatybilności Word
+- ⚠️ **Wymaga pluginów** — większość funkcji to płatne dodatki
+
+#### 6️⃣ TinyMCE — Edytor WYSIWYG
+- ✅ **Najpopularniejszy** — używany przez WordPress, Jira
+- ✅ **Łatwa integracja** — prosty setup (kilka linii JS)
+- ✅ **Licencja MIT (core)** — darmowy dla podstawowych funkcji
+- ❌ **Nie DOCX-native** — tylko HTML editor
+- ❌ **Funkcje premium płatne** — PowerPaste, MergeFields (od $69/mc)
+- ⚠️ **Brak zaawansowanych tabel** — ograniczone scalanie, formatowanie
+
+### Podsumowanie
+
+**Doc2 jest najlepszym wyborem gdy:**
+- ✅ Potrzebujesz **pełnej kompatybilności z Word** (DOCX native)
+- ✅ Chcesz **uniknąć kosztów licencjonowania** (zero per-user fees)
+- ✅ Wymagasz **pełnej kontroli** nad hostingiem i kodem
+- ✅ Potrzebujesz **unikalnych funkcji** (podpisy X.509, kody QR)
+- ✅ Akceptujesz **roadmap** dla niektórych funkcji (kolaboracja, track changes)
+
+**Alternatywy są lepsze gdy:**
+- ONLYOFFICE — potrzebujesz **pełnego suite** (Excel, PowerPoint) z **kolaboracją** już teraz
+- Syncfusion — potrzebujesz **wsparcia enterprise** i **SLA**
+- Apryse — wymagana **najwyższa jakość** renderowania i **zaawansowane PDF**
+- CKEditor 5 / TinyMCE — wystarcza **prosty edytor HTML** bez pełnej kompatybilności DOCX
+
+---
+
 > **Wskazówki do PPTX:**
 > - Slajdy 3, 7 — idealnie nadają się na diagramy / schematy blokowe
 > - Slajdy 8 — umieść screenshot aplikacji z numerowanymi strzałkami
@@ -595,4 +1080,5 @@ Dziękuję za uwagę!
 > - Slajdy 17 — wizualizacja flow podpisywania (strzałki: upload cert → hash → sign → download)
 > - Slajdy 19 — tabela skrótów dobrze wygląda na ciemnym tle
 > - Slajd 24 — ikony ✅ przy każdym punkcie dają efekt „checklisty"
+> - Slajd 27 — tabela porównawcza idealnie nadaje się na wykres radarowy lub heatmap z kolorami (zielony=✅, żółty=⚠️, czerwony=❌)
 > - Kolorystyka sugerowana: pomarańczowy ING (#FF6200) jako kolor akcentu, białe tło, ciemnoszary tekst
