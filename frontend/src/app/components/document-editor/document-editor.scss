@@ -1813,3 +1813,323 @@
   overflow: hidden;
   pointer-events: none;
 }
+
+/* ===== Signatures Banner ===== */
+.signatures-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 6px;
+  margin: 8px 40px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #2e7d32;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: #c8e6c9;
+  }
+
+  svg {
+    flex-shrink: 0;
+    color: #4caf50;
+  }
+}
+
+/* ===== Properties Dialog ===== */
+.properties-dialog {
+  width: 720px;
+
+  .properties-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 28px;
+  }
+
+  .properties-section {
+    h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #FF6200;
+      margin: 0 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+  }
+
+  .form-group {
+    margin-bottom: 12px;
+  }
+
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #555;
+    margin-bottom: 4px;
+  }
+
+  .form-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+
+    &:focus {
+      outline: none;
+      border-color: #FF6200;
+      box-shadow: 0 0 0 2px rgba(255, 98, 0, 0.1);
+    }
+  }
+
+  .form-textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+    resize: vertical;
+    font-family: inherit;
+    transition: border-color 0.15s;
+
+    &:focus {
+      outline: none;
+      border-color: #FF6200;
+      box-shadow: 0 0 0 2px rgba(255, 98, 0, 0.1);
+    }
+  }
+
+  .properties-stats {
+    background: #f8f8f8;
+    border-radius: 6px;
+    padding: 10px 12px;
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 3px 0;
+      font-size: 12px;
+    }
+
+    .stat-label {
+      color: #666;
+    }
+
+    .stat-value {
+      color: #333;
+      font-weight: 500;
+    }
+  }
+}
+
+/* ===== Signature Dialog ===== */
+.signature-dialog {
+  width: 600px;
+
+  .signature-tabs {
+    display: flex;
+    border-bottom: 1px solid #e0e0e0;
+    padding: 0 24px;
+    flex-shrink: 0;
+  }
+
+  .signature-tab {
+    padding: 10px 20px;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    font-weight: 500;
+    color: #666;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s ease;
+    margin-bottom: -1px;
+
+    &.active {
+      color: #FF6200;
+      border-bottom-color: #FF6200;
+    }
+
+    &:hover:not(.active) {
+      color: #333;
+      background: #f8f8f8;
+    }
+  }
+
+  .empty-signatures {
+    text-align: center;
+    padding: 40px 0;
+
+    svg {
+      margin-bottom: 12px;
+    }
+
+    p {
+      font-size: 14px;
+      color: #888;
+      margin: 0 0 16px;
+    }
+  }
+
+  .signatures-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .signature-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+
+    &.valid {
+      border-color: #a5d6a7;
+    }
+
+    &.invalid {
+      border-color: #ef9a9a;
+    }
+  }
+
+  .signature-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: #f8f8f8;
+    border-bottom: 1px solid #e0e0e0;
+
+    .valid & {
+      background: #e8f5e9;
+    }
+
+    .invalid & {
+      background: #ffebee;
+    }
+  }
+
+  .signature-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    strong {
+      font-size: 14px;
+      color: #333;
+    }
+  }
+
+  .signature-date {
+    font-size: 12px;
+    color: #888;
+  }
+
+  .signature-card-body {
+    padding: 10px 14px;
+  }
+
+  .sig-detail {
+    font-size: 12px;
+    color: #555;
+    padding: 2px 0;
+  }
+
+  .sig-label {
+    font-weight: 500;
+    color: #333;
+  }
+
+  .sig-validation {
+    margin-top: 6px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+
+    &.valid {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+
+    &.invalid {
+      background: #ffebee;
+      color: #c62828;
+    }
+  }
+
+  /* Sign form */
+  .sign-form {
+    h4 {
+      font-size: 14px;
+      font-weight: 600;
+      color: #FF6200;
+      margin: 0 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+  }
+
+  .form-group {
+    margin-bottom: 14px;
+  }
+
+  .form-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: #555;
+    margin-bottom: 4px;
+  }
+
+  .form-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+
+    &:focus {
+      outline: none;
+      border-color: #FF6200;
+      box-shadow: 0 0 0 2px rgba(255, 98, 0, 0.1);
+    }
+  }
+
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .file-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .file-name {
+    font-size: 12px;
+    color: #888;
+  }
+
+  .btn-sm {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
+  .sign-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid #e0e0e0;
+  }
+}

@@ -21,7 +21,9 @@ import {
   PageSettings,
   MARGIN_PRESETS,
   DocumentStyle,
-  HeaderFooterContent
+  HeaderFooterContent,
+  DigitalSignatureInfo,
+  SignDocumentRequest
 } from '../../models/document.model';
 
 /**
@@ -172,6 +174,26 @@ export class DocumentEditorComponent {
     differentOddEven: false
   });
 
+  // Dialog Właściwości dokumentu
+  showPropertiesDialog = signal(false);
+  propertiesData = signal<DocumentMetadata>({});
+
+  // Dialog Podpisów cyfrowych
+  showSignatureDialog = signal(false);
+  signatureDialogTab = signal<'list' | 'sign'>('list');
+  signatureData = {
+    signerName: '' as string,
+    signerTitle: '' as string,
+    signerEmail: '' as string,
+    reason: '' as string,
+    certificateBase64: '' as string,
+    certificatePassword: '' as string,
+    certificateFileName: '' as string
+  };
+
+  // Baner podpisów
+  documentSignatures = signal<DigitalSignatureInfo[]>([]);
+
   // Math dla template
   protected readonly Math = Math;
 
@@ -270,6 +292,9 @@ export class DocumentEditorComponent {
         if (this.editor) {
           this.editor.setContent(content.html);
         }
+        
+        // Wczytaj podpisy
+        this.documentSignatures.set(content.metadata.signatures || []);
         
         this.showSuccess(`Otwarto dokument: ${file.name}`);
         this.isLoading.set(false);
@@ -2316,5 +2341,185 @@ export class DocumentEditorComponent {
         }
       }
     }, 50);
+  }
+
+  // ===== WŁAŚCIWOŚCI DOKUMENTU =====
+
+  /**
+   * Otwiera dialog właściwości dokumentu
+   */
+  openPropertiesDialog(): void {
+    this.propertiesData.set({ ...this.documentMetadata() });
+    this.showPropertiesDialog.set(true);
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zapisuje właściwości dokumentu
+   */
+  saveProperties(): void {
+    const props = this.propertiesData();
+    this.documentMetadata.update(m => ({
+      ...m,
+      title: props.title,
+      author: props.author,
+      subject: props.subject,
+      keywords: props.keywords,
+      description: props.description,
+      category: props.category,
+      company: props.company,
+      manager: props.manager,
+      contentStatus: props.contentStatus,
+      lastModifiedBy: props.lastModifiedBy,
+      revision: props.revision,
+      version: props.version,
+      modified: new Date().toISOString()
+    }));
+    this.showPropertiesDialog.set(false);
+    this.showSuccess('Właściwości dokumentu zostały zaktualizowane');
+  }
+
+  /**
+   * Zamyka dialog właściwości
+   */
+  closePropertiesDialog(): void {
+    this.showPropertiesDialog.set(false);
+  }
+
+  /**
+   * Aktualizuje pojedynczą właściwość w propertiesData
+   */
+  updateProperty(key: string, value: string): void {
+    this.propertiesData.update(p => ({ ...p, [key]: value }));
+  }
+
+  // ===== PODPISY CYFROWE =====
+
+  /**
+   * Otwiera dialog podpisów cyfrowych
+   */
+  openSignatureDialog(): void {
+    this.signatureDialogTab.set(
+      this.documentSignatures().length > 0 ? 'list' : 'sign'
+    );
+    this.signatureData.signerName = '';
+    this.signatureData.signerTitle = '';
+    this.signatureData.signerEmail = '';
+    this.signatureData.reason = '';
+    this.signatureData.certificateBase64 = '';
+    this.signatureData.certificatePassword = '';
+    this.signatureData.certificateFileName = '';
+    this.showSignatureDialog.set(true);
+    this.closeAllMenus();
+  }
+
+  /**
+   * Zamyka dialog podpisów
+   */
+  closeSignatureDialog(): void {
+    this.showSignatureDialog.set(false);
+  }
+
+  /**
+   * Obsługuje wybranie pliku certyfikatu PFX
+   */
+  onCertificateFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    this.signatureData.certificateFileName = file.name;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result as ArrayBuffer;
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      bytes.forEach(b => binary += String.fromCharCode(b));
+      this.signatureData.certificateBase64 = btoa(binary);
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  /**
+   * Podpisuje dokument
+   */
+  signDocument(): void {
+    if (!this.signatureData.certificateBase64) {
+      this.showError('Wybierz plik certyfikatu (.pfx/.p12)');
+      return;
+    }
+    if (!this.signatureData.signerName.trim()) {
+      this.showError('Podaj imię i nazwisko podpisującego');
+      return;
+    }
+    if (!this.signatureData.certificatePassword) {
+      this.showError('Podaj hasło do certyfikatu');
+      return;
+    }
+
+    const html = this.editor?.getContent() || this.documentContent();
+    const fileName = this.originalFileName() || `${this.documentMetadata().title || 'dokument'}.docx`;
+
+    this.isLoading.set(true);
+
+    const request: SignDocumentRequest = {
+      html,
+      originalFileName: fileName,
+      metadata: this.documentMetadata(),
+      header: this.headerContent(),
+      footer: this.footerContent(),
+      certificateBase64: this.signatureData.certificateBase64,
+      certificatePassword: this.signatureData.certificatePassword,
+      signerName: this.signatureData.signerName,
+      signerTitle: this.signatureData.signerTitle || undefined,
+      signerEmail: this.signatureData.signerEmail || undefined,
+      signatureReason: this.signatureData.reason || undefined
+    };
+
+    this.documentService.signDocument(request).subscribe({
+      next: (blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName.endsWith('.docx') ? fileName : `${fileName}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        this.showSignatureDialog.set(false);
+        this.showSuccess('Dokument został podpisany i pobrany');
+        this.isLoading.set(false);
+      },
+      error: (err) => {
+        this.showError(err.message || 'Nie udało się podpisać dokumentu');
+        this.isLoading.set(false);
+      }
+    });
+  }
+
+  /**
+   * Wstawia wizualny blok podpisu do dokumentu
+   */
+  insertSignatureLine(): void {
+    const name = this.signatureData.signerName || '________________________';
+    const title = this.signatureData.signerTitle || '';
+    const date = new Date().toLocaleDateString('pl-PL');
+
+    const html = `
+      <div style="margin: 24px 0; padding: 16px; border: 1px solid #999; width: 300px; font-family: Calibri, sans-serif;">
+        <div style="border-bottom: 1px solid #333; padding-bottom: 40px; margin-bottom: 8px; font-size: 10px; color: #999;">
+          ✕ Podpis
+        </div>
+        <div style="font-size: 12px; font-weight: bold;">${name}</div>
+        ${title ? `<div style="font-size: 11px; color: #555;">${title}</div>` : ''}
+        <div style="font-size: 10px; color: #888; margin-top: 4px;">Data: ${date}</div>
+      </div>
+    `;
+
+    this.editor?.insertHtml(html);
+    this.showSignatureDialog.set(false);
+    this.notifyEditorChange();
   }
 }

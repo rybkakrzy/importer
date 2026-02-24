@@ -29,13 +29,65 @@ public class DocumentContent
 /// </summary>
 public class DocumentMetadata
 {
+    // Core Properties
     public string? Title { get; set; }
     public string? Author { get; set; }
     public string? Subject { get; set; }
+    public string? Keywords { get; set; }
+    public string? Description { get; set; }
+    public string? Category { get; set; }
+    public string? ContentStatus { get; set; }
+    public string? LastModifiedBy { get; set; }
+    public string? Revision { get; set; }
+    public string? Version { get; set; }
     public DateTime? Created { get; set; }
     public DateTime? Modified { get; set; }
     public int PageCount { get; set; }
     public int WordCount { get; set; }
+
+    // Extended Properties
+    public string? Company { get; set; }
+    public string? Manager { get; set; }
+
+    // Podpisy cyfrowe
+    public List<DigitalSignatureInfo>? Signatures { get; set; }
+}
+
+/// <summary>
+/// Informacja o podpisie cyfrowym
+/// </summary>
+public class DigitalSignatureInfo
+{
+    public string SignerName { get; set; } = string.Empty;
+    public string? SignerEmail { get; set; }
+    public string? SignerTitle { get; set; }
+    public string CertificateSubject { get; set; } = string.Empty;
+    public string CertificateIssuer { get; set; } = string.Empty;
+    public string CertificateSerialNumber { get; set; } = string.Empty;
+    public DateTime SignedAt { get; set; }
+    public DateTime CertificateValidFrom { get; set; }
+    public DateTime CertificateValidTo { get; set; }
+    public bool IsValid { get; set; }
+    public string? ValidationMessage { get; set; }
+    public string? Reason { get; set; }
+}
+
+/// <summary>
+/// Request podpisania dokumentu
+/// </summary>
+public class SignDocumentRequest
+{
+    public string Html { get; set; } = string.Empty;
+    public string? OriginalFileName { get; set; }
+    public DocumentMetadata? Metadata { get; set; }
+    public HeaderFooterContent? Header { get; set; }
+    public HeaderFooterContent? Footer { get; set; }
+    public string CertificateBase64 { get; set; } = string.Empty;
+    public string CertificatePassword { get; set; } = string.Empty;
+    public string SignerName { get; set; } = string.Empty;
+    public string? SignerTitle { get; set; }
+    public string? SignerEmail { get; set; }
+    public string? SignatureReason { get; set; }
 }
 
 /// <summary>

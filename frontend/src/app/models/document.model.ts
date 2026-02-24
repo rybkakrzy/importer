@@ -28,10 +28,51 @@ export interface DocumentMetadata {
   title?: string;
   author?: string;
   subject?: string;
+  keywords?: string;
+  description?: string;
+  category?: string;
+  contentStatus?: string;
+  lastModifiedBy?: string;
+  revision?: string;
+  version?: string;
   created?: string;
   modified?: string;
   pageCount?: number;
   wordCount?: number;
+  company?: string;
+  manager?: string;
+  signatures?: DigitalSignatureInfo[];
+}
+
+/** Informacja o podpisie cyfrowym */
+export interface DigitalSignatureInfo {
+  signerName: string;
+  signerEmail?: string;
+  signerTitle?: string;
+  certificateSubject: string;
+  certificateIssuer: string;
+  certificateSerialNumber: string;
+  signedAt: string;
+  certificateValidFrom: string;
+  certificateValidTo: string;
+  isValid: boolean;
+  validationMessage?: string;
+  reason?: string;
+}
+
+/** Request podpisania dokumentu */
+export interface SignDocumentRequest {
+  html: string;
+  originalFileName?: string;
+  metadata?: DocumentMetadata;
+  header?: HeaderFooterContent;
+  footer?: HeaderFooterContent;
+  certificateBase64: string;
+  certificatePassword: string;
+  signerName: string;
+  signerTitle?: string;
+  signerEmail?: string;
+  signatureReason?: string;
 }
 
 /** Styl dokumentu (Nagłówek 1, Normalny, itp.) */

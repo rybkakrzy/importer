@@ -1,9 +1,11 @@
 using Importer.Application.Features.Documents.Commands.SaveDocument;
+using Importer.Application.Features.Documents.Commands.SignDocument;
 using Importer.Application.Features.Documents.Commands.UploadImage;
 using Importer.Application.Features.Documents.Queries.GetNewDocument;
 using Importer.Application.Features.Documents.Queries.GetTemplate;
 using Importer.Application.Features.Documents.Queries.GetTemplates;
 using Importer.Application.Features.Documents.Queries.OpenDocument;
+using Importer.Domain.Interfaces;
 using Importer.Domain.Models;
 using Microsoft.AspNetCore.Mvc;
 
@@ -117,5 +119,58 @@ public class DocumentController : BaseApiController
     {
         var result = await Mediator.Send(new GetTemplateQuery(templateId));
         return HandleResult(result);
+    }
+
+    /// <summary>
+    /// Podpisuje dokument certyfikatem cyfrowym
+    /// </summary>
+    [HttpPost("sign")]
+    public async Task<IActionResult> SignDocument([FromBody] SignDocumentRequest request)
+    {
+        var command = new SignDocumentCommand(
+            request.Html,
+            request.OriginalFileName,
+            request.Metadata,
+            request.Header,
+            request.Footer,
+            request.CertificateBase64,
+            request.CertificatePassword,
+            request.SignerName,
+            request.SignerTitle,
+            request.SignerEmail,
+            request.SignatureReason
+        );
+
+        var result = await Mediator.Send(command);
+
+        return result.Match<IActionResult>(
+            onSuccess: signResult => File(
+                signResult.DocxBytes,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                signResult.FileName),
+            onFailure: error => BadRequest(new { error })
+        );
+    }
+
+    /// <summary>
+    /// Weryfikuje podpisy cyfrowe w dokumencie DOCX
+    /// </summary>
+    [HttpPost("verify-signatures")]
+    [RequestSizeLimit(50 * 1024 * 1024)]
+    public IActionResult VerifySignatures(IFormFile file, [FromServices] IDigitalSignatureService signatureService)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new { error = "Nie przesłano pliku" });
+
+        try
+        {
+            using var stream = file.OpenReadStream();
+            var signatures = signatureService.VerifySignatures(stream);
+            return Ok(signatures);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = $"Błąd weryfikacji podpisów: {ex.Message}" });
+        }
     }
 }

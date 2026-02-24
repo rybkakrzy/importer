@@ -11,6 +11,7 @@ public static class DependencyInjection
         services.AddSingleton<IBarcodeGenerator, BarcodeGeneratorService>();
         services.AddScoped<IDocxToHtmlConverter, DocxToHtmlConverter>();
         services.AddScoped<IHtmlToDocxConverter, HtmlToDocxConverter>();
+        services.AddScoped<IDigitalSignatureService, DigitalSignatureService>();
 
         return services;
     }

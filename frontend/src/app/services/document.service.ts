@@ -5,8 +5,10 @@ import { catchError } from 'rxjs/operators';
 import { 
   DocumentContent, 
   SaveDocumentRequest, 
+  SignDocumentRequest,
   DocumentTemplate, 
-  ImageUploadResponse 
+  ImageUploadResponse,
+  DigitalSignatureInfo
 } from '../models/document.model';
 import { ApiConfigService } from '../core/services/api-config.service';
 
@@ -98,6 +100,46 @@ export class DocumentService {
         console.error('Błąd podczas pobierania dokumentu:', error);
       }
     });
+  }
+
+  /**
+   * Podpisuje dokument certyfikatem cyfrowym i pobiera podpisany plik
+   */
+  signDocument(request: SignDocumentRequest): Observable<Blob> {
+    return this.http.post(`${this.apiUrl}/sign`, request, {
+      responseType: 'blob'
+    }).pipe(catchError(this.handleError));
+  }
+
+  /**
+   * Podpisuje i pobiera dokument
+   */
+  downloadSignedDocument(request: SignDocumentRequest, filename: string): void {
+    this.signDocument(request).subscribe({
+      next: (blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename.endsWith('.docx') ? filename : `${filename}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      },
+      error: (error) => {
+        console.error('Błąd podczas podpisywania dokumentu:', error);
+      }
+    });
+  }
+
+  /**
+   * Weryfikuje podpisy cyfrowe w pliku DOCX
+   */
+  verifySignatures(file: File): Observable<DigitalSignatureInfo[]> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return this.http.post<DigitalSignatureInfo[]>(`${this.apiUrl}/verify-signatures`, formData)
+      .pipe(catchError(this.handleError));
   }
 
   /**

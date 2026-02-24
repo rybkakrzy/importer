@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -188,22 +189,39 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Wyciąga metadane z dokumentu
+    /// Wyciąga metadane z dokumentu (core + extended properties)
     /// </summary>
     private DocumentMetadata ExtractMetadata(WordprocessingDocument document)
     {
         var metadata = new DocumentMetadata();
 
+        // Core Properties (OPC)
         var coreProps = document.PackageProperties;
         if (coreProps != null)
         {
             metadata.Title = coreProps.Title;
             metadata.Author = coreProps.Creator;
             metadata.Subject = coreProps.Subject;
+            metadata.Keywords = coreProps.Keywords;
+            metadata.Description = coreProps.Description;
+            metadata.Category = coreProps.Category;
+            metadata.ContentStatus = coreProps.ContentStatus;
+            metadata.LastModifiedBy = coreProps.LastModifiedBy;
+            metadata.Revision = coreProps.Revision;
+            metadata.Version = coreProps.Version;
             metadata.Created = coreProps.Created;
             metadata.Modified = coreProps.Modified;
         }
 
+        // Extended Properties (app.xml)
+        var extPropsPart = document.ExtendedFilePropertiesPart;
+        if (extPropsPart?.Properties != null)
+        {
+            metadata.Company = extPropsPart.Properties.Company?.Text;
+            metadata.Manager = extPropsPart.Properties.Manager?.Text;
+        }
+
+        // Word count
         var body = document.MainDocumentPart?.Document?.Body;
         if (body != null)
         {
@@ -212,7 +230,55 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 StringSplitOptions.RemoveEmptyEntries).Length;
         }
 
+        // Podpisy cyfrowe
+        metadata.Signatures = ExtractSignatures(document);
+
         return metadata;
+    }
+
+    /// <summary>
+    /// Wyciąga informacje o podpisach cyfrowych z Custom XML Parts
+    /// </summary>
+    private List<DigitalSignatureInfo> ExtractSignatures(WordprocessingDocument document)
+    {
+        var signatures = new List<DigitalSignatureInfo>();
+        var sigNs = XNamespace.Get("http://schemas.importer.app/digitalsignatures");
+
+        if (document.MainDocumentPart == null) return signatures;
+
+        foreach (var xmlPart in document.MainDocumentPart.CustomXmlParts)
+        {
+            try
+            {
+                using var stream = xmlPart.GetStream(FileMode.Open, FileAccess.Read);
+                var doc = XDocument.Load(stream);
+
+                if (doc.Root?.Name.Namespace == sigNs && doc.Root.Name.LocalName == "DigitalSignatures")
+                {
+                    foreach (var sigEl in doc.Root.Elements(sigNs + "Signature"))
+                    {
+                        signatures.Add(new DigitalSignatureInfo
+                        {
+                            SignerName = sigEl.Element(sigNs + "SignerName")?.Value ?? "",
+                            SignerTitle = sigEl.Element(sigNs + "SignerTitle")?.Value,
+                            SignerEmail = sigEl.Element(sigNs + "SignerEmail")?.Value,
+                            Reason = sigEl.Element(sigNs + "Reason")?.Value,
+                            CertificateSubject = sigEl.Element(sigNs + "CertificateSubject")?.Value ?? "",
+                            CertificateIssuer = sigEl.Element(sigNs + "CertificateIssuer")?.Value ?? "",
+                            CertificateSerialNumber = sigEl.Element(sigNs + "CertificateSerial")?.Value ?? "",
+                            SignedAt = DateTime.TryParse(sigEl.Element(sigNs + "SignedAt")?.Value, out var signedAt) ? signedAt : DateTime.MinValue,
+                            CertificateValidFrom = DateTime.TryParse(sigEl.Element(sigNs + "CertificateValidFrom")?.Value, out var from) ? from : DateTime.MinValue,
+                            CertificateValidTo = DateTime.TryParse(sigEl.Element(sigNs + "CertificateValidTo")?.Value, out var to) ? to : DateTime.MaxValue,
+                            IsValid = true,
+                            ValidationMessage = "Podpis odczytany — pełna weryfikacja wymaga dedykowanego zapytania."
+                        });
+                    }
+                }
+            }
+            catch { /* Ignoruj nieprawidłowe XML parts */ }
+        }
+
+        return signatures;
     }
 
     /// <summary>

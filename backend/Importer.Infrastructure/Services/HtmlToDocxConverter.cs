@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.ExtendedProperties;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Importer.Domain.Interfaces;
@@ -1685,6 +1686,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
     private void SetDocumentMetadata(WordprocessingDocument document, DocumentMetadata metadata)
     {
+        // Core Properties (OPC package properties)
         var props = document.PackageProperties;
         
         if (!string.IsNullOrEmpty(metadata.Title))
@@ -1693,9 +1695,35 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             props.Creator = metadata.Author;
         if (!string.IsNullOrEmpty(metadata.Subject))
             props.Subject = metadata.Subject;
+        if (!string.IsNullOrEmpty(metadata.Keywords))
+            props.Keywords = metadata.Keywords;
+        if (!string.IsNullOrEmpty(metadata.Description))
+            props.Description = metadata.Description;
+        if (!string.IsNullOrEmpty(metadata.Category))
+            props.Category = metadata.Category;
+        if (!string.IsNullOrEmpty(metadata.ContentStatus))
+            props.ContentStatus = metadata.ContentStatus;
+        if (!string.IsNullOrEmpty(metadata.LastModifiedBy))
+            props.LastModifiedBy = metadata.LastModifiedBy;
+        if (!string.IsNullOrEmpty(metadata.Revision))
+            props.Revision = metadata.Revision;
+        if (!string.IsNullOrEmpty(metadata.Version))
+            props.Version = metadata.Version;
         
-        props.Created = DateTime.UtcNow;
+        props.Created = metadata.Created ?? DateTime.UtcNow;
         props.Modified = DateTime.UtcNow;
+
+        // Extended Properties (app.xml — Company, Manager)
+        var extPropsPart = document.AddExtendedFilePropertiesPart();
+        extPropsPart.Properties = new Properties();
+
+        if (!string.IsNullOrEmpty(metadata.Company))
+            extPropsPart.Properties.Company = new Company(metadata.Company);
+        if (!string.IsNullOrEmpty(metadata.Manager))
+            extPropsPart.Properties.Manager = new Manager(metadata.Manager);
+
+        extPropsPart.Properties.Application = new Application("Doc2 Importer");
+        extPropsPart.Properties.Save();
     }
 
     /// <summary>
