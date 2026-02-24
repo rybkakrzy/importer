@@ -1,0 +1,36 @@
+<div class="sessions-container">
+  <div class="sessions-header">
+    <h2>📋 Aktywne sesje agentów</h2>
+    <button class="refresh-button" (click)="loadSessions()" [disabled]="isLoading">
+      {{ isLoading ? '⟳ Ładowanie...' : '🔄 Odśwież' }}
+    </button>
+  </div>
+
+  <div class="error-message" *ngIf="errorMessage">
+    ⚠️ {{ errorMessage }}
+  </div>
+
+  <div class="empty-state" *ngIf="!isLoading && sessions.length === 0 && !errorMessage">
+    <p>📭 Brak sesji importu. Prześlij plik ZIP, aby rozpocząć.</p>
+  </div>
+
+  <div class="sessions-list" *ngIf="sessions.length > 0">
+    <div class="session-card" *ngFor="let session of sessions">
+      <div class="session-header">
+        <span class="session-filename">📦 {{ session.fileName }}</span>
+        <span class="session-status" [ngClass]="getStatusClass(session.status)">
+          {{ getStatusLabel(session.status) }}
+        </span>
+      </div>
+      <div class="session-details">
+        <span>🕐 Rozpoczęto: {{ session.startedAt | date:'medium' }}</span>
+        <span *ngIf="session.completedAt">✔️ Zakończono: {{ session.completedAt | date:'medium' }}</span>
+        <span *ngIf="session.filesCount != null">📁 Pliki: {{ session.filesCount }}</span>
+        <span *ngIf="session.totalSize != null">📏 Rozmiar: {{ formatFileSize(session.totalSize) }}</span>
+      </div>
+      <div class="session-error" *ngIf="session.errorMessage">
+        ❌ {{ session.errorMessage }}
+      </div>
+    </div>
+  </div>
+</div>

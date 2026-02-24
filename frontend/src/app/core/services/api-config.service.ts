@@ -24,4 +24,9 @@ export class ApiConfigService {
   get fileUploadUrl(): string {
     return `${this.baseUrl}/FileUpload`;
   }
+
+  /** API sesji importu */
+  get uploadSessionsUrl(): string {
+    return `${this.baseUrl}/UploadSessions`;
+  }
 }
