@@ -25,7 +25,7 @@ public class DigitalSignatureService : IDigitalSignatureService
     {
         // Wczytaj certyfikat
         var cert = new X509Certificate2(certificateBytes, password,
-            X509KeyStorageFlags.EphemeralKeySet);
+            X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
 
         using var memoryStream = new MemoryStream();
         memoryStream.Write(docxBytes, 0, docxBytes.Length);

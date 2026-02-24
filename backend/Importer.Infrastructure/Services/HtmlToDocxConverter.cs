@@ -1722,7 +1722,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (!string.IsNullOrEmpty(metadata.Manager))
             extPropsPart.Properties.Manager = new Manager(metadata.Manager);
 
-        extPropsPart.Properties.Application = new Application("Doc2 Importer");
+        extPropsPart.Properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application("Doc2 Importer");
         extPropsPart.Properties.Save();
     }
 

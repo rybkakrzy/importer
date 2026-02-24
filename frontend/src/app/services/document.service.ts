@@ -108,7 +108,23 @@ export class DocumentService {
   signDocument(request: SignDocumentRequest): Observable<Blob> {
     return this.http.post(`${this.apiUrl}/sign`, request, {
       responseType: 'blob'
-    }).pipe(catchError(this.handleError));
+    }).pipe(catchError((error) => {
+      if (error.error instanceof Blob) {
+        return new Observable<never>(observer => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const json = JSON.parse(reader.result as string);
+              observer.error(new Error(json.error || 'Błąd podpisywania dokumentu'));
+            } catch {
+              observer.error(new Error('Błąd podpisywania dokumentu'));
+            }
+          };
+          reader.readAsText(error.error);
+        });
+      }
+      return this.handleError(error);
+    }));
   }
 
   /**
