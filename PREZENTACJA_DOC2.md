@@ -12,7 +12,7 @@
 **Doc2 — Edytor dokumentów Word online**
 
 ### Podtytuł
-Autorski edytor DOCX w przeglądarce oparty na Angular 19 i ASP.NET Core 8
+Autorski edytor DOCX w przeglądarce oparty na Angular 20 i ASP.NET Core 8
 
 ### Elementy wizualne
 - Logo ING (branding aplikacji)
@@ -131,7 +131,7 @@ Architektura — Clean Architecture + CQRS
 ### Diagram (do narysowania / wklejenia)
 ```
 ┌─────────────────────────────────────────────────┐
-│  FRONTEND  (Angular 19, Signals, Standalone)    │
+│  FRONTEND  (Angular 20, Signals, Standalone)    │
 │  localhost:4200                                  │
 └──────────────────┬──────────────────────────────┘
                    │ REST API (JSON + FormData)
@@ -154,6 +154,7 @@ Architektura — Clean Architecture + CQRS
 - **Dependency Rule** — warstwy wewnętrzne nie znają zewnętrznych
 - **Domain** nie ma żadnych paczek NuGet — czysty C#
 - Cały przepływ: Controller → MediatR → Handler → Service → Result
+- **Nazewnictwo projektów**: D2Tools.Api · D2Tools.Application · D2Tools.Domain · D2Tools.Infrastructure
 
 ---
 
@@ -165,7 +166,7 @@ Technologie i biblioteki
 ### Frontend
 | Technologia | Zastosowanie |
 |---|---|
-| **Angular 19** | Framework UI (standalone components, signals) |
+| **Angular 20** | Framework UI (standalone components, signals) |
 | **TypeScript** | Typowany język frontend |
 | **SCSS** | Stylowanie komponentów |
 | **ContentEditable** | Silnik WYSIWYG edycji |
@@ -195,8 +196,8 @@ Wzorce projektowe w Doc2
 - **Result Pattern** — `Result<T>` / `Result` zamiast wyjątków do obsługi błędów biznesowych
 - **Dependency Inversion** — Domain definiuje interfejsy, Infrastructure je implementuje
 - **Clean Architecture** — 4 warstwy z jednokierunkowym przepływem zależności
-- **Standalone Components** (Angular) — brak NgModules, każdy komponent jest samowystarczalny
-- **Signals** (Angular) — reaktywny stan bez RxJS tam, gdzie to możliwe
+- **Standalone Components** (Angular 20) — brak NgModules, każdy komponent jest samowystarczalny
+- **Signals** (Angular 20) — reaktywny stan bez RxJS tam, gdzie to możliwe
 
 ---
 
@@ -659,7 +660,7 @@ Podpisy elektroniczne X.509
    - Hash: SHA-256
 4. **Serializacja do XML** — Custom XML Part:
    ```xml
-   <DigitalSignature xmlns="schemas.importer.app/digitalsignatures">
+   <DigitalSignature xmlns="schemas.D2Tools.app/digitalsignatures">
      <SignerName>Jan Kowalski</SignerName>
      <SignerTitle>Dyrektor Finansowy</SignerTitle>
      <SignerEmail>jan.kowalski@ing.pl</SignerEmail>
@@ -677,7 +678,7 @@ Podpisy elektroniczne X.509
 6. **Zwrot pliku** — podpisany DOCX gotowy do pobrania
 
 **Proces weryfikacji**:
-1. **Odczyt Custom XML Part** — parsowanie XML z namespace `schemas.importer.app/digitalsignatures`
+1. **Odczyt Custom XML Part** — parsowanie XML z namespace `schemas.D2Tools.app/digitalsignatures`
 2. **Rekonstrukcja certyfikatu** — X509Certificate2 z CertificateSubject/Issuer
 3. **Obliczenie aktualnego hash** — SHA-256 z MainDocumentPart
 4. **Weryfikacja podpisu** — RSA.VerifyData() porównuje hash z SignatureValue
@@ -883,7 +884,7 @@ Funkcje niedostępne w konkurencji
 
 ### 1. Podpisy cyfrowe X.509 (RSA-SHA256)
 - **Standardy kryptograficzne** — NIST-approved algorithm
-- **Custom XML storage** — podpisy osadzone w DOCX (namespace: schemas.importer.app/digitalsignatures)
+- **Custom XML storage** — podpisy osadzone w DOCX (namespace: schemas.D2Tools.app/digitalsignatures)
 - **Pełna weryfikacja** — hash dokumentu + validacja certyfikatu
 - **Karty podpisów** — wizualizacja z danymi certyfikatu, issuer, ważnością
 - ❌ **Brak w Word Online** — wymaga desktop Word + dodatków
@@ -947,7 +948,7 @@ Dalszy rozwój
 - 📱 Responsywny widok mobilny
 - 🗄️ Integracja z systemem zarządzania dokumentami
 - 📝 Śledzenie zmian (Track Changes)
-- 🧪 Testy E2E (katalog `e2e/` przygotowany)
+- ✅ Testy E2E — Playwright + pytest-bdd (Python) w katalogu `D2E2ETools/` (Page Object Model, scenariusze BDD po polsku, testy UI + API)
 - ⚡ Testy wydajnościowe (katalog `performence/` przygotowany)
 
 ---
@@ -1001,7 +1002,7 @@ Porównanie Doc2 z innymi rozwiązaniami do edycji dokumentów w przeglądarce:
 | **Responsywność** | ✅ Skalowanie 50%-200% | ✅ Pełna | ✅ Pełna | ✅ Pełna | ✅ Pełna | ✅ Pełna |
 | **Wielojęzyczność** | ✅ Polish + English | ✅ 40+ języków | ✅ Lokalizowalne | ✅ Lokalizowalne | ✅ Lokalizowalne | ✅ 50+ języków |
 | **Wymagania backend** | .NET Core 8 | Node.js / Java / .NET | .NET / Java / JS | Różne platformy | Node.js (opcja) | PHP/Node (opcja) |
-| **Wymagania frontend** | Angular 19 | Vanilla JS | Angular/React/Vue | Vanilla JS / React | Vanilla JS / React | Vanilla JS / React |
+| **Wymagania frontend** | Angular 20 | Vanilla JS | Angular/React/Vue | Vanilla JS / React | Vanilla JS / React | Vanilla JS / React |
 | **Rozmiar paczki (frontend)** | ~2.5 MB (gzip) | ~5 MB (gzip) | ~3 MB (gzip) | ~8 MB+ (gzip) | ~200 KB (core) | ~150 KB (core) |
 | **Obsługa makr VBA** | ❌ Brak | ⚠️ Ograniczona | ❌ Brak | ⚠️ Częściowa | ❌ Brak | ❌ Brak |
 | **Obsługa OLE** | 🚧 Roadmap | ✅ Częściowa | ✅ Częściowa | ✅ Dobra | ❌ Brak | ❌ Brak |
@@ -1082,3 +1083,4 @@ Porównanie Doc2 z innymi rozwiązaniami do edycji dokumentów w przeglądarce:
 > - Slajd 24 — ikony ✅ przy każdym punkcie dają efekt „checklisty"
 > - Slajd 27 — tabela porównawcza idealnie nadaje się na wykres radarowy lub heatmap z kolorami (zielony=✅, żółty=⚠️, czerwony=❌)
 > - Kolorystyka sugerowana: pomarańczowy ING (#FF6200) jako kolor akcentu, białe tło, ciemnoszary tekst
+> - Struktura repozytoriów: `D2ApiTools/` (backend .NET), `D2GuiTools/` (frontend Angular 20), `D2E2ETools/` (testy E2E Playwright+BDD)
