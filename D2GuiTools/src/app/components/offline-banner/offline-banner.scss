@@ -1,0 +1,70 @@
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 16px;
+  background: #f5f40b;
+  color: #1a1a1a;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  z-index: 10000;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  animation: slideDown 0.3s ease-out;
+  position: relative;
+
+  &__text {
+    letter-spacing: 0.02em;
+    text-align: center;
+  }
+
+  &__build {
+    margin-left: 8px;
+    opacity: 0.7;
+    font-size: 11px;
+  }
+
+  &__close {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #1a1a1a;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    flex-shrink: 0;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.1);
+    }
+
+    &:active {
+      background: rgba(0, 0, 0, 0.18);
+    }
+  }
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media print {
+  .offline-banner {
+    display: none !important;
+  }
+}

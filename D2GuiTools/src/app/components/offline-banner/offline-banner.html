@@ -1,0 +1,15 @@
+@if (connectionStatus.isOffline()) {
+  <div class="offline-banner" role="alert">
+    <span class="offline-banner__text">
+      Tryb OFFLINE. Zapisz dokument lokalnie po zakończeniu edycji.
+    </span>
+    <button
+      class="offline-banner__close"
+      (click)="connectionStatus.dismiss()"
+      aria-label="Zamknij powiadomienie"
+      title="Zamknij"
+    >
+      ✕
+    </button>
+  </div>
+}

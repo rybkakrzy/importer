@@ -752,6 +752,15 @@
         <span class="status-item">Znaki: {{ editorState()?.characterCount }}</span>
       }
     </div>
+    <div class="status-center">
+      @if (buildInfo.environment() !== 'PRD') {
+        <span class="status-item status-env">{{ buildInfo.environment() }}</span>
+        <span class="status-separator">|</span>
+      }
+      <span class="status-item">Wersja: {{ buildInfo.buildNumber() }}</span>
+      <span class="status-separator">|</span>
+      <span class="status-item">{{ buildInfo.buildDate() }}</span>
+    </div>
     <div class="status-right">
       @if (documentMetadata().modified) {
         <span class="status-item status-modified">

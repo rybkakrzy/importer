@@ -2,18 +2,21 @@ import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
 import { NotificationService } from '../services/notification.service';
+import { ConnectionStatusService } from '../services/connection-status.service';
 
 /**
  * Interceptor HTTP — centralna obsługa błędów API (RFC 7807 ProblemDetails)
  */
 export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
   const notificationService = inject(NotificationService);
+  const connectionStatus = inject(ConnectionStatusService);
 
   return next(req).pipe(
     catchError((error: HttpErrorResponse) => {
       let errorMessage = 'Wystąpił nieoczekiwany błąd';
 
       if (error.status === 0) {
+        connectionStatus.reportApiError();
         errorMessage = 'Nie można połączyć się z serwerem. Sprawdź połączenie sieciowe.';
       } else if (error.error) {
         // ProblemDetails (RFC 7807) from backend ExceptionHandlingMiddleware

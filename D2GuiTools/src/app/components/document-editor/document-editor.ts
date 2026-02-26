@@ -25,6 +25,7 @@ import {
   DigitalSignatureInfo,
   SignDocumentRequest
 } from '../../models/document.model';
+import { BuildInfoService } from '../../core/services/build-info.service';
 
 /**
  * Główny komponent edytora dokumentów Word Online
@@ -47,6 +48,7 @@ export class DocumentEditorComponent {
   @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
 
   private documentService = inject(DocumentService);
+  readonly buildInfo = inject(BuildInfoService);
 
   // Stan dokumentu
   documentContent = signal<string>('<p></p>');

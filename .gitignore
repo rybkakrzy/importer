@@ -5,6 +5,9 @@ backend/*.user
 backend/.vs/
 backend/.vscode/
 
+# Secrets — NIGDY nie commituj!
+**/*.secrets.json
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
