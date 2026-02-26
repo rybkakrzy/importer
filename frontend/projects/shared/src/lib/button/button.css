@@ -1,0 +1,38 @@
+.lib-btn {
+  border: none;
+  padding: var(--spacing-md, 0.75rem) var(--spacing-2xl, 2rem);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  font-size: var(--font-size-base, 1rem);
+  color: var(--color-text-white, #fff);
+  transition: background 0.3s;
+}
+
+.lib-btn:disabled {
+  background: var(--color-disabled, #ccc);
+  cursor: not-allowed;
+}
+
+.lib-btn--primary {
+  background: var(--color-primary, #007bff);
+}
+
+.lib-btn--primary:hover:not(:disabled) {
+  background: var(--color-primary-hover, #0056b3);
+}
+
+.lib-btn--success {
+  background: var(--color-success, #28a745);
+}
+
+.lib-btn--success:hover:not(:disabled) {
+  background: var(--color-success-hover, #218838);
+}
+
+.lib-btn--danger {
+  background: var(--color-danger, #dc3545);
+}
+
+.lib-btn--danger:hover:not(:disabled) {
+  background: var(--color-danger-hover, #c82333);
+}

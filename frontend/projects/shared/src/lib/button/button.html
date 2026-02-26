@@ -1,0 +1,9 @@
+<button
+  [class]="'lib-btn lib-btn--' + variant"
+  [disabled]="disabled || loading"
+  [attr.aria-busy]="loading || null"
+  (click)="onClick()"
+>
+  <ng-container *ngIf="loading; else contentTpl">{{ loadingText }}</ng-container>
+  <ng-template #contentTpl><ng-content /></ng-template>
+</button>
