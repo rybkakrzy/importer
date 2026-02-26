@@ -483,23 +483,35 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje listę na paragrafy z prawidłową definicją numeracji Word
     /// </summary>
-    private List<OpenXmlElement> ConvertListElement(HtmlNode node, bool ordered, int level = 0)
+    private List<OpenXmlElement> ConvertListElement(HtmlNode node, bool ordered, int level = 0, int? parentNumId = null)
     {
         var elements = new List<OpenXmlElement>();
         
-        // Upewnij się że mamy NumberingDefinitionsPart
-        EnsureNumberingPart();
-        
-        // Utwórz definicję numeracji dla tej listy
-        var abstractNumId = CreateAbstractNumbering(ordered);
-        var numId = CreateNumberingInstance(abstractNumId);
+        int numId;
+        if (parentNumId.HasValue)
+        {
+            // Zagnieżdżona lista — współdziel numId z rodzicem
+            numId = parentNumId.Value;
+        }
+        else
+        {
+            // Lista najwyższego poziomu — utwórz nową definicję numeracji
+            EnsureNumberingPart();
+            
+            // Przeskanuj strukturę listy aby określić format dla każdego poziomu
+            var levelFormats = new Dictionary<int, bool>();
+            ScanListLevels(node, ordered, level, levelFormats);
+            
+            var abstractNumId = CreateAbstractNumbering(levelFormats);
+            numId = CreateNumberingInstance(abstractNumId);
+        }
 
         foreach (var child in node.ChildNodes)
         {
             if (child.Name.ToLower() != "li") continue;
             
-            // Sprawdź czy li zawiera zagnieżdżoną listę
-            var nestedList = child.SelectSingleNode("./ul|./ol");
+            // Sprawdź czy li zawiera zagnieżdżone listy
+            var nestedLists = child.SelectNodes("./ul|./ol");
             
             // Utwórz paragraf z elementem listy
             var para = new Paragraph();
@@ -537,15 +549,39 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
             elements.Add(para);
 
-            // Obsłuż zagnieżdżoną listę
-            if (nestedList != null)
+            // Obsłuż zagnieżdżone listy — współdziel numId
+            if (nestedLists != null)
             {
-                var isOrdered = nestedList.Name.ToLower() == "ol";
-                elements.AddRange(ConvertListElement(nestedList, isOrdered, level + 1));
+                foreach (var nestedList in nestedLists)
+                {
+                    var isOrdered = nestedList.Name.ToLower() == "ol";
+                    elements.AddRange(ConvertListElement(nestedList, isOrdered, level + 1, numId));
+                }
             }
         }
 
         return elements;
+    }
+
+    /// <summary>
+    /// Skanuje strukturę HTML listy aby określić format (ordered/unordered) dla każdego poziomu zagnieżdżenia
+    /// </summary>
+    private void ScanListLevels(HtmlNode node, bool ordered, int level, Dictionary<int, bool> levelFormats)
+    {
+        if (!levelFormats.ContainsKey(level))
+            levelFormats[level] = ordered;
+
+        foreach (var child in node.ChildNodes)
+        {
+            if (child.Name.ToLower() != "li") continue;
+            var nested = child.SelectNodes("./ul|./ol");
+            if (nested == null) continue;
+            foreach (var nestedList in nested)
+            {
+                var isOrdered = nestedList.Name.ToLower() == "ol";
+                ScanListLevels(nestedList, isOrdered, level + 1, levelFormats);
+            }
+        }
     }
 
     /// <summary>
@@ -563,20 +599,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Tworzy definicję abstrakcyjnej numeracji
     /// </summary>
-    private int CreateAbstractNumbering(bool ordered)
+    private int CreateAbstractNumbering(Dictionary<int, bool> levelFormats)
     {
         var abstractNumId = _numberingId++;
         
         var abstractNum = new AbstractNum { AbstractNumberId = abstractNumId };
+        
+        // Dodaj wymagany identyfikator Nsid dla poprawnej obsługi numeracji w Word
+        var nsidValue = Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper();
+        abstractNum.Append(new Nsid { Val = nsidValue });
         abstractNum.Append(new MultiLevelType { Val = MultiLevelValues.HybridMultilevel });
         
-        // Zdefiniuj 9 poziomów
+        // Zdefiniuj 9 poziomów — każdy poziom ma format zgodny ze strukturą HTML
         for (int lvl = 0; lvl < 9; lvl++)
         {
+            // Określ format dla danego poziomu (domyślnie jak poziom najwyższy)
+            var isOrdered = levelFormats.TryGetValue(lvl, out var fmt)
+                ? fmt
+                : (levelFormats.TryGetValue(0, out var defaultFmt) && defaultFmt);
+            
             var levelDef = new Level { LevelIndex = lvl };
             levelDef.Append(new StartNumberingValue { Val = 1 });
             
-            if (ordered)
+            if (isOrdered)
             {
                 var format = lvl switch
                 {
@@ -598,26 +643,23 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 levelDef.Append(new NumberingFormat { Val = NumberFormatValues.Bullet });
                 
-                // Użyj standardowych czcionek i znaków Word:
-                // Poziom 0,3,6: Symbol font, znak \uF0B7 (bullet)
-                // Poziom 1,4,7: Courier New, znak "o" (circle)
-                // Poziom 2,5,8: Wingdings, znak \uF0A7 (filled square)
+                // Standardowe definicje bullet Word z prawidłowymi czcionkami:
                 var bulletType = lvl % 3;
                 switch (bulletType)
                 {
-                    case 0: // Filled circle (Symbol)
+                    case 0: // Wypełnione kółko (Symbol)
                         levelDef.Append(new LevelText { Val = "\uF0B7" });
                         levelDef.Append(new NumberingSymbolRunProperties(
                             new RunFonts { Ascii = "Symbol", HighAnsi = "Symbol", Hint = FontTypeHintValues.Default }
                         ));
                         break;
-                    case 1: // Open circle (Courier New)
+                    case 1: // Puste kółko (Courier New)
                         levelDef.Append(new LevelText { Val = "o" });
                         levelDef.Append(new NumberingSymbolRunProperties(
                             new RunFonts { Ascii = "Courier New", HighAnsi = "Courier New", ComplexScript = "Courier New", Hint = FontTypeHintValues.Default }
                         ));
                         break;
-                    case 2: // Filled square (Wingdings)
+                    case 2: // Wypełniony kwadrat (Wingdings)
                         levelDef.Append(new LevelText { Val = "\uF0A7" });
                         levelDef.Append(new NumberingSymbolRunProperties(
                             new RunFonts { Ascii = "Wingdings", HighAnsi = "Wingdings", Hint = FontTypeHintValues.Default }

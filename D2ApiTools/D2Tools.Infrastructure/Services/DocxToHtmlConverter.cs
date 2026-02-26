@@ -319,40 +319,182 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Sprawdza czy paragraf jest elementem listy
+    /// Sprawdza czy paragraf jest elementem listy (inline lub odziedziczone ze stylu)
     /// </summary>
     private bool IsListParagraph(Paragraph paragraph)
     {
+        // Sprawdź bezpośrednie NumberingProperties na paragrafie
         var numPr = paragraph.ParagraphProperties?.NumberingProperties;
-        return numPr?.NumberingId?.Val?.Value != null && numPr.NumberingId.Val.Value > 0;
+        if (numPr?.NumberingId?.Val?.Value != null && numPr.NumberingId.Val.Value > 0)
+            return true;
+
+        // Jeśli numeracja jest jawnie wyłączona (numId = 0), to nie jest lista
+        if (numPr?.NumberingId?.Val?.Value == 0)
+            return false;
+
+        // Sprawdź numerację odziedziczoną ze stylu paragrafu
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        var styleNumPr = ResolveStyleNumbering(styleId);
+        return styleNumPr != null;
+    }
+
+    /// <summary>
+    /// Rozwiązuje NumberingProperties z definicji stylu (z dziedziczeniem BasedOn)
+    /// </summary>
+    private NumberingProperties? ResolveStyleNumbering(string? styleId, HashSet<string>? visited = null)
+    {
+        if (styleId == null) return null;
+        visited ??= new HashSet<string>();
+        if (visited.Contains(styleId)) return null;
+        visited.Add(styleId);
+
+        if (!_rawStyles.TryGetValue(styleId, out var style)) return null;
+
+        var spProps = style.StyleParagraphProperties;
+        if (spProps != null)
+        {
+            var numPr = spProps.GetFirstChild<NumberingProperties>();
+            if (numPr?.NumberingId?.Val?.Value != null && numPr.NumberingId.Val.Value > 0)
+                return numPr;
+        }
+
+        var basedOn = style.BasedOn?.Val?.Value;
+        if (basedOn != null)
+            return ResolveStyleNumbering(basedOn, visited);
+
+        return null;
+    }
+
+    /// <summary>
+    /// Pobiera efektywne informacje o numeracji (numId, ilvl) z paragrafu lub jego stylu
+    /// </summary>
+    private (int numId, int level) GetEffectiveNumberingInfo(Paragraph paragraph)
+    {
+        var numPr = paragraph.ParagraphProperties?.NumberingProperties;
+        if (numPr?.NumberingId?.Val?.Value != null && numPr.NumberingId.Val.Value > 0)
+        {
+            return (numPr.NumberingId.Val.Value, numPr.NumberingLevelReference?.Val?.Value ?? 0);
+        }
+
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        var styleNumPr = ResolveStyleNumbering(styleId);
+        if (styleNumPr != null)
+        {
+            return (
+                styleNumPr.NumberingId?.Val?.Value ?? 0,
+                styleNumPr.NumberingLevelReference?.Val?.Value ?? 0
+            );
+        }
+
+        return (0, 0);
+    }
+
+    /// <summary>
+    /// Pobiera efektywne NumberingProperties z paragrafu (inline lub ze stylu)
+    /// </summary>
+    private NumberingProperties? GetEffectiveNumberingProps(Paragraph paragraph)
+    {
+        var numPr = paragraph.ParagraphProperties?.NumberingProperties;
+        if (numPr?.NumberingId?.Val?.Value != null && numPr.NumberingId.Val.Value > 0)
+            return numPr;
+
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        return ResolveStyleNumbering(styleId);
+    }
+
+    /// <summary>
+    /// Pobiera wcięcia z definicji numeracji dla danego poziomu (w px)
+    /// </summary>
+    private (int leftPx, int hangingPx) GetNumberingLevelIndentation(NumberingProperties? numPr, int levelOverride = -1)
+    {
+        if (numPr == null || _numberingPart?.Numbering == null) return (0, 0);
+        
+        var numId = numPr.NumberingId?.Val?.Value;
+        if (numId == null) return (0, 0);
+        
+        var level = levelOverride >= 0 ? levelOverride : (numPr.NumberingLevelReference?.Val?.Value ?? 0);
+        
+        var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
+            .FirstOrDefault(n => n.NumberID?.Value == numId);
+        if (numInstance == null) return (0, 0);
+        
+        var abstractNumId = numInstance.AbstractNumId?.Val?.Value;
+        if (abstractNumId == null) return (0, 0);
+        
+        var abstractNum = _numberingPart.Numbering.Elements<AbstractNum>()
+            .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
+        if (abstractNum == null) return (0, 0);
+        
+        var levelDef = abstractNum.Elements<Level>()
+            .FirstOrDefault(l => l.LevelIndex?.Value == level);
+        if (levelDef == null) return (0, 0);
+        
+        var prevParaProps = levelDef.GetFirstChild<PreviousParagraphProperties>();
+        var indent = prevParaProps?.GetFirstChild<Indentation>();
+        
+        int leftTwips = 0, hangingTwips = 0;
+        if (indent?.Left?.Value != null) int.TryParse(indent.Left.Value, out leftTwips);
+        if (indent?.Hanging?.Value != null) int.TryParse(indent.Hanging.Value, out hangingTwips);
+        
+        return (TwipsToPx(leftTwips), TwipsToPx(hangingTwips));
+    }
+
+    /// <summary>
+    /// Usuwa właściwości CSS związane z wcięciami z ciągu stylów (margin-left, text-indent, padding-left)
+    /// Używane dla elementów <li> gdzie wcięcia obsługuje kontener <ul>/<ol>
+    /// </summary>
+    private static string StripIndentationCss(string css)
+    {
+        if (string.IsNullOrEmpty(css)) return css;
+        
+        css = Regex.Replace(css, @"margin-left:\s*[^;]+;?", "");
+        css = Regex.Replace(css, @"text-indent:\s*[^;]+;?", "");
+        css = Regex.Replace(css, @"padding-left:\s*[^;]+;?", "");
+        
+        return css;
     }
 
     /// <summary>
     /// Konwertuje kolejne elementy listy na prawidłowy HTML z zagnieżdżaniem
     /// </summary>
-    private string ConvertConsecutiveListItems(List<OpenXmlElement> elements, ref int index, WordprocessingDocument document)
+    private string ConvertConsecutiveListItems(List<OpenXmlElement> elements, ref int index, WordprocessingDocument document, int parentIndentPx = 0)
     {
         var html = new StringBuilder();
         
         var firstPara = (Paragraph)elements[index];
-        var listType = GetListType(firstPara.ParagraphProperties?.NumberingProperties, document);
+        var firstNumProps = GetEffectiveNumberingProps(firstPara);
+        var (firstNumId, _) = GetEffectiveNumberingInfo(firstPara);
+        var listType = GetListType(firstNumProps, document);
         var firstLevel = GetListLevel(firstPara);
         
-        html.Append(listType == "ol" ? "<ol style=\"margin:0;\">" : "<ul style=\"margin:0;\">");
+        // Pobierz wcięcie z definicji numeracji i wylicz padding dla kontenera listy
+        var (levelIndentPx, _) = GetNumberingLevelIndentation(firstNumProps, firstLevel);
+        var listPadding = levelIndentPx > parentIndentPx 
+            ? levelIndentPx - parentIndentPx 
+            : (levelIndentPx > 0 ? levelIndentPx : 36);
+        
+        html.Append(listType == "ol" 
+            ? $"<ol style=\"margin:0;padding-left:{listPadding}px;\">" 
+            : $"<ul style=\"margin:0;padding-left:{listPadding}px;\">");
         
         while (index < elements.Count)
         {
             if (elements[index] is not Paragraph p || !IsListParagraph(p))
                 break;
             
+            // Sprawdź czy numId się zmienił (inna lista)
+            var (currentNumId, _) = GetEffectiveNumberingInfo(p);
             var currentLevel = GetListLevel(p);
+            
+            if (currentNumId != firstNumId && currentLevel <= firstLevel)
+                break;
             
             if (currentLevel > firstLevel)
             {
-                // Zagnieżdżona lista
+                // Zagnieżdżona lista — przekaż aktualne wcięcie jako rodzica
                 var lastLi = "</li>";
-                html.Length -= lastLi.Length; // Usuń ostatnie </li> - zagnieżdżona lista idzie wewnątrz
-                html.Append(ConvertConsecutiveListItems(elements, ref index, document));
+                html.Length -= lastLi.Length;
+                html.Append(ConvertConsecutiveListItems(elements, ref index, document, levelIndentPx));
                 html.Append("</li>");
             }
             else if (currentLevel < firstLevel)
@@ -361,12 +503,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             else
             {
+                // Buduj CSS dla <li> BEZ wcięć — wcięcia obsługuje kontener <ul>/<ol>
                 var cssStyle = GetParagraphStyle(p.ParagraphProperties);
                 var styleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
                 if (styleId != null && _styles.TryGetValue(styleId, out var styleCss))
                 {
                     cssStyle = styleCss + cssStyle;
                 }
+                cssStyle = StripIndentationCss(cssStyle);
                 
                 html.Append($"<li style=\"{cssStyle}\">");
                 
@@ -405,8 +549,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private int GetListLevel(Paragraph paragraph)
     {
-        var numPr = paragraph.ParagraphProperties?.NumberingProperties;
-        return numPr?.NumberingLevelReference?.Val?.Value ?? 0;
+        var (_, level) = GetEffectiveNumberingInfo(paragraph);
+        return level;
     }
 
     /// <summary>
@@ -694,8 +838,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var headingLevel = GetHeadingLevel(styleId);
         
         // Listy powinny być obsługiwane przez ConvertConsecutiveListItems
-        var numPr = paraProps?.NumberingProperties;
-        var isListItem = numPr?.NumberingId?.Val?.Value != null && numPr.NumberingId.Val.Value > 0;
+        var isListItem = IsListParagraph(paragraph);
         
         var tag = headingLevel > 0 ? $"h{headingLevel}" : "p";
         
