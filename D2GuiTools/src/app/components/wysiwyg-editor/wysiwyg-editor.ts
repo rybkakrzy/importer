@@ -185,6 +185,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   differentFirstPage = computed(() => this._differentFirstPage());
   differentOddEven = computed(() => this._differentOddEven());
 
+  // Computed: zawartość nagłówka/stopki per strona (reaktywna na zmiany sygnałów)
+  headerContents = computed(() => {
+    const pagesArr = this.pages();
+    return pagesArr.map((_, i) => this._computeHeaderContent(i));
+  });
+  footerContents = computed(() => {
+    const pagesArr = this.pages();
+    return pagesArr.map((_, i) => this._computeFooterContent(i));
+  });
+
   // Stan edytora
   editorState = signal<EditorState>({
     isModified: false,
@@ -2437,9 +2447,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Pobiera zawartość nagłówka dla danej strony
+   * Wylicza zawartość nagłówka dla danej strony (używane wewnętrznie przez computed)
    */
-  getHeaderContent(pageIndex: number): string {
+  private _computeHeaderContent(pageIndex: number): string {
     // Pierwsza strona z inną treścią
     if (this._differentFirstPage() && pageIndex === 0) {
       return this._headerFirstPageHtml();
@@ -2453,9 +2463,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Pobiera zawartość stopki dla danej strony
+   * Pobiera zawartość nagłówka dla danej strony (używane w szablonie)
    */
-  getFooterContent(pageIndex: number): string {
+  getHeaderContent(pageIndex: number): string {
+    const contents = this.headerContents();
+    return contents[pageIndex] ?? this._headerHtml();
+  }
+
+  /**
+   * Wylicza zawartość stopki dla danej strony (używane wewnętrznie przez computed)
+   */
+  private _computeFooterContent(pageIndex: number): string {
     let content: string;
     // Pierwsza strona z inną treścią
     if (this._differentFirstPage() && pageIndex === 0) {
@@ -2472,6 +2490,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     content = content.replace(/\{page\}/gi, String(pageIndex + 1));
     content = content.replace(/\{pages\}/gi, String(this.pages().length));
     return content;
+  }
+
+  /**
+   * Pobiera zawartość stopki dla danej strony (używane w szablonie)
+   */
+  getFooterContent(pageIndex: number): string {
+    const contents = this.footerContents();
+    return contents[pageIndex] ?? this._footerHtml();
   }
 
   /**

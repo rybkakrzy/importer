@@ -240,6 +240,8 @@ export class DocumentEditorComponent {
     });
     this.documentStyles.set([]); // Reset stylów - toolbar użyje domyślnych
     this.originalFileName.set('');
+    this.headerContent.set({ html: '', height: 1.25 });
+    this.footerContent.set({ html: '', height: 1.25 });
     this.editor?.setContent('<p></p>');
     this.showMenu.set(false);
   }
@@ -277,19 +279,15 @@ export class DocumentEditorComponent {
         this.documentStyles.set(content.styles || []);
         this.originalFileName.set(file.name);
         
-        // Wczytaj nagłówek i stopkę
-        if (content.header) {
-          this.headerContent.set({
-            html: content.header.html || '',
-            height: content.header.height || 1.25
-          });
-        }
-        if (content.footer) {
-          this.footerContent.set({
-            html: content.footer.html || '',
-            height: content.footer.height || 1.25
-          });
-        }
+        // Wczytaj nagłówek i stopkę (resetuj jeśli brak w dokumencie)
+        this.headerContent.set({
+          html: content.header?.html || '',
+          height: content.header?.height || 1.25
+        });
+        this.footerContent.set({
+          html: content.footer?.html || '',
+          height: content.footer?.height || 1.25
+        });
         
         if (this.editor) {
           this.editor.setContent(content.html);
