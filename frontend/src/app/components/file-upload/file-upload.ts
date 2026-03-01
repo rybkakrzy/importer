@@ -1,10 +1,11 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FileUpload as FileUploadService, ZipUploadResponse } from '../../services/file-upload';
+import { ButtonComponent, ErrorMessageComponent } from '@importer/shared';
 
 @Component({
   selector: 'app-file-upload',
-  imports: [CommonModule],
+  imports: [CommonModule, ButtonComponent, ErrorMessageComponent],
   templateUrl: './file-upload.html',
   styleUrl: './file-upload.css',
 })

@@ -18,18 +18,18 @@
       </span>
     </div>
 
-    <button
-      (click)="uploadFile()"
-      [disabled]="!selectedFile || isUploading"
-      class="upload-button"
+    <lib-button
+      variant="success"
+      [disabled]="!selectedFile"
+      [loading]="isUploading"
+      loadingText="Przesyłanie..."
+      (clicked)="uploadFile()"
     >
-      {{ isUploading ? 'Przesyłanie...' : 'Prześlij plik' }}
-    </button>
+      Prześlij plik
+    </lib-button>
   </div>
 
-  <div class="error-message" *ngIf="errorMessage">
-    ⚠️ {{ errorMessage }}
-  </div>
+  <lib-error-message [message]="errorMessage" />
 
   <div class="response-section" *ngIf="uploadResponse">
     <h3>✅ {{ uploadResponse.message }}</h3>
@@ -65,5 +65,6 @@
     </div>
   </div>
 </div>
+
 
 
