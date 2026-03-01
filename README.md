@@ -1,66 +1,146 @@
-# Importer Parametryzacji
+# Doc2 — Edytor dokumentów Word online
 
-System do importu i analizy plików ZIP zawierających pliki parametryzacji.
+Autorski edytor DOCX w przeglądarce oparty na **Angular 20** i **ASP.NET Core 8**.  
+Umożliwia otwieranie, edycję i zapisywanie plików DOCX bez instalacji Microsoft Office — w pełni w przeglądarce.
 
 ## Struktura projektu
 
-- **backend** - ASP.NET 8 Web API
-- **frontend** - Angular (najnowsza wersja)
+```
+importer/
+├── D2ApiTools/        # Backend — ASP.NET Core 8 Web API (Clean Architecture)
+├── D2GuiTools/        # Frontend — Angular 20 (standalone components)
+└── D2E2ETools/        # Testy automatyczne E2E — Python + Playwright + pytest-bdd
+```
 
 ## Funkcjonalność
 
-### Backend (ASP.NET 8 Web API)
-- Endpoint: `POST /api/FileUpload/upload`
-- Przyjmuje plik ZIP
-- Analizuje zawartość archiwum
-- Zwraca informacje o plikach znajdujących się w archiwum (docx, json, certyfikaty)
+### Backend — D2ApiTools (ASP.NET Core 8 Web API)
 
-### Frontend (Angular)
-- Komponent do wyboru pliku ZIP
-- Wysyłanie pliku do API
-- Wyświetlanie szczegółowej informacji o zawartości archiwum
+Architektura czysta (Clean Architecture) z warstwami: Api, Application, Domain, Infrastructure.
+
+#### Endpointy API
+
+**Dokumenty** (`/api/Document`)
+
+| Metoda | Ścieżka | Opis |
+|--------|---------|------|
+| `POST` | `/api/Document/open` | Wczytuje plik DOCX i zwraca HTML |
+| `POST` | `/api/Document/save` | Zapisuje HTML jako plik DOCX |
+| `GET`  | `/api/Document/new` | Tworzy nowy pusty dokument |
+| `POST` | `/api/Document/upload-image` | Wgrywa obraz i zwraca Base64 |
+| `GET`  | `/api/Document/templates` | Pobiera listę szablonów dokumentów |
+| `GET`  | `/api/Document/templates/{id}` | Pobiera wybrany szablon |
+| `POST` | `/api/Document/sign` | Podpisuje dokument certyfikatem X.509 |
+| `POST` | `/api/Document/verify-signatures` | Weryfikuje podpisy cyfrowe w dokumencie |
+| `POST` | `/api/Document/export-pdf` | Eksport do PDF *(w przygotowaniu)* |
+
+**Kody kreskowe / QR** (`/api/Barcode`)
+
+| Metoda | Ścieżka | Opis |
+|--------|---------|------|
+| `GET`  | `/api/Barcode/types` | Pobiera listę obsługiwanych typów kodów |
+| `POST` | `/api/Barcode/generate` | Generuje kod kreskowy / QR — zwraca Base64 |
+| `POST` | `/api/Barcode/generate-image` | Generuje kod kreskowy / QR — zwraca plik PNG |
+
+**Import plików ZIP** (`/api/FileUpload`)
+
+| Metoda | Ścieżka | Opis |
+|--------|---------|------|
+| `POST` | `/api/FileUpload/upload` | Przyjmuje plik ZIP i analizuje jego zawartość |
+
+### Frontend — D2GuiTools (Angular 20)
+
+- Edytor WYSIWYG dokumentów DOCX w przeglądarce
+- Pasek narzędzi (formatowanie, style, wstawianie obrazów i kodów QR)
+- Dialog generowania kodów kreskowych / QR (13 formatów)
+- Wyszukiwanie i zamiana tekstu z licznikiem wyników
+- Zarządzanie metadanymi dokumentu (właściwości OOXML)
+- Podpisywanie dokumentów certyfikatem cyfrowym
+- Wielostronicowy podgląd A4 z zoomem (50%–200%)
+- Import pliku ZIP z parametryzacją
+
+### Testy E2E — D2E2ETools (Python + Playwright)
+
+- Testy BDD w języku polskim (Gherkin / pytest-bdd)
+- Scenariusze UI: edytor dokumentów, pasek narzędzi, kody kreskowe, znajdź i zamień
+- Scenariusze API: endpointy dokumentów
+- Raporty HTML i Allure
 
 ## Uruchomienie
 
 ### Backend
 
 ```powershell
-cd backend
-dotnet run
+cd D2ApiTools
+dotnet run --project D2Tools.Api
 ```
 
-API będzie dostępne pod adresem: `http://localhost:5190`
+API będzie dostępne pod adresem: `http://localhost:5190`  
+Swagger UI (środowisko deweloperskie): `http://localhost:5190/swagger`
 
 ### Frontend
 
 ```powershell
-cd frontend
+cd D2GuiTools
+npm install
 npm start
 ```
 
 Aplikacja będzie dostępna pod adresem: `http://localhost:4200`
 
-## Oczekiwana struktura pliku ZIP
+### Testy E2E
 
-W archiwum ZIP powinny znajdować się:
-- Pliki DOCX (dokumenty Word)
-- Plik JSON z konfiguracją (struktura zostanie zdefiniowana później)
-- Certyfikat (.cer, .crt, .pem, .pfx)
+```bash
+cd D2E2ETools
+
+# Utwórz wirtualne środowisko
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/macOS
+
+# Zainstaluj zależności
+pip install -r requirements.txt
+playwright install --with-deps chromium
+
+# Uruchom testy
+pytest                          # Wszystkie testy
+pytest -m "ui and smoke"        # Testy UI (smoke)
+pytest -m api                   # Testy API
+pytest -m regression            # Testy regresji
+pytest --html=report.html       # Z raportem HTML
+```
+
+> Przed uruchomieniem testów E2E upewnij się, że backend i frontend są uruchomione.
 
 ## Technologie
 
 ### Backend
-- ASP.NET 8 Web API
-- System.IO.Compression dla obsługi ZIP
+- ASP.NET Core 8 Web API
+- MediatR (CQRS / Clean Architecture)
+- System.IO.Compression (obsługa ZIP)
+- Konwersja DOCX ↔ HTML (dwukierunkowa)
+- Podpisy cyfrowe X.509 (RSA-SHA256)
+- Generowanie kodów kreskowych i QR (13 formatów)
+- Swagger / OpenAPI
 
 ### Frontend
-- Angular (standalone components)
-- HttpClient dla komunikacji z API
-- Reactive Forms
+- Angular 20 (standalone components)
+- HttpClient — komunikacja z API
+- WYSIWYG edytor dokumentów DOCX
+- TypeScript 5.8
 
-## TODO
-- Zdefiniować dokładną strukturę pliku JSON
-- Dodać walidację zawartości JSON
-- Dodać obsługę certyfikatów
+### Testy
+- Python 3.11+
+- Playwright (automatyzacja przeglądarki)
+- pytest-bdd (BDD / Gherkin, język polski)
+- Allure / pytest-html (raporty)
+
+## Roadmap
+
+- [ ] Eksport do PDF
+- [ ] Kolaboracja w czasie rzeczywistym (WebSocket)
+- [ ] Śledzenie zmian (Track Changes)
+- [ ] Komentarze w dokumentach
+- [ ] Tryb offline (PWA)
 
 
