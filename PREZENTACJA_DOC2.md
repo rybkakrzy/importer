@@ -948,8 +948,8 @@ Dalszy rozwój
 - 📱 Responsywny widok mobilny
 - 🗄️ Integracja z systemem zarządzania dokumentami
 - 📝 Śledzenie zmian (Track Changes)
-- ✅ Testy E2E — Playwright + pytest-bdd (Python) w katalogu `D2E2ETools/` (Page Object Model, scenariusze BDD po polsku, testy UI + API)
-- ⚡ Testy wydajnościowe (katalog `performence/` przygotowany)
+- ✅ Testy E2E — Playwright + pytest-bdd (Python) w katalogu `D2TestViewerEditor/` (Page Object Model, scenariusze BDD po polsku, testy UI + API)
+- ⚡ Testy wydajnościowe — Locust w katalogu `D2TestViewerEditor/performance/` (load testing wszystkich endpointów)
 
 ---
 
@@ -1083,4 +1083,4 @@ Porównanie Doc2 z innymi rozwiązaniami do edycji dokumentów w przeglądarce:
 > - Slajd 24 — ikony ✅ przy każdym punkcie dają efekt „checklisty"
 > - Slajd 27 — tabela porównawcza idealnie nadaje się na wykres radarowy lub heatmap z kolorami (zielony=✅, żółty=⚠️, czerwony=❌)
 > - Kolorystyka sugerowana: pomarańczowy ING (#FF6200) jako kolor akcentu, białe tło, ciemnoszary tekst
-> - Struktura repozytoriów: `D2ApiTools/` (backend .NET), `D2GuiTools/` (frontend Angular 20), `D2E2ETools/` (testy E2E Playwright+BDD)
+> - Struktura repozytoriów: `D2ApiViewerEditor/` (backend .NET), `D2GuiViewerEditor/` (frontend Angular 20), `D2TestViewerEditor/` (testy E2E Playwright+BDD, testy wydajnościowe Locust)

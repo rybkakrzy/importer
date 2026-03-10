@@ -1,20 +1,22 @@
-﻿# D2TestViewerEditor — testy automatyczne E2E
+﻿# D2TestViewerEditor — testy automatyczne
 
 ## Opis
 
-Projekt testów automatycznych end-to-end dla aplikacji **D2 Tools**.  
-Stack: **Python** + **Playwright** + **pytest-bdd** (podejście BDD).
+Projekt testów automatycznych dla aplikacji **D2 ViewerEditor**.  
+Zawiera:
+- **Testy E2E** — Python + Playwright + pytest-bdd (podejście BDD)
+- **Testy wydajnościowe** — Locust (load testing)
 
 ## Struktura projektu
 
 ```
 D2TestViewerEditor/
 ├── .env                       # Zmienne środowiskowe
-├── requirements.txt           # Zależności Python
+├── requirements.txt           # Zależności Python (E2E)
 ├── pytest.ini                 # Konfiguracja pytest
 ├── conftest.py                # Globalne fixtures (Playwright browser/page)
 │
-├── config/                    # Konfiguracja środowisk
+├── config/                    # Konfiguracja środowisk (E2E)
 │   ├── environments.py
 │   └── settings.py
 │
@@ -50,7 +52,23 @@ D2TestViewerEditor/
 │   ├── artifacts.py
 │   └── test_data.py
 │
-└── test_data/                 # Pliki testowe (DOCX, ZIP, …)
+├── test_data/                 # Pliki testowe (DOCX, ZIP, …)
+│
+└── performance/               # Testy wydajnościowe (Locust)
+    ├── .env                   # Zmienne środowiskowe
+    ├── locust.conf            # Konfiguracja Locust
+    ├── requirements.txt       # Zależności Python (Locust)
+    ├── README.md              # Dokumentacja testów wydajnościowych
+    ├── config/
+    │   └── settings.py
+    ├── helpers/
+    │   └── payloads.py
+    └── locustfiles/
+        ├── barcode_locust.py
+        ├── document_locust.py
+        ├── fileupload_locust.py
+        ├── health_locust.py
+        └── all_endpoints_locust.py
 ```
 
 ## Wymagania
@@ -60,6 +78,8 @@ D2TestViewerEditor/
 - Działający frontend (D2GuiViewerEditor) na `http://localhost:4200`
 
 ## Instalacja
+
+### Testy E2E
 
 ```bash
 cd D2TestViewerEditor
@@ -76,7 +96,19 @@ pip install -r requirements.txt
 playwright install --with-deps chromium
 ```
 
+### Testy wydajnościowe (Locust)
+
+```bash
+cd D2TestViewerEditor/performance
+
+# Użyj tego samego .venv lub stwórz nowe
+# Zainstaluj zależności Locust
+pip install -r requirements.txt
+```
+
 ## Uruchamianie testów
+
+### Testy E2E
 
 ```bash
 # Wszystkie testy
@@ -103,6 +135,22 @@ allure serve test-results/allure
 
 # Tryb headed (widoczna przeglądarka)
 D2_HEADLESS=false pytest -m "ui and smoke"
+```
+
+### Testy wydajnościowe
+
+```bash
+cd performance
+
+# Web UI (http://localhost:8089)
+locust -f locustfiles/all_endpoints_locust.py
+
+# Headless mode
+locust -f locustfiles/all_endpoints_locust.py --headless -u 100 -r 10 -t 60s
+
+# Konkretny endpoint
+locust -f locustfiles/barcode_locust.py
+locust -f locustfiles/document_locust.py
 ```
 
 ## Markery

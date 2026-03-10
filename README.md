@@ -1,66 +1,108 @@
-# Importer Parametryzacji
+# D2 ViewerEditor
 
-System do importu i analizy plików ZIP zawierających pliki parametryzacji.
+System do przeglądania, edycji i zarządzania dokumentami DOCX z obsługą kodów kreskowych, podpisów cyfrowych i konwersji HTML↔DOCX.
 
 ## Struktura projektu
 
-- **backend** - ASP.NET 8 Web API
-- **frontend** - Angular (najnowsza wersja)
+```
+importer/
+├── D2ApiViewerEditor/          # Backend - ASP.NET 8 Web API
+│   ├── D2ViewerEditor.Api/
+│   ├── D2ViewerEditor.Application/
+│   ├── D2ViewerEditor.Domain/
+│   └── D2ViewerEditor.Infrastructure/
+│
+├── D2GuiViewerEditor/          # Frontend - Angular 20
+│   └── src/
+│
+└── D2TestViewerEditor/         # Testy automatyczne
+    ├── config/                 # Testy E2E (Playwright + pytest-bdd)
+    ├── features/
+    ├── pages/
+    ├── tests/
+    └── performance/            # Testy wydajnościowe (Locust)
+```
 
 ## Funkcjonalność
 
 ### Backend (ASP.NET 8 Web API)
-- Endpoint: `POST /api/FileUpload/upload`
-- Przyjmuje plik ZIP
-- Analizuje zawartość archiwum
-- Zwraca informacje o plikach znajdujących się w archiwum (docx, json, certyfikaty)
+- **Dokumenty**: Tworzenie, edycja, zapisywanie dokumentów DOCX
+- **Konwersja**: DOCX ↔ HTML (z zachowaniem formatowania)
+- **Kody kreskowe**: Generowanie QR, Code128, EAN-13, etc. (ZXing)
+- **Podpisy cyfrowe**: Podpisywanie dokumentów certyfikatem X.509
+- **Upload plików**: Obsługa ZIP z wieloma dokumentami
+- **Architektura**: Clean Architecture + CQRS (MediatR)
 
-### Frontend (Angular)
-- Komponent do wyboru pliku ZIP
-- Wysyłanie pliku do API
-- Wyświetlanie szczegółowej informacji o zawartości archiwum
+### Frontend (Angular 20)
+- Edytor WYSIWYG dokumentów z toolbar
+- Dialog generowania kodów kreskowych
+- Upload plików ZIP
+- Podgląd i zapis dokumentów
+- Standalone components, Signals
+
+### Testy
+- **E2E**: Playwright + pytest-bdd (scenariusze BDD po polsku)
+- **Wydajnościowe**: Locust (load testing wszystkich endpointów)
 
 ## Uruchomienie
 
 ### Backend
 
 ```powershell
-cd backend
-dotnet run
+cd D2ApiViewerEditor\D2ViewerEditor.Api
+dotnet run --environment DEV
 ```
 
-API będzie dostępne pod adresem: `http://localhost:5190`
+API: `http://localhost:5190`  
+Swagger: `http://localhost:5190/swagger`
 
 ### Frontend
 
 ```powershell
-cd frontend
+cd D2GuiViewerEditor
 npm start
 ```
 
-Aplikacja będzie dostępna pod adresem: `http://localhost:4200`
+Aplikacja: `http://localhost:4200`
 
-## Oczekiwana struktura pliku ZIP
+### Testy E2E
 
-W archiwum ZIP powinny znajdować się:
-- Pliki DOCX (dokumenty Word)
-- Plik JSON z konfiguracją (struktura zostanie zdefiniowana później)
-- Certyfikat (.cer, .crt, .pem, .pfx)
+```powershell
+cd D2TestViewerEditor
+pip install -r requirements.txt
+playwright install chromium
+pytest -m "ui and smoke"
+```
+
+### Testy wydajnościowe
+
+```powershell
+cd D2TestViewerEditor\performance
+pip install -r requirements.txt
+locust -f locustfiles/all_endpoints_locust.py
+```
+
+Locust UI: `http://localhost:8089`
 
 ## Technologie
 
 ### Backend
 - ASP.NET 8 Web API
-- System.IO.Compression dla obsługi ZIP
+- MediatR (CQRS), FluentValidation
+- DocumentFormat.OpenXml (DOCX)
+- HtmlAgilityPack (HTML parsing)
+- ZXing.Net (kody kreskowe)
+- SkiaSharp (rendering grafiki)
 
 ### Frontend
-- Angular (standalone components)
-- HttpClient dla komunikacji z API
-- Reactive Forms
+- Angular 20 (standalone, signals)
+- TypeScript
+- SCSS
 
-## TODO
-- Zdefiniować dokładną strukturę pliku JSON
-- Dodać walidację zawartości JSON
-- Dodać obsługę certyfikatów
+### Testy
+- Python 3.11+
+- Playwright (E2E)
+- pytest-bdd (BDD)
+- Locust (load testing)
 
 
