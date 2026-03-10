@@ -1,0 +1,16 @@
+﻿using D2ViewerEditor.Domain.Common;
+using D2ViewerEditor.Domain.Models;
+using MediatR;
+
+namespace D2ViewerEditor.Application.Features.Barcode.Commands.GenerateBarcode;
+
+/// <summary>
+/// Komenda generowania kodu kreskowego/QR
+/// </summary>
+public record GenerateBarcodeCommand(
+    string Content,
+    string BarcodeType,
+    int Width,
+    int Height,
+    bool ShowText
+) : IRequest<Result<BarcodeResponse>>;
