@@ -18,7 +18,6 @@ D2PerformenceTools/
     ├── health_locust.py          # Smoke test — Health Check
     ├── barcode_locust.py         # Barcode API (types, generate, generate-image)
     ├── document_locust.py        # Document API (new, save, open, templates, upload-image)
-    ├── fileupload_locust.py      # FileUpload API (upload ZIP — small / medium)
     └── all_endpoints_locust.py   # Mix wszystkich endpointów (realistyczny ruch)
 ```
 
@@ -48,7 +47,6 @@ locust
 # Lub konkretny plik:
 locust -f locustfiles/barcode_locust.py
 locust -f locustfiles/document_locust.py
-locust -f locustfiles/fileupload_locust.py
 locust -f locustfiles/health_locust.py
 ```
 
@@ -79,7 +77,7 @@ locust --tags barcode
 locust --tags barcode document --exclude-tags read
 ```
 
-Dostępne tagi: `health`, `barcode`, `document`, `fileupload`, `read`, `write`, `large`.
+Dostępne tagi: `health`, `barcode`, `document`, `read`, `write`, `large`.
 
 ## Konfiguracja
 
@@ -105,8 +103,6 @@ Edytuj plik `.env` lub nadpisz zmiennymi środowiskowymi:
 | `/api/Document/open`                         | POST   | document_locust.py       |
 | `/api/Document/templates`                    | GET    | document_locust.py       |
 | `/api/Document/upload-image`                 | POST   | document_locust.py       |
-| `/api/FileUpload/upload` (small ZIP)         | POST   | fileupload_locust.py     |
-| `/api/FileUpload/upload` (medium ZIP)        | POST   | fileupload_locust.py     |
 
 Plik `all_endpoints_locust.py` łączy wszystkie powyższe w jeden realistyczny scenariusz.
 

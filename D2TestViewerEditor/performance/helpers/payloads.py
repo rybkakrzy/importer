@@ -3,7 +3,6 @@
 import io
 import random
 import struct
-import zipfile
 import zlib
 from typing import Any
 
@@ -149,16 +148,3 @@ def png_file_tuple() -> tuple[str, bytes, str]:
         _CACHED_PNG,
         "image/png",
     )
-
-
-# ── FileUpload – ZIP ─────────────────────────────
-
-def zip_file_bytes(num_files: int = 3, file_size: int = 1024) -> tuple[bytes, str]:
-    """Tworzy minimalny plik ZIP w pamięci. Zwraca (bytes, filename)."""
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i in range(num_files):
-            zf.writestr(f"file_{i}.txt", fake.text(max_nb_chars=file_size))
-    buf.seek(0)
-    filename = f"test-upload-{fake.uuid4()[:8]}.zip"
-    return buf.read(), filename

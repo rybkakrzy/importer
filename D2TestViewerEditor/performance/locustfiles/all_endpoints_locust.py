@@ -19,7 +19,6 @@ from helpers.payloads import (
     docx_file_tuple,
     document_save_payload,
     png_file_tuple,
-    zip_file_bytes,
 )
 
 
@@ -30,7 +29,6 @@ class MixedTrafficUser(HttpUser):
       - Health check         — sporadycznie (monitoring)
       - Barcode (read/write) — umiarkowanie
       - Document (CRUD)      — najczęściej
-      - FileUpload           — rzadziej
     """
 
     wait_time = between(1, 4)
@@ -95,21 +93,4 @@ class MixedTrafficUser(HttpUser):
         self.client.post(
             "/api/Document/upload-image",
             files={"file": (fname, fbytes, fmime)},
-        )
-
-    # ────────────────────────────────────────────
-    # FileUpload
-    # ────────────────────────────────────────────
-    @tag("fileupload", "write")
-    @task(2)
-    def upload_zip(self) -> None:
-        data, filename = zip_file_bytes(num_files=3, file_size=1024)
-        self.client.post(
-            "/api/FileUpload/upload",
-            data=data,
-            headers={
-                "Content-Type": "application/octet-stream",
-                "X-File-Name": filename,
-            },
-            name="/api/FileUpload/upload",
         )

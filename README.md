@@ -30,13 +30,11 @@ importer/
 - **Konwersja**: DOCX ↔ HTML (z zachowaniem formatowania)
 - **Kody kreskowe**: Generowanie QR, Code128, EAN-13, etc. (ZXing)
 - **Podpisy cyfrowe**: Podpisywanie dokumentów certyfikatem X.509
-- **Upload plików**: Obsługa ZIP z wieloma dokumentami
 - **Architektura**: Clean Architecture + CQRS (MediatR)
 
 ### Frontend (Angular 20)
 - Edytor WYSIWYG dokumentów z toolbar
 - Dialog generowania kodów kreskowych
-- Upload plików ZIP
 - Podgląd i zapis dokumentów
 - Standalone components, Signals
 

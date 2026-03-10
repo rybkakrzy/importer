@@ -223,11 +223,6 @@ REST API — pełna mapa endpointów
 | `POST` | `/api/Barcode/generate` | Generowanie kodu → Base64 PNG |
 | `GET` | `/api/Barcode/types` | Lista obsługiwanych typów kodów |
 
-### Inne
-| Metoda | Endpoint | Opis |
-|---|---|---|
-| `POST` | `/api/FileUpload/upload` | Upload ZIP → ekstrakcja plików |
-
 ---
 
 ## Slajd 7 — Konwersja DOCX ↔ HTML

@@ -66,7 +66,6 @@ D2TestViewerEditor/
     └── locustfiles/
         ├── barcode_locust.py
         ├── document_locust.py
-        ├── fileupload_locust.py
         ├── health_locust.py
         └── all_endpoints_locust.py
 ```
