@@ -219,6 +219,162 @@ Invoke-RestMethod -Uri "http://localhost:5190/api/document/create" `
 
 Aplikacja wykorzystuje wbudowany system logowania ASP.NET Core. Logi są wyświetlane w konsoli podczas uruchomienia.
 
+## Testy jednostkowe
+
+Projekt zawiera kompleksowe testy jednostkowe dla wszystkich warstw architektury.
+
+### Struktura projektów testowych
+
+```
+D2ApiViewerEditor/
+├── D2ViewerEditor.Domain.UnitTests/         # Testy modeli i Result pattern
+├── D2ViewerEditor.Application.UnitTests/    # Testy handlerów CQRS i walidatorów
+├── D2ViewerEditor.Infrastructure.UnitTests/ # Testy serwisów (BarcodeGenerator, etc.)
+└── D2ViewerEditor.Api.UnitTests/            # Testy kontrolerów API
+```
+
+### Stack technologiczny testów
+
+- **NUnit 3** - Framework testowy
+- **FluentAssertions** - Czytelne asercje
+- **NSubstitute** - Mocking framework
+- **Microsoft.AspNetCore.Mvc.Testing** - Testy kontrolerów
+
+### Uruchamianie testów
+
+**Wszystkie testy:**
+```powershell
+dotnet test
+```
+
+**Konkretny projekt:**
+```powershell
+dotnet test D2ViewerEditor.Application.UnitTests
+```
+
+**Z code coverage:**
+```powershell
+dotnet test --collect:"XPlat Code Coverage"
+```
+
+**W trybie watch (ciągłe uruchamianie):**
+```powershell
+dotnet watch test
+```
+
+**Filtrowanie testów:**
+```powershell
+# Tylko testy zawierające "Barcode" w nazwie
+dotnet test --filter "FullyQualifiedName~Barcode"
+
+# Tylko testy z kategorii (jeśli są zdefiniowane)
+dotnet test --filter "TestCategory=Unit"
+```
+
+### Przykłady testów
+
+**Domain - Test wzorca Result:**
+```csharp
+[Test]
+public void Success_ShouldCreateSuccessResult()
+{
+    var result = Result<string>.Success("test");
+    
+    result.IsSuccess.Should().BeTrue();
+    result.Value.Should().Be("test");
+}
+```
+
+**Application - Test handler z mockowaniem:**
+```csharp
+[Test]
+public async Task Handle_WithValidCommand_ShouldReturnSuccessResult()
+{
+    var barcodeGenerator = Substitute.For<IBarcodeGenerator>();
+    barcodeGenerator.Generate(Arg.Any<string>(), Arg.Any<string>(), 
+        Arg.Any<int>(), Arg.Any<int>(), Arg.Any<bool>())
+        .Returns(new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+    
+    var handler = new GenerateBarcodeCommandHandler(barcodeGenerator);
+    var command = new GenerateBarcodeCommand("TEST", "Code128", 300, 300, false);
+    
+    var result = await handler.Handle(command, CancellationToken.None);
+    
+    result.IsSuccess.Should().BeTrue();
+}
+```
+
+**Infrastructure - Test integracyjny serwisu:**
+```csharp
+[Test]
+public void Generate_WithValidQRCode_ShouldReturnPngBytes()
+{
+    var service = new BarcodeGeneratorService();
+    
+    var result = service.Generate("https://example.com", "QRCode", 300, 300, false);
+    
+    result.Should().NotBeEmpty();
+    result.Take(4).Should().Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47 }); // PNG header
+}
+```
+
+**API - Test kontrolera:**
+```csharp
+[Test]
+public async Task GenerateBarcode_WithValidRequest_ShouldReturnOk()
+{
+    var mediator = Substitute.For<IMediator>();
+    mediator.Send(Arg.Any<GenerateBarcodeCommand>(), Arg.Any<CancellationToken>())
+        .Returns(Result<BarcodeResponse>.Success(new BarcodeResponse()));
+    
+    var controller = CreateController(mediator);
+    
+    var result = await controller.GenerateBarcode(new BarcodeRequest());
+    
+    result.Should().BeOfType<OkObjectResult>();
+}
+```
+
+### Metryki pokrycia
+
+Aktualny stan testów:
+- **52 testy jednostkowe**
+- Pokrycie wszystkich 4 warstw architektury
+- Testy walidatorów (FluentValidation)
+- Testy handlerów (MediatR)
+- Testy serwisów domenowych
+- Testy kontrolerów API
+
+### Dodawanie nowych testów
+
+1. Wybierz odpowiedni projekt testowy (Domain/Application/Infrastructure/Api)
+2. Utwórz plik testowy w strukturze odzwierciedlającej testowany kod
+3. Użyj konwencji nazewnictwa: `[Klasa]Tests.cs`
+4. Implementuj testy zgodnie z wzorcem AAA (Arrange-Act-Assert)
+
+Przykład:
+```csharp
+namespace D2ViewerEditor.Application.UnitTests.Features.Documents;
+
+[TestFixture]
+public class SaveDocumentCommandHandlerTests
+{
+    [Test]
+    public async Task Handle_WithValidCommand_ShouldSaveDocument()
+    {
+        // Arrange
+        var converter = Substitute.For<IHtmlToDocxConverter>();
+        var handler = new SaveDocumentCommandHandler(converter);
+        
+        // Act
+        var result = await handler.Handle(command, CancellationToken.None);
+        
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+    }
+}
+```
+
 ## Troubleshooting
 
 ### Port zajęty
