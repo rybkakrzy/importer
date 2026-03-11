@@ -44,24 +44,71 @@ importer/
 
 ## Uruchomienie
 
-### Backend
+### Backend (API)
 
+**Tryb deweloperski (DEV):**
 ```powershell
 cd D2ApiViewerEditor\D2ViewerEditor.Api
-dotnet run --environment DEV
+dotnet run
 ```
+
+**Tryb UAT:**
+```powershell
+cd D2ApiViewerEditor\D2ViewerEditor.Api
+dotnet run --launch-profile uat
+```
+
+**Odpowiednie pliki konfiguracyjne:**
+- `appsettings.DEV.json` - Środowisko deweloperskie
+- `appsettings.UAT.json` - Środowisko UAT
+- `appsettings.PRD.json` - Środowisko produkcyjne
 
 API: `http://localhost:5190`  
 Swagger: `http://localhost:5190/swagger`
 
-### Frontend
+### Frontend (GUI)
 
+**Tryb deweloperski (hot-reload, source maps):**
+```powershell
+cd D2GuiViewerEditor
+npm install  # Pierwsza instalacja zależności
+npm start
+```
+
+**Tryb produkcyjny (dev server z optymalizacjami):**
+```powershell
+cd D2GuiViewerEditor
+npm start -- --configuration production
+```
+
+**Build produkcyjny + serwowanie lokalnie:**
+```powershell
+cd D2GuiViewerEditor
+npm run build  # Tworzy folder dist/
+npx http-server dist/d2-gui-viewereditor/browser -p 4200
+```
+
+**Odpowiednie pliki środowiskowe:**
+- `src/environments/environment.development.ts` - Development
+- `src/environments/environment.ts` - Production
+
+Aplikacja: `http://localhost:4200`
+
+### Uruchomienie obu aplikacji jednocześnie
+
+**W osobnych terminalach:**
+
+Terminal 1 (API):
+```powershell
+cd D2ApiViewerEditor\D2ViewerEditor.Api
+dotnet run
+```
+
+Terminal 2 (GUI):
 ```powershell
 cd D2GuiViewerEditor
 npm start
 ```
-
-Aplikacja: `http://localhost:4200`
 
 ### Testy E2E
 
