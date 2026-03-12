@@ -22,7 +22,7 @@
 }
 
 .page {
-  width: 816px; /* 21cm * 96 DPI / 2.54 */
+  width: 794px; /* 21cm * 96 DPI / 2.54 = 793.7px */
   min-height: 1122px; /* 29.7cm * 96 DPI / 2.54 */
   background: white;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
@@ -35,12 +35,12 @@
 
 .page.landscape {
   width: 1122px;
-  min-height: 816px;
+  min-height: 794px;
 }
 
 /* Separator między stronami - styl Google Docs */
 .page-separator {
-  width: 816px;
+  width: 794px;
   height: 8px;
   background: #e0e0e0;
   margin: 0 auto;

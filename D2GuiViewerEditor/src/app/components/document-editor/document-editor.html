@@ -741,9 +741,7 @@
       <div class="ruler-h-bar">
         <div class="ruler-h-gutter"></div>
         <div class="ruler-h-scrollable">
-          <div class="ruler-h-inner"
-               [style.transform]="'scaleX(' + zoomLevel() / 100 + ')'"
-               [style.transform-origin]="'left top'">
+          <div class="ruler-h-inner">
             <d2-ruler
               mode="horizontal"
               [margins]="pageSettings().margins"
@@ -760,9 +758,7 @@
       <!-- Pionowa linijka — pełna wysokość, przyklejona do lewej krawędzi -->
       @if (showRuler()) {
         <div class="ruler-v-bar" #verticalRulerBar>
-          <div class="ruler-v-inner"
-               [style.transform]="'scaleY(' + zoomLevel() / 100 + ')'"
-               [style.transform-origin]="'left top'">
+          <div class="ruler-v-inner">
             <d2-ruler
               mode="vertical"
               [margins]="pageSettings().margins"

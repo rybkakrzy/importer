@@ -534,7 +534,7 @@
   align-items: stretch;
   height: 22px;
   flex-shrink: 0;
-  background: #c4c4c4;   /* szary = poza kartką */
+  background: #e8e8e8;   /* jasnoszare tło - jak tło dokumentu */
   border-bottom: 1px solid #b0b0b0;
   z-index: 25;
   overflow: hidden;
@@ -544,7 +544,7 @@
 .ruler-h-gutter {
   width: 22px;
   flex-shrink: 0;
-  background: #dcdcdc;
+  background: #e8e8e8;
   border-right: 1px solid #b0b0b0;
   box-sizing: border-box;
 }
@@ -558,7 +558,10 @@
 }
 
 .ruler-h-inner {
-  /* Skaluje się z zoomem — transform jest inline */
+  /* Linijka sama się dostosowuje do zoomu - nie używamy transform */
+  display: flex;
+  justify-content: center;
+  margin-left: -11px; /* Połowa szerokości gutter'a dla lepszego wyrównania */
 }
 
 /* ── Kontener: pion. linijka + scroll area ── */
@@ -572,7 +575,7 @@
 .ruler-v-bar {
   width: 22px;
   flex-shrink: 0;
-  background: #c4c4c4;
+  background: #e8e8e8;
   border-right: 1px solid #b0b0b0;
   z-index: 24;
   overflow-y: scroll;
@@ -587,7 +590,7 @@
 }
 
 .ruler-v-inner {
-  /* Skaluje się z zoomem — transform jest inline */
+  /* Linijka sama się dostosowuje do zoomu - nie używamy transform */
   padding-top: 20px;   /* pasuje do editor-scroll-container padding */
 }
 

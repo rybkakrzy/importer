@@ -2,7 +2,7 @@
      Linijka: POZIOMA (horizontal)
      ═══════════════════════════════════════════════ -->
 @if (mode === 'horizontal') {
-  <div class="h-ruler" [style.width.px]="axisPx">
+  <div class="h-ruler" [style.width.px]="axisPxScaled">
     <!-- Szara strefa LEWEGO marginesu -->
     <div class="h-margin h-margin-start" [style.width.px]="startMarginPx"></div>
     <!-- Szara strefa PRAWEGO marginesu -->
@@ -35,7 +35,7 @@
 
     <!-- Uchwyt END (prawy margines) -->
     <div class="h-handle h-handle-end"
-         [style.left.px]="axisPx - endMarginPx"
+         [style.left.px]="axisPxScaled - endMarginPx"
          [class.active]="activeSide() === 'end'"
          [title]="endTooltip"
          (mousedown)="onEndHandleDown($event)">
@@ -55,7 +55,7 @@
      Linijka: PIONOWA (vertical)
      ═══════════════════════════════════════════════ -->
 @if (mode === 'vertical') {
-  <div class="v-ruler" [style.height.px]="axisPx">
+  <div class="v-ruler" [style.height.px]="axisPxScaled">
     <!-- Szara strefa GÓRNEGO marginesu -->
     <div class="v-margin v-margin-start" [style.height.px]="startMarginPx"></div>
     <!-- Szara strefa DOLNEGO marginesu -->
@@ -88,7 +88,7 @@
 
     <!-- Uchwyt END (dolny margines) -->
     <div class="v-handle v-handle-end"
-         [style.top.px]="axisPx - endMarginPx"
+         [style.top.px]="axisPxScaled - endMarginPx"
          [class.active]="activeSide() === 'end'"
          [title]="endTooltip"
          (mousedown)="onEndHandleDown($event)">

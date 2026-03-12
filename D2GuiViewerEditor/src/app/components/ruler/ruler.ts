@@ -63,19 +63,29 @@ export class RulerComponent implements OnChanges {
     return Math.round(this.axisCm * this.CM_TO_PX);
   }
 
+  /** Długość osi w px ze zoomem (faktyczna szerokość/wysokość do wyrenderowania) */
+  get axisPxScaled(): number {
+    return Math.round(this.axisPx * (this.zoomLevel / 100));
+  }
+
+  /** Scale factor for positioning elements */
+  get scale(): number {
+    return this.zoomLevel / 100;
+  }
+
   /** Ticki (co 1 cm) */
   get ticks(): number[] {
     return Array.from({ length: Math.floor(this.axisCm) + 1 }, (_, i) => i);
   }
 
-  /** Margines "bliższy" (lewy / górny) w px */
+  /** Margines "bliższy" (lewy / górny) w px - scaled */
   get startMarginPx(): number {
-    return (this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top) * this.CM_TO_PX;
+    return (this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top) * this.CM_TO_PX * this.scale;
   }
 
-  /** Margines "dalszy" (prawy / dolny) w px */
+  /** Margines "dalszy" (prawy / dolny) w px - scaled */
   get endMarginPx(): number {
-    return (this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom) * this.CM_TO_PX;
+    return (this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom) * this.CM_TO_PX * this.scale;
   }
 
   // ────── Drag state ──────
@@ -122,9 +132,8 @@ export class RulerComponent implements OnChanges {
     if (!this._dragging) return;
     e.preventDefault();
 
-    const scale = this.zoomLevel / 100;
     const client = this.mode === 'horizontal' ? e.clientX : e.clientY;
-    const deltaCm = ((client - this._dragStartClientPx) / scale) / this.CM_TO_PX;
+    const deltaCm = (client - this._dragStartClientPx) / (this.CM_TO_PX * this.scale);
 
     let newCm = this._dragging === 'start'
       ? this._dragStartMarginCm + deltaCm
@@ -143,7 +152,7 @@ export class RulerComponent implements OnChanges {
 
     this._tempMargins = { ...this.margins, [key]: newCm };
     this.dragIndicatorPos.set(
-      this._dragging === 'start' ? newCm * this.CM_TO_PX : this.axisPx - newCm * this.CM_TO_PX
+      this._dragging === 'start' ? newCm * this.CM_TO_PX * this.scale : this.axisPxScaled - newCm * this.CM_TO_PX * this.scale
     );
   }
 
@@ -170,7 +179,7 @@ export class RulerComponent implements OnChanges {
   }
 
   tickPos(cm: number): number {
-    return cm * this.CM_TO_PX;
+    return cm * this.CM_TO_PX * this.scale;
   }
 
   tickLabel(cm: number): string {
