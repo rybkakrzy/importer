@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: d2viewereditor_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: d2viewereditor_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d d2viewereditor_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - d2viewereditor_network
+
+  # pgAdmin (opcjonalny - do zarządzania bazą przez GUI)
+  pgadmin:
+    image: docker.io/dpage/pgadmin4:latest
+    container_name: d2viewereditor_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@d2viewereditor.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - d2viewereditor_network
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  d2viewereditor_network:
+    driver: bridge

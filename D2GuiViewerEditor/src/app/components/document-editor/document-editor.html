@@ -433,6 +433,36 @@
             </div>
           }
         </div>
+
+        <!-- WIDOK -->
+        <div class="menu-item-wrapper">
+          <button class="menu-item" (click)="toggleViewMenu(); $event.stopPropagation()">Widok</button>
+          
+          @if (showViewMenu()) {
+            <div class="dropdown-menu" (click)="$event.stopPropagation()">
+              <button class="dropdown-item" (click)="toggleRuler()">
+                @if (showRuler()) {
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                  </svg>
+                } @else {
+                  <span class="dropdown-item-spacer"></span>
+                }
+                Linijka
+              </button>
+              <button class="dropdown-item" (click)="toggleMarginGuides()">
+                @if (showMarginGuides()) {
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                  </svg>
+                } @else {
+                  <span class="dropdown-item-spacer"></span>
+                }
+                Linie marginesów
+              </button>
+            </div>
+          }
+        </div>
       </nav>
     </div>
     
@@ -706,33 +736,72 @@
 
   <!-- Main Editor Area -->
   <main class="editor-main">
-    <div class="editor-scroll-container" (scroll)="onEditorScroll($event)">
-      <div class="editor-wrapper" [style.transform]="'scale(' + zoomLevel() / 100 + ')'" [style.transform-origin]="'top center'">
-        <!-- Kartka dokumentu -->
-        <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
-          <d2-wysiwyg-editor
-            [content]="documentContent()"
-            [pageMargins]="pageSettings().margins"
-            [pageOrientation]="pageSettings().orientation"
-            [showMarginGuides]="showMarginGuides()"
-            [headerContent]="headerContent()"
-            [footerContent]="footerContent()"
-            (contentChange)="onContentChange($event)"
-            (stateChange)="onStateChange($event)"
-            (pagesChange)="onPagesChange($event)"
-            (headerChange)="onHeaderChange($event)"
-            (footerChange)="onFooterChange($event)"
-            (openHeaderFooterSettings)="onOpenHeaderFooterSettings($event)"
-          />
+    <!-- Pozioma linijka — pełna szerokość, przyklejona pod toolbarem -->
+    @if (showRuler()) {
+      <div class="ruler-h-bar">
+        <div class="ruler-h-gutter"></div>
+        <div class="ruler-h-scrollable">
+          <div class="ruler-h-inner"
+               [style.transform]="'scaleX(' + zoomLevel() / 100 + ')'"
+               [style.transform-origin]="'left top'">
+            <d2-ruler
+              mode="horizontal"
+              [margins]="pageSettings().margins"
+              [orientation]="pageSettings().orientation"
+              [zoomLevel]="zoomLevel()"
+              (marginsChange)="onRulerMarginsChange($event)"
+            />
+          </div>
         </div>
       </div>
-      
-      <!-- Wskaźnik stron przy scrollowaniu -->
-      @if (showPageIndicator() && totalPages() > 1) {
-        <div class="page-indicator">
-          {{ currentPage() }} z {{ totalPages() }}
+    }
+
+    <div class="editor-below-hruler">
+      <!-- Pionowa linijka — pełna wysokość, przyklejona do lewej krawędzi -->
+      @if (showRuler()) {
+        <div class="ruler-v-bar" #verticalRulerBar>
+          <div class="ruler-v-inner"
+               [style.transform]="'scaleY(' + zoomLevel() / 100 + ')'"
+               [style.transform-origin]="'left top'">
+            <d2-ruler
+              mode="vertical"
+              [margins]="pageSettings().margins"
+              [orientation]="pageSettings().orientation"
+              [zoomLevel]="zoomLevel()"
+              (marginsChange)="onRulerMarginsChange($event)"
+            />
+          </div>
         </div>
       }
+
+      <!-- Scrollowalny obszar dokumentu -->
+      <div class="editor-scroll-container" (scroll)="onEditorScroll($event)">
+        <div class="editor-wrapper" [style.transform]="'scale(' + zoomLevel() / 100 + ')'" [style.transform-origin]="'top center'">
+          <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
+            <d2-wysiwyg-editor
+              [content]="documentContent()"
+              [pageMargins]="pageSettings().margins"
+              [pageOrientation]="pageSettings().orientation"
+              [showMarginGuides]="showMarginGuides()"
+              [headerContent]="headerContent()"
+              [footerContent]="footerContent()"
+              (contentChange)="onContentChange($event)"
+              (stateChange)="onStateChange($event)"
+              (pagesChange)="onPagesChange($event)"
+              (headerChange)="onHeaderChange($event)"
+              (footerChange)="onFooterChange($event)"
+              (openHeaderFooterSettings)="onOpenHeaderFooterSettings($event)"
+            />
+          </div>
+        </div>
+        
+        <!-- Wskaźnik stron przy scrollowaniu -->
+        @if (showPageIndicator() && totalPages() > 1) {
+          <div class="page-indicator">
+            {{ currentPage() }} z {{ totalPages() }}
+          </div>
+        }
+      </div>
     </div>
   </main>
 

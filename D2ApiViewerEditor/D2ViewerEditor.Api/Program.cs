@@ -10,7 +10,7 @@ builder.Configuration.AddJsonFile($"appsettings.{env}.secrets.json", optional: t
 
 // Add Architecture layers
 builder.Services.AddApplication();
-builder.Services.AddInfrastructure();
+builder.Services.AddInfrastructure(builder.Configuration);
 
 // Add API services
 builder.Services.AddControllers();

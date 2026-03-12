@@ -20,6 +20,8 @@ D2ApiViewerEditor/
 - **Konwersja**: DOCX ↔ HTML (z zachowaniem formatowania)
 - **Kody kreskowe**: Generowanie QR, Code128, EAN-13 (ZXing)
 - **Podpisy cyfrowe**: Podpisywanie certyfikatem X.509
+- **Przechowywanie dokumentów**: PostgreSQL z wersjonowaniem (każde zapisanie = nowa wersja)
+- **Wersjonowanie**: Możliwość przywrócenia dowolnej wcześniejszej wersji dokumentu
 - **Health Check**: Endpoint monitoringu `/health`
 
 ## Technologie
@@ -27,10 +29,78 @@ D2ApiViewerEditor/
 - **.NET 8** + ASP.NET Core Web API
 - **MediatR** - CQRS pattern
 - **FluentValidation** - Walidacja żądań
+- **Entity Framework Core** - ORM z PostgreSQL (Npgsql)
+- **PostgreSQL 16** - Baza danych dokumentów z wersjonowaniem
 - **DocumentFormat.OpenXml** - Manipulacja DOCX
 - **HtmlAgilityPack** - Parsing HTML
 - **ZXing.Net** - Generowanie kodów kreskowych
 - **SkiaSharp** - Rendering grafiki
+
+## Baza Danych (PostgreSQL)
+
+Aplikacja używa **PostgreSQL** do przechowywania dokumentów z pełnym wersjonowaniem.
+
+### Uruchomienie bazy danych
+
+**Wymagania:** Podman lub Docker z podman-compose/docker-compose
+
+```powershell
+# Z głównego katalogu projektu
+cd infra
+podman-compose up -d
+
+# Sprawdź status
+podman-compose ps
+
+# Logi
+podman-compose logs -f postgres
+```
+
+📘 **Szczegółowa dokumentacja:** [infra/README.md](../infra/README.md)
+
+### Connection String
+
+Connection string znajduje się w `appsettings.{ENV}.json`:
+
+```json
+{
+  "ConnectionStrings": {
+    "DocumentDatabase": "Host=localhost;Port=5432;Database=d2viewereditor_dev;Username=postgres;Password=postgres"
+  }
+}
+```
+
+### Schemat bazy
+
+- **documents** - Tabela główna (aggregate root)
+  - `id` (UUID) - GUID mastera dokumentu
+  - `name` - Nazwa dokumentu
+  - `mime_type` - Typ MIME
+  - `created_at`, `created_by` - Metadata
+  - `is_deleted` - Soft delete flag
+
+- **document_versions** - Wersje dokumentów
+  - `id` (UUID) - GUID wersji
+  - `document_id` (FK) - Powiązanie z dokumentem
+  - `version_number` - Numer wersji (1, 2, 3...)
+  - `content` (BYTEA) - Zawartość binarna
+  - `is_active` - Czy aktywna wersja (tylko jedna może być TRUE)
+  - `created_at`, `created_by` - Metadata
+
+### Migracje
+
+⚠️ **Aplikacja NIE używa EF Core Migrations.** Skrypty SQL dla Liquibase znajdują się w `infra/sql/`:
+- `001_init_schema.sql` - Definicje tabel
+- `002_init_indexes.sql` - Indeksy wydajnościowe
+
+Skrypty są automatycznie wykonywane przy pierwszym uruchomieniu kontenera PostgreSQL.
+
+### pgAdmin (opcjonalny GUI)
+
+pgAdmin jest dostępny po uruchomieniu `podman-compose` pod adresem:
+- **URL:** http://localhost:5050
+- **Email:** admin@d2viewereditor.local
+- **Password:** admin
 
 ## Uruchomienie
 
@@ -105,11 +175,57 @@ Dokumentacja interaktywna: **http://localhost:5190/swagger**
 | Endpoint | Metoda | Opis |
 |----------|--------|------|
 | `/api/health` | GET | Status aplikacji |
+| **Dokumenty - Zarządzanie** | | |
+| `/api/documentstorage/upload` | POST | Upload nowego dokumentu (zwraca guid_master) |
+| `/api/documentstorage/{masterId}` | GET | Pobranie aktywnej wersji dokumentu |
+| `/api/documentstorage/{masterId}/save` | POST | Zapisanie nowej wersji dokumentu |
+| `/api/documentstorage/{masterId}/versions` | GET | Lista wszystkich wersji dokumentu |
+| `/api/documentstorage/{masterId}/restore/{versionId}` | POST | Przywrócenie wybranej wersji |
+| **Dokumenty - Operacje** | | |
 | `/api/document/create` | POST | Tworzenie dokumentu DOCX |
 | `/api/document/save` | POST | Zapisywanie dokumentu |
 | `/api/document/convert/html-to-docx` | POST | Konwersja HTML → DOCX |
 | `/api/document/convert/docx-to-html` | POST | Konwersja DOCX → HTML |
+| **Kody kreskowe** | | |
 | `/api/barcode/generate` | POST | Generowanie kodu kreskowego |
+
+#### Przykład: Upload dokumentu
+
+```bash
+curl -X POST http://localhost:5190/api/documentstorage/upload \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "dokument.pdf",
+    "mimeType": "application/pdf",
+    "content": "SGVsbG8gV29ybGQh",
+    "createdBy": "System"
+  }'
+```
+
+**Response:**
+```json
+{
+  "masterId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "versionId": "8c9d2f7a-4b3e-4f1a-9d8c-7e5b3a2f1c0d"
+}
+```
+
+#### Przykład: Zapis nowej wersji
+
+```bash
+curl -X POST http://localhost:5190/api/documentstorage/{masterId}/save \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "TmV3IHZlcnNpb24gZGF0YQ==",
+    "createdBy": "JanKowalski"
+  }'
+```
+
+#### Przykład: Przywrócenie wersji
+
+```bash
+curl -X POST http://localhost:5190/api/documentstorage/{masterId}/restore/{versionId}
+```
 
 ## Tryby uruchomieniowe
 

@@ -1,0 +1,231 @@
+/* ═══════════════════════════════════════════════
+   Linijka (Ruler) — styl MS Word
+   Każdy <d2-ruler> renderuje JEDNĄ oś.
+   ═══════════════════════════════════════════════ */
+
+:host {
+  display: block;
+}
+
+/* ─── Tokeny ─── */
+$ruler-bg:           #e8e8e8;
+$ruler-content-bg:   #ffffff;
+$ruler-margin-bg:    #c4c4c4;
+$ruler-border:       #b0b0b0;
+$ruler-tick:         #6e6e6e;
+$ruler-label:        #444;
+$handle-fill:        #5a5a5a;
+$handle-hover:       #333;
+$handle-active:      #0060df;
+$guide-color:        #0060df;
+
+$h-height: 20px;   /* wysokość poziomej linijki */
+$v-width:  20px;   /* szerokość pionowej linijki */
+
+
+/* ─────────────────────────────────────────────
+   POZIOMA LINIJKA (.h-ruler)
+   ───────────────────────────────────────────── */
+
+.h-ruler {
+  position: relative;
+  height: $h-height;
+  background: $ruler-content-bg;
+  border-bottom: 1px solid $ruler-border;
+  user-select: none;
+  overflow: visible;
+}
+
+/* Szare strefy marginesów */
+.h-margin {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: $ruler-margin-bg;
+  z-index: 0;
+}
+.h-margin-start { left: 0; }
+.h-margin-end   { right: 0; }
+
+/* ─── Ticki ─── */
+.h-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.h-tick-major {
+  border-left: 1px solid $ruler-tick;
+  /* Pełna wysokość — kreska od góry do dołu */
+}
+
+.h-tick-half {
+  top: 4px;
+  bottom: 4px;
+  border-left: 1px solid $ruler-tick;
+}
+
+.h-tick-quarter {
+  top: 7px;
+  bottom: 7px;
+  border-left: 1px solid #8e8e8e;
+}
+
+.h-tick-label {
+  position: absolute;
+  /* Etykieta wyśrodkowana pionowo, lekko odsunięta od kreski */
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  font: 600 9px/1 'Segoe UI', Arial, sans-serif;
+  color: $ruler-label;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ─── Uchwyty ─── */
+.h-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  margin-left: -8px;
+  cursor: col-resize;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 1px;
+}
+
+.h-handle-icon {
+  fill: $handle-fill;
+  transition: fill 0.12s ease;
+  pointer-events: none;
+  filter: drop-shadow(0 0.5px 0 rgba(255,255,255,0.6));
+}
+
+.h-handle:hover .h-handle-icon { fill: $handle-hover; }
+.h-handle.active .h-handle-icon { fill: $handle-active; }
+
+.h-handle:hover,
+.h-handle.active {
+  background: rgba($handle-active, 0.08);
+}
+
+/* ─── Linia prowadząca (guide line) ─── */
+.h-guide-line {
+  position: absolute;
+  top: $h-height;
+  width: 0;
+  height: 3000px;          /* wystarczająco wysoka */
+  border-left: 1px dashed $guide-color;
+  pointer-events: none;
+  z-index: 50;
+}
+
+
+/* ─────────────────────────────────────────────
+   PIONOWA LINIJKA (.v-ruler)
+   ───────────────────────────────────────────── */
+
+.v-ruler {
+  position: relative;
+  width: $v-width;
+  background: $ruler-content-bg;
+  border-right: 1px solid $ruler-border;
+  user-select: none;
+  overflow: visible;
+}
+
+.v-margin {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: $ruler-margin-bg;
+  z-index: 0;
+}
+.v-margin-start { top: 0; }
+.v-margin-end   { bottom: 0; }
+
+/* ─── Ticki ─── */
+.v-tick {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.v-tick-major {
+  border-top: 1px solid $ruler-tick;
+}
+
+.v-tick-half {
+  left: 4px;
+  right: 4px;
+  border-top: 1px solid $ruler-tick;
+}
+
+.v-tick-quarter {
+  left: 7px;
+  right: 7px;
+  border-top: 1px solid #8e8e8e;
+}
+
+.v-tick-label {
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  transform: translateX(-50%) rotate(-90deg);
+  transform-origin: center center;
+  font: 600 9px/1 'Segoe UI', Arial, sans-serif;
+  color: $ruler-label;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ─── Uchwyty ─── */
+.v-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 16px;
+  margin-top: -8px;
+  cursor: row-resize;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 1px;
+}
+
+.v-handle-icon {
+  fill: $handle-fill;
+  transition: fill 0.12s ease;
+  pointer-events: none;
+  filter: drop-shadow(0.5px 0 0 rgba(255,255,255,0.6));
+}
+
+.v-handle:hover .v-handle-icon { fill: $handle-hover; }
+.v-handle.active .v-handle-icon { fill: $handle-active; }
+
+.v-handle:hover,
+.v-handle.active {
+  background: rgba($handle-active, 0.08);
+}
+
+/* ─── Linia prowadząca ─── */
+.v-guide-line {
+  position: absolute;
+  left: $v-width;
+  height: 0;
+  width: 3000px;
+  border-top: 1px dashed $guide-color;
+  pointer-events: none;
+  z-index: 50;
+}

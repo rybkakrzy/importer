@@ -1,0 +1,105 @@
+<!-- ═══════════════════════════════════════════════
+     Linijka: POZIOMA (horizontal)
+     ═══════════════════════════════════════════════ -->
+@if (mode === 'horizontal') {
+  <div class="h-ruler" [style.width.px]="axisPx">
+    <!-- Szara strefa LEWEGO marginesu -->
+    <div class="h-margin h-margin-start" [style.width.px]="startMarginPx"></div>
+    <!-- Szara strefa PRAWEGO marginesu -->
+    <div class="h-margin h-margin-end" [style.width.px]="endMarginPx"></div>
+
+    <!-- Tickmarki -->
+    @for (cm of ticks; track cm) {
+      <div class="h-tick h-tick-major" [style.left.px]="tickPos(cm)">
+        @if (tickLabel(cm)) {
+          <span class="h-tick-label">{{ tickLabel(cm) }}</span>
+        }
+      </div>
+      @if (cm < axisCm) {
+        <div class="h-tick h-tick-half" [style.left.px]="tickPos(cm + 0.5)"></div>
+        <div class="h-tick h-tick-quarter" [style.left.px]="tickPos(cm + 0.25)"></div>
+        <div class="h-tick h-tick-quarter" [style.left.px]="tickPos(cm + 0.75)"></div>
+      }
+    }
+
+    <!-- Uchwyt START (lewy margines) -->
+    <div class="h-handle h-handle-start"
+         [style.left.px]="startMarginPx"
+         [class.active]="activeSide() === 'start'"
+         [title]="startTooltip"
+         (mousedown)="onStartHandleDown($event)">
+      <svg class="h-handle-icon" width="12" height="10" viewBox="0 0 12 10">
+        <polygon points="0,0 12,0 6,10" />
+      </svg>
+    </div>
+
+    <!-- Uchwyt END (prawy margines) -->
+    <div class="h-handle h-handle-end"
+         [style.left.px]="axisPx - endMarginPx"
+         [class.active]="activeSide() === 'end'"
+         [title]="endTooltip"
+         (mousedown)="onEndHandleDown($event)">
+      <svg class="h-handle-icon" width="12" height="10" viewBox="0 0 12 10">
+        <polygon points="0,0 12,0 6,10" />
+      </svg>
+    </div>
+
+    <!-- Linia prowadząca podczas drag -->
+    @if (isDragging()) {
+      <div class="h-guide-line" [style.left.px]="dragIndicatorPos()"></div>
+    }
+  </div>
+}
+
+<!-- ═══════════════════════════════════════════════
+     Linijka: PIONOWA (vertical)
+     ═══════════════════════════════════════════════ -->
+@if (mode === 'vertical') {
+  <div class="v-ruler" [style.height.px]="axisPx">
+    <!-- Szara strefa GÓRNEGO marginesu -->
+    <div class="v-margin v-margin-start" [style.height.px]="startMarginPx"></div>
+    <!-- Szara strefa DOLNEGO marginesu -->
+    <div class="v-margin v-margin-end" [style.height.px]="endMarginPx"></div>
+
+    <!-- Tickmarki -->
+    @for (cm of ticks; track cm) {
+      <div class="v-tick v-tick-major" [style.top.px]="tickPos(cm)">
+        @if (tickLabel(cm)) {
+          <span class="v-tick-label">{{ tickLabel(cm) }}</span>
+        }
+      </div>
+      @if (cm < axisCm) {
+        <div class="v-tick v-tick-half" [style.top.px]="tickPos(cm + 0.5)"></div>
+        <div class="v-tick v-tick-quarter" [style.top.px]="tickPos(cm + 0.25)"></div>
+        <div class="v-tick v-tick-quarter" [style.top.px]="tickPos(cm + 0.75)"></div>
+      }
+    }
+
+    <!-- Uchwyt START (górny margines) -->
+    <div class="v-handle v-handle-start"
+         [style.top.px]="startMarginPx"
+         [class.active]="activeSide() === 'start'"
+         [title]="startTooltip"
+         (mousedown)="onStartHandleDown($event)">
+      <svg class="v-handle-icon" width="10" height="12" viewBox="0 0 10 12">
+        <polygon points="0,0 0,12 10,6" />
+      </svg>
+    </div>
+
+    <!-- Uchwyt END (dolny margines) -->
+    <div class="v-handle v-handle-end"
+         [style.top.px]="axisPx - endMarginPx"
+         [class.active]="activeSide() === 'end'"
+         [title]="endTooltip"
+         (mousedown)="onEndHandleDown($event)">
+      <svg class="v-handle-icon" width="10" height="12" viewBox="0 0 10 12">
+        <polygon points="0,0 0,12 10,6" />
+      </svg>
+    </div>
+
+    <!-- Linia prowadząca podczas drag -->
+    @if (isDragging()) {
+      <div class="v-guide-line" [style.top.px]="dragIndicatorPos()"></div>
+    }
+  </div>
+}

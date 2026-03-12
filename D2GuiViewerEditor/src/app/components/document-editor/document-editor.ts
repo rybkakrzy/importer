@@ -1,6 +1,7 @@
 import { 
   Component, 
   ViewChild, 
+  ElementRef,
   inject,
   signal,
   HostListener
@@ -10,6 +11,7 @@ import { FormsModule } from '@angular/forms';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
+import { RulerComponent } from '../ruler/ruler';
 import { DocumentService } from '../../services/document.service';
 import { 
   DocumentContent, 
@@ -38,7 +40,8 @@ import { BuildInfoService } from '../../core/services/build-info.service';
     FormsModule,
     WysiwygEditorComponent,
     EditorToolbarComponent,
-    BarcodeDialogComponent
+    BarcodeDialogComponent,
+    RulerComponent
   ],
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
@@ -46,6 +49,7 @@ import { BuildInfoService } from '../../core/services/build-info.service';
 export class DocumentEditorComponent {
   @ViewChild(WysiwygEditorComponent) editor!: WysiwygEditorComponent;
   @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
+  @ViewChild('verticalRulerBar') verticalRulerBar?: ElementRef<HTMLDivElement>;
 
   private documentService = inject(DocumentService);
   readonly buildInfo = inject(BuildInfoService);
@@ -155,6 +159,10 @@ export class DocumentEditorComponent {
   // Ustawienia strony
   showPageSetup = signal(false);
   showMarginGuides = signal(true);
+  showRuler = signal(true);
+
+  // Menu Widok
+  showViewMenu = signal(false);
   pageSettings = signal<PageSettings>({
     margins: { top: 2.5, bottom: 2.5, left: 2.5, right: 2.5 },
     orientation: 'portrait',
@@ -623,6 +631,11 @@ export class DocumentEditorComponent {
     const container = event.target as HTMLElement;
     const scrollTop = container.scrollTop;
     const scale = this.zoomLevel() / 100;
+
+    // Synchronizuj pionową linijkę ze scrollem
+    if (this.verticalRulerBar?.nativeElement) {
+      this.verticalRulerBar.nativeElement.scrollTop = scrollTop;
+    }
     
     // Wysokość strony A4 w pikselach + margines
     const PAGE_HEIGHT = 1122;
@@ -899,6 +912,7 @@ export class DocumentEditorComponent {
     this.showFormatMenu.set(false);
     this.showInsertMenu.set(false);
     this.showToolsMenu.set(false);
+    this.showViewMenu.set(false);
     this.activeSubmenu.set(null);
     this.showTemplates.set(false);
     this.showContextMenu.set(false);
@@ -1338,14 +1352,6 @@ export class DocumentEditorComponent {
     this.editor?.startEditingFooter();
   }
 
-  /**
-   * Przełącza widok marginesów
-   */
-  toggleMarginGuides(): void {
-    this.showMarginGuides.update(v => !v);
-    this.closeAllMenus();
-  }
-
   // =====================
   // ZNAJDŹ I ZAMIEŃ
   // =====================
@@ -1672,6 +1678,36 @@ export class DocumentEditorComponent {
     const wasOpen = this.showToolsMenu();
     this.closeAllMenus();
     this.showToolsMenu.set(!wasOpen);
+  }
+
+  // =====================
+  // MENU WIDOK
+  // =====================
+
+  toggleViewMenu(): void {
+    const wasOpen = this.showViewMenu();
+    this.closeAllMenus();
+    this.showViewMenu.set(!wasOpen);
+  }
+
+  toggleRuler(): void {
+    this.showRuler.set(!this.showRuler());
+    this.closeAllMenus();
+  }
+
+  toggleMarginGuides(): void {
+    this.showMarginGuides.set(!this.showMarginGuides());
+    this.closeAllMenus();
+  }
+
+  /**
+   * Obsługuje zmianę marginesów z linijki (drag & drop)
+   */
+  onRulerMarginsChange(margins: PageMargins): void {
+    this.pageSettings.update(s => ({
+      ...s,
+      margins: { ...margins }
+    }));
   }
 
   // =====================
