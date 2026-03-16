@@ -11,8 +11,8 @@
           <div class="page-header"
                [class.editing]="editingSection() === 'header'"
                [style.min-height.cm]="headerHeight()"
-               [style.padding-left.px]="pageMargins.left * 37.8"
-               [style.padding-right.px]="pageMargins.right * 37.8"
+               [style.padding-left.px]="pageMargins().left * 37.8"
+               [style.padding-right.px]="pageMargins().right * 37.8"
                (click)="startEditingHeader()"
                (dblclick)="startEditingHeader()">
             @if (editingSection() === 'header' && $index === 0) {
@@ -68,20 +68,20 @@
               contenteditable="true"
               spellcheck="true"
               [attr.placeholder]="'Zacznij pisać...'"
-              [style.padding-left.px]="pageMargins.left * 37.8"
-              [style.padding-right.px]="pageMargins.right * 37.8"
-              [style.padding-top.px]="8"
-              [style.padding-bottom.px]="8"
+              [style.padding-left.px]="pageMargins().left * 37.8"
+              [style.padding-right.px]="pageMargins().right * 37.8"
+              [style.padding-top.px]="contentPaddingTop()"
+              [style.padding-bottom.px]="contentPaddingBottom()"
               (mouseup)="saveSelection()"
               (keyup)="saveSelection()"
               (click)="stopEditingHeaderFooter()"
             ></div>
           } @else {
             <div class="page-overflow-content"
-                 [style.padding-left.px]="pageMargins.left * 37.8"
-                 [style.padding-right.px]="pageMargins.right * 37.8"
-                 [style.padding-top.px]="8"
-                 [style.padding-bottom.px]="8"
+                 [style.padding-left.px]="pageMargins().left * 37.8"
+                 [style.padding-right.px]="pageMargins().right * 37.8"
+                 [style.padding-top.px]="contentPaddingTop()"
+                 [style.padding-bottom.px]="contentPaddingBottom()"
                  [innerHTML]="page"
                  (click)="stopEditingHeaderFooter()">
             </div>
@@ -91,8 +91,8 @@
           <div class="page-footer"
                [class.editing]="editingSection() === 'footer'"
                [style.min-height.cm]="footerHeight()"
-               [style.padding-left.px]="pageMargins.left * 37.8"
-               [style.padding-right.px]="pageMargins.right * 37.8"
+               [style.padding-left.px]="pageMargins().left * 37.8"
+               [style.padding-right.px]="pageMargins().right * 37.8"
                (click)="startEditingFooter()"
                (dblclick)="startEditingFooter()">
             @if (editingSection() === 'footer' && $index === 0) {

@@ -12,7 +12,8 @@ import {
   computed,
   ViewChildren,
   QueryList,
-  ViewEncapsulation
+  ViewEncapsulation,
+  input
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -56,7 +57,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
   }
   
-  @Input() pageMargins: PageMargins = { top: 2.5, bottom: 2.5, left: 2.5, right: 2.5 };
+  pageMargins = input<PageMargins>({ top: 2.5, bottom: 2.5, left: 2.5, right: 2.5 });
   @Input() pageOrientation: 'portrait' | 'landscape' = 'portrait';
   @Input() showMarginGuides = true;
   
@@ -195,6 +196,22 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return pagesArr.map((_, i) => this._computeFooterContent(i));
   });
 
+  // Computed: efektywne paddingi treści (margines minus wysokość nagłówka/stopki)
+  // W MS Word, nagłówek/stopka zajmują CZĘŚĆ marginesu, nie dodają się do niego
+  contentPaddingTop = computed(() => {
+    const topMargin = this.pageMargins().top; // cm
+    const headerH = this._headerHeight(); // cm
+    const effectivePadding = Math.max(0, topMargin - headerH);
+    return effectivePadding * 37.8; // px
+  });
+  
+  contentPaddingBottom = computed(() => {
+    const bottomMargin = this.pageMargins().bottom; // cm
+    const footerH = this._footerHeight(); // cm
+    const effectivePadding = Math.max(0, bottomMargin - footerH);
+    return effectivePadding * 37.8; // px
+  });
+
   // Stan edytora
   editorState = signal<EditorState>({
     isModified: false,
@@ -254,8 +271,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     
     const contentHeight = editor.scrollHeight;
-    const marginTop = this.pageMargins.top * 37.8;
-    const marginBottom = this.pageMargins.bottom * 37.8;
+    const marginTop = this.pageMargins().top * 37.8;
+    const marginBottom = this.pageMargins().bottom * 37.8;
     const availableHeight = this.PAGE_HEIGHT_PX - marginTop - marginBottom;
 
     // Tolerancja na różnice renderowania (1-4px), które potrafią sztucznie dodać stronę
