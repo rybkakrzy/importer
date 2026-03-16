@@ -43,8 +43,7 @@ public class DocumentVersionConfiguration : IEntityTypeConfiguration<DocumentVer
 
         builder.Property(v => v.IsActive)
             .HasColumnName("is_active")
-            .IsRequired()
-            .HasDefaultValue(true);
+            .IsRequired();
 
         // Computed column dla rozmiaru
         builder.Ignore(v => v.SizeInBytes);

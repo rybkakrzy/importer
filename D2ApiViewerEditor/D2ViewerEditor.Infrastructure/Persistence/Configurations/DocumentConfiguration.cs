@@ -43,11 +43,15 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
             .IsRequired()
             .HasDefaultValue(false);
 
-        // Relacja 1:N z DocumentVersion
-        builder.HasMany<DocumentVersion>("_versions")
+        // Relacja 1:N z DocumentVersion — backing field _versions
+        builder.HasMany(d => d.Versions)
             .WithOne(v => v.Document!)
             .HasForeignKey(v => v.DocumentId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Navigation(d => d.Versions)
+            .HasField("_versions")
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
 
         // Indeksy
         builder.HasIndex(d => d.CreatedAt);

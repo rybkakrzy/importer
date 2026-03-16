@@ -28,6 +28,7 @@ import {
   SignDocumentRequest
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { DocumentStorageService } from '../../services/document-storage.service';
 
 /**
  * Główny komponent edytora dokumentów Word Online
@@ -52,10 +53,12 @@ export class DocumentEditorComponent {
   @ViewChild('verticalRulerBar') verticalRulerBar?: ElementRef<HTMLDivElement>;
 
   private documentService = inject(DocumentService);
+  private documentStorageService = inject(DocumentStorageService);
   readonly buildInfo = inject(BuildInfoService);
 
   // Stan dokumentu
   documentContent = signal<string>('<p></p>');
+  documentMasterId = signal<string | null>(null);
   documentMetadata = signal<DocumentMetadata>({
     title: 'Nowy dokument',
     created: new Date().toISOString(),
@@ -306,6 +309,20 @@ export class DocumentEditorComponent {
         
         this.showSuccess(`Otwarto dokument: ${file.name}`);
         this.isLoading.set(false);
+
+        // Zapisz dokument do bazy danych
+        this.documentStorageService.fileToBase64(file).then(base64 => {
+          this.documentStorageService.uploadDocument({
+            name: file.name,
+            mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            content: base64
+          }).subscribe({
+            next: (result) => {
+              this.documentMasterId.set(result.masterId);
+            },
+            error: () => { /* Błąd zapisu do bazy nie blokuje pracy w edytorze */ }
+          });
+        });
       },
       error: (err) => {
         this.showError(err.message || 'Nie udało się otworzyć dokumentu');
