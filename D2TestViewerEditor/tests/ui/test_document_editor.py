@@ -60,6 +60,11 @@ def perform_redo(editor_page: DocumentEditorPage):
     editor_page.page.keyboard.press("Control+Y")
 
 
+@when("klikam prawym przyciskiem w obszarze edytora")
+def right_click_editor(editor_page: DocumentEditorPage):
+    editor_page.open_context_menu()
+
+
 # ──────────────────────────────────────────────
 # THEN
 # ──────────────────────────────────────────────
@@ -88,3 +93,30 @@ def editor_contains_text(editor_page: DocumentEditorPage, text: str):
 @then("edytor jest pusty")
 def editor_is_empty(editor_page: DocumentEditorPage):
     editor_page.editor_should_be_empty()
+
+
+@then("inicjowane jest pobieranie pliku DOCX")
+def download_initiated(editor_page: DocumentEditorPage):
+    """Sprawdza czy Playwright zarejestrował zdarzenie pobierania pliku."""
+    # Oczekujemy, że po kliknięciu Zapisz serwer zwróci plik do pobrania
+    with editor_page.page.expect_download(timeout=10_000) as download_info:
+        editor_page.save_document()
+    download = download_info.value
+    assert download.suggested_filename.endswith(".docx"), (
+        f"Pobrano plik o nieoczekiwanej nazwie: {download.suggested_filename}"
+    )
+
+
+@then("widoczna jest stopka edytora")
+def see_editor_footer(editor_page: DocumentEditorPage):
+    editor_page.should_be_visible(DocumentEditorPage.FOOTER)
+
+
+@then("widoczny jest wskaźnik strony")
+def see_page_indicator(editor_page: DocumentEditorPage):
+    editor_page.should_be_visible(DocumentEditorPage.PAGE_INDICATOR)
+
+
+@then("menu kontekstowe jest widoczne")
+def context_menu_visible(editor_page: DocumentEditorPage):
+    editor_page.should_be_visible(DocumentEditorPage.CONTEXT_MENU)

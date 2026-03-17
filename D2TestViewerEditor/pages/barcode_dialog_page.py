@@ -37,6 +37,10 @@ class BarcodeDialogPage(BasePage):
     def enter_content(self, content: str) -> None:
         self.fill(self.CONTENT_INPUT, content)
 
+    def set_content(self, content: str) -> None:
+        """Alias dla enter_content() — używany w testach BDD."""
+        self.enter_content(content)
+
     def set_width(self, width: int) -> None:
         self.fill(self.WIDTH_INPUT, str(width))
 
@@ -59,6 +63,10 @@ class BarcodeDialogPage(BasePage):
 
     def should_be_open(self) -> None:
         super().should_be_visible(self.DIALOG)
+
+    def should_be_visible(self) -> None:
+        """Zgodność z konwencją BasePage — sprawdza widoczność dialoga."""
+        self.should_be_open()
 
     def should_be_closed(self) -> None:
         self.wait_for_hidden(self.DIALOG)

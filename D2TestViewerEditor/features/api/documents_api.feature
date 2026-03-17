@@ -5,6 +5,18 @@ Właściwość: Documents API — operacje na dokumentach
   Aby integrować D2 Tools z innymi systemami
 
   # ────────────────────────────────────────────
+  # Health check
+  # ────────────────────────────────────────────
+
+  @api @smoke
+  Scenariusz: Sprawdzenie stanu aplikacji
+    Kiedy wysyłam GET na "/health"
+    Wtedy status odpowiedzi to 200
+    I odpowiedź zawiera pole "status"
+    I odpowiedź zawiera pole "environment"
+    I odpowiedź zawiera pole "timestamp"
+
+  # ────────────────────────────────────────────
   # Nowy dokument
   # ────────────────────────────────────────────
 
@@ -23,6 +35,7 @@ Właściwość: Documents API — operacje na dokumentach
     Kiedy wysyłam GET na "/document/templates"
     Wtedy status odpowiedzi to 200
     I odpowiedź jest listą
+    I lista zawiera co najmniej 1 element
 
   @api @regression
   Szablon scenariusza: Pobranie konkretnego szablonu
@@ -38,6 +51,29 @@ Właściwość: Documents API — operacje na dokumentach
       | cv          |
 
   # ────────────────────────────────────────────
+  # Zapis dokumentu
+  # ────────────────────────────────────────────
+
+  @api @regression
+  Scenariusz: Zapisanie dokumentu jako DOCX
+    Kiedy wysyłam POST na "/document/save" z danymi:
+      | html                        | originalFileName |
+      | <p>Test dokumentu</p>       | test.docx        |
+    Wtedy status odpowiedzi to 200
+    I odpowiedź ma content-type "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+  # ────────────────────────────────────────────
+  # Eksport do PDF (niezaimplementowany)
+  # ────────────────────────────────────────────
+
+  @api @regression
+  Scenariusz: Próba eksportu do PDF zwraca informację o braku implementacji
+    Kiedy wysyłam POST na "/document/export-pdf" z danymi:
+      | html              | originalFileName |
+      | <p>Test PDF</p>   | test.docx        |
+    Wtedy odpowiedź zwraca błąd 'nie zaimplementowano'
+
+  # ────────────────────────────────────────────
   # Barcode API
   # ────────────────────────────────────────────
 
@@ -46,6 +82,7 @@ Właściwość: Documents API — operacje na dokumentach
     Kiedy wysyłam GET na "/barcode/types"
     Wtedy status odpowiedzi to 200
     I odpowiedź jest listą
+    I lista zawiera co najmniej 3 element
 
   @api @regression
   Szablon scenariusza: Generowanie kodu kreskowego przez API
@@ -60,15 +97,13 @@ Właściwość: Documents API — operacje na dokumentach
       | https://example.com | QRCode      |
       | ABC-12345           | Code128     |
       | 5901234123457       | EAN13       |
-
-  # ────────────────────────────────────────────
-  # Zapis dokumentu
-  # ────────────────────────────────────────────
+      | 12345678            | EAN8        |
+      | TEST-CODE           | Code39      |
 
   @api @regression
-  Scenariusz: Zapisanie dokumentu jako DOCX
-    Kiedy wysyłam POST na "/document/save" z danymi:
-      | html                        | originalFileName |
-      | <p>Test dokumentu</p>       | test.docx        |
+  Scenariusz: Generowanie kodu kreskowego jako obraz PNG
+    Kiedy wysyłam POST na "/barcode/generate-image" z danymi:
+      | content      | barcodeType | width | height |
+      | ABC-12345    | Code128     | 300   | 150    |
     Wtedy status odpowiedzi to 200
-    I odpowiedź ma content-type "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    I odpowiedź ma content-type "image/png"

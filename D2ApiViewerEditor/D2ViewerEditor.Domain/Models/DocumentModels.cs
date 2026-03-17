@@ -1,6 +1,17 @@
 ﻿namespace D2ViewerEditor.Domain.Models;
 
 /// <summary>
+/// Marginesy strony dokumentu (w cm)
+/// </summary>
+public class PageMargins
+{
+    public double Top { get; set; } = 2.5;
+    public double Bottom { get; set; } = 2.5;
+    public double Left { get; set; } = 2.5;
+    public double Right { get; set; } = 2.5;
+}
+
+/// <summary>
 /// Nagłówek lub stopka dokumentu
 /// </summary>
 public class HeaderFooterContent
@@ -22,6 +33,7 @@ public class DocumentContent
     public List<DocumentStyle> Styles { get; set; } = new();
     public HeaderFooterContent? Header { get; set; }
     public HeaderFooterContent? Footer { get; set; }
+    public PageMargins? Margins { get; set; }
 }
 
 /// <summary>
@@ -110,6 +122,7 @@ public class SaveDocumentRequest
     public DocumentMetadata? Metadata { get; set; }
     public HeaderFooterContent? Header { get; set; }
     public HeaderFooterContent? Footer { get; set; }
+    public PageMargins? Margins { get; set; }
 }
 
 /// <summary>

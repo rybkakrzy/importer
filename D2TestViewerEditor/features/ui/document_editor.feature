@@ -59,3 +59,32 @@ Właściwość: Edytor dokumentów — podstawowe operacje
     Wtedy edytor jest pusty
     Kiedy wykonuję ponów
     Wtedy edytor zawiera tekst "Pierwszy"
+
+  # ────────────────────────────────────────────
+  # Zapis dokumentu
+  # ────────────────────────────────────────────
+
+  @ui @regression
+  Scenariusz: Zapis dokumentu inicjuje pobranie pliku DOCX
+    Kiedy wpisuję tekst "Treść do zapisania" w edytorze
+    I wybieram z menu "Plik" opcję "Zapisz"
+    Wtedy inicjowane jest pobieranie pliku DOCX
+
+  # ────────────────────────────────────────────
+  # Pasek statusu / Stopka
+  # ────────────────────────────────────────────
+
+  @ui @smoke
+  Scenariusz: Widoczność stopki z poziomem zoomu
+    Wtedy widoczna jest stopka edytora
+    I widoczny jest wskaźnik strony
+
+  # ────────────────────────────────────────────
+  # Menu kontekstowe
+  # ────────────────────────────────────────────
+
+  @ui @regression
+  Scenariusz: Otwarcie menu kontekstowego w edytorze
+    Kiedy wpisuję tekst "Tekst do menu kontekstowego" w edytorze
+    I klikam prawym przyciskiem w obszarze edytora
+    Wtedy menu kontekstowe jest widoczne

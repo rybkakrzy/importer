@@ -1,6 +1,7 @@
 # Backend
 **/bin/
 **/obj/
+**/TestResults/
 backend/*.user
 backend/.vs/
 backend/.vscode/

@@ -25,7 +25,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -55,7 +55,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             AddHeaderAndFooter(document, header, footer);
 
             // Dodaj ustawienia strony
-            AddPageSettings(body, header, footer);
+            AddPageSettings(body, header, footer, margins);
 
             document.Save();
         }
@@ -1771,7 +1771,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Dodaje ustawienia strony z dokładnymi marginesami
     /// </summary>
-    private void AddPageSettings(Body body, HeaderFooterContent? header = null, HeaderFooterContent? footer = null)
+    private void AddPageSettings(Body body, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null)
     {
         var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
         if (sectionProps == null)
@@ -1790,20 +1790,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             });
         }
         
+        // Przelicz marginesy na twipsy (1 cm = 567 twips)
+        const double cmToTwips = 567.0;
+        int leftTwips  = margins != null ? (int)Math.Round(margins.Left  * cmToTwips) : 1440;
+        int rightTwips = margins != null ? (int)Math.Round(margins.Right * cmToTwips) : 1440;
+
         var headerHeightTwips = header != null ? (int)(header.Height * 1440 / 2.54) : 720;
         var footerHeightTwips = footer != null ? (int)(footer.Height * 1440 / 2.54) : 720;
-        
-        var topMargin = Math.Max(1440, headerHeightTwips + 720);
-        var bottomMargin = Math.Max(1440, footerHeightTwips + 720);
+
+        int topTwips    = margins != null ? (int)Math.Round(margins.Top    * cmToTwips) : 1440;
+        int bottomTwips = margins != null ? (int)Math.Round(margins.Bottom * cmToTwips) : 1440;
+
+        // Marginesy góra/dół muszą pomieścić nagłówek/stopkę
+        var topMargin    = Math.Max(topTwips,    headerHeightTwips + 720);
+        var bottomMargin = Math.Max(bottomTwips, footerHeightTwips + 720);
         
         if (!sectionProps.Elements<PageMargin>().Any())
         {
             sectionProps.Append(new PageMargin
             {
-                Top = topMargin,
-                Right = 1440,
+                Top    = topMargin,
+                Right  = (uint)rightTwips,
                 Bottom = bottomMargin,
-                Left = 1440,
+                Left   = (uint)leftTwips,
                 Header = 720,
                 Footer = 720
             });

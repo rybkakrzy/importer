@@ -52,10 +52,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             Images = _images.Values.ToList(),
             Styles = stylesLoaded.Count > 0 ? stylesLoaded : DefaultWordStyles.GetDefaultStyles(),
             Header = ExtractHeader(document),
-            Footer = ExtractFooter(document)
+            Footer = ExtractFooter(document),
+            Margins = ExtractPageMargins(document)
         };
 
         return content;
+    }
+
+    /// <summary>
+    /// Wyciąga marginesy strony z dokumentu (w cm)
+    /// </summary>
+    private static PageMargins? ExtractPageMargins(WordprocessingDocument document)
+    {
+        var sectionProps = document.MainDocumentPart?.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
+        if (pgMar == null) return null;
+
+        const double twipsToCm = 1.0 / 567.0;
+        return new PageMargins
+        {
+            Top    = pgMar.Top    != null ? Math.Round(Math.Abs((int)pgMar.Top.Value)    * twipsToCm, 2) : 2.5,
+            Bottom = pgMar.Bottom != null ? Math.Round(Math.Abs((int)pgMar.Bottom.Value) * twipsToCm, 2) : 2.5,
+            Left   = pgMar.Left   != null ? Math.Round((int)pgMar.Left.Value             * twipsToCm, 2) : 2.5,
+            Right  = pgMar.Right  != null ? Math.Round((int)pgMar.Right.Value            * twipsToCm, 2) : 2.5,
+        };
     }
 
     /// <summary>
@@ -580,6 +600,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     /// <summary>
     /// Konwertuje styl na CSS z rozwiązywaniem dziedziczenia (BasedOn)
+    /// Duplikaty właściwości CSS są deduplikowane — zachowywana jest wartość z bardziej szczegółowego stylu.
     /// </summary>
     private string ConvertStyleToCssWithInheritance(Style style, HashSet<string>? visited = null)
     {
@@ -614,7 +635,33 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             css.Append(ConvertParagraphPropertiesToCss(paraProps));
         }
 
-        return css.ToString();
+        // Deduplikuj właściwości CSS: jeśli ta sama właściwość pojawia się wielokrotnie
+        // (np. margin-bottom z Normal i margin-bottom z Heading1), zachowaj ostatnią (overridującą).
+        return DeduplicateCss(css.ToString());
+    }
+
+    /// <summary>
+    /// Deduplikuje właściwości CSS, zachowując ostatnie wystąpienie każdej właściwości.
+    /// Zapobiega problemom z regex-parsowaniem w HtmlToDocxConverter gdy dziedziczenie
+    /// powoduje duplikaty jak "margin-bottom:8pt; ... margin-bottom:0pt;".
+    /// </summary>
+    private static string DeduplicateCss(string css)
+    {
+        if (string.IsNullOrEmpty(css)) return css;
+
+        var order = new List<string>();
+        var props = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match m in Regex.Matches(css, @"([\w-]+)\s*:\s*([^;]+);"))
+        {
+            var name = m.Groups[1].Value.ToLowerInvariant();
+            var val  = m.Groups[2].Value.Trim();
+            if (!props.ContainsKey(name))
+                order.Add(name);
+            props[name] = val; // ostatnia wartość wygrywa
+        }
+
+        return string.Concat(order.Select(p => $"{p}:{props[p]};"));
     }
 
     /// <summary>

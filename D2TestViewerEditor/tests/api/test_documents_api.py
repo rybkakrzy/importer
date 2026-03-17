@@ -15,17 +15,6 @@ scenarios("../../features/api/documents_api.feature")
 
 
 # ──────────────────────────────────────────────
-# Kontekst współdzielony między krokami
-# ──────────────────────────────────────────────
-
-
-@pytest.fixture()
-def api_ctx() -> dict:
-    """Mały kontener na dane przekazywane między krokami."""
-    return {}
-
-
-# ──────────────────────────────────────────────
 # WHEN — GET
 # ──────────────────────────────────────────────
 
@@ -47,20 +36,18 @@ def send_post_with_table(api: ApiClient, path: str, api_ctx: dict, datatable):
     Konwertuje tabelę z feature-a (nagłówki + wiersz) na dict JSON.
     pytest-bdd przekazuje datatable jako listę wierszy.
     """
-    # datatable to obiekt pytest-bdd; interpretujemy jako dict z jednego wiersza
     if hasattr(datatable, "rows"):
         headers = datatable.rows[0]
         values = datatable.rows[1]
         payload = dict(zip(headers, values))
     else:
-        # Fallback — datatable jako lista list
         headers = datatable[0]
         values = datatable[1]
         payload = dict(zip(headers, values))
 
     # Automatyczna konwersja typów
     for key, val in payload.items():
-        if val.isdigit():
+        if isinstance(val, str) and val.isdigit():
             payload[key] = int(val)
 
     resp = api.post(path, json=payload)
@@ -99,4 +86,28 @@ def response_content_type(api_ctx: dict, content_type: str):
     assert content_type in actual_ct, (
         f"Oczekiwany content-type zawierający '{content_type}', "
         f"otrzymano: '{actual_ct}'"
+    )
+
+
+@then(parsers.parse("lista zawiera co najmniej {count:d} element"))
+def response_list_min_count(api_ctx: dict, count: int):
+    data = api_ctx["response"].json()
+    assert isinstance(data, list), f"Oczekiwano listy, otrzymano {type(data).__name__}"
+    assert len(data) >= count, f"Oczekiwano co najmniej {count} elementów, otrzymano {len(data)}"
+
+
+@then("odpowiedź zwraca błąd 'nie zaimplementowano'")
+def response_not_implemented(api_ctx: dict):
+    resp = api_ctx["response"]
+    assert resp.status_code == 501, (
+        f"Oczekiwano HTTP 501 Not Implemented, otrzymano {resp.status_code}"
+    )
+
+
+@then(parsers.parse('odpowiedź zawiera pole "{field}" z wartością "{value}"'))
+def response_field_equals(api_ctx: dict, field: str, value: str):
+    data = api_ctx["response"].json()
+    assert field in data, f"Brak pola '{field}' w odpowiedzi"
+    assert str(data[field]).lower() == value.lower(), (
+        f"Pole '{field}': oczekiwano '{value}', otrzymano '{data[field]}'"
     )

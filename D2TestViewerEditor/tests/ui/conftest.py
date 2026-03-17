@@ -10,6 +10,7 @@ from playwright.sync_api import Page
 from config.settings import BASE_URL
 from pages.barcode_dialog_page import BarcodeDialogPage
 from pages.document_editor_page import DocumentEditorPage
+from pages.signature_dialog_page import SignatureDialogPage
 from pages.toolbar_page import ToolbarPage
 
 
@@ -34,3 +35,9 @@ def toolbar(app_page: Page) -> ToolbarPage:
 def barcode_dialog(app_page: Page) -> BarcodeDialogPage:
     """Zwraca Page Object dialogu kodów kreskowych."""
     return BarcodeDialogPage(app_page)
+
+
+@pytest.fixture()
+def signature_dialog(app_page: Page) -> SignatureDialogPage:
+    """Zwraca Page Object dialogu podpisywania dokumentu."""
+    return SignatureDialogPage(app_page)

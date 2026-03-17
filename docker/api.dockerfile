@@ -3,16 +3,16 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
 # Kopiuj pliki projektów i przywróć zależności (cache warstw)
-COPY D2ViewerEditor.sln ./
-COPY D2ViewerEditor.Api/D2ViewerEditor.Api.csproj                         D2ViewerEditor.Api/
-COPY D2ViewerEditor.Application/D2ViewerEditor.Application.csproj         D2ViewerEditor.Application/
-COPY D2ViewerEditor.Domain/D2ViewerEditor.Domain.csproj                   D2ViewerEditor.Domain/
-COPY D2ViewerEditor.Infrastructure/D2ViewerEditor.Infrastructure.csproj   D2ViewerEditor.Infrastructure/
+COPY D2ApiViewerEditor/D2ViewerEditor.sln ./
+COPY D2ApiViewerEditor/D2ViewerEditor.Api/D2ViewerEditor.Api.csproj                         D2ViewerEditor.Api/
+COPY D2ApiViewerEditor/D2ViewerEditor.Application/D2ViewerEditor.Application.csproj         D2ViewerEditor.Application/
+COPY D2ApiViewerEditor/D2ViewerEditor.Domain/D2ViewerEditor.Domain.csproj                   D2ViewerEditor.Domain/
+COPY D2ApiViewerEditor/D2ViewerEditor.Infrastructure/D2ViewerEditor.Infrastructure.csproj   D2ViewerEditor.Infrastructure/
 
 RUN dotnet restore D2ViewerEditor.Api/D2ViewerEditor.Api.csproj
 
 # Kopiuj resztę kodu i opublikuj
-COPY . .
+COPY D2ApiViewerEditor/ .
 RUN dotnet publish D2ViewerEditor.Api/D2ViewerEditor.Api.csproj \
     -c Release \
     -o /app/publish \

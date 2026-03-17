@@ -100,6 +100,18 @@ export class DocumentEditorComponent implements OnInit {
   contextMenuY = signal(0);
   contextSubmenu = signal<string | null>(null);
   contextMenuTargetCell = signal<HTMLElement | null>(null);
+  contextMenuTargetImage = signal<HTMLImageElement | null>(null);
+
+  // Mini toolbar nad zaznaczeniem
+  showMiniToolbar = signal(false);
+  miniToolbarX = signal(0);
+  miniToolbarY = signal(0);
+
+  readonly commonFonts = [
+    'Calibri', 'Arial', 'Arial Narrow', 'Times New Roman', 'Cambria',
+    'Georgia', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Helvetica',
+    'Courier New', 'Lucida Console', 'Palatino Linotype', 'Garamond', 'Book Antiqua'
+  ];
 
   // Menu Narzędzia
   showToolsMenu = signal(false);
@@ -1028,6 +1040,10 @@ export class DocumentEditorComponent implements OnInit {
       const cellTarget = target.closest('td, th') as HTMLElement | null;
       this.contextMenuTargetCell.set(cellTarget);
 
+      // Wykryj czy kliknięto w obraz
+      const imgTarget = (target.tagName === 'IMG' ? target : target.closest('img')) as HTMLImageElement | null;
+      this.contextMenuTargetImage.set(imgTarget);
+
       // Oblicz pozycję — upewnij się, że menu nie wychodzi poza ekran
       const menuWidth = 260;
       const menuHeight = 420;
@@ -1703,6 +1719,114 @@ export class DocumentEditorComponent implements OnInit {
   }
 
   // =====================
+  // MINI TOOLBAR
+  // =====================
+
+  onEditorMouseUp(event: MouseEvent): void {
+    // Nie pokazuj jeśli otwarte jest menu kontekstowe
+    if (this.showContextMenu()) return;
+
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+        this.showMiniToolbar.set(false);
+        return;
+      }
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0) {
+        this.showMiniToolbar.set(false);
+        return;
+      }
+
+      const toolbarWidth = 560;
+      const toolbarHeight = 76;
+      const margin = 8;
+
+      let x = rect.left + rect.width / 2 - toolbarWidth / 2;
+      let y = rect.top - toolbarHeight - margin;
+
+      // Nie wychodź poza lewą/prawą krawędź ekranu
+      x = Math.max(margin, Math.min(x, window.innerWidth - toolbarWidth - margin));
+      // Jeśli nie mieści się nad — pokaż pod
+      if (y < margin) {
+        y = rect.bottom + margin;
+      }
+
+      this.miniToolbarX.set(x);
+      this.miniToolbarY.set(y);
+      this.showMiniToolbar.set(true);
+    }, 10);
+  }
+
+  onEditorMouseDown(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    if (!target.closest('.mini-toolbar')) {
+      this.showMiniToolbar.set(false);
+    }
+  }
+
+  miniToolbarCommand(command: string): void {
+    this.editor?.executeCommand(command as any);
+    // Nie zamykaj — użytkownik może kliknąć kolejny przycisk
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) {
+        this.showMiniToolbar.set(false);
+      }
+    }, 50);
+  }
+
+  miniToolbarSetFontFamily(family: string): void {
+    this.editor?.setFontFamily(family);
+  }
+
+  miniToolbarSetFontSize(event: Event): void {
+    const val = parseInt((event.target as HTMLInputElement).value, 10);
+    if (!isNaN(val) && val > 0) {
+      this.editor?.setFontSize(val);
+    }
+  }
+
+  miniToolbarIncreaseFontSize(): void {
+    const current = this.editorState()?.fontSize ?? 11;
+    this.editor?.setFontSize(current + 1);
+  }
+
+  miniToolbarDecreaseFontSize(): void {
+    const current = this.editorState()?.fontSize ?? 11;
+    if (current > 1) this.editor?.setFontSize(current - 1);
+  }
+
+  miniToolbarSetTextColor(color: string): void {
+    this.editor?.setTextColor(color);
+  }
+
+  miniToolbarSetHighlightColor(color: string): void {
+    this.editor?.setBackgroundColor(color);
+  }
+
+  miniToolbarCut(): void {
+    document.execCommand('cut');
+  }
+
+  miniToolbarCopy(): void {
+    document.execCommand('copy');
+  }
+
+  miniToolbarPaste(): void {
+    navigator.clipboard.readText().then(text => this.editor?.insertText(text)).catch(() => document.execCommand('paste'));
+  }
+
+  miniToolbarIncreaseIndent(): void {
+    this.editor?.executeCommand('indent');
+  }
+
+  miniToolbarDecreaseIndent(): void {
+    this.editor?.executeCommand('outdent');
+  }
+
+  // =====================
   // MENU KONTEKSTOWE
   // =====================
 
@@ -1796,6 +1920,154 @@ export class DocumentEditorComponent implements OnInit {
     this.closeContextMenu();
     this.showShadingDropdown.set(false);
     this.notifyEditorChange();
+  }
+
+  // =====================
+  // TABELA – MENU KONTEKSTOWE
+  // =====================
+
+  private getContextCell(): HTMLElement | null {
+    return this.contextMenuTargetCell() || this.activeTableCell();
+  }
+
+  contextMenuInsertRowAbove(): void {
+    const cell = this.getContextCell();
+    if (!cell) { this.closeContextMenu(); return; }
+    const row = cell.closest('tr');
+    if (!row) { this.closeContextMenu(); return; }
+    const table = row.closest('table')!;
+    const colspan = row.querySelectorAll('td, th').length;
+    const newRow = row.cloneNode(false) as HTMLTableRowElement;
+    for (let i = 0; i < colspan; i++) {
+      const td = document.createElement('td');
+      td.innerHTML = '<br>';
+      newRow.appendChild(td);
+    }
+    table.querySelector('tbody')?.insertBefore(newRow, row) || row.parentNode?.insertBefore(newRow, row);
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuInsertRowBelow(): void {
+    const cell = this.getContextCell();
+    if (!cell) { this.closeContextMenu(); return; }
+    const row = cell.closest('tr');
+    if (!row) { this.closeContextMenu(); return; }
+    const table = row.closest('table')!;
+    const colspan = row.querySelectorAll('td, th').length;
+    const newRow = row.cloneNode(false) as HTMLTableRowElement;
+    for (let i = 0; i < colspan; i++) {
+      const td = document.createElement('td');
+      td.innerHTML = '<br>';
+      newRow.appendChild(td);
+    }
+    const nextSibling = row.nextSibling;
+    nextSibling ? row.parentNode?.insertBefore(newRow, nextSibling) : row.parentNode?.appendChild(newRow);
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuInsertColLeft(): void {
+    const cell = this.getContextCell();
+    if (!cell) { this.closeContextMenu(); return; }
+    const table = cell.closest('table');
+    if (!table) { this.closeContextMenu(); return; }
+    const colIndex = (cell as HTMLTableCellElement).cellIndex;
+    table.querySelectorAll('tr').forEach(row => {
+      const ref = row.cells[colIndex];
+      const newTd = document.createElement('td');
+      newTd.innerHTML = '<br>';
+      if (ref) row.insertBefore(newTd, ref);
+      else row.appendChild(newTd);
+    });
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuInsertColRight(): void {
+    const cell = this.getContextCell();
+    if (!cell) { this.closeContextMenu(); return; }
+    const table = cell.closest('table');
+    if (!table) { this.closeContextMenu(); return; }
+    const colIndex = (cell as HTMLTableCellElement).cellIndex;
+    table.querySelectorAll('tr').forEach(row => {
+      const ref = row.cells[colIndex];
+      const newTd = document.createElement('td');
+      newTd.innerHTML = '<br>';
+      if (ref?.nextSibling) row.insertBefore(newTd, ref.nextSibling);
+      else row.appendChild(newTd);
+    });
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuDeleteRow(): void {
+    const cell = this.getContextCell();
+    const row = cell?.closest('tr');
+    row?.parentNode?.removeChild(row);
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuDeleteCol(): void {
+    const cell = this.getContextCell();
+    if (!cell) { this.closeContextMenu(); return; }
+    const table = cell.closest('table');
+    const colIndex = (cell as HTMLTableCellElement).cellIndex;
+    table?.querySelectorAll('tr').forEach(row => {
+      const td = row.cells[colIndex];
+      if (td) row.removeChild(td);
+    });
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuDeleteTable(): void {
+    const cell = this.getContextCell();
+    const table = cell?.closest('table');
+    table?.parentNode?.removeChild(table);
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  // =====================
+  // GRAFIKA – MENU KONTEKSTOWE
+  // =====================
+
+  contextMenuAlignImageLeft(): void {
+    const img = this.contextMenuTargetImage();
+    if (img) {
+      img.style.display = 'block';
+      img.style.marginLeft = '0';
+      img.style.marginRight = 'auto';
+      img.style.float = '';
+    }
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuAlignImageCenter(): void {
+    const img = this.contextMenuTargetImage();
+    if (img) {
+      img.style.display = 'block';
+      img.style.marginLeft = 'auto';
+      img.style.marginRight = 'auto';
+      img.style.float = '';
+    }
+    this.notifyEditorChange();
+    this.closeContextMenu();
+  }
+
+  contextMenuAlignImageRight(): void {
+    const img = this.contextMenuTargetImage();
+    if (img) {
+      img.style.display = 'block';
+      img.style.marginLeft = 'auto';
+      img.style.marginRight = '0';
+      img.style.float = '';
+    }
+    this.notifyEditorChange();
+    this.closeContextMenu();
   }
 
   /**

@@ -67,6 +67,12 @@ class ApiClient:
 
 
 @pytest.fixture(scope="session")
+def api_base_url() -> str:
+    """Bazowy URL API — używany przez testy korzystające bezpośrednio z requests."""
+    return get_settings().api_base_url
+
+
+@pytest.fixture(scope="session")
 def api_client() -> ApiClient:
     """Sesyjny klient API — jeden na cały przebieg testów."""
     settings = get_settings()
@@ -80,3 +86,9 @@ def api(api_client: ApiClient) -> ApiClient:
     """Per-testowy alias z wyczyszczonym last_response."""
     api_client.last_response = None
     return api_client
+
+
+@pytest.fixture()
+def api_ctx() -> dict:
+    """Współdzielony kontener stanu dla kroków BDD w testach API."""
+    return {}

@@ -47,7 +47,8 @@ public class DocumentController : BaseApiController
             request.OriginalFileName,
             request.Metadata,
             request.Header,
-            request.Footer
+            request.Footer,
+            request.Margins
         );
 
         var result = await Mediator.Send(command);

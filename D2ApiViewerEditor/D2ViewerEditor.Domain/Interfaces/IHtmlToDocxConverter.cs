@@ -11,5 +11,6 @@ public interface IHtmlToDocxConverter
     /// Konwertuje HTML na dokument DOCX (tablica bajtów)
     /// </summary>
     byte[] Convert(string html, DocumentMetadata? metadata = null,
-                   HeaderFooterContent? header = null, HeaderFooterContent? footer = null);
+                   HeaderFooterContent? header = null, HeaderFooterContent? footer = null,
+                   PageMargins? margins = null);
 }

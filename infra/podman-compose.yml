@@ -1,8 +1,8 @@
 services:
   api:
     build:
-      context: ../D2ApiViewerEditor
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/api.dockerfile
     container_name: d2viewereditor_api
     restart: unless-stopped
     environment:
@@ -18,8 +18,8 @@ services:
 
   frontend:
     build:
-      context: ../D2GuiViewerEditor
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/gui.dockerfile
     container_name: d2viewereditor_frontend
     restart: unless-stopped
     ports:
