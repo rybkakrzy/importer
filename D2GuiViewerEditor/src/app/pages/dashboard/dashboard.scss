@@ -1,0 +1,224 @@
+:host {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dashboard-wrapper {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #f5f6fa;
+  overflow-y: auto;
+}
+
+/* ── Header ── */
+.dashboard-header {
+  background: #ffffff;
+  border-bottom: 2px solid #ff6200;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.header-content {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+
+.app-name {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  letter-spacing: -0.5px;
+}
+
+/* ── Main ── */
+.dashboard-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 60px 24px 40px;
+}
+
+.hero {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.hero-title {
+  font-size: 2.4rem;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 0 0 10px;
+}
+
+.hero-subtitle {
+  font-size: 1.1rem;
+  color: #666;
+  margin: 0;
+}
+
+/* ── Error banner ── */
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #fff3f0;
+  border: 1px solid #f4c2b0;
+  color: #c0392b;
+  border-radius: 8px;
+  padding: 12px 18px;
+  margin-bottom: 28px;
+  font-size: 0.95rem;
+  max-width: 700px;
+  width: 100%;
+}
+
+/* ── Action cards grid ── */
+.actions-grid {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 860px;
+  width: 100%;
+}
+
+.action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  border: 2px solid #e0e0e0;
+  border-radius: 16px;
+  padding: 36px 32px 28px;
+  width: 240px;
+  cursor: pointer;
+  transition: border-color 0.18s, box-shadow 0.18s, transform 0.12s;
+  position: relative;
+  font-family: inherit;
+  text-align: center;
+
+  &:hover:not(:disabled) {
+    border-color: #ff6200;
+    box-shadow: 0 6px 24px rgba(255, 98, 0, 0.15);
+    transform: translateY(-3px);
+  }
+
+  &:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(255, 98, 0, 0.12);
+  }
+
+  &:disabled,
+  &.disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    background: #f5f5f5;
+  }
+}
+
+.action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  margin-bottom: 6px;
+}
+
+.new-doc-icon {
+  background: #fff3e0;
+  color: #ff6200;
+}
+
+.open-file-icon {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.check-doc-icon {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.action-label {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.action-desc {
+  font-size: 0.85rem;
+  color: #888;
+  line-height: 1.4;
+}
+
+.coming-soon-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: #e0e0e0;
+  color: #757575;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* ── Loading spinner ── */
+.loading-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #ffe0c2;
+  border-top-color: #ff6200;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Footer ── */
+.dashboard-footer {
+  background: #ffffff;
+  border-top: 1px solid #e0e0e0;
+  padding: 16px 24px;
+  text-align: center;
+}
+
+.footer-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.footer-sep {
+  color: #ccc;
+}

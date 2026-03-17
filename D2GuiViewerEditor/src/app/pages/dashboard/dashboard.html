@@ -1,0 +1,70 @@
+<div class="dashboard-wrapper">
+  <header class="dashboard-header">
+    <div class="header-content">
+      <div class="brand">
+        <img src="logo.svg" alt="Doc2 Logo" class="logo" />
+        <span class="app-name">Doc2</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="dashboard-main">
+    <div class="hero">
+      <h1 class="hero-title">Witaj w Doc2</h1>
+      <p class="hero-subtitle">Edytor i przeglądarka dokumentów</p>
+    </div>
+
+    @if (errorMessage()) {
+      <div class="error-banner">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+        </svg>
+        {{ errorMessage() }}
+      </div>
+    }
+
+    <div class="actions-grid">
+      <button class="action-card" (click)="newDocument()" [disabled]="isLoading()">
+        <div class="action-icon new-doc-icon">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor">
+            <path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6zm7-7h-2v-2h-2v2H7v2h2v2h2v-2h2v-2z"/>
+          </svg>
+        </div>
+        <span class="action-label">Nowy dokument</span>
+        <span class="action-desc">Utwórz pusty dokument Word</span>
+        @if (isLoading()) {
+          <span class="loading-spinner"></span>
+        }
+      </button>
+
+      <button class="action-card" (click)="openFile()" [disabled]="isLoading()">
+        <div class="action-icon open-file-icon">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor">
+            <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V6h5.17l2 2H20v10z"/>
+          </svg>
+        </div>
+        <span class="action-label">Otwórz plik</span>
+        <span class="action-desc">Wczytaj dokument Word lub PDF</span>
+      </button>
+
+      <button class="action-card disabled" disabled>
+        <div class="action-icon check-doc-icon">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor">
+            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+          </svg>
+        </div>
+        <span class="action-label">Sprawdź dokument</span>
+        <span class="action-desc">Wkrótce dostępne</span>
+        <span class="coming-soon-badge">Wkrótce</span>
+      </button>
+    </div>
+  </main>
+
+  <footer class="dashboard-footer">
+    <div class="footer-content">
+      <span>Doc2 &copy; {{ currentYear }} ING Bank Śląski S.A.</span>
+      <span class="footer-sep">|</span>
+      <span>Edytor dokumentów</span>
+    </div>
+  </footer>
+</div>

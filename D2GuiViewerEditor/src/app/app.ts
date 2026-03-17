@@ -1,21 +1,27 @@
 import { Component } from '@angular/core';
-import { DocumentEditorComponent } from './components/document-editor/document-editor';
+import { RouterOutlet } from '@angular/router';
 import { OfflineBannerComponent } from './components/offline-banner/offline-banner';
 
 @Component({
   selector: 'd2-root',
-  imports: [DocumentEditorComponent, OfflineBannerComponent],
+  imports: [RouterOutlet, OfflineBannerComponent],
   template: `
     <d2-offline-banner />
-    <d2-document-editor />
+    <router-outlet />
   `,
   styles: [`
     :host {
       display: flex;
       flex-direction: column;
       height: 100vh;
+      overflow: hidden;
     }
-    d2-document-editor {
+    d2-offline-banner {
+      flex-shrink: 0;
+    }
+    d2-dashboard,
+    d2-document-editor,
+    d2-pdf-maintenance {
       flex: 1;
       min-height: 0;
     }

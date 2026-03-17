@@ -4,10 +4,14 @@ import {
   ElementRef,
   inject,
   signal,
-  HostListener
+  HostListener,
+  OnInit
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute, Router } from '@angular/router';
+import { switchMap, map, filter, distinctUntilChanged } from 'rxjs/operators';
+import { from } from 'rxjs';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
@@ -47,13 +51,15 @@ import { DocumentStorageService } from '../../services/document-storage.service'
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
 })
-export class DocumentEditorComponent {
+export class DocumentEditorComponent implements OnInit {
   @ViewChild(WysiwygEditorComponent) editor!: WysiwygEditorComponent;
   @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
   @ViewChild('verticalRulerBar') verticalRulerBar?: ElementRef<HTMLDivElement>;
 
   private documentService = inject(DocumentService);
   private documentStorageService = inject(DocumentStorageService);
+  private route = inject(ActivatedRoute);
+  private router = inject(Router);
   readonly buildInfo = inject(BuildInfoService);
 
   // Stan dokumentu
@@ -207,12 +213,68 @@ export class DocumentEditorComponent {
   // Baner podpisów
   documentSignatures = signal<DigitalSignatureInfo[]>([]);
 
+  // Dialog opuszczania edytora
+  showLeaveDialog = signal(false);
+
   // Math dla template
   protected readonly Math = Math;
 
   constructor() {
     // Załaduj szablony
     this.loadTemplates();
+  }
+
+  ngOnInit(): void {
+    this.route.queryParams.pipe(
+      map(params => params['masterId'] as string | undefined),
+      filter(masterId => !!masterId),
+      distinctUntilChanged()
+    ).subscribe(masterId => {
+      this.loadFromStorage(masterId!);
+    });
+  }
+
+  /**
+   * Ładuje dokument z bazy danych na podstawie masterId
+   */
+  private loadFromStorage(masterId: string): void {
+    this.isLoading.set(true);
+    this.errorMessage.set(null);
+    this.documentMasterId.set(masterId);
+
+    this.documentStorageService.getDocument(masterId).pipe(
+      switchMap(doc => {
+        const blob = this.documentStorageService.base64ToBlob(doc.content, doc.mimeType);
+        const file = new File([blob], doc.name, { type: doc.mimeType });
+        return this.documentService.openDocument(file).pipe(
+          map(content => ({ content, doc }))
+        );
+      })
+    ).subscribe({
+      next: ({ content, doc }) => {
+        this.documentContent.set(content.html);
+        this.documentMetadata.set(content.metadata);
+        this.documentStyles.set(content.styles || []);
+        this.originalFileName.set(doc.name);
+        this.headerContent.set({
+          html: content.header?.html || '',
+          height: content.header?.height || 1.25
+        });
+        this.footerContent.set({
+          html: content.footer?.html || '',
+          height: content.footer?.height || 1.25
+        });
+        if (this.editor) {
+          this.editor.setContent(content.html);
+        }
+        this.documentSignatures.set(content.metadata.signatures || []);
+        this.isLoading.set(false);
+      },
+      error: (err) => {
+        this.showError(err.message || 'Nie udało się otworzyć dokumentu z bazy danych');
+        this.isLoading.set(false);
+      }
+    });
   }
 
   /**
@@ -234,7 +296,30 @@ export class DocumentEditorComponent {
   }
 
   /**
-   * Tworzy nowy dokument
+   * Wraca do dashboardu — pokazuje ładny dialog jeśli jest otwarty dokument lub niezapisane zmiany
+   */
+  goToDashboard(): void {
+    const hasDocument = !!this.documentMasterId();
+    const hasChanges = !!this.editorState()?.isModified;
+
+    if (hasDocument || hasChanges) {
+      this.showLeaveDialog.set(true);
+    } else {
+      this.router.navigate(['/']);
+    }
+  }
+
+  confirmLeave(): void {
+    this.showLeaveDialog.set(false);
+    this.router.navigate(['/']);
+  }
+
+  cancelLeave(): void {
+    this.showLeaveDialog.set(false);
+  }
+
+  /**
+   * Tworzy nowy dokument — zapisuje pusty dokument do bazy, nawiguje do edytora z nowym masterId
    */
   newDocument(): void {
     if (this.editorState()?.isModified) {
@@ -242,38 +327,91 @@ export class DocumentEditorComponent {
         return;
       }
     }
-    
-    this.documentContent.set('<p></p>');
-    this.documentMetadata.set({
-      title: 'Nowy dokument',
-      created: new Date().toISOString(),
-      modified: new Date().toISOString()
-    });
-    this.documentStyles.set([]); // Reset stylów - toolbar użyje domyślnych
-    this.originalFileName.set('');
-    this.headerContent.set({ html: '', height: 1.25 });
-    this.footerContent.set({ html: '', height: 1.25 });
-    this.editor?.setContent('<p></p>');
+
     this.showMenu.set(false);
+    this.isLoading.set(true);
+    this.errorMessage.set(null);
+
+    this.documentService.newDocument().pipe(
+      switchMap(content =>
+        this.documentService.saveDocument({ html: content.html, metadata: content.metadata }).pipe(
+          switchMap(blob =>
+            from(this.blobToBase64(blob)).pipe(
+              switchMap(base64 =>
+                this.documentStorageService.uploadDocument({
+                  name: 'Nowy dokument.docx',
+                  mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                  content: base64
+                })
+              )
+            )
+          )
+        )
+      )
+    ).subscribe({
+      next: (result) => {
+        this.router.navigate(['/editor'], { queryParams: { masterId: result.masterId } });
+      },
+      error: () => {
+        this.showError('Nie udało się utworzyć nowego dokumentu');
+        this.isLoading.set(false);
+      }
+    });
   }
 
   /**
-   * Otwiera dokument z pliku
+   * Otwiera dokument z pliku — DOCX: upload do bazy, nawiguje z nowym masterId; PDF: strona konserwacji
    */
   openDocument(): void {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.docx';
-    
-    input.onchange = (e) => {
+    input.accept = '.docx,.pdf';
+
+    input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        this.loadDocument(file);
+      if (!file) return;
+
+      this.showMenu.set(false);
+
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        this.router.navigate(['/pdf-maintenance']);
+        return;
+      }
+
+      this.isLoading.set(true);
+      this.errorMessage.set(null);
+
+      try {
+        const base64 = await this.documentStorageService.fileToBase64(file);
+        this.documentStorageService.uploadDocument({
+          name: file.name,
+          mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          content: base64
+        }).subscribe({
+          next: (result) => {
+            this.router.navigate(['/editor'], { queryParams: { masterId: result.masterId } });
+          },
+          error: () => {
+            this.showError('Nie udało się zapisać dokumentu w bazie danych');
+            this.isLoading.set(false);
+          }
+        });
+      } catch {
+        this.showError('Nie udało się odczytać pliku');
+        this.isLoading.set(false);
       }
     };
-    
+
     input.click();
-    this.showMenu.set(false);
+  }
+
+  private blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onload = () => resolve((reader.result as string).split(',')[1]);
+      reader.onerror = reject;
+    });
   }
 
   /**
@@ -310,19 +448,7 @@ export class DocumentEditorComponent {
         this.showSuccess(`Otwarto dokument: ${file.name}`);
         this.isLoading.set(false);
 
-        // Zapisz dokument do bazy danych
-        this.documentStorageService.fileToBase64(file).then(base64 => {
-          this.documentStorageService.uploadDocument({
-            name: file.name,
-            mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            content: base64
-          }).subscribe({
-            next: (result) => {
-              this.documentMasterId.set(result.masterId);
-            },
-            error: () => { /* Błąd zapisu do bazy nie blokuje pracy w edytorze */ }
-          });
-        });
+        // masterId już ustawiony przed wywołaniem loadDocument()
       },
       error: (err) => {
         this.showError(err.message || 'Nie udało się otworzyć dokumentu');

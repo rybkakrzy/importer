@@ -60,7 +60,7 @@ export interface RestoreVersionResponse {
 })
 export class DocumentStorageService {
   private readonly http = inject(HttpClient);
-  private readonly apiUrl = `${environment.apiUrl}/api/documentstorage`;
+  private readonly apiUrl = `${environment.apiUrl}/documentstorage`;
 
   /**
    * Upload nowego dokumentu do systemu

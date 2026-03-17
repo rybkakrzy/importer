@@ -3,7 +3,7 @@
   <header class="editor-header">
     <div class="header-left">
       <!-- Logo i nazwa -->
-      <div class="app-logo">
+      <div class="app-logo" (click)="goToDashboard()" style="cursor:pointer" title="Wróć do strony głównej">
         <img src="logo.svg" alt="ING Bank Śląski" width="32" height="32">
         <span class="app-name">Doc2</span>
       </div>
@@ -949,6 +949,27 @@
   }
 
   <!-- About Dialog -->
+  <!-- Dialog opuszczania edytora -->
+  @if (showLeaveDialog()) {
+    <div class="dialog-overlay leave-dialog-overlay" (click)="cancelLeave()">
+      <div class="dialog leave-dialog" (click)="$event.stopPropagation()">
+        <div class="leave-dialog-icon">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none">
+            <circle cx="12" cy="12" r="11" stroke="#ff6200" stroke-width="2"/>
+            <path d="M12 7v5" stroke="#ff6200" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="16" r="1" fill="#ff6200"/>
+          </svg>
+        </div>
+        <h3 class="leave-dialog-title">Opuścić edytor?</h3>
+        <p class="leave-dialog-message">Masz otwarty dokument z niezapisanymi zmianami.<br>Jeśli wyjdziesz teraz, zmiany wprowadzone od ostatniego zapisu zostaną utracone.</p>
+        <div class="leave-dialog-actions">
+          <button class="leave-btn-cancel" (click)="cancelLeave()">Zostań w edytorze</button>
+          <button class="leave-btn-confirm" (click)="confirmLeave()">Wyjdź bez zapisywania</button>
+        </div>
+      </div>
+    </div>
+  }
+
   @if (showAbout()) {
     <div class="dialog-overlay" (click)="showAbout.set(false)">
       <div class="dialog about-dialog" (click)="$event.stopPropagation()">

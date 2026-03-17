@@ -872,6 +872,96 @@
   z-index: 1000;
 }
 
+/* Leave editor confirmation dialog */
+.leave-dialog-overlay {
+  z-index: 2000;
+  backdrop-filter: blur(3px);
+  animation: fadeInOverlay 0.15s ease;
+}
+
+@keyframes fadeInOverlay {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.leave-dialog {
+  width: 420px;
+  padding: 36px 32px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0;
+  animation: slideInDialog 0.18s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+@keyframes slideInDialog {
+  from { opacity: 0; transform: translateY(-16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.leave-dialog-icon {
+  margin-bottom: 16px;
+}
+
+.leave-dialog-title {
+  margin: 0 0 12px;
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+.leave-dialog-message {
+  margin: 0 0 28px;
+  font-size: 0.95rem;
+  color: #555;
+  line-height: 1.6;
+}
+
+.leave-dialog-actions {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.leave-btn-cancel {
+  flex: 1;
+  padding: 11px 16px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  background: #fff;
+  color: #333;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+
+  &:hover {
+    border-color: #aaa;
+    background: #f5f5f5;
+  }
+}
+
+.leave-btn-confirm {
+  flex: 1;
+  padding: 11px 16px;
+  border: none;
+  border-radius: 8px;
+  background: #ff6200;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  font-family: inherit;
+
+  &:hover {
+    background: #e55a00;
+    box-shadow: 0 4px 12px rgba(255, 98, 0, 0.35);
+  }
+}
+
 .dialog {
   background: white;
   border-radius: 12px;
