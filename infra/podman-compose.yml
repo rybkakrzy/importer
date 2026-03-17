@@ -1,4 +1,34 @@
 services:
+  api:
+    build:
+      context: ../D2ApiViewerEditor
+      dockerfile: Dockerfile
+    container_name: d2viewereditor_api
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: DEV
+      ASPNETCORE_URLS: http://+:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - d2viewereditor_network
+
+  frontend:
+    build:
+      context: ../D2GuiViewerEditor
+      dockerfile: Dockerfile
+    container_name: d2viewereditor_frontend
+    restart: unless-stopped
+    ports:
+      - "4200:80"
+    depends_on:
+      - api
+    networks:
+      - d2viewereditor_network
+
   postgres:
     image: docker.io/library/postgres:16-alpine
     container_name: d2viewereditor_postgres
