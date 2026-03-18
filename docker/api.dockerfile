@@ -1,8 +1,6 @@
-# ── Stage 1: build ──────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Kopiuj pliki projektów i przywróć zależności (cache warstw)
 COPY D2ApiViewerEditor/D2ViewerEditor.sln ./
 COPY D2ApiViewerEditor/D2ViewerEditor.Api/D2ViewerEditor.Api.csproj                         D2ViewerEditor.Api/
 COPY D2ApiViewerEditor/D2ViewerEditor.Application/D2ViewerEditor.Application.csproj         D2ViewerEditor.Application/
@@ -11,18 +9,15 @@ COPY D2ApiViewerEditor/D2ViewerEditor.Infrastructure/D2ViewerEditor.Infrastructu
 
 RUN dotnet restore D2ViewerEditor.Api/D2ViewerEditor.Api.csproj
 
-# Kopiuj resztę kodu i opublikuj
 COPY D2ApiViewerEditor/ .
 RUN dotnet publish D2ViewerEditor.Api/D2ViewerEditor.Api.csproj \
     -c Release \
     -o /app/publish \
     --no-restore
 
-# ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
-# Nie uruchamiaj jako root
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser
 
