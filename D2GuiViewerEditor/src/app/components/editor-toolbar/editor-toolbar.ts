@@ -140,8 +140,12 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
 export class EditorToolbarComponent {
   private _editorState: EditorState | null = null;
 
-  @HostListener('document:click')
-  onDocumentClick(): void {
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    // Nie zamykaj dropdowna gdy klik jest wewnątrz toolbara
+    if ((event.target as HTMLElement).closest('d2-editor-toolbar')) {
+      return;
+    }
     this.showStyleDropdown.set(false);
   }
   

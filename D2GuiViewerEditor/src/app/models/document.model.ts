@@ -21,6 +21,7 @@ export interface DocumentContent {
   styles: DocumentStyle[];
   header?: HeaderFooterContent;
   footer?: HeaderFooterContent;
+  margins?: PageMargins;
 }
 
 /** Metadane dokumentu */
@@ -142,6 +143,7 @@ export interface SaveDocumentRequest {
   metadata?: DocumentMetadata;
   header?: HeaderFooterContent;
   footer?: HeaderFooterContent;
+  margins?: PageMargins;
 }
 
 /** Szablon dokumentu */

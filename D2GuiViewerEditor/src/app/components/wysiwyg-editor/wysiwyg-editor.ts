@@ -127,6 +127,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private pageCheckInterval?: ReturnType<typeof setInterval>;
   private selectedImageWrapper: HTMLElement | null = null;
   private draggedImageWrapper: HTMLElement | null = null;
+  private imageDragCaret: HTMLElement | null = null;
+  private imageMoveState: {
+    wrapper: HTMLElement;
+    startX: number;
+    startY: number;
+    isDragging: boolean;
+  } | null = null;
   private imageResizeState: {
     wrapper: HTMLElement;
     startX: number;
@@ -328,6 +335,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.handleKeyboard(e);
     });
 
+    // Zapisz selekcję gdy edytor traci fokus (np. klik w toolbar)
+    editor.addEventListener('blur', () => {
+      this.saveSelection();
+    });
+
     // Drop - obsługa przeciągania
     editor.addEventListener('drop', (e) => {
       this.handleDrop(e);
@@ -470,9 +482,81 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
-    // Kliknięcie na wrapper obrazu (nie resize handle) - zaznacz obraz
+    // Kliknięcie / przeciąganie na wrapper obrazu (nie resize handle)
     event.preventDefault();
     this.selectImageWrapper(wrapper);
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    this.imageMoveState = { wrapper, startX, startY, isDragging: false };
+
+    const onImageMouseMove = (moveEvent: MouseEvent) => {
+      if (!this.imageMoveState) return;
+      const dx = moveEvent.clientX - this.imageMoveState.startX;
+      const dy = moveEvent.clientY - this.imageMoveState.startY;
+      if (!this.imageMoveState.isDragging && Math.hypot(dx, dy) > 5) {
+        this.imageMoveState.isDragging = true;
+        document.body.classList.add('image-moving');
+        wrapper.classList.add('image-dragging');
+        // Wyłącz pointer-events na wrapperze żeby getRangeFromPoint trafiał w tekst pod grafiką
+        wrapper.style.pointerEvents = 'none';
+        // Utwórz element wskazujący miejsce upuszczenia (kursor edytora)
+        this.imageDragCaret = document.createElement('div');
+        this.imageDragCaret.className = 'image-drop-caret';
+        document.body.appendChild(this.imageDragCaret);
+      }
+
+      if (this.imageMoveState.isDragging && this.imageDragCaret) {
+        const editor = this.editorContent?.nativeElement;
+        const range = editor ? this.getRangeFromPoint(moveEvent.clientX, moveEvent.clientY) : null;
+        if (range && editor && editor.contains(range.startContainer) && !wrapper.contains(range.startContainer)) {
+          const rect = range.getBoundingClientRect();
+          if (rect.height > 0) {
+            this.imageDragCaret.style.display = 'block';
+            this.imageDragCaret.style.left = `${rect.left}px`;
+            this.imageDragCaret.style.top = `${rect.top}px`;
+            this.imageDragCaret.style.height = `${rect.height}px`;
+          } else {
+            this.imageDragCaret.style.display = 'none';
+          }
+        } else {
+          this.imageDragCaret.style.display = 'none';
+        }
+      }
+    };
+
+    const onImageMouseUp = (upEvent: MouseEvent) => {
+      if (this.imageMoveState?.isDragging) {
+        // Przywróć pointer-events i usuń kursor upuszczenia
+        wrapper.style.pointerEvents = '';
+        this.imageDragCaret?.remove();
+        this.imageDragCaret = null;
+
+        const editor = this.editorContent?.nativeElement;
+        if (editor) {
+          wrapper.classList.remove('image-dragging');
+          const dropRange = this.getRangeFromPoint(upEvent.clientX, upEvent.clientY);
+          if (dropRange && editor.contains(dropRange.startContainer) && !wrapper.contains(dropRange.startContainer)) {
+            wrapper.remove();
+            dropRange.insertNode(wrapper);
+            this.selectImageWrapper(wrapper);
+            this.onContentChange();
+          }
+        }
+      }
+      // Sprzątanie po każdym mouse-up (także gdy nie było faktycznego drag)
+      document.body.classList.remove('image-moving');
+      wrapper.classList.remove('image-dragging');
+      wrapper.style.pointerEvents = '';
+      this.imageDragCaret?.remove();
+      this.imageDragCaret = null;
+      this.imageMoveState = null;
+      document.removeEventListener('mousemove', onImageMouseMove);
+      document.removeEventListener('mouseup', onImageMouseUp);
+    };
+
+    document.addEventListener('mousemove', onImageMouseMove);
+    document.addEventListener('mouseup', onImageMouseUp);
   }
 
   // ======= RESIZE TABEL =======
@@ -545,8 +629,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Zmienia kursor nad krawędziami tabeli
    */
   private handleTableResizeCursor(event: MouseEvent): void {
-    // Nie zmieniaj kursora podczas aktywnego resize
-    if (this.tableResizeState || this.imageResizeState) return;
+    // Nie zmieniaj kursora podczas aktywnego resize / przenoszenia obrazu
+    if (this.tableResizeState || this.imageResizeState || this.imageMoveState) return;
 
     const target = event.target as HTMLElement;
     const td = target.closest('td, th') as HTMLTableCellElement | null;
@@ -1120,8 +1204,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     this.currentFontSize = size;
     editor.focus();
-    
-    const selection = window.getSelection();
+
+    // Jeśli selekcja zaginęła (np. klik w input toolbara) – przywróć zapisaną
+    let selection = window.getSelection();
+    if ((!selection || selection.rangeCount === 0) && this.savedSelection) {
+      this.restoreSelection();
+      selection = window.getSelection();
+    }
+
     if (!selection || selection.rangeCount === 0) {
       // Brak selekcji - ustaw dla następnego tekstu
       this.pendingFontSize = size;
@@ -1258,8 +1348,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     this.currentFontFamily = fontFamily;
     editor.focus();
-    
-    const selection = window.getSelection();
+
+    // Jeśli selekcja zaginęła (np. klik w select toolbara) – przywróć zapisaną
+    let selection = window.getSelection();
+    if ((!selection || selection.rangeCount === 0) && this.savedSelection) {
+      this.restoreSelection();
+      selection = window.getSelection();
+    }
+
     if (!selection || selection.rangeCount === 0) {
       this.pendingFontFamily = fontFamily;
       return;

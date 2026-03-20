@@ -276,6 +276,10 @@ export class DocumentEditorComponent implements OnInit {
           html: content.footer?.html || '',
           height: content.footer?.height || 1.25
         });
+        // Wczytaj marginesy strony
+        if (content.margins) {
+          this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
+        }
         if (this.editor) {
           this.editor.setContent(content.html);
         }
@@ -449,7 +453,12 @@ export class DocumentEditorComponent implements OnInit {
           html: content.footer?.html || '',
           height: content.footer?.height || 1.25
         });
-        
+
+        // Wczytaj marginesy strony
+        if (content.margins) {
+          this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
+        }
+
         if (this.editor) {
           this.editor.setContent(content.html);
         }
@@ -484,7 +493,8 @@ export class DocumentEditorComponent implements OnInit {
         originalFileName: fileName,
         metadata: this.documentMetadata(),
         header: this.headerContent(),
-        footer: this.footerContent()
+        footer: this.footerContent(),
+        margins: this.pageSettings().margins
       },
       fileName
     );
@@ -1763,6 +1773,20 @@ export class DocumentEditorComponent implements OnInit {
     const target = event.target as HTMLElement;
     if (!target.closest('.mini-toolbar')) {
       this.showMiniToolbar.set(false);
+    }
+  }
+
+  /** Zapobiega utracie selekcji w edytorze przy klikaniu w mini-toolbar,
+   *  ale pozwala INPUT i SELECT na normalne działanie.
+   *  Dla INPUT/SELECT selekcja jest zapisywana PRZED przeniesieniem focusu
+   *  przez przeglądarkę (mousedown odpala się przed blur edytora). */
+  onMiniToolbarMouseDown(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'SELECT') {
+      // Zapisz selekcję zanim focus przejdzie do kontrolki i edytor ją wyczyści
+      this.editor?.saveSelection();
+    } else {
+      event.preventDefault();
     }
   }
 

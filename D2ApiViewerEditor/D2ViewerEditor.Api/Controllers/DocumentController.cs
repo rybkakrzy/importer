@@ -139,7 +139,8 @@ public class DocumentController : BaseApiController
             request.SignerName,
             request.SignerTitle,
             request.SignerEmail,
-            request.SignatureReason
+            request.SignatureReason,
+            request.Margins
         );
 
         var result = await Mediator.Send(command);

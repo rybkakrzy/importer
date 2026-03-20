@@ -100,6 +100,7 @@ public class SignDocumentRequest
     public string? SignerTitle { get; set; }
     public string? SignerEmail { get; set; }
     public string? SignatureReason { get; set; }
+    public PageMargins? Margins { get; set; }
 }
 
 /// <summary>

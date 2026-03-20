@@ -1240,7 +1240,7 @@
     <div class="mini-toolbar"
          [style.left.px]="miniToolbarX()"
          [style.top.px]="miniToolbarY()"
-         (mousedown)="$event.preventDefault()">
+         (mousedown)="onMiniToolbarMouseDown($event)">
 
       <!-- Wiersz 1: Formatowanie tekstu -->
       <div class="mt-row">

@@ -317,9 +317,13 @@ body.table-resizing * {
   position: relative;
   max-width: 100%;
   margin: 10px 0;
-  cursor: move;
+  cursor: grab;
   line-height: 0;
   vertical-align: top;
+
+  &:active {
+    cursor: grabbing;
+  }
 }
 
 .editor-content .editor-image-wrapper img {
@@ -336,6 +340,60 @@ body.table-resizing * {
 
 .editor-content .editor-image-wrapper.selected {
   outline: 3px solid #0066cc;
+}
+
+/* Styl podczas przeciągania (przenoszenia) obrazu */
+.editor-content .editor-image-wrapper.image-dragging {
+  opacity: 0.35;
+  outline: 2px dashed #0066cc;
+}
+
+/* Blokada kursora i selekcji podczas przenoszenia obrazu */
+body.image-moving,
+body.image-moving * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* Kursor wskazujący miejsce upuszczenia grafiki */
+.image-drop-caret {
+  position: fixed;
+  width: 2px;
+  background: #0066cc;
+  pointer-events: none;
+  display: none;
+  z-index: 9999;
+  animation: image-drop-caret-pulse 0.6s ease-in-out infinite alternate;
+
+  /* Górna zaślepka */
+  &::before {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: -4px;
+    width: 10px;
+    height: 5px;
+    background: #0066cc;
+    border-radius: 2px 2px 0 0;
+  }
+
+  /* Dolna zaślepka */
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -5px;
+    left: -4px;
+    width: 10px;
+    height: 5px;
+    background: #0066cc;
+    border-radius: 0 0 2px 2px;
+  }
+}
+
+@keyframes image-drop-caret-pulse {
+  from { opacity: 1; transform: scaleX(1); }
+  to   { opacity: 0.4; transform: scaleX(1.5); }
 }
 
 /* Wspólne style uchwytów resize */
@@ -574,10 +632,21 @@ body.table-resizing * {
 .header-editor-content,
 .footer-editor-content {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
   outline: none;
   display: block;
   overflow: visible;
+}
+
+.header-editor-content p,
+.footer-editor-content p {
+  margin: 0;
+}
+
+.header-editor-content img,
+.footer-editor-content img {
+  max-width: 100%;
+  height: auto;
 }
 
 .header-editor-content:empty::before,
