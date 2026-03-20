@@ -34,7 +34,7 @@ services:
     container_name: d2viewereditor_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: d2viewereditor_dev
+      POSTGRES_DB: d2viewereditor
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       PGDATA: /var/lib/postgresql/data/pgdata
@@ -44,7 +44,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d d2viewereditor_dev"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d d2viewereditor"]
       interval: 10s
       timeout: 5s
       retries: 5

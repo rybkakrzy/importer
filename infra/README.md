@@ -32,7 +32,7 @@ podman-compose ps
 podman-compose logs -f postgres
 
 # Test połączenia
-podman exec -it d2viewereditor_postgres psql -U postgres -d d2viewereditor_dev -c "\dt"
+podman exec -it d2viewereditor_postgres psql -U postgres -d d2viewereditor -c "\dt"
 ```
 
 ### 3. Zatrzymanie
@@ -54,24 +54,21 @@ podman-compose down -v
 
 | Środowisko | Host | Port | Database | User | Password |
 |-----------|------|------|----------|------|----------|
-| DEV | localhost | 5432 | d2viewereditor_dev | postgres | postgres |
+| DEV | localhost | 5432 | d2viewereditor | postgres | postgres |
 | UAT | uat-postgres-server | 5432 | d2viewereditor_uat | d2app_user | changeme_uat |
 | PRD | prd-postgres-server | 5432 | d2viewereditor_prd | d2app_user | changeme_prd |
 
 ### Connection String
 
 ```
-Host=localhost;Port=5432;Database=d2viewereditor_dev;Username=postgres;Password=postgres
+Host=localhost;Port=5432;Database=d2viewereditor;Username=postgres;Password=postgres
 ```
 
 ### Bezpośrednie połączenie (psql)
 
 ```bash
 # Psql wewnątrz kontenera
-podman exec -it d2viewereditor_postgres psql -U postgres -d d2viewereditor_dev
-
-# Psql z hosta (jeśli masz zainstalowanego psql)
-psql -h localhost -p 5432 -U postgres -d d2viewereditor_dev
+podman exec -it d2viewereditor_postgres psql -U postgres -d d2viewereditor
 ```
 
 ## 🎨 pgAdmin (Opcjonalny GUI)
@@ -90,7 +87,7 @@ pgAdmin jest dostępny pod adresem: **http://localhost:5050**
    - **Connection**:
      - Host: `postgres` (nazwa serwisu z docker-compose)
      - Port: `5432`
-     - Database: `d2viewereditor_dev`
+     - Database: `d2viewereditor`
      - Username: `postgres`
      - Password: `postgres`
 
@@ -130,8 +127,8 @@ Skrypty SQL znajdują się w katalogu `sql/`:
 
 ```bash
 # Wykonaj skrypt w kontenerze
-podman exec -i d2viewereditor_postgres psql -U postgres -d d2viewereditor_dev < sql/001_init_schema.sql
-podman exec -i d2viewereditor_postgres psql -U postgres -d d2viewereditor_dev < sql/002_init_indexes.sql
+podman exec -i d2viewereditor_postgres psql -U postgres -d d2viewereditor < sql/001_init_schema.sql
+podman exec -i d2viewereditor_postgres psql -U postgres -d d2viewereditor < sql/002_init_indexes.sql
 ```
 
 ### Auto-inicjalizacja
@@ -172,17 +169,17 @@ curl -X POST http://localhost:5001/api/documentstorage/upload \
 
 ```bash
 # Dump całej bazy
-podman exec d2viewereditor_postgres pg_dump -U postgres d2viewereditor_dev > backup_$(date +%Y%m%d).sql
+podman exec d2viewereditor_postgres pg_dump -U postgres d2viewereditor > backup_$(date +%Y%m%d).sql
 
 # Dump tylko danych
-podman exec d2viewereditor_postgres pg_dump -U postgres -a d2viewereditor_dev > data_backup.sql
+podman exec d2viewereditor_postgres pg_dump -U postgres -a d2viewereditor > data_backup.sql
 ```
 
 ### Restore
 
 ```bash
 # Restore z pliku
-podman exec -i d2viewereditor_postgres psql -U postgres -d d2viewereditor_dev < backup_20241215.sql
+podman exec -i d2viewereditor_postgres psql -U postgres -d d2viewereditor < backup_20241215.sql
 ```
 
 ### Reset bazy

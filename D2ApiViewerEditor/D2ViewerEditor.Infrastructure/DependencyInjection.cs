@@ -19,7 +19,7 @@ public static class DependencyInjection
         services.AddScoped<IDigitalSignatureService, DigitalSignatureService>();
 
         // Database
-        var connectionString = configuration.GetConnectionString("DocumentDatabase");
+        var connectionString = configuration.GetConnectionString("DefaultConnection");
         if (!string.IsNullOrEmpty(connectionString))
         {
             services.AddDbContext<DocumentDbContext>(options =>
