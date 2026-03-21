@@ -59,7 +59,9 @@ public class DocumentStorageController : BaseApiController
 
         return result.IsSuccess
             ? Ok(result.Value)
-            : BadRequest(result.Error);
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(result.Error);
     }
 
     /// <summary>
@@ -77,7 +79,7 @@ public class DocumentStorageController : BaseApiController
 
         return result.IsSuccess
             ? Ok(result.Value)
-            : NotFound(result.Error);
+            : NotFound(new { error = result.Error });
     }
 
     /// <summary>
@@ -95,7 +97,7 @@ public class DocumentStorageController : BaseApiController
 
         return result.IsSuccess
             ? Ok(result.Value)
-            : NotFound(result.Error);
+            : NotFound(new { error = result.Error });
     }
 
     /// <summary>
@@ -119,7 +121,9 @@ public class DocumentStorageController : BaseApiController
 
         return result.IsSuccess
             ? Ok(new { Message = "Wersja została przywrócona", VersionId = versionId })
-            : BadRequest(result.Error);
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(result.Error);
     }
 }
 

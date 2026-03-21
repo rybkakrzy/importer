@@ -1,9 +1,9 @@
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Router } from '@angular/router';
 import { switchMap, from } from 'rxjs';
 import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
+import { DocumentNavigationService } from '../../core/services/document-navigation.service';
 
 @Component({
   selector: 'd2-dashboard',
@@ -13,9 +13,9 @@ import { DocumentStorageService } from '../../services/document-storage.service'
   styleUrl: './dashboard.scss'
 })
 export class DashboardComponent {
-  private router = inject(Router);
   private documentService = inject(DocumentService);
   private documentStorageService = inject(DocumentStorageService);
+  private documentNavigation = inject(DocumentNavigationService);
 
   isLoading = signal(false);
   errorMessage = signal<string | null>(null);
@@ -43,7 +43,10 @@ export class DashboardComponent {
       )
     ).subscribe({
       next: (result) => {
-        this.router.navigate(['/editor'], { queryParams: { masterId: result.masterId } });
+        this.documentNavigation.navigateToDocument(
+          result.masterId,
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        );
       },
       error: () => {
         this.isLoading.set(false);
@@ -62,7 +65,27 @@ export class DashboardComponent {
       if (!file) return;
 
       if (file.name.toLowerCase().endsWith('.pdf')) {
-        this.router.navigate(['/pdf-maintenance']);
+        this.isLoading.set(true);
+        this.errorMessage.set(null);
+        try {
+          const base64 = await this.documentStorageService.fileToBase64(file);
+          this.documentStorageService.uploadDocument({
+            name: file.name,
+            mimeType: 'application/pdf',
+            content: base64,
+          }).subscribe({
+            next: (result) => {
+              this.documentNavigation.navigateToDocument(result.masterId, 'application/pdf');
+            },
+            error: () => {
+              this.isLoading.set(false);
+              this.errorMessage.set('Błąd podczas wczytywania pliku PDF. Spróbuj ponownie.');
+            },
+          });
+        } catch {
+          this.isLoading.set(false);
+          this.errorMessage.set('Błąd podczas odczytu pliku PDF.');
+        }
         return;
       }
 
@@ -77,7 +100,10 @@ export class DashboardComponent {
           content: base64
         }).subscribe({
           next: (result) => {
-            this.router.navigate(['/editor'], { queryParams: { masterId: result.masterId } });
+            this.documentNavigation.navigateToDocument(
+              result.masterId,
+              file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            );
           },
           error: () => {
             this.isLoading.set(false);

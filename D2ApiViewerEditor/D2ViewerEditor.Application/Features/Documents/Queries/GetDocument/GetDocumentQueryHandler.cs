@@ -23,7 +23,7 @@ public class GetDocumentQueryHandler : IRequestHandler<GetDocumentQuery, Result<
             // Pobierz dokument z wersjami
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
-                return Result<DocumentDto>.Failure($"Dokument {request.MasterId} nie istnieje");
+                return Result<DocumentDto>.NotFound();
 
             // Pobierz aktywną wersję
             var activeVersion = document.GetActiveVersion();

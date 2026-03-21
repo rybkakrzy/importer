@@ -23,7 +23,7 @@ public class GetDocumentVersionsQueryHandler : IRequestHandler<GetDocumentVersio
             // Pobierz dokument z wersjami
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
-                return Result<List<DocumentVersionDto>>.Failure($"Dokument {request.MasterId} nie istnieje");
+                return Result<List<DocumentVersionDto>>.NotFound();
 
             // Mapuj wersje na DTO (sortuj od najnowszej)
             var versions = document.Versions

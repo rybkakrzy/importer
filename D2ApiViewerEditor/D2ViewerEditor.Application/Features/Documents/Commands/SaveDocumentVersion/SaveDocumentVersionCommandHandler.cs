@@ -23,7 +23,7 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
             // Pobierz dokument z wersjami
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
-                return Result<SaveDocumentVersionResult>.Failure($"Dokument {request.MasterId} nie istnieje");
+                return Result<SaveDocumentVersionResult>.NotFound();
 
             // Dodaj nową wersję
             var newVersion = document.AddVersion(

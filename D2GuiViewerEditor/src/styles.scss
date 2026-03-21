@@ -17,6 +17,31 @@ body {
   overflow: hidden;
 }
 
+/* PDF.js text layer — must be global because Angular scoped CSS doesn't apply
+   to elements created dynamically via document.createElement */
+.text-layer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.text-layer span::selection {
+  background: rgba(0, 102, 255, 0.2);
+}
+
+.text-layer span.search-match {
+  background: rgba(255, 196, 0, 0.45);
+  border-radius: 2px;
+}
+
+.text-layer span.search-match-active {
+  background: rgba(255, 98, 0, 0.55) !important;
+  outline: 2px solid rgba(255, 98, 0, 0.7);
+  border-radius: 2px;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 12px;

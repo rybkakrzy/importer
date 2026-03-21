@@ -9,7 +9,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { switchMap, map, filter, distinctUntilChanged } from 'rxjs/operators';
 import { from } from 'rxjs';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
@@ -43,6 +43,7 @@ import { DocumentStorageService } from '../../services/document-storage.service'
   imports: [
     CommonModule,
     FormsModule,
+    RouterLink,
     WysiwygEditorComponent,
     EditorToolbarComponent,
     BarcodeDialogComponent,
@@ -93,6 +94,7 @@ export class DocumentEditorComponent implements OnInit {
   showBarcodeDialog = signal(false);
   errorMessage = signal<string | null>(null);
   successMessage = signal<string | null>(null);
+  documentNotFound = signal(false);
 
   // Menu kontekstowe
   showContextMenu = signal(false);
@@ -287,7 +289,11 @@ export class DocumentEditorComponent implements OnInit {
         this.isLoading.set(false);
       },
       error: (err) => {
-        this.showError(err.message || 'Nie udało się otworzyć dokumentu z bazy danych');
+        if (err.status === 404) {
+          this.documentNotFound.set(true);
+        } else {
+          this.showError(err.message || 'Nie udało się otworzyć dokumentu z bazy danych');
+        }
         this.isLoading.set(false);
       }
     });

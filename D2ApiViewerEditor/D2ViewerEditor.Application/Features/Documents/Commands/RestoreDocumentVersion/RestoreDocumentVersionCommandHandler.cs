@@ -23,7 +23,7 @@ public class RestoreDocumentVersionCommandHandler : IRequestHandler<RestoreDocum
             // Pobierz dokument z wersjami
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
-                return Result<RestoreDocumentVersionResult>.Failure($"Dokument {request.MasterId} nie istnieje");
+                return Result<RestoreDocumentVersionResult>.NotFound();
 
             // Znajdź wersję do przywrócenia
             var versionToRestore = document.Versions.FirstOrDefault(v => v.Id == request.VersionId);
