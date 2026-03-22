@@ -40,7 +40,8 @@
               }
             ],
             "styles": [
-              "src/styles.scss"
+              "src/styles.scss",
+              "node_modules/pdfjs-dist/web/pdf_viewer.css"
             ]
           },
           "configurations": {

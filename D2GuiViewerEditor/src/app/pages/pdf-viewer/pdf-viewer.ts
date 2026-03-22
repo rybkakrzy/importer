@@ -33,8 +33,8 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
   // ── State ───────────────────────────────────────────────────────────────────
   isLoading = signal(true);
   isRendering = signal(false);
-  errorMessage = signal<string | null>(null);
   isNotFound = signal(false);
+  errorMessage = signal<string | null>(null);
   totalPages = signal(0);
   currentPage = signal(1);
   scale = signal(1.5);
@@ -48,8 +48,10 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
 
   private pdfDoc: PDFDocumentProxy | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
-  private textSpans: HTMLElement[] = [];
-  private matchElements: HTMLElement[] = [];
+  // Text nodes collected via TreeWalker — works with both span-based and
+  // CSS Custom Highlight API modes of PDF.js v5
+  private textNodes: Text[] = [];
+  private matchNodes: Text[] = [];
   private highlightOverlays: HTMLElement[] = [];
 
   @ViewChild('viewerContainer') viewerContainer!: ElementRef<HTMLDivElement>;
@@ -84,13 +86,8 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
         this.documentName.set(doc.name);
         this.loadPdf(doc.content);
       },
-      error: (err) => {
-        if (err.status === 404) {
-          this.isNotFound.set(true);
-          this.errorMessage.set('Nie znaleziono dokumentu');
-        } else {
-          this.errorMessage.set('Nie można pobrać dokumentu z serwera.');
-        }
+      error: () => {
+        this.errorMessage.set('Nie można pobrać dokumentu z serwera.');
         this.isLoading.set(false);
       },
     });
@@ -127,7 +124,7 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
   private async renderAllPages(): Promise<void> {
     if (!this.pdfDoc || !this.viewerContainer) return;
     this.isRendering.set(true);
-    this.textSpans = [];
+    this.textNodes = [];
     this.clearHighlights();
 
     const container = this.viewerContainer.nativeElement;
@@ -166,39 +163,54 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
     const page = await this.pdfDoc!.getPage(pageNum);
     const viewport = page.getViewport({ scale: this.scale() });
 
+    // Wrapper: position context for absolutely-positioned children.
+    // Must set position:relative inline — Angular ViewEncapsulation scoping
+    // prevents the component SCSS class from applying to dynamic elements.
+    wrapper.style.position = 'relative';
+    wrapper.style.width    = `${viewport.width}px`;
+    wrapper.style.height   = `${viewport.height}px`;
+    wrapper.style.overflow = 'hidden';
+
     // Canvas
     const canvas = document.createElement('canvas');
     canvas.height = viewport.height;
-    canvas.width = viewport.width;
+    canvas.width  = viewport.width;
+    canvas.style.display = 'block';
     wrapper.appendChild(canvas);
     await page.render({ canvas, viewport }).promise;
 
-    // Text layer — enables selection & search highlighting
-    const textLayerDiv = document.createElement('div');
-    textLayerDiv.className = 'text-layer';
-    // Inline styles are required because Angular's scoped CSS doesn't apply to
-    // dynamically created elements (no _ngcontent attribute)
-    textLayerDiv.style.position = 'absolute';
-    textLayerDiv.style.top = '0';
-    textLayerDiv.style.left = '0';
-    textLayerDiv.style.width = `${viewport.width}px`;
-    textLayerDiv.style.height = `${viewport.height}px`;
-    textLayerDiv.style.overflow = 'hidden';
-    textLayerDiv.style.lineHeight = '1';
-    textLayerDiv.style.pointerEvents = 'none';
-    wrapper.appendChild(textLayerDiv);
+    // PDF.js v5 TextLayer puts spans *directly* into the container element (no
+    // intermediate div is created). It also calls setLayerDimensions(container)
+    // which overwrites the container's width/height with calc(--total-scale-factor * Xpx).
+    // To avoid clobbering the wrapper dimensions we pass a separate div.
+    //
+    // class="textLayer" ensures pdf_viewer.css rules apply:
+    //   • .textLayer { position:absolute; inset:0; overflow:clip }
+    //   • .textLayer span { position:absolute; color:transparent; white-space:pre }
+    //
+    // --total-scale-factor must be provided; setLayerDimensions() uses it in
+    // calc() to size the container. Span top/left are set as % of this size.
+    const textContainer = document.createElement('div');
+    textContainer.className = 'textLayer';
+    textContainer.style.zIndex = '2';
+    textContainer.style.setProperty('--total-scale-factor', String(viewport.scale));
+    textContainer.style.setProperty('--scale-round-x', '1px');
+    textContainer.style.setProperty('--scale-round-y', '1px');
+    wrapper.appendChild(textContainer);
 
-    const textContent = await page.getTextContent();
     const textLayer = new TextLayer({
-      textContentSource: textContent,
-      container: textLayerDiv,
+      textContentSource: await page.getTextContent(),
+      container: textContainer,
       viewport,
     });
     await textLayer.render();
 
-    // Collect non-empty spans for search
-    const spans = Array.from(textLayerDiv.querySelectorAll('span')) as HTMLElement[];
-    this.textSpans.push(...spans.filter((s) => !!s.textContent?.trim()));
+    // Collect text nodes for search
+    const walker = document.createTreeWalker(textContainer, NodeFilter.SHOW_TEXT);
+    let tn: Text | null;
+    while ((tn = walker.nextNode() as Text | null)) {
+      if (tn.textContent?.trim()) this.textNodes.push(tn);
+    }
 
     page.cleanup();
   }
@@ -230,12 +242,12 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
       this.currentMatchIndex.set(0);
       return;
     }
-    this.matchElements = this.textSpans.filter(
-      (span) => span.textContent?.toLowerCase().includes(query)
+    this.matchNodes = this.textNodes.filter(
+      (tn) => (tn.textContent ?? '').toLowerCase().includes(query)
     );
-    this.matchElements.forEach((span) => this.createOverlay(span, query, false));
-    this.searchResults.set(this.matchElements.length);
-    if (this.matchElements.length > 0) {
+    this.matchNodes.forEach((tn) => this.createOverlay(tn, query, false));
+    this.searchResults.set(this.matchNodes.length);
+    if (this.matchNodes.length > 0) {
       this.currentMatchIndex.set(1);
       this.activateMatch(0);
     } else {
@@ -244,16 +256,16 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
   }
 
   nextMatch(): void {
-    if (!this.matchElements.length) return;
-    const nextIdx = this.currentMatchIndex() % this.matchElements.length;
+    if (!this.matchNodes.length) return;
+    const nextIdx = this.currentMatchIndex() % this.matchNodes.length;
     this.currentMatchIndex.set(nextIdx + 1);
     this.activateMatch(nextIdx);
   }
 
   prevMatch(): void {
-    if (!this.matchElements.length) return;
+    if (!this.matchNodes.length) return;
     const prevIdx =
-      (this.currentMatchIndex() - 2 + this.matchElements.length) % this.matchElements.length;
+      (this.currentMatchIndex() - 2 + this.matchNodes.length) % this.matchNodes.length;
     this.currentMatchIndex.set(prevIdx + 1);
     this.activateMatch(prevIdx);
   }
@@ -262,24 +274,19 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
     this.highlightOverlays.forEach((ov, i) => {
       if (i === index) {
         ov.style.background = 'rgba(255, 98, 0, 0.6)';
-        ov.style.outline = '2px solid rgba(255, 98, 0, 0.85)';
+        ov.style.outline    = '2px solid rgba(255, 98, 0, 0.85)';
       } else {
         ov.style.background = 'rgba(255, 196, 0, 0.45)';
-        ov.style.outline = '';
+        ov.style.outline    = '';
       }
     });
     this.scrollToOverlay(this.highlightOverlays[index]);
   }
 
-  private createOverlay(span: HTMLElement, query: string, active: boolean): void {
-    const wrapper = span.closest('.pdf-page-wrapper') as HTMLElement | null;
+  private createOverlay(textNode: Text, query: string, active: boolean): void {
+    const parentEl = textNode.parentElement;
+    const wrapper  = parentEl?.closest('.pdf-page-wrapper') as HTMLElement | null;
     if (!wrapper) return;
-
-    // Use Range API to get the exact visual rect of only the matching substring.
-    // getBoundingClientRect() on a Range accounts for PDF.js scaleX transforms and
-    // returns the true visual bounds — not the full-line span bounds.
-    const textNode = span.firstChild;
-    if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return;
 
     const fullText = (textNode.textContent ?? '').toLowerCase();
     const idx = fullText.indexOf(query);
@@ -287,24 +294,26 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
 
     const range = document.createRange();
     range.setStart(textNode, idx);
-    range.setEnd(textNode, idx + query.length);
+    range.setEnd(textNode, Math.min(idx + query.length, textNode.length));
 
-    const rangeRect  = range.getBoundingClientRect();
+    const rangeRect   = range.getBoundingClientRect();
     const wrapperRect = wrapper.getBoundingClientRect();
 
-    if (rangeRect.width === 0 && rangeRect.height === 0) return;
+    if (rangeRect.width < 1 && rangeRect.height < 1) return;
 
     const overlay = document.createElement('div');
-    overlay.style.position      = 'absolute';
-    overlay.style.left          = `${rangeRect.left - wrapperRect.left}px`;
-    overlay.style.top           = `${rangeRect.top  - wrapperRect.top}px`;
-    overlay.style.width         = `${Math.max(rangeRect.width,  3)}px`;
-    overlay.style.height        = `${Math.max(rangeRect.height, 3)}px`;
-    overlay.style.background    = active ? 'rgba(255, 98, 0, 0.6)' : 'rgba(255, 196, 0, 0.45)';
-    overlay.style.borderRadius  = '2px';
-    overlay.style.pointerEvents = 'none';
-    overlay.style.zIndex        = '20';
-    if (active) overlay.style.outline = '2px solid rgba(255, 98, 0, 0.85)';
+    overlay.style.cssText = [
+      'position:absolute',
+      `left:${rangeRect.left - wrapperRect.left}px`,
+      `top:${rangeRect.top  - wrapperRect.top}px`,
+      `width:${Math.max(rangeRect.width, 3)}px`,
+      `height:${Math.max(rangeRect.height, 3)}px`,
+      `background:${active ? 'rgba(255,98,0,0.6)' : 'rgba(255,196,0,0.45)'}`,
+      'border-radius:2px',
+      'pointer-events:none',
+      'z-index:3',
+      ...(active ? ['outline:2px solid rgba(255,98,0,0.85)'] : []),
+    ].join(';');
     wrapper.appendChild(overlay);
     this.highlightOverlays.push(overlay);
   }
@@ -314,20 +323,19 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
     const scrollArea = this.viewerContainer?.nativeElement
       ?.closest('.pdf-scroll-area') as HTMLElement | null;
     if (!scrollArea) return;
-
     const ovRect   = overlay.getBoundingClientRect();
     const areaRect = scrollArea.getBoundingClientRect();
-    const scrollTop = scrollArea.scrollTop
-      + (ovRect.top  - areaRect.top)
-      - (scrollArea.clientHeight / 2)
-      + (ovRect.height / 2);
-    scrollArea.scrollTo({ top: scrollTop, behavior: 'smooth' });
+    scrollArea.scrollTo({
+      top: scrollArea.scrollTop + (ovRect.top - areaRect.top)
+           - (scrollArea.clientHeight / 2) + (ovRect.height / 2),
+      behavior: 'smooth',
+    });
   }
 
   private clearHighlights(): void {
     this.highlightOverlays.forEach((ov) => ov.remove());
     this.highlightOverlays = [];
-    this.matchElements = [];
+    this.matchNodes = [];
   }
 
   // ── Zoom actions ─────────────────────────────────────────────────────────────
