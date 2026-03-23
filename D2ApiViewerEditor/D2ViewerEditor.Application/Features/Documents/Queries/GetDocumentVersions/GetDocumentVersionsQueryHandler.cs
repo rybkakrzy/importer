@@ -29,6 +29,7 @@ public class GetDocumentVersionsQueryHandler : IRequestHandler<GetDocumentVersio
             var versions = document.Versions
                 .OrderByDescending(v => v.VersionNumber)
                 .Select(v => new DocumentVersionDto(
+                    DocumentId: document.Id,
                     VersionId: v.Id,
                     VersionNumber: v.VersionNumber,
                     CreatedAt: v.CreatedAt,

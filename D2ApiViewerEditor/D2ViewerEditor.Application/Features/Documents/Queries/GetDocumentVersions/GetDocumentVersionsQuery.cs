@@ -14,6 +14,7 @@ public record GetDocumentVersionsQuery(
 /// DTO wersji dokumentu (bez content - tylko metadane)
 /// </summary>
 public record DocumentVersionDto(
+    Guid DocumentId,
     Guid VersionId,
     int VersionNumber,
     DateTime CreatedAt,

@@ -17,7 +17,7 @@ public abstract class BaseApiController : ControllerBase
         _mediator ??= HttpContext.RequestServices.GetRequiredService<IMediator>();
 
     /// <summary>
-    /// Mapuje Result<T> na odpowiedni HTTP response
+    /// Mapuje Result&lt;T&gt; na odpowiedni HTTP response
     /// </summary>
     protected IActionResult HandleResult<T>(Result<T> result)
     {

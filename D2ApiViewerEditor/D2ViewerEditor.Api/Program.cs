@@ -1,6 +1,8 @@
 ﻿using D2ViewerEditor.Api.Extensions;
 using D2ViewerEditor.Application;
 using D2ViewerEditor.Infrastructure;
+using Microsoft.OpenApi.Models;
+using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,7 +17,35 @@ builder.Services.AddInfrastructure(builder.Configuration);
 // Add API services
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "D2 Viewer Editor API",
+        Version = "v1",
+        Description = """
+            REST API do zarządzania dokumentami DOCX — otwieranie, edycja, zapis wersji,
+            podpisywanie cyfrowe oraz pobieranie historii wersji.
+            """,
+        Contact = new OpenApiContact
+        {
+            Name = "D2 Team",
+            Email = "d2team@example.com"
+        }
+    });
+
+    // Dołącz XML komentarze z kodu
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    options.IncludeXmlComments(xmlPath);
+
+    // Grupowanie endpointów po tagach (controller name)
+    options.TagActionsBy(api =>
+    {
+        api.ActionDescriptor.RouteValues.TryGetValue("controller", out var controller);
+        return [api.GroupName ?? controller ?? "Default"];
+    });
+});
 
 // Add CORS — originy z konfiguracji
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? ["http://localhost:4200"];
@@ -35,17 +65,22 @@ var app = builder.Build();
 // Middleware pipeline — order matters
 app.UseExceptionHandlingMiddleware();
 
-// Swagger — włączany per środowisko
+// Swagger / Scalar — włączany per środowisko
 var swaggerEnabled = app.Configuration.GetValue<bool>("Swagger:Enabled");
 if (swaggerEnabled)
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+
+    // Klasyczny Swagger UI pod /swagger
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "D2 Viewer Editor API v1");
+        c.DocumentTitle = "D2 Viewer Editor API";
+        c.DisplayRequestDuration();
+        c.EnableDeepLinking();
+        c.EnableFilter();
+    });
 }
-
-app.UseCors("AllowAngularApp");
-
-app.UseHttpsRedirection();
 
 app.MapControllers();
 

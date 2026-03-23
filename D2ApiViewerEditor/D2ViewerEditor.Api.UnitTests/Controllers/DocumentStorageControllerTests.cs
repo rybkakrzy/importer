@@ -124,8 +124,8 @@ public class DocumentStorageControllerTests
         var masterId = Guid.NewGuid();
         var versions = new List<DocumentVersionDto>
         {
-            new(Guid.NewGuid(), 1, DateTime.UtcNow, "User", true, 1024),
-            new(Guid.NewGuid(), 2, DateTime.UtcNow, "User", false, 2048)
+            new(masterId, Guid.NewGuid(), 1, DateTime.UtcNow, "User", true, 1024),
+            new(masterId, Guid.NewGuid(), 2, DateTime.UtcNow, "User", false, 2048)
         };
 
         _mediator.Send(Arg.Any<GetDocumentVersionsQuery>(), Arg.Any<CancellationToken>())
