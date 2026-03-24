@@ -1,6 +1,6 @@
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { switchMap, from } from 'rxjs';
+import { switchMap, from, Subscription } from 'rxjs';
 import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { DocumentNavigationService } from '../../core/services/document-navigation.service';
@@ -21,11 +21,13 @@ export class DashboardComponent {
   errorMessage = signal<string | null>(null);
   readonly currentYear = new Date().getFullYear();
 
+  private activeSubscription: Subscription | null = null;
+
   newDocument(): void {
     this.isLoading.set(true);
     this.errorMessage.set(null);
 
-    this.documentService.newDocument().pipe(
+    this.activeSubscription = this.documentService.newDocument().pipe(
       switchMap(content =>
         this.documentService.saveDocument({ html: content.html, metadata: content.metadata }).pipe(
           switchMap(blob =>
@@ -55,6 +57,12 @@ export class DashboardComponent {
     });
   }
 
+  cancelLoading(): void {
+    this.activeSubscription?.unsubscribe();
+    this.activeSubscription = null;
+    this.isLoading.set(false);
+  }
+
   openFile(): void {
     const input = document.createElement('input');
     input.type = 'file';
@@ -69,7 +77,7 @@ export class DashboardComponent {
         this.errorMessage.set(null);
         try {
           const base64 = await this.documentStorageService.fileToBase64(file);
-          this.documentStorageService.uploadDocument({
+      this.activeSubscription = this.documentStorageService.uploadDocument({
             name: file.name,
             mimeType: 'application/pdf',
             content: base64,
@@ -94,7 +102,7 @@ export class DashboardComponent {
 
       try {
         const base64 = await this.documentStorageService.fileToBase64(file);
-        this.documentStorageService.uploadDocument({
+        this.activeSubscription = this.documentStorageService.uploadDocument({
           name: file.name,
           mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           content: base64
