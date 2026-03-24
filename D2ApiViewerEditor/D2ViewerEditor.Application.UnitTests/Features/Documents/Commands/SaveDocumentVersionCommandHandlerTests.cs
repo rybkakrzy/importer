@@ -74,8 +74,7 @@ public class SaveDocumentVersionCommandHandlerTests
 
         // Assert
         result.IsFailure.Should().BeTrue();
-        result.Error.Should().Contain("nie istnieje");
-        result.Error.Should().Contain(masterId.ToString());
+        result.IsNotFound.Should().BeTrue();
     }
 
     [Test]

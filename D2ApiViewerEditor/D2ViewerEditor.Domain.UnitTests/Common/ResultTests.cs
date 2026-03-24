@@ -100,4 +100,50 @@ public class ResultTests
         result.IsFailure.Should().BeTrue();
         result.Error.Should().Be(errorMessage);
     }
+
+    [Test]
+    public void NotFound_ShouldSetIsNotFoundTrue()
+    {
+        var result = Result<string>.NotFound("Nie znaleziono rekordu");
+
+        result.IsNotFound.Should().BeTrue();
+        result.IsFailure.Should().BeTrue();
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Be("Nie znaleziono rekordu");
+    }
+
+    [Test]
+    public void NotFound_WithDefaultMessage_ShouldUseDefaultError()
+    {
+        var result = Result<int>.NotFound();
+
+        result.IsNotFound.Should().BeTrue();
+        result.Error.Should().NotBeNullOrEmpty();
+    }
+
+    [Test]
+    public void Success_IsNotFound_ShouldBeFalse()
+    {
+        var result = Result<string>.Success("value");
+
+        result.IsNotFound.Should().BeFalse();
+    }
+
+    [Test]
+    public void Failure_IsNotFound_ShouldBeFalseByDefault()
+    {
+        var result = Result<string>.Failure("error");
+
+        result.IsNotFound.Should().BeFalse();
+    }
+
+    [Test]
+    public void ResultWithoutValue_NotFound_ShouldSetIsNotFoundTrue()
+    {
+        var result = Result.NotFound("Brak zasobu");
+
+        result.IsNotFound.Should().BeTrue();
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Be("Brak zasobu");
+    }
 }

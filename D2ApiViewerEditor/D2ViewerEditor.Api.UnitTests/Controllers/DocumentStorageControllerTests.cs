@@ -3,6 +3,8 @@ using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVers
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocument;
+using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentBaseContent;
+using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersionContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersions;
 using D2ViewerEditor.Domain.Common;
 using FluentAssertions;
@@ -219,5 +221,79 @@ public class DocumentStorageControllerTests
 
         // Assert
         result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Test]
+    public async Task DownloadBaseDocument_WithExistingId_ShouldReturnFileWithCorrectMimeType()
+    {
+        // Arrange
+        var masterId = Guid.NewGuid();
+        var content = new byte[] { 37, 80, 68, 70 };
+        var dto = new DocumentBaseContentDto("contract_v1.pdf", "application/pdf", content);
+
+        _mediator.Send(Arg.Any<GetDocumentBaseContentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Result<DocumentBaseContentDto>.Success(dto));
+
+        // Act
+        var result = await _controller.DownloadBaseDocument(masterId);
+
+        // Assert
+        result.Should().BeOfType<FileContentResult>();
+        var file = (FileContentResult)result;
+        file.FileContents.Should().BeEquivalentTo(content);
+        file.ContentType.Should().Be("application/pdf");
+        file.FileDownloadName.Should().Be("contract_v1.pdf");
+    }
+
+    [Test]
+    public async Task DownloadBaseDocument_WithNonExistingId_ShouldReturnNotFound()
+    {
+        // Arrange
+        _mediator.Send(Arg.Any<GetDocumentBaseContentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Result<DocumentBaseContentDto>.NotFound());
+
+        // Act
+        var result = await _controller.DownloadBaseDocument(Guid.NewGuid());
+
+        // Assert
+        result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Test]
+    public async Task DownloadDocumentVersion_WithValidIds_ShouldReturnFileWithCorrectMimeType()
+    {
+        // Arrange
+        var masterId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+        var content = new byte[] { 1, 2, 3, 4 };
+        var dto = new DocumentVersionContentDto("report_v2.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", content);
+
+        _mediator.Send(Arg.Any<GetDocumentVersionContentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Result<DocumentVersionContentDto>.Success(dto));
+
+        // Act
+        var result = await _controller.DownloadDocumentVersion(masterId, versionId);
+
+        // Assert
+        result.Should().BeOfType<FileContentResult>();
+        var file = (FileContentResult)result;
+        file.FileContents.Should().BeEquivalentTo(content);
+        file.ContentType.Should().Be("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        file.FileDownloadName.Should().Be("report_v2.docx");
+    }
+
+    [Test]
+    public async Task DownloadDocumentVersion_WithNonExistingVersion_ShouldReturnNotFound()
+    {
+        // Arrange
+        _mediator.Send(Arg.Any<GetDocumentVersionContentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Result<DocumentVersionContentDto>.NotFound());
+
+        // Act
+        var result = await _controller.DownloadDocumentVersion(Guid.NewGuid(), Guid.NewGuid());
+
+        // Assert
+        result.Should().BeOfType<NotFoundObjectResult>();
     }
 }

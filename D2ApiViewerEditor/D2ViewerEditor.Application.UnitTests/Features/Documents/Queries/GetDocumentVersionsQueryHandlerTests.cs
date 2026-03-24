@@ -72,7 +72,7 @@ public class GetDocumentVersionsQueryHandlerTests
 
         // Assert
         result.IsFailure.Should().BeTrue();
-        result.Error.Should().Contain("nie istnieje");
+        result.IsNotFound.Should().BeTrue();
     }
 
     [Test]
