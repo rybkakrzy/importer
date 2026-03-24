@@ -65,6 +65,9 @@ var app = builder.Build();
 // Middleware pipeline — order matters
 app.UseExceptionHandlingMiddleware();
 
+// CORS musi być przed MapControllers
+app.UseCors("AllowAngularApp");
+
 // Swagger / Scalar — włączany per środowisko
 var swaggerEnabled = app.Configuration.GetValue<bool>("Swagger:Enabled");
 if (swaggerEnabled)

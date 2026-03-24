@@ -1,5 +1,6 @@
 import { Injectable, signal, computed, OnDestroy, inject, NgZone } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { timeout, TimeoutError } from 'rxjs';
 import { ApiConfigService } from './api-config.service';
 
 export interface HealthResponse {
@@ -104,6 +105,7 @@ export class ConnectionStatusService implements OnDestroy {
   private checkApi(): void {
     this.http
       .get<HealthResponse>(`${this.apiConfig.baseUrl}/health`)
+      .pipe(timeout(5_000))
       .subscribe({
         next: (res) => {
           this.ngZone.run(() => {
@@ -115,7 +117,7 @@ export class ConnectionStatusService implements OnDestroy {
         },
         error: (err) => {
           this.ngZone.run(() => {
-            if (err.status === 0) {
+            if (err.status === 0 || err instanceof TimeoutError) {
               this._apiUnreachable.set(true);
               this._dismissed.set(false);
             } else {

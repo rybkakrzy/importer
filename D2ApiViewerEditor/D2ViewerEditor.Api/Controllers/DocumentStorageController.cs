@@ -3,6 +3,7 @@ using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVers
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocument;
+using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentBaseContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersionContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersions;
 using Microsoft.AspNetCore.Mvc;
@@ -99,6 +100,26 @@ public class DocumentStorageController : BaseApiController
         return result.IsSuccess
             ? Ok(result.Value)
             : NotFound(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Pobranie bazowego (oryginalnego) pliku dokumentu — pierwsza wersja po uploadzie
+    /// </summary>
+    /// <param name="masterId">GUID mastera dokumentu</param>
+    /// <returns>Oryginalny plik z właściwym Content-Type</returns>
+    [HttpGet("{masterId:guid}/download")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadBaseDocument(Guid masterId)
+    {
+        var query = new GetDocumentBaseContentQuery(masterId);
+        var result = await Mediator.Send(query);
+
+        if (!result.IsSuccess)
+            return NotFound(new { error = result.Error });
+
+        var dto = result.Value!;
+        return File(dto.Content, dto.MimeType, dto.FileName);
     }
 
     /// <summary>
