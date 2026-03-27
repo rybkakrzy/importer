@@ -16,15 +16,17 @@
 
 /* ── Header ── */
 .dashboard-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
   background: #ffffff;
-  border-bottom: 2px solid #ff6200;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  color: #333;
+  min-height: 52px;
+  border-bottom: 1px solid #e0e0e0;
+  position: relative;
 }
 
 .header-content {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 14px 24px;
   display: flex;
   align-items: center;
 }
@@ -32,20 +34,20 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .logo {
-  width: 44px;
-  height: 44px;
-  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
 }
 
 .app-name {
-  font-size: 1.6rem;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 600;
   color: #1a1a1a;
-  letter-spacing: -0.5px;
+  line-height: 28px;
 }
 
 /* ── Main ── */
