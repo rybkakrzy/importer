@@ -10,10 +10,12 @@ namespace D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVer
 public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVersionCommand, Result<SaveDocumentVersionResult>>
 {
     private readonly IDocumentRepository _documentRepository;
+    private readonly IDocumentStorageService _storageService;
 
-    public SaveDocumentVersionCommandHandler(IDocumentRepository documentRepository)
+    public SaveDocumentVersionCommandHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
     {
         _documentRepository = documentRepository;
+        _storageService = storageService;
     }
 
     public async Task<Result<SaveDocumentVersionResult>> Handle(SaveDocumentVersionCommand request, CancellationToken cancellationToken)
@@ -25,13 +27,19 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
             if (document == null)
                 return Result<SaveDocumentVersionResult>.NotFound();
 
-            // Dodaj nową wersję
+            // Upload pliku do GCS
+            var versionId = Guid.NewGuid();
+            var storagePath = await _storageService.UploadAsync(
+                versionId, request.Content, document.MimeType, cancellationToken);
+
+            // Dodaj nową wersję z referencją do GCS
             var newVersion = document.AddVersion(
-                content: request.Content,
+                storagePath: storagePath,
+                sizeInBytes: request.Content.Length,
                 createdBy: request.CreatedBy
             );
 
-            // Zapisz zmiany
+            // Zapisz metadane w bazie
             await _documentRepository.UpdateAsync(document, cancellationToken);
             await _documentRepository.SaveChangesAsync(cancellationToken);
 

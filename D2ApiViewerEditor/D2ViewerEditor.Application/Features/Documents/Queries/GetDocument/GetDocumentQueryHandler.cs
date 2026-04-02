@@ -10,10 +10,12 @@ namespace D2ViewerEditor.Application.Features.Documents.Queries.GetDocument;
 public class GetDocumentQueryHandler : IRequestHandler<GetDocumentQuery, Result<DocumentDto>>
 {
     private readonly IDocumentRepository _documentRepository;
+    private readonly IDocumentStorageService _storageService;
 
-    public GetDocumentQueryHandler(IDocumentRepository documentRepository)
+    public GetDocumentQueryHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
     {
         _documentRepository = documentRepository;
+        _storageService = storageService;
     }
 
     public async Task<Result<DocumentDto>> Handle(GetDocumentQuery request, CancellationToken cancellationToken)
@@ -30,13 +32,16 @@ public class GetDocumentQueryHandler : IRequestHandler<GetDocumentQuery, Result<
             if (activeVersion == null)
                 return Result<DocumentDto>.Failure($"Dokument {request.MasterId} nie ma aktywnej wersji");
 
+            // Pobierz content z GCS
+            var content = await _storageService.DownloadAsync(activeVersion.StoragePath, cancellationToken);
+
             var dto = new DocumentDto(
                 MasterId: document.Id,
                 Name: document.Name,
                 MimeType: document.MimeType,
                 CreatedAt: document.CreatedAt,
                 ActiveVersionId: activeVersion.Id,
-                Content: activeVersion.Content,
+                Content: content,
                 VersionNumber: activeVersion.VersionNumber
             );
 

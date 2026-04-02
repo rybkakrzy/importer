@@ -1,0 +1,5 @@
+{
+  "kind": "storage#bucket",
+  "id": "d2viewereditor-documents",
+  "name": "d2viewereditor-documents"
+}

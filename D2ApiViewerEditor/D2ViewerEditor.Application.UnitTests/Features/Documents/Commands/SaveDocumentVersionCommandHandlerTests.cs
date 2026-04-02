@@ -11,13 +11,17 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
 public class SaveDocumentVersionCommandHandlerTests
 {
     private IDocumentRepository _documentRepository;
+    private IDocumentStorageService _storageService;
     private SaveDocumentVersionCommandHandler _handler;
 
     [SetUp]
     public void SetUp()
     {
         _documentRepository = Substitute.For<IDocumentRepository>();
-        _handler = new SaveDocumentVersionCommandHandler(_documentRepository);
+        _storageService = Substitute.For<IDocumentStorageService>();
+        _storageService.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci => $"documents/{ci.ArgAt<Guid>(0)}");
+        _handler = new SaveDocumentVersionCommandHandler(_documentRepository, _storageService);
     }
 
     [Test]
@@ -31,7 +35,7 @@ public class SaveDocumentVersionCommandHandlerTests
             mimeType: "application/pdf",
             createdBy: "User1"
         );
-        existingDocument.AddVersion(new byte[] { 1, 2 }, "User1");
+        existingDocument.AddVersion("documents/existing/v1", 100, "User1");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(existingDocument);
@@ -51,6 +55,8 @@ public class SaveDocumentVersionCommandHandlerTests
         result.Value!.VersionNumber.Should().Be(2); // Druga wersja
         result.Value.VersionId.Should().NotBeEmpty();
 
+        await _storageService.Received(1).UploadAsync(
+            Arg.Any<Guid>(), Arg.Any<byte[]>(), "application/pdf", Arg.Any<CancellationToken>());
         await _documentRepository.Received(1).UpdateAsync(existingDocument, Arg.Any<CancellationToken>());
         await _documentRepository.Received(1).SaveChangesAsync(Arg.Any<CancellationToken>());
     }
@@ -83,9 +89,9 @@ public class SaveDocumentVersionCommandHandlerTests
         // Arrange
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "doc.txt", "text/plain", "User");
-        document.AddVersion(new byte[] { 1 }, "User");
-        document.AddVersion(new byte[] { 2 }, "User");
-        document.AddVersion(new byte[] { 3 }, "User");
+        document.AddVersion("documents/test/v1", 10, "User");
+        document.AddVersion("documents/test/v2", 20, "User");
+        document.AddVersion("documents/test/v3", 30, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -111,7 +117,7 @@ public class SaveDocumentVersionCommandHandlerTests
         // Arrange
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "test.doc", "application/msword", "User");
-        document.AddVersion(new byte[] { 1 }, "User");
+        document.AddVersion("documents/test/v1", 10, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -134,7 +140,7 @@ public class SaveDocumentVersionCommandHandlerTests
         // Arrange
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Analyst");
-        document.AddVersion(new byte[] { 1, 2, 3 }, "Analyst");
+        document.AddVersion("documents/test/v1", 100, "Analyst");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);

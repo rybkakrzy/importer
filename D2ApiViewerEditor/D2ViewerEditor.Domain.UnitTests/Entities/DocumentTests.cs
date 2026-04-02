@@ -7,7 +7,7 @@ namespace D2ViewerEditor.Domain.UnitTests.Entities;
 [TestFixture]
 public class DocumentTests
 {
-    private static readonly byte[] SampleContent = [1, 2, 3, 4, 5];
+    private static readonly string SampleStoragePath = "documents/test/v1";
 
     // ── Constructor ────────────────────────────────────────────────────────────
 
@@ -59,11 +59,11 @@ public class DocumentTests
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
 
-        var version = doc.AddVersion(SampleContent, "User");
+        var version = doc.AddVersion(SampleStoragePath, 500, "User");
 
         version.VersionNumber.Should().Be(1);
         version.IsActive.Should().BeTrue();
-        version.Content.Should().BeEquivalentTo(SampleContent);
+        version.StoragePath.Should().Be(SampleStoragePath);
         doc.Versions.Should().HaveCount(1);
     }
 
@@ -71,9 +71,9 @@ public class DocumentTests
     public void AddVersion_SecondVersion_ShouldDeactivatePreviousAndBeActive()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        var v1 = doc.AddVersion([1, 2], "User");
+        var v1 = doc.AddVersion("documents/test/v1", 100, "User");
 
-        var v2 = doc.AddVersion([3, 4], "User");
+        var v2 = doc.AddVersion("documents/test/v2", 200, "User");
 
         v1.IsActive.Should().BeFalse();
         v2.IsActive.Should().BeTrue();
@@ -86,7 +86,7 @@ public class DocumentTests
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
 
         var versions = Enumerable.Range(1, 5)
-            .Select(i => doc.AddVersion([(byte)i], "User"))
+            .Select(i => doc.AddVersion($"documents/test/v{i}", i * 10, "User"))
             .ToList();
 
         versions.Select(v => v.VersionNumber).Should().BeEquivalentTo([1, 2, 3, 4, 5]);
@@ -95,22 +95,22 @@ public class DocumentTests
     }
 
     [Test]
-    public void AddVersion_WithEmptyContent_ShouldThrowArgumentException()
+    public void AddVersion_WithEmptyStoragePath_ShouldThrowArgumentException()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
 
-        var act = () => doc.AddVersion([], "User");
+        var act = () => doc.AddVersion("", 10, "User");
 
         act.Should().Throw<ArgumentException>()
-            .WithMessage("*Zawartość*");
+            .WithMessage("*storage*");
     }
 
     [Test]
     public void AddVersion_ShouldAssignUniqueIds()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        doc.AddVersion([1], "User");
-        doc.AddVersion([2], "User");
+        doc.AddVersion("documents/test/v1", 10, "User");
+        doc.AddVersion("documents/test/v2", 20, "User");
 
         var ids = doc.Versions.Select(v => v.Id).ToList();
         ids.Should().OnlyHaveUniqueItems();
@@ -123,7 +123,7 @@ public class DocumentTests
         var docId = Guid.NewGuid();
         var doc = new Document(docId, "doc.pdf", "application/pdf", "User");
 
-        var version = doc.AddVersion(SampleContent, "User");
+        var version = doc.AddVersion(SampleStoragePath, 500, "User");
 
         version.DocumentId.Should().Be(docId);
     }
@@ -142,9 +142,9 @@ public class DocumentTests
     public void GetActiveVersion_WithMultipleVersions_ShouldReturnLatest()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        doc.AddVersion([1], "User");
-        doc.AddVersion([2], "User");
-        var v3 = doc.AddVersion([3], "User");
+        doc.AddVersion("documents/test/v1", 10, "User");
+        doc.AddVersion("documents/test/v2", 20, "User");
+        var v3 = doc.AddVersion("documents/test/v3", 30, "User");
 
         doc.GetActiveVersion()!.Id.Should().Be(v3.Id);
     }
@@ -155,9 +155,9 @@ public class DocumentTests
     public void RestoreVersion_ValidId_ShouldActivateAndDeactivateOthers()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        var v1 = doc.AddVersion([1], "User");
-        var v2 = doc.AddVersion([2], "User");
-        var v3 = doc.AddVersion([3], "User");
+        var v1 = doc.AddVersion("documents/test/v1", 10, "User");
+        var v2 = doc.AddVersion("documents/test/v2", 20, "User");
+        var v3 = doc.AddVersion("documents/test/v3", 30, "User");
 
         doc.RestoreVersion(v1.Id);
 
@@ -170,8 +170,8 @@ public class DocumentTests
     public void RestoreVersion_CurrentActiveVersion_ShouldRemainActive()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        doc.AddVersion([1], "User");
-        var v2 = doc.AddVersion([2], "User");
+        doc.AddVersion("documents/test/v1", 10, "User");
+        var v2 = doc.AddVersion("documents/test/v2", 20, "User");
 
         doc.RestoreVersion(v2.Id);
 
@@ -182,7 +182,7 @@ public class DocumentTests
     public void RestoreVersion_NonExistentId_ShouldThrowInvalidOperationException()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        doc.AddVersion([1], "User");
+        doc.AddVersion("documents/test/v1", 10, "User");
 
         var act = () => doc.RestoreVersion(Guid.NewGuid());
 
@@ -194,9 +194,9 @@ public class DocumentTests
     public void RestoreVersion_ShouldPreserveAllVersionsInHistory()
     {
         var doc = new Document(Guid.NewGuid(), "doc.pdf", "application/pdf", "User");
-        var v1 = doc.AddVersion([1], "User");
-        doc.AddVersion([2], "User");
-        doc.AddVersion([3], "User");
+        var v1 = doc.AddVersion("documents/test/v1", 10, "User");
+        doc.AddVersion("documents/test/v2", 20, "User");
+        doc.AddVersion("documents/test/v3", 30, "User");
 
         doc.RestoreVersion(v1.Id);
 

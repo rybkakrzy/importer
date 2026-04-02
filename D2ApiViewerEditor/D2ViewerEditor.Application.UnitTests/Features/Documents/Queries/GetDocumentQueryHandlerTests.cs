@@ -11,13 +11,15 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Queries;
 public class GetDocumentQueryHandlerTests
 {
     private IDocumentRepository _documentRepository;
+    private IDocumentStorageService _storageService;
     private GetDocumentQueryHandler _handler;
 
     [SetUp]
     public void SetUp()
     {
         _documentRepository = Substitute.For<IDocumentRepository>();
-        _handler = new GetDocumentQueryHandler(_documentRepository);
+        _storageService = Substitute.For<IDocumentStorageService>();
+        _handler = new GetDocumentQueryHandler(_documentRepository, _storageService);
     }
 
     [Test]
@@ -27,10 +29,12 @@ public class GetDocumentQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "invoice.pdf", "application/pdf", "Accountant");
         var content = new byte[] { 10, 20, 30, 40 };
-        document.AddVersion(content, "Accountant");
+        var version = document.AddVersion("documents/test/v1", content.Length, "Accountant");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
+        _storageService.DownloadAsync(version.StoragePath, Arg.Any<CancellationToken>())
+            .Returns(content);
 
         var query = new GetDocumentQuery(masterId);
 
@@ -72,13 +76,15 @@ public class GetDocumentQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Analyst");
         
-        document.AddVersion(new byte[] { 1, 2 }, "Analyst");
-        document.AddVersion(new byte[] { 3, 4 }, "Analyst");
+        document.AddVersion("documents/test/v1", 20, "Analyst");
+        document.AddVersion("documents/test/v2", 20, "Analyst");
         var activeContent = new byte[] { 5, 6, 7 };
-        document.AddVersion(activeContent, "Analyst"); // Wersja 3 - aktywna
+        var activeVersion = document.AddVersion("documents/test/v3", activeContent.Length, "Analyst"); // Wersja 3 - aktywna
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
+        _storageService.DownloadAsync(activeVersion.StoragePath, Arg.Any<CancellationToken>())
+            .Returns(activeContent);
 
         var query = new GetDocumentQuery(masterId);
 

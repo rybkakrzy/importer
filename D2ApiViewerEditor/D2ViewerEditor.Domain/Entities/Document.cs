@@ -64,16 +64,17 @@ public class Document
     /// <summary>
     /// Dodaje nową wersję dokumentu
     /// </summary>
-    public DocumentVersion AddVersion(byte[] content, string createdBy)
+    public DocumentVersion AddVersion(string storagePath, long sizeInBytes, string createdBy)
     {
-        if (content == null || content.Length == 0)
-            throw new ArgumentException("Zawartość dokumentu nie może być pusta", nameof(content));
+        if (string.IsNullOrWhiteSpace(storagePath))
+            throw new ArgumentException("Ścieżka storage nie może być pusta", nameof(storagePath));
 
         var versionNumber = _versions.Count + 1;
         var version = new DocumentVersion(
             id: Guid.NewGuid(),
             documentId: Id,
-            content: content,
+            storagePath: storagePath,
+            sizeInBytes: sizeInBytes,
             versionNumber: versionNumber,
             createdBy: createdBy
         );

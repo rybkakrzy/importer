@@ -27,11 +27,11 @@ public class GetDocumentVersionsQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "changelog.md", "text/markdown", "Developer");
         
-        var v1 = document.AddVersion(new byte[] { 1 }, "Developer");
+        var v1 = document.AddVersion("documents/test/v1", 10, "Developer");
         Thread.Sleep(10); // Ensure different timestamps
-        var v2 = document.AddVersion(new byte[] { 2, 2 }, "Developer");
+        var v2 = document.AddVersion("documents/test/v2", 20, "Developer");
         Thread.Sleep(10);
-        var v3 = document.AddVersion(new byte[] { 3, 3, 3 }, "Developer");
+        var v3 = document.AddVersion("documents/test/v3", 30, "Developer");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -83,7 +83,7 @@ public class GetDocumentVersionsQueryHandlerTests
         var document = new Document(masterId, "large_file.bin", "application/octet-stream", "User");
         
         var largeContent = new byte[10 * 1024 * 1024]; // 10 MB
-        document.AddVersion(largeContent, "User");
+        document.AddVersion("documents/test/v1", largeContent.Length, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -107,7 +107,7 @@ public class GetDocumentVersionsQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "readme.txt", "text/plain", "Admin");
         var content = new byte[] { 72, 101, 108, 108, 111 }; // "Hello"
-        var version = document.AddVersion(content, "Admin");
+        var version = document.AddVersion("documents/test/v1", content.Length, "Admin");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -137,9 +137,9 @@ public class GetDocumentVersionsQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "contract.pdf", "application/pdf", "Lawyer");
         
-        var v1 = document.AddVersion(new byte[] { 1 }, "Lawyer");
-        var v2 = document.AddVersion(new byte[] { 2 }, "Lawyer");
-        var v3 = document.AddVersion(new byte[] { 3 }, "Lawyer");
+        var v1 = document.AddVersion("documents/test/v1", 10, "Lawyer");
+        var v2 = document.AddVersion("documents/test/v2", 20, "Lawyer");
+        var v3 = document.AddVersion("documents/test/v3", 30, "Lawyer");
         
         // Restore do wersji 1
         document.RestoreVersion(v1.Id);

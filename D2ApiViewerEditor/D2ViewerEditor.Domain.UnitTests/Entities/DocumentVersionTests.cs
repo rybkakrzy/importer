@@ -12,13 +12,14 @@ public class DocumentVersionTests
     {
         var id = Guid.NewGuid();
         var documentId = Guid.NewGuid();
-        var content = new byte[] { 10, 20, 30 };
+        var storagePath = "documents/test/v1";
 
-        var version = new DocumentVersion(id, documentId, content, 1, "Author");
+        var version = new DocumentVersion(id, documentId, storagePath, 300, 1, "Author");
 
         version.Id.Should().Be(id);
         version.DocumentId.Should().Be(documentId);
-        version.Content.Should().BeEquivalentTo(content);
+        version.StoragePath.Should().Be(storagePath);
+        version.SizeInBytes.Should().Be(300);
         version.VersionNumber.Should().Be(1);
         version.CreatedBy.Should().Be("Author");
         version.IsActive.Should().BeTrue();
@@ -26,35 +27,34 @@ public class DocumentVersionTests
     }
 
     [Test]
-    public void Constructor_WithEmptyContent_ShouldThrowArgumentException()
+    public void Constructor_WithEmptyStoragePath_ShouldThrowArgumentException()
     {
-        var act = () => new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), [], 1, "User");
+        var act = () => new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), "", 10, 1, "User");
 
         act.Should().Throw<ArgumentException>()
-            .WithMessage("*Zawartość*");
+            .WithMessage("*storage*");
     }
 
     [Test]
-    public void Constructor_WithNullContent_ShouldThrowArgumentException()
+    public void Constructor_WithNullStoragePath_ShouldThrowArgumentException()
     {
-        var act = () => new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), null!, 1, "User");
+        var act = () => new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), null!, 10, 1, "User");
 
         act.Should().Throw<ArgumentException>();
     }
 
     [Test]
-    public void SizeInBytes_ShouldReturnContentLength()
+    public void SizeInBytes_ShouldReturnConfiguredValue()
     {
-        var content = new byte[1024];
-        var version = new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), content, 1, "User");
+        var version = new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), "documents/test/v1", 1024, 1, "User");
 
         version.SizeInBytes.Should().Be(1024);
     }
 
     [Test]
-    public void SizeInBytes_WithSingleByte_ShouldReturnOne()
+    public void SizeInBytes_WithSmallValue_ShouldReturnCorrectly()
     {
-        var version = new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), [42], 1, "User");
+        var version = new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), "documents/test/v1", 1, 1, "User");
 
         version.SizeInBytes.Should().Be(1);
     }
@@ -62,7 +62,7 @@ public class DocumentVersionTests
     [Test]
     public void NewVersion_IsAlwaysActive()
     {
-        var version = new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), [1], 1, "User");
+        var version = new DocumentVersion(Guid.NewGuid(), Guid.NewGuid(), "documents/test/v1", 10, 1, "User");
 
         version.IsActive.Should().BeTrue();
     }

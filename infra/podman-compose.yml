@@ -8,11 +8,15 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: DEV
       ASPNETCORE_URLS: http://+:8080
+      GoogleCloudStorage__ApiEndpoint: http://fake-gcs:4443
+      GoogleCloudStorage__BucketName: d2viewereditor-documents
     ports:
       - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
+      fake-gcs:
+        condition: service_started
     networks:
       - d2viewereditor_network
 
@@ -67,6 +71,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - d2viewereditor_network
+
+  # fake-gcs-server — emulacja Google Cloud Storage dla DEV/testów
+  fake-gcs:
+    image: docker.io/fsouza/fake-gcs-server:latest
+    container_name: d2viewereditor_fake_gcs
+    restart: unless-stopped
+    command: ["-scheme", "http", "-backend", "memory", "-data", "/data"]
+    ports:
+      - "4443:4443"
+    volumes:
+      - ./fake-gcs-data:/data:ro
     networks:
       - d2viewereditor_network
 

@@ -2,20 +2,21 @@ namespace D2ViewerEditor.Domain.Entities;
 
 /// <summary>
 /// Wersja dokumentu - Entity
-/// Reprezentuje konkretną wersję z zawartością binarną
+/// Reprezentuje konkretną wersję z referencją do pliku w storage (GCS)
 /// </summary>
 public class DocumentVersion
 {
     private DocumentVersion() { } // EF Core
 
-    public DocumentVersion(Guid id, Guid documentId, byte[] content, int versionNumber, string createdBy)
+    public DocumentVersion(Guid id, Guid documentId, string storagePath, long sizeInBytes, int versionNumber, string createdBy)
     {
-        if (content == null || content.Length == 0)
-            throw new ArgumentException("Zawartość nie może być pusta", nameof(content));
+        if (string.IsNullOrWhiteSpace(storagePath))
+            throw new ArgumentException("Ścieżka storage nie może być pusta", nameof(storagePath));
 
         Id = id;
         DocumentId = documentId;
-        Content = content;
+        StoragePath = storagePath;
+        SizeInBytes = sizeInBytes;
         VersionNumber = versionNumber;
         CreatedAt = DateTime.UtcNow;
         CreatedBy = createdBy;
@@ -33,9 +34,14 @@ public class DocumentVersion
     public Guid DocumentId { get; private set; }
 
     /// <summary>
-    /// Zawartość binarna dokumentu (DOCX, PDF)
+    /// Ścieżka do pliku w GCS (np. "documents/{versionId}")
     /// </summary>
-    public byte[] Content { get; private set; } = Array.Empty<byte>();
+    public string StoragePath { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// Rozmiar zawartości w bajtach
+    /// </summary>
+    public long SizeInBytes { get; private set; }
 
     /// <summary>
     /// Numer wersji (1, 2, 3, ...)
@@ -56,11 +62,6 @@ public class DocumentVersion
     /// Czy ta wersja jest aktywna (tylko jedna wersja może być aktywna)
     /// </summary>
     public bool IsActive { get; private set; }
-
-    /// <summary>
-    /// Rozmiar zawartości w bajtach
-    /// </summary>
-    public long SizeInBytes => Content?.Length ?? 0;
 
     /// <summary>
     /// Navigation property do dokumentu

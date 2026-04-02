@@ -21,6 +21,8 @@ namespace D2ViewerEditor.Benchmarks.Benchmarks;
 public class DocumentDomainBenchmarks
 {
     private static readonly byte[] SmallContent = new byte[512];
+    private static readonly long SmallContentSize = 512;
+    private int _versionCounter;
 
     /// <summary>
     /// Liczba istniejących wersji dokumentu przed wykonaniem operacji.
@@ -48,9 +50,10 @@ public class DocumentDomainBenchmarks
         _doc = new Document(Guid.NewGuid(), "benchmark.docx",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "benchmark-user");
 
+        _versionCounter = 0;
         for (int i = 0; i < VersionCount; i++)
         {
-            var v = _doc.AddVersion(SmallContent, "benchmark-user");
+            var v = _doc.AddVersion($"documents/bench/v{_versionCounter++}", SmallContentSize, "benchmark-user");
             if (i == 0) _firstVersionId = v.Id;
             _lastVersionId = v.Id;
         }
@@ -62,7 +65,7 @@ public class DocumentDomainBenchmarks
     /// </summary>
     [Benchmark(Baseline = true)]
     public DocumentVersion AddVersion()
-        => _doc.AddVersion(SmallContent, "benchmark-user");
+        => _doc.AddVersion($"documents/bench/v{_versionCounter++}", SmallContentSize, "benchmark-user");
 
     /// <summary>
     /// Przywraca pierwszą wersję (najdalszą w historii) z N wersji.

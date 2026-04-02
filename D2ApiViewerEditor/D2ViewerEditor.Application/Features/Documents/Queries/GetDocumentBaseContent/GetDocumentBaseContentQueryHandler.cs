@@ -11,10 +11,12 @@ public class GetDocumentBaseContentQueryHandler
     : IRequestHandler<GetDocumentBaseContentQuery, Result<DocumentBaseContentDto>>
 {
     private readonly IDocumentRepository _documentRepository;
+    private readonly IDocumentStorageService _storageService;
 
-    public GetDocumentBaseContentQueryHandler(IDocumentRepository documentRepository)
+    public GetDocumentBaseContentQueryHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
     {
         _documentRepository = documentRepository;
+        _storageService = storageService;
     }
 
     public async Task<Result<DocumentBaseContentDto>> Handle(
@@ -32,11 +34,14 @@ public class GetDocumentBaseContentQueryHandler
         if (baseVersion == null)
             return Result<DocumentBaseContentDto>.Failure($"Dokument {request.MasterId} nie ma żadnych wersji");
 
+        // Pobierz content z GCS
+        var content = await _storageService.DownloadAsync(baseVersion.StoragePath, cancellationToken);
+
         var extension = GetExtension(document.MimeType);
         var dto = new DocumentBaseContentDto(
             FileName: $"{document.Name}_v{baseVersion.VersionNumber}{extension}",
             MimeType: document.MimeType,
-            Content: baseVersion.Content
+            Content: content
         );
 
         return Result<DocumentBaseContentDto>.Success(dto);

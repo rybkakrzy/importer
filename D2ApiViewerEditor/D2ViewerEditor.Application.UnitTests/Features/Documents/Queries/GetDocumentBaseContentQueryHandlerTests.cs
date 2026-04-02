@@ -11,13 +11,15 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Queries;
 public class GetDocumentBaseContentQueryHandlerTests
 {
     private IDocumentRepository _documentRepository;
+    private IDocumentStorageService _storageService;
     private GetDocumentBaseContentQueryHandler _handler;
 
     [SetUp]
     public void SetUp()
     {
         _documentRepository = Substitute.For<IDocumentRepository>();
-        _handler = new GetDocumentBaseContentQueryHandler(_documentRepository);
+        _storageService = Substitute.For<IDocumentStorageService>();
+        _handler = new GetDocumentBaseContentQueryHandler(_documentRepository, _storageService);
     }
 
     [Test]
@@ -27,10 +29,12 @@ public class GetDocumentBaseContentQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "contract.pdf", "application/pdf", "Admin");
         var content = new byte[] { 37, 80, 68, 70 }; // %PDF magic bytes
-        document.AddVersion(content, "Admin");
+        var version = document.AddVersion("documents/test/v1", content.Length, "Admin");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
+        _storageService.DownloadAsync(version.StoragePath, Arg.Any<CancellationToken>())
+            .Returns(content);
 
         var query = new GetDocumentBaseContentQuery(masterId);
 
@@ -53,12 +57,14 @@ public class GetDocumentBaseContentQueryHandlerTests
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "User");
 
         var originalContent = new byte[] { 1, 2, 3 };
-        document.AddVersion(originalContent, "User");
-        document.AddVersion(new byte[] { 4, 5, 6 }, "User");
-        document.AddVersion(new byte[] { 7, 8, 9 }, "User");
+        var baseVersion = document.AddVersion("documents/test/v1", originalContent.Length, "User");
+        document.AddVersion("documents/test/v2", 30, "User");
+        document.AddVersion("documents/test/v3", 30, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
+        _storageService.DownloadAsync(baseVersion.StoragePath, Arg.Any<CancellationToken>())
+            .Returns(originalContent);
 
         var query = new GetDocumentBaseContentQuery(masterId);
 
@@ -118,10 +124,12 @@ public class GetDocumentBaseContentQueryHandlerTests
         // Arrange
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "file", mimeType, "User");
-        document.AddVersion([1, 2, 3], "User");
+        var version = document.AddVersion("documents/test/v1", 30, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
+        _storageService.DownloadAsync(version.StoragePath, Arg.Any<CancellationToken>())
+            .Returns(new byte[] { 1, 2, 3 });
 
         var query = new GetDocumentBaseContentQuery(masterId);
 
@@ -142,14 +150,16 @@ public class GetDocumentBaseContentQueryHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "doc.pdf", "application/pdf", "User");
         var v1Content = new byte[] { 1 };
-        var v1 = document.AddVersion(v1Content, "User");
-        document.AddVersion([2], "User");
-        document.AddVersion([3], "User");
+        var v1 = document.AddVersion("documents/test/v1", v1Content.Length, "User");
+        document.AddVersion("documents/test/v2", 20, "User");
+        document.AddVersion("documents/test/v3", 30, "User");
         // Aktywna jest v3, ale base content = v1
         v1.IsActive.Should().BeFalse();
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
+        _storageService.DownloadAsync(v1.StoragePath, Arg.Any<CancellationToken>())
+            .Returns(v1Content);
 
         var query = new GetDocumentBaseContentQuery(masterId);
 

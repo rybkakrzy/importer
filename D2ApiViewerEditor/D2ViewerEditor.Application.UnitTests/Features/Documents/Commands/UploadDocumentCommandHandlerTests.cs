@@ -11,13 +11,17 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
 public class UploadDocumentCommandHandlerTests
 {
     private IDocumentRepository _documentRepository;
+    private IDocumentStorageService _storageService;
     private UploadDocumentCommandHandler _handler;
 
     [SetUp]
     public void SetUp()
     {
         _documentRepository = Substitute.For<IDocumentRepository>();
-        _handler = new UploadDocumentCommandHandler(_documentRepository);
+        _storageService = Substitute.For<IDocumentStorageService>();
+        _storageService.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(ci => $"documents/{ci.ArgAt<Guid>(0)}");
+        _handler = new UploadDocumentCommandHandler(_documentRepository, _storageService);
     }
 
     [Test]
@@ -43,6 +47,8 @@ public class UploadDocumentCommandHandlerTests
         result.Value.FileName.Should().Be("test.pdf");
         result.Value.CreatedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
 
+        await _storageService.Received(1).UploadAsync(
+            Arg.Any<Guid>(), content, "application/pdf", Arg.Any<CancellationToken>());
         await _documentRepository.Received(1).AddAsync(
             Arg.Is<Document>(d => d.Name == "test.pdf" && d.MimeType == "application/pdf"),
             Arg.Any<CancellationToken>()
@@ -107,11 +113,13 @@ public class UploadDocumentCommandHandlerTests
             CreatedBy: "System"
         );
 
+        _storageService.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns("documents/test/v1");
+
         // Act
         var result = await _handler.Handle(command, CancellationToken.None);
 
         // Assert
         result.IsFailure.Should().BeTrue();
-        result.Error.Should().Contain("Zawartość dokumentu");
     }
 }

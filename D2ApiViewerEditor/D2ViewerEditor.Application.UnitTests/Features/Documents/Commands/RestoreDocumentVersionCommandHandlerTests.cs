@@ -27,9 +27,9 @@ public class RestoreDocumentVersionCommandHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "contract.pdf", "application/pdf", "Lawyer");
         
-        var version1 = document.AddVersion(new byte[] { 1, 2 }, "Lawyer");
-        var version2 = document.AddVersion(new byte[] { 3, 4 }, "Lawyer");
-        var version3 = document.AddVersion(new byte[] { 5, 6 }, "Lawyer");
+        var version1 = document.AddVersion("documents/test/v1", 100, "Lawyer");
+        var version2 = document.AddVersion("documents/test/v2", 200, "Lawyer");
+        var version3 = document.AddVersion("documents/test/v3", 300, "Lawyer");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -78,7 +78,7 @@ public class RestoreDocumentVersionCommandHandlerTests
         // Arrange
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "file.txt", "text/plain", "User");
-        document.AddVersion(new byte[] { 1 }, "User");
+        document.AddVersion("documents/test/v1", 10, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -102,9 +102,9 @@ public class RestoreDocumentVersionCommandHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "policy.doc", "application/msword", "Admin");
         
-        var v1 = document.AddVersion(new byte[] { 1 }, "Admin");
-        var v2 = document.AddVersion(new byte[] { 2 }, "Admin");
-        var v3 = document.AddVersion(new byte[] { 3 }, "Admin");
+        var v1 = document.AddVersion("documents/test/v1", 10, "Admin");
+        var v2 = document.AddVersion("documents/test/v2", 20, "Admin");
+        var v3 = document.AddVersion("documents/test/v3", 30, "Admin");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -126,7 +126,7 @@ public class RestoreDocumentVersionCommandHandlerTests
         // Arrange
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "test.pdf", "application/pdf", "User");
-        var version = document.AddVersion(new byte[] { 1 }, "User");
+        var version = document.AddVersion("documents/test/v1", 10, "User");
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);
@@ -150,11 +150,11 @@ public class RestoreDocumentVersionCommandHandlerTests
         var masterId = Guid.NewGuid();
         var document = new Document(masterId, "article.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Writer");
         
-        var v1 = document.AddVersion(new byte[] { 1 }, "Writer"); // Draft
-        var v2 = document.AddVersion(new byte[] { 2 }, "Writer"); // First revision
-        var v3 = document.AddVersion(new byte[] { 3 }, "Writer"); // Good version ← chcemy wrócić
-        var v4 = document.AddVersion(new byte[] { 4 }, "Writer"); // Bad edit
-        var v5 = document.AddVersion(new byte[] { 5 }, "Writer"); // Worse edit
+        var v1 = document.AddVersion("documents/test/v1", 10, "Writer"); // Draft
+        var v2 = document.AddVersion("documents/test/v2", 20, "Writer"); // First revision
+        var v3 = document.AddVersion("documents/test/v3", 30, "Writer"); // Good version ← chcemy wrócić
+        var v4 = document.AddVersion("documents/test/v4", 40, "Writer"); // Bad edit
+        var v5 = document.AddVersion("documents/test/v5", 50, "Writer"); // Worse edit
 
         _documentRepository.GetByIdWithVersionsAsync(masterId, Arg.Any<CancellationToken>())
             .Returns(document);

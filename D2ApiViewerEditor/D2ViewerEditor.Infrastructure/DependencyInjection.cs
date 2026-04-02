@@ -2,9 +2,12 @@
 using D2ViewerEditor.Infrastructure.Persistence;
 using D2ViewerEditor.Infrastructure.Persistence.Repositories;
 using D2ViewerEditor.Infrastructure.Services;
+using Google.Apis.Auth.OAuth2;
+using Google.Cloud.Storage.V1;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Infrastructure;
 
@@ -26,6 +29,46 @@ public static class DependencyInjection
                 options.UseNpgsql(connectionString));
 
             services.AddScoped<IDocumentRepository, DocumentRepository>();
+        }
+
+        // Google Cloud Storage
+        var gcsSection = configuration.GetSection(GcsStorageOptions.SectionName);
+        var gcsOptions = new GcsStorageOptions();
+        gcsSection.Bind(gcsOptions);
+        services.Configure<GcsStorageOptions>(o =>
+        {
+            o.BucketName = gcsOptions.BucketName;
+            o.ApiEndpoint = gcsOptions.ApiEndpoint;
+            o.CredentialPath = gcsOptions.CredentialPath;
+        });
+
+        if (!string.IsNullOrEmpty(gcsOptions.BucketName))
+        {
+            services.AddSingleton(sp =>
+            {
+                if (!string.IsNullOrEmpty(gcsOptions.ApiEndpoint))
+                {
+                    // DEV/test: fake-gcs-server — bez autoryzacji, custom endpoint
+                    var builder = new StorageClientBuilder
+                    {
+                        BaseUri = gcsOptions.ApiEndpoint.TrimEnd('/') + "/storage/v1/",
+                        UnauthenticatedAccess = true
+                    };
+                    return builder.Build();
+                }
+
+                if (!string.IsNullOrEmpty(gcsOptions.CredentialPath))
+                {
+                    // Produkcja z plikiem service account
+                    var credential = GoogleCredential.FromFile(gcsOptions.CredentialPath);
+                    return StorageClient.Create(credential);
+                }
+
+                // Produkcja: Workload Identity / Application Default Credentials
+                return StorageClient.Create();
+            });
+
+            services.AddScoped<IDocumentStorageService, GcsDocumentStorageService>();
         }
 
         return services;

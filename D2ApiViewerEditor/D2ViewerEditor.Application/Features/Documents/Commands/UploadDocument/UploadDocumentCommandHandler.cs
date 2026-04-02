@@ -11,18 +11,28 @@ namespace D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
 public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentCommand, Result<UploadDocumentResult>>
 {
     private readonly IDocumentRepository _documentRepository;
+    private readonly IDocumentStorageService _storageService;
 
-    public UploadDocumentCommandHandler(IDocumentRepository documentRepository)
+    public UploadDocumentCommandHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
     {
         _documentRepository = documentRepository;
+        _storageService = storageService;
     }
 
     public async Task<Result<UploadDocumentResult>> Handle(UploadDocumentCommand request, CancellationToken cancellationToken)
     {
         try
         {
+            if (request.Content == null || request.Content.Length == 0)
+                return Result<UploadDocumentResult>.Failure("Zawartość dokumentu nie może być pusta");
+
             // Generuj GUID master dla dokumentu
             var masterId = Guid.NewGuid();
+            var versionId = Guid.NewGuid();
+
+            // Upload pliku do GCS
+            var storagePath = await _storageService.UploadAsync(
+                versionId, request.Content, request.MimeType, cancellationToken);
 
             // Utwórz dokument (aggregate root)
             var document = new Document(
@@ -32,13 +42,14 @@ public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentComman
                 createdBy: request.CreatedBy
             );
 
-            // Dodaj pierwszą wersję
+            // Dodaj pierwszą wersję z referencją do GCS
             var version = document.AddVersion(
-                content: request.Content,
+                storagePath: storagePath,
+                sizeInBytes: request.Content.Length,
                 createdBy: request.CreatedBy
             );
 
-            // Zapisz w bazie
+            // Zapisz metadane w bazie
             await _documentRepository.AddAsync(document, cancellationToken);
             await _documentRepository.SaveChangesAsync(cancellationToken);
 

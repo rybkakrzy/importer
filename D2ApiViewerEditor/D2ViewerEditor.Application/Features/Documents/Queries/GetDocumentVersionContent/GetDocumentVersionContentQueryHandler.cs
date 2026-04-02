@@ -11,10 +11,12 @@ public class GetDocumentVersionContentQueryHandler
     : IRequestHandler<GetDocumentVersionContentQuery, Result<DocumentVersionContentDto>>
 {
     private readonly IDocumentRepository _documentRepository;
+    private readonly IDocumentStorageService _storageService;
 
-    public GetDocumentVersionContentQueryHandler(IDocumentRepository documentRepository)
+    public GetDocumentVersionContentQueryHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
     {
         _documentRepository = documentRepository;
+        _storageService = storageService;
     }
 
     public async Task<Result<DocumentVersionContentDto>> Handle(
@@ -31,10 +33,13 @@ public class GetDocumentVersionContentQueryHandler
             if (version == null)
                 return Result<DocumentVersionContentDto>.NotFound();
 
+            // Pobierz content z GCS
+            var content = await _storageService.DownloadAsync(version.StoragePath, cancellationToken);
+
             var dto = new DocumentVersionContentDto(
                 FileName: $"{document.Name}_v{version.VersionNumber}{GetExtension(document.MimeType)}",
                 MimeType: document.MimeType,
-                Content: version.Content
+                Content: content
             );
 
             return Result<DocumentVersionContentDto>.Success(dto);

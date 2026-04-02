@@ -23,9 +23,13 @@ public class DocumentVersionConfiguration : IEntityTypeConfiguration<DocumentVer
             .HasColumnName("document_id")
             .IsRequired();
 
-        builder.Property(v => v.Content)
-            .HasColumnName("content")
-            .HasColumnType("bytea")
+        builder.Property(v => v.StoragePath)
+            .HasColumnName("storage_path")
+            .HasMaxLength(500)
+            .IsRequired();
+
+        builder.Property(v => v.SizeInBytes)
+            .HasColumnName("size_in_bytes")
             .IsRequired();
 
         builder.Property(v => v.VersionNumber)
@@ -44,9 +48,6 @@ public class DocumentVersionConfiguration : IEntityTypeConfiguration<DocumentVer
         builder.Property(v => v.IsActive)
             .HasColumnName("is_active")
             .IsRequired();
-
-        // Computed column dla rozmiaru
-        builder.Ignore(v => v.SizeInBytes);
 
         // Indeksy
         builder.HasIndex(v => v.DocumentId);
