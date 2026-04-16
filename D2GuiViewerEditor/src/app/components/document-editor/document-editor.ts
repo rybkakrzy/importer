@@ -89,7 +89,6 @@ export class DocumentEditorComponent implements OnInit {
   showInsertMenu = signal(false);
   activeSubmenu = signal<string | null>(null);
   showTemplates = signal(false);
-  showAbout = signal(false);
   showFindReplace = signal(false);
   showBarcodeDialog = signal(false);
   errorMessage = signal<string | null>(null);
@@ -1093,6 +1092,29 @@ export class DocumentEditorComponent implements OnInit {
     this.showContextMenu.set(false);
     this.contextSubmenu.set(null);
     this.showShadingDropdown.set(false);
+  }
+
+  openReportEmail(): void {
+    const masterId = this.documentMasterId() ?? '—';
+    const version = this.documentMetadata()?.version ?? '—';
+    const date = new Date().toLocaleString('pl-PL');
+    const url = window.location.href;
+
+    const subject = encodeURIComponent('Zgłoszenie - Doc2 Editor');
+    const body = encodeURIComponent(
+      `Opis problemu:\n\n\n` +
+      `---\n` +
+      `### Nie usuwaj poniższych danych: ###\n` +
+      `Data zgłoszenia: ${date}\n` +
+      `Master ID: ${masterId}\n` +
+      `Version: ${version}\n` +
+      `URL: ${url}\n` +
+      `Wersja aplikacji: ${this.buildInfo.buildNumber()}\n` +
+      `Środowisko: ${this.buildInfo.environment()}\n`+
+      `### ------------------------ ###\n` 
+
+    );
+    window.open(`mailto:?subject=${subject}&body=${body}`, '_self');
   }
 
   /**
