@@ -22,6 +22,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private int _imageCounter = 0;
     private NumberingDefinitionsPart? _numberingPart;
     private ThemePart? _themePart;
+    // Domyślne wartości z docDefaults/rPrDefault (stosowane, gdy run/style ich nie nadpisują)
+    private string? _defaultFontFamily;
+    private double? _defaultFontSizePt;
+    // Cache dla fontów motywu: major/minor -> nazwa kroju
+    private string? _themeMajorLatin;
+    private string? _themeMinorLatin;
+    private string? _themeMajorEastAsia;
+    private string? _themeMinorEastAsia;
+    private string? _themeMajorComplexScript;
+    private string? _themeMinorComplexScript;
 
     /// <summary>
     /// Konwertuje plik DOCX na HTML
@@ -35,12 +45,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _imageCounter = 0;
         _numberingPart = null;
         _themePart = null;
+        _defaultFontFamily = null;
+        _defaultFontSizePt = null;
+        _themeMajorLatin = _themeMinorLatin = null;
+        _themeMajorEastAsia = _themeMinorEastAsia = null;
+        _themeMajorComplexScript = _themeMinorComplexScript = null;
 
         using var document = WordprocessingDocument.Open(docxStream, false);
         
         // Załaduj części pomocnicze
         _numberingPart = document.MainDocumentPart?.NumberingDefinitionsPart;
         _themePart = document.MainDocumentPart?.ThemePart;
+        LoadThemeFonts();
         
         // Załaduj style dokumentu
         var stylesLoaded = ExtractDocumentStyles(document);
@@ -314,7 +330,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         LoadDocumentImages(document);
 
         var html = new StringBuilder();
-        html.Append("<div class=\"document-content\">");
+        var containerCss = new StringBuilder();
+        if (!string.IsNullOrEmpty(_defaultFontFamily))
+            containerCss.Append($"font-family:'{_defaultFontFamily}',sans-serif;");
+        if (_defaultFontSizePt.HasValue)
+            containerCss.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "font-size:{0:0.##}pt;", _defaultFontSizePt.Value));
+
+        if (containerCss.Length > 0)
+            html.Append($"<div class=\"document-content\" style=\"{containerCss}\">");
+        else
+            html.Append("<div class=\"document-content\">");
 
         var elements = body.Elements().ToList();
         int i = 0;
@@ -581,6 +607,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var stylesPart = document.MainDocumentPart?.StyleDefinitionsPart;
         if (stylesPart?.Styles == null) return;
 
+        // Odczytaj docDefaults/rPrDefault — domyślna czcionka i rozmiar dla całego dokumentu
+        LoadDocDefaults(stylesPart);
+
         // Załaduj surowe style
         foreach (var style in stylesPart.Styles.Elements<Style>())
         {
@@ -595,6 +624,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             var css = ConvertStyleToCssWithInheritance(kvp.Value);
             _styles[kvp.Key] = css;
+        }
+    }
+
+    /// <summary>
+    /// Ładuje domyślny krój i rozmiar czcionki z w:docDefaults/w:rPrDefault.
+    /// Te wartości są stosowane na kontenerze dokumentu, aby każdy run dziedziczył je,
+    /// gdy ani własne rPr, ani style nie definiują fontu.
+    /// </summary>
+    private void LoadDocDefaults(StyleDefinitionsPart stylesPart)
+    {
+        var docDefaults = stylesPart.Styles?.DocDefaults;
+        var rPrDefault = docDefaults?.RunPropertiesDefault?.RunPropertiesBaseStyle;
+        if (rPrDefault == null) return;
+
+        var fonts = rPrDefault.GetFirstChild<RunFonts>();
+        var name = GetFontName(fonts);
+        if (!string.IsNullOrEmpty(name))
+            _defaultFontFamily = name;
+
+        var size = rPrDefault.GetFirstChild<FontSize>();
+        if (size?.Val?.Value != null &&
+            double.TryParse(size.Val.Value, System.Globalization.CultureInfo.InvariantCulture, out var sz))
+        {
+            _defaultFontSizePt = sz / 2.0;
         }
     }
 
@@ -699,9 +752,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 var font = runProps.RunFonts;
                 if (font != null)
                 {
-                    docStyle.FontFamily = font.Ascii?.Value ?? 
-                                          font.HighAnsi?.Value ?? 
-                                          font.ComplexScript?.Value;
+                    docStyle.FontFamily = GetFontName(font);
                 }
 
                 if (runProps.FontSize?.Val?.Value != null &&
@@ -888,7 +939,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var isListItem = IsListParagraph(paragraph);
         
         var tag = headingLevel > 0 ? $"h{headingLevel}" : "p";
-        
+
+        // Rozpoznaj specjalne style Worda (Title/Subtitle) — oznaczamy klasą, by CSS
+        // mógł je potraktować tak samo jak nagłówki (prawdziwy bold zamiast cienkiej Calibri Light).
+        var docClass = GetDocStyleClass(styleId);
+
         // Buduj CSS: najpierw styl z definicji (z dziedziczeniem), potem inline
         var cssBuilder = new StringBuilder();
         if (styleId != null && _styles.TryGetValue(styleId, out var styleCss))
@@ -905,14 +960,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         
         var cssStyle = cssBuilder.ToString();
+        var classAttr = docClass != null ? $" class=\"{docClass}\"" : string.Empty;
+        // data-style-id pozwala eksporterowi HTML→DOCX odtworzyć oryginalny styleId (np. Title, Subtitle),
+        // nawet jeśli wizualny tag to <p>.
+        var dataStyleAttr = !string.IsNullOrEmpty(styleId) && docClass != null
+            ? $" data-style-id=\"{System.Net.WebUtility.HtmlEncode(styleId)}\""
+            : string.Empty;
 
         if (isListItem)
         {
-            html.Append($"<li style=\"{cssStyle}\">");
+            html.Append($"<li{classAttr}{dataStyleAttr} style=\"{cssStyle}\">");
         }
         else
         {
-            html.Append($"<{tag} style=\"{cssStyle}\">");
+            html.Append($"<{tag}{classAttr}{dataStyleAttr} style=\"{cssStyle}\">");
         }
 
         // Obsługa złożonych pól (FieldChar Begin/Separate/End)
@@ -1071,16 +1132,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Konwertuje obramowanie OpenXML na CSS border string
+    /// Konwertuje obramowanie OpenXML na CSS border string.
+    /// Zwraca "none" gdy brak sensownej definicji borderu (brak Val lub Val=None/Nil).
     /// </summary>
     private string GetBorderCss(BorderType border)
     {
+        var borderVal = border.Val?.Value;
+
+        // Brak Val lub explicit None/Nil -> żadnej linii (zapobiega fałszywym czarnym liniom na eksporcie).
+        if (borderVal == null || borderVal == BorderValues.None || borderVal == BorderValues.Nil)
+            return "none";
+
         var size = border.Size?.Value ?? 4;
         var sizePx = Math.Max(1, size / 8.0);
         var color = border.Color?.Value ?? "000000";
         if (color == "auto") color = "000000";
-        
-        var borderVal = border.Val?.Value;
+
         string style = "solid";
         if (borderVal == BorderValues.Single) style = "solid";
         else if (borderVal == BorderValues.Double) style = "double";
@@ -1093,7 +1160,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else if (borderVal == BorderValues.ThickThinSmallGap) style = "double";
         else if (borderVal == BorderValues.ThinThickSmallGap) style = "double";
         
-        return $"{sizePx:F1}px {style} #{color}";
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}px {1} #{2}", sizePx, style, color);
     }
 
     private int GetHeadingLevel(string? styleId)
@@ -1106,6 +1173,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             return int.Parse(level);
         }
         return 0;
+    }
+
+    /// <summary>
+    /// Mapuje nazwane style Worda (Title/Subtitle) na klasy CSS dla warstwy prezentacyjnej.
+    /// Pozwala frontendowi zastosować dla nich prawdziwy bold zamiast cienkiej Calibri Light.
+    /// </summary>
+    private static string? GetDocStyleClass(string? styleId)
+    {
+        if (string.IsNullOrEmpty(styleId)) return null;
+        var s = styleId.Replace(" ", string.Empty);
+        if (string.Equals(s, "Title", StringComparison.OrdinalIgnoreCase)) return "doc-title";
+        if (string.Equals(s, "Subtitle", StringComparison.OrdinalIgnoreCase)) return "doc-subtitle";
+        return null;
     }
 
     /// <summary>
@@ -1187,22 +1267,58 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var spacing = props.Descendants<SpacingBetweenLines>().FirstOrDefault();
         if (spacing != null)
         {
-            if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
-                css.Append($"margin-top:{(beforeVal / 20.0):F1}pt;");
-            if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
-                css.Append($"margin-bottom:{(afterVal / 20.0):F1}pt;");
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+            // w:beforeAutoSpacing="true" oznacza, że Word ignoruje wartość Before i wylicza auto.
+            // W HTML nie mamy sensownego odpowiednika — pomijamy emisję, by nie wpisać niepoprawnej wartości.
+            var beforeAuto = spacing.BeforeAutoSpacing?.Value == true;
+            var afterAuto = spacing.AfterAutoSpacing?.Value == true;
+
+            if (!beforeAuto)
+            {
+                if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
+                    css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", beforeVal / 20.0));
+                else if (spacing.BeforeLines?.Value != null)
+                {
+                    // BeforeLines jest w 1/100 linii — przybliżamy do wielokrotności domyślnego rozmiaru.
+                    var pt = spacing.BeforeLines.Value / 100.0 * (_defaultFontSizePt ?? 11);
+                    css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", pt));
+                }
+            }
+
+            if (!afterAuto)
+            {
+                if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
+                    css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", afterVal / 20.0));
+                else if (spacing.AfterLines?.Value != null)
+                {
+                    var pt = spacing.AfterLines.Value / 100.0 * (_defaultFontSizePt ?? 11);
+                    css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", pt));
+                }
+            }
+
             if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
             {
                 var lineRule = spacing.LineRule?.Value;
                 if (lineRule == LineSpacingRuleValues.Exact || lineRule == LineSpacingRuleValues.AtLeast)
                 {
-                    css.Append($"line-height:{(lineVal / 20.0):F1}pt;");
+                    css.Append(string.Format(inv, "line-height:{0:0.##}pt;", lineVal / 20.0));
                 }
                 else
                 {
-                    css.Append($"line-height:{(lineVal / 240.0):F2};");
+                    // Auto (domyślne gdy brak w:lineRule) — wartość jest w 240-tych częściach linii.
+                    css.Append(string.Format(inv, "line-height:{0:0.###};", lineVal / 240.0));
                 }
             }
+        }
+
+        // w:contextualSpacing — gdy true, Word znosi odstępy między sąsiednimi paragrafami tego samego stylu.
+        // Eksportujemy jako data-attribute, aby HtmlToDocxConverter mógł to przywrócić.
+        var contextualSpacing = props.Descendants<ContextualSpacing>().FirstOrDefault();
+        if (contextualSpacing != null && (contextualSpacing.Val == null || contextualSpacing.Val.Value))
+        {
+            // Zaznacz w CSS custom property — HtmlToDocx to rozpozna.
+            css.Append("--w-contextual-spacing:1;");
         }
 
         // Kolor tła paragrafu
@@ -1304,23 +1420,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         if (props == null) return string.Empty;
         var css = new StringBuilder();
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
 
         // Rozmiar czcionki
         var fontSize = props.Descendants<FontSize>().FirstOrDefault();
-        if (fontSize?.Val != null)
+        if (fontSize?.Val != null &&
+            double.TryParse(fontSize.Val.Value, System.Globalization.NumberStyles.Float, inv, out var sz))
         {
-            var size = double.Parse(fontSize.Val.Value, System.Globalization.CultureInfo.InvariantCulture) / 2;
-            css.Append($"font-size:{size}pt;");
+            css.Append(string.Format(inv, "font-size:{0:0.##}pt;", sz / 2));
         }
 
-        // Rodzina czcionki
+        // Rodzina czcionki (z obsługą theme fonts: asciiTheme/hAnsiTheme/...)
         var fontFamily = props.Descendants<RunFonts>().FirstOrDefault();
-        if (fontFamily != null)
-        {
-            var name = fontFamily.Ascii?.Value ?? fontFamily.HighAnsi?.Value ?? fontFamily.ComplexScript?.Value;
-            if (name != null)
-                css.Append($"font-family:'{name}',sans-serif;");
-        }
+        var fontName = GetFontName(fontFamily);
+        if (fontName != null)
+            css.Append($"font-family:'{fontName}',sans-serif;");
 
         // Kolor tekstu (z obsługą kolorów motywu)
         var color = props.Descendants<Color>().FirstOrDefault();
@@ -1347,7 +1461,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Rozstrzelenie liter
         var spacing = props.Descendants<Spacing>().FirstOrDefault();
         if (spacing?.Val != null)
-            css.Append($"letter-spacing:{(spacing.Val.Value / 20.0):F1}pt;");
+            css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "letter-spacing:{0:0.#}pt;", spacing.Val.Value / 20.0));
 
         // Caps / SmallCaps
         var caps = props.Descendants<Caps>().FirstOrDefault();
@@ -1390,19 +1505,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             css.Append($"text-decoration:{string.Join(" ", decorations)};");
 
         var fontSize = props.Descendants<FontSize>().FirstOrDefault();
-        if (fontSize?.Val != null)
+        if (fontSize?.Val != null &&
+            double.TryParse(fontSize.Val.Value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var size))
         {
-            var size = double.Parse(fontSize.Val.Value, System.Globalization.CultureInfo.InvariantCulture) / 2;
-            css.Append($"font-size:{size}pt;");
+            css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "font-size:{0:0.##}pt;", size / 2));
         }
 
         var fontFamily = props.Descendants<RunFonts>().FirstOrDefault();
-        if (fontFamily != null)
-        {
-            var name = fontFamily.Ascii?.Value ?? fontFamily.HighAnsi?.Value ?? fontFamily.ComplexScript?.Value;
-            if (name != null)
-                css.Append($"font-family:'{name}',sans-serif;");
-        }
+        var fontName = GetFontName(fontFamily);
+        if (fontName != null)
+            css.Append($"font-family:'{fontName}',sans-serif;");
 
         var color = props.Descendants<Color>().FirstOrDefault();
         if (color?.Val != null && color.Val.Value != "auto")
@@ -1432,7 +1546,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var spacing = props.Descendants<Spacing>().FirstOrDefault();
         if (spacing?.Val != null)
-            css.Append($"letter-spacing:{(spacing.Val.Value / 20.0):F1}pt;");
+            css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "letter-spacing:{0:0.#}pt;", spacing.Val.Value / 20.0));
 
         var capsProp = props.Descendants<Caps>().FirstOrDefault();
         if (capsProp != null && (capsProp.Val == null || capsProp.Val.Value))
@@ -1442,6 +1557,69 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             css.Append("font-variant:small-caps;");
 
         return css.ToString();
+    }
+
+    /// <summary>
+    /// Ładuje nazwy czcionek z motywu (major/minor -> Latin/EastAsia/ComplexScript).
+    /// </summary>
+    private void LoadThemeFonts()
+    {
+        var fontScheme = _themePart?.Theme?.ThemeElements?.FontScheme;
+        if (fontScheme == null) return;
+
+        var major = fontScheme.MajorFont;
+        if (major != null)
+        {
+            _themeMajorLatin = major.LatinFont?.Typeface?.Value;
+            _themeMajorEastAsia = major.EastAsianFont?.Typeface?.Value;
+            _themeMajorComplexScript = major.ComplexScriptFont?.Typeface?.Value;
+        }
+
+        var minor = fontScheme.MinorFont;
+        if (minor != null)
+        {
+            _themeMinorLatin = minor.LatinFont?.Typeface?.Value;
+            _themeMinorEastAsia = minor.EastAsianFont?.Typeface?.Value;
+            _themeMinorComplexScript = minor.ComplexScriptFont?.Typeface?.Value;
+        }
+    }
+
+    /// <summary>
+    /// Rozwiązuje theme-font na konkretną nazwę kroju odczytaną z theme1.xml.
+    /// </summary>
+    private string? ResolveThemeFont(ThemeFontValues theme)
+    {
+        if (theme == ThemeFontValues.MajorAscii || theme == ThemeFontValues.MajorHighAnsi) return _themeMajorLatin;
+        if (theme == ThemeFontValues.MinorAscii || theme == ThemeFontValues.MinorHighAnsi) return _themeMinorLatin;
+        if (theme == ThemeFontValues.MajorEastAsia) return _themeMajorEastAsia;
+        if (theme == ThemeFontValues.MinorEastAsia) return _themeMinorEastAsia;
+        if (theme == ThemeFontValues.MajorBidi) return _themeMajorComplexScript;
+        if (theme == ThemeFontValues.MinorBidi) return _themeMinorComplexScript;
+        return null;
+    }
+
+    /// <summary>
+    /// Wyciąga nazwę czcionki z RunFonts uwzględniając zarówno jawne atrybuty,
+    /// jak i referencje do motywu (AsciiTheme, HighAnsiTheme, itd.).
+    /// </summary>
+    private string? GetFontName(RunFonts? fonts)
+    {
+        if (fonts == null) return null;
+
+        // Najpierw sprawdź jawne nazwy (najwyższy priorytet zgodnie z OOXML)
+        var name = fonts.Ascii?.Value
+                   ?? fonts.HighAnsi?.Value
+                   ?? fonts.ComplexScript?.Value
+                   ?? fonts.EastAsia?.Value;
+        if (!string.IsNullOrEmpty(name)) return name;
+
+        // Następnie referencje do motywu
+        if (fonts.AsciiTheme?.Value != null) name = ResolveThemeFont(fonts.AsciiTheme.Value);
+        if (string.IsNullOrEmpty(name) && fonts.HighAnsiTheme?.Value != null) name = ResolveThemeFont(fonts.HighAnsiTheme.Value);
+        if (string.IsNullOrEmpty(name) && fonts.ComplexScriptTheme?.Value != null) name = ResolveThemeFont(fonts.ComplexScriptTheme.Value);
+        if (string.IsNullOrEmpty(name) && fonts.EastAsiaTheme?.Value != null) name = ResolveThemeFont(fonts.EastAsiaTheme.Value);
+
+        return string.IsNullOrEmpty(name) ? null : name;
     }
 
     /// <summary>
@@ -1700,6 +1878,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Domyślne obramowania tabeli
         var defaultBorders = tableProps?.TableBorders;
+
+        // Sygnał dla HtmlToDocx: czy tabela ma jakiekolwiek zdefiniowane tblBorders.
+        // Gdy wszystkie strony + inside to brak/None/Nil lub brak definicji — kod eksportu ma NIE
+        // wymuszać solid-black tblBorders (co powodowałoby fałszywe czarne linie).
+        var tblBordersAreEmpty = IsTableBordersEmpty(defaultBorders);
+        var tblBordersMarker = tblBordersAreEmpty ? " data-no-borders=\"1\"" : "";
         
         // Domyślny padding komórek
         var defaultPadding = "4px 8px";
@@ -1713,7 +1897,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             defaultPadding = $"{TwipsToPx(topPad)}px {TwipsToPx(rightPad)}px {TwipsToPx(bottomPad)}px {TwipsToPx(leftPad)}px";
         }
         
-        html.Append($"<table style=\"border-collapse:collapse;width:{tableWidth};margin:4px 0;{tableAlign}{tableIndent}\">");
+        html.Append($"<table{tblBordersMarker} style=\"border-collapse:collapse;width:{tableWidth};margin:4px 0;{tableAlign}{tableIndent}\">");
 
         foreach (var row in table.Elements<TableRow>())
         {
@@ -1879,8 +2063,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var border = cellBorder ?? defaultBorder;
         if (border == null) return "none";
-        if (border.Val?.Value == BorderValues.None || border.Val?.Value == BorderValues.Nil) return "none";
+        var v = border.Val?.Value;
+        if (v == null || v == BorderValues.None || v == BorderValues.Nil) return "none";
         return GetBorderCss(border);
+    }
+
+    /// <summary>
+    /// Sprawdza, czy TableBorders nie zawiera żadnego widocznego borderu
+    /// (brak elementu, lub wszystkie strony mają Val=None/Nil albo brak Val).
+    /// </summary>
+    private static bool IsTableBordersEmpty(TableBorders? tb)
+    {
+        if (tb == null) return true;
+        bool IsBlank(BorderType? b)
+        {
+            if (b == null) return true;
+            var v = b.Val?.Value;
+            return v == null || v == BorderValues.None || v == BorderValues.Nil;
+        }
+        return IsBlank(tb.TopBorder)
+            && IsBlank(tb.BottomBorder)
+            && IsBlank(tb.LeftBorder)
+            && IsBlank(tb.RightBorder)
+            && IsBlank(tb.InsideHorizontalBorder)
+            && IsBlank(tb.InsideVerticalBorder);
     }
 
     private string ConvertSdtBlockToHtml(SdtBlock sdtBlock, WordprocessingDocument document)

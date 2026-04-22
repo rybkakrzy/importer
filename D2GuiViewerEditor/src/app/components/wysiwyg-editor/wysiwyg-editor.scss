@@ -141,7 +141,13 @@
   font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
   font-size: 11pt;
   line-height: 1.15;
-  color: #333;
+  color: #000;
+  // Reset globalnego -webkit-font-smoothing: antialiased ze styles.scss.
+  // Natywny rendering (DirectWrite/ClearType) daje efekt „grubszego” tekstu,
+  // zgodny z wyglądem MS Word. Wymuszenie grayscale sprawia, że litery wydają się cięższe.
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+  text-rendering: geometricPrecision;
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
@@ -154,7 +160,10 @@
   font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
   font-size: 11pt;
   line-height: 1.15;
-  color: #333;
+  color: #000;
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+  text-rendering: geometricPrecision;
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
@@ -185,44 +194,71 @@
 /* Style dla elementów dokumentu */
 .editor-content h1 {
   font-size: 24pt;
-  font-weight: bold;
+  font-weight: 700;
   margin: 20px 0 10px 0;
   color: #1a1a1a;
 }
 
 .editor-content h2 {
   font-size: 18pt;
-  font-weight: bold;
+  font-weight: 700;
   margin: 18px 0 9px 0;
   color: #1a1a1a;
 }
 
 .editor-content h3 {
   font-size: 14pt;
-  font-weight: bold;
+  font-weight: 700;
   margin: 16px 0 8px 0;
   color: #1a1a1a;
 }
 
 .editor-content h4 {
   font-size: 12pt;
-  font-weight: bold;
+  font-weight: 700;
   margin: 14px 0 7px 0;
   color: #1a1a1a;
 }
 
 .editor-content h5 {
   font-size: 11pt;
-  font-weight: bold;
+  font-weight: 700;
   margin: 12px 0 6px 0;
   color: #1a1a1a;
 }
 
 .editor-content h6 {
   font-size: 10pt;
-  font-weight: bold;
+  font-weight: 700;
   margin: 10px 0 5px 0;
   color: #1a1a1a;
+}
+
+/* Nagłówki i tytuły używają w Wordzie 'Calibri Light'. Web nie ma odpowiednika
+ * 'Calibri Light Bold', więc przeglądarka syntetyzuje bold z Light → wychodzi cienko.
+ * Dla spanów wewnątrz nagłówków nadpisujemy font-family na zwykłego Calibri
+ * (ma prawdziwą wagę Bold), aby wygląd był zgodny z MS Word. */
+.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title, .doc-subtitle) span[style*="Calibri Light"],
+.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title, .doc-subtitle) span[style*="Aptos Display"] {
+  font-family: 'Calibri', 'Segoe UI', Arial, sans-serif !important;
+  font-weight: 700;
+  font-synthesis: weight style;
+}
+
+/* Dodatkowe wzmocnienie syntezy boldu dla pozostałych spanów w nagłówkach */
+.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title) strong,
+.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title) b {
+  font-weight: 800;
+}
+
+/* Title (Word): duży tekst, domyślnie Calibri Light, bez <h1>.
+ * Wymuszamy cięższy rysunek litery — w Wordzie subpikselowy rendering DirectWrite
+ * sprawia, że Title wygląda masywnie; w web bez tego trzeba to emulować wagą. */
+.editor-content .doc-title {
+  font-weight: 700;
+}
+.editor-content .doc-subtitle {
+  font-weight: 600;
 }
 
 .editor-content p {

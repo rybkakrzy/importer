@@ -712,15 +712,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var table = new Table();
         var tableProps = new TableProperties();
-        
-        // Domyślne obramowania
+
+        // Domyślne obramowania — None (żadne linie), chyba że CSS tabeli jawnie definiuje `border:`.
+        // Wcześniej wymuszaliśmy solid-black jako default, co powodowało fałszywe czarne linie
+        // w tabelach, które w oryginalnym DOCX miały `w:tblBorders` z val=nil/none lub w ogóle bez
+        // definicji (bordery per-komórka są w pełni opisane przez ApplyCellBorders).
         var defaultBorders = new TableBorders(
-            new TopBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-            new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-            new LeftBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-            new RightBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-            new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
-            new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" }
+            new TopBorder { Val = BorderValues.None, Size = 0 },
+            new BottomBorder { Val = BorderValues.None, Size = 0 },
+            new LeftBorder { Val = BorderValues.None, Size = 0 },
+            new RightBorder { Val = BorderValues.None, Size = 0 },
+            new InsideHorizontalBorder { Val = BorderValues.None, Size = 0 },
+            new InsideVerticalBorder { Val = BorderValues.None, Size = 0 }
         );
         
         // Parsuj style tabeli
@@ -1493,42 +1496,43 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Odstępy
         var spacing = new SpacingBetweenLines();
         bool hasSpacing = false;
-        
-        var marginTopMatch = Regex.Match(style, @"margin-top:\s*([\d.]+)(px|pt)");
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        var marginTopMatch = Regex.Match(style, @"margin-top:\s*([\d.,]+)(px|pt)");
         if (marginTopMatch.Success)
         {
-            var val = double.Parse(marginTopMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var val = double.Parse(marginTopMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = marginTopMatch.Groups[2].Value;
             if (unit == "px") val = val * 0.75; // px to pt approx
-            spacing.Before = ((int)(val * 20)).ToString(); // pt to twips
+            spacing.Before = ((int)Math.Round(val * 20)).ToString(); // pt to twips
             hasSpacing = true;
         }
         
-        var marginBottomMatch = Regex.Match(style, @"margin-bottom:\s*([\d.]+)(px|pt)");
+        var marginBottomMatch = Regex.Match(style, @"margin-bottom:\s*([\d.,]+)(px|pt)");
         if (marginBottomMatch.Success)
         {
-            var val = double.Parse(marginBottomMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var val = double.Parse(marginBottomMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = marginBottomMatch.Groups[2].Value;
             if (unit == "px") val = val * 0.75;
-            spacing.After = ((int)(val * 20)).ToString();
+            spacing.After = ((int)Math.Round(val * 20)).ToString();
             hasSpacing = true;
         }
         
-        var lineHeightMatch = Regex.Match(style, @"line-height:\s*([\d.]+)(pt)?");
+        var lineHeightMatch = Regex.Match(style, @"line-height:\s*([\d.,]+)(pt)?");
         if (lineHeightMatch.Success)
         {
-            var val = double.Parse(lineHeightMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var val = double.Parse(lineHeightMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = lineHeightMatch.Groups[2].Value;
             if (unit == "pt")
             {
                 // Dokładna wartość w pt
-                spacing.Line = ((int)(val * 20)).ToString();
+                spacing.Line = ((int)Math.Round(val * 20)).ToString();
                 spacing.LineRule = LineSpacingRuleValues.Exact;
             }
             else
             {
                 // Mnożnik
-                spacing.Line = ((int)(val * 240)).ToString();
+                spacing.Line = ((int)Math.Round(val * 240)).ToString();
                 spacing.LineRule = LineSpacingRuleValues.Auto;
             }
             hasSpacing = true;
@@ -1536,6 +1540,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         
         if (hasSpacing)
             props.Append(spacing);
+
+        // w:contextualSpacing (znosi odstępy między paragrafami tego samego stylu) —
+        // oznaczony w CSS jako --w-contextual-spacing:1
+        if (Regex.IsMatch(style, @"--w-contextual-spacing\s*:\s*1"))
+        {
+            props.Append(new ContextualSpacing());
+        }
 
         // Kolor tła paragrafu
         var bgColor = ExtractColor(style, @"background(?:-color)?:\s*");
@@ -1637,10 +1648,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         // Font-size (obsługa pt, px, em, rem)
-        var fontSizeMatch = Regex.Match(style, @"font-size:\s*([\d.]+)(pt|px|em|rem)");
+        var fontSizeMatch = Regex.Match(style, @"font-size:\s*([\d.,]+)(pt|px|em|rem)");
         if (fontSizeMatch.Success)
         {
-            var size = double.Parse(fontSizeMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var size = double.Parse(fontSizeMatch.Groups[1].Value.Replace(',', '.'),
+                System.Globalization.CultureInfo.InvariantCulture);
             var unit = fontSizeMatch.Groups[2].Value;
             
             double ptSize = unit switch
@@ -1692,10 +1704,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Subscript });
 
         // Letter spacing
-        var letterSpacingMatch = Regex.Match(style, @"letter-spacing:\s*([\d.]+)(pt|px)");
+        var letterSpacingMatch = Regex.Match(style, @"letter-spacing:\s*([\d.,]+)(pt|px)");
         if (letterSpacingMatch.Success && !props.Elements<Spacing>().Any())
         {
-            var ls = double.Parse(letterSpacingMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            var ls = double.Parse(letterSpacingMatch.Groups[1].Value.Replace(',', '.'),
+                System.Globalization.CultureInfo.InvariantCulture);
             var lsUnit = letterSpacingMatch.Groups[2].Value;
             if (lsUnit == "px") ls = ls * 0.75;
             props.Append(new Spacing { Val = (int)(ls * 20) });

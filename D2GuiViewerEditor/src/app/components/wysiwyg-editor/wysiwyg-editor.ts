@@ -237,6 +237,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     currentStyle: {}
   });
 
+  // Ostatnia policzona liczba stron (do emisji pagesChange bez rerenderu DOM)
+  private lastEmittedPageCount = 1;
+
   ngAfterViewInit(): void {
     this.initializeEditor();
     this.setupEventListeners();
@@ -244,7 +247,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Oblicz strony przy starcie
     setTimeout(() => {
       this.calculatePages();
-      this.pagesChange.emit(this.pages().length);
     }, 100);
     
     // Sprawdzaj podział na strony co 500ms
@@ -260,36 +262,41 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Oblicza liczbę stron na podstawie wysokości zawartości
+   * Oblicza liczbę stron na podstawie wysokości zawartości.
+   * Uwaga: nie tworzymy pustych dodatkowych "kartek" w DOM — edytor renderuje
+   * zawsze jedną wizualną ramkę `.page`, która rozciąga się wraz z treścią
+   * (podziały stron z DOCX są zaznaczane kreską `.page-break`).
+   * Liczba stron jest jedynie emitowana przez `pagesChange` na potrzeby
+   * wskaźnika w stopce/pasku.
    */
   private calculatePages(): void {
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
-    // Dla pustego dokumentu zawsze pokazuj 1 stronę
+    // Upewnij się, że w DOM jest zawsze dokładnie jedna ramka strony
+    if (this.pages().length !== 1) {
+      this.pages.set(['']);
+    }
+
+    // Dla pustego dokumentu zawsze 1 strona
     const plainText = (editor.textContent || '').replace(/\u00A0/g, '').trim();
     const hasMedia = editor.querySelector('img, table, hr, .page-break') !== null;
+    let pageCount: number;
     if (!plainText && !hasMedia) {
-      if (this.pages().length !== 1) {
-        this.pages.set(['']);
-        this.pagesChange.emit(1);
-      }
-      return;
-    }
-    
-    const contentHeight = editor.scrollHeight;
-    const marginTop = this.pageMargins().top * 37.8;
-    const marginBottom = this.pageMargins().bottom * 37.8;
-    const availableHeight = this.PAGE_HEIGHT_PX - marginTop - marginBottom;
+      pageCount = 1;
+    } else {
+      const contentHeight = editor.scrollHeight;
+      const marginTop = this.pageMargins().top * 37.8;
+      const marginBottom = this.pageMargins().bottom * 37.8;
+      const availableHeight = this.PAGE_HEIGHT_PX - marginTop - marginBottom;
 
-    // Tolerancja na różnice renderowania (1-4px), które potrafią sztucznie dodać stronę
-    const adjustedHeight = Math.max(0, contentHeight - 4);
-    const pageCount = Math.max(1, Math.ceil(adjustedHeight / availableHeight));
-    
-    // Aktualizuj liczbę stron tylko jeśli się zmieniła
-    if (this.pages().length !== pageCount) {
-      const newPages = Array(pageCount).fill('');
-      this.pages.set(newPages);
+      // Tolerancja na różnice renderowania (1-4px), które potrafią sztucznie dodać stronę
+      const adjustedHeight = Math.max(0, contentHeight - 4);
+      pageCount = Math.max(1, Math.ceil(adjustedHeight / availableHeight));
+    }
+
+    if (pageCount !== this.lastEmittedPageCount) {
+      this.lastEmittedPageCount = pageCount;
       this.pagesChange.emit(pageCount);
     }
   }
