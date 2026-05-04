@@ -22,7 +22,8 @@ import { OfflineBannerComponent } from './components/offline-banner/offline-bann
     d2-dashboard,
     d2-document-editor,
     d2-pdf-maintenance,
-    d2-pdf-viewer {
+    d2-pdf-viewer,
+    d2-admin-shell {
       flex: 1;
       min-height: 0;
       overflow: hidden;

@@ -6,6 +6,7 @@ using D2ViewerEditor.Application.Features.Documents.Queries.GetDocument;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentBaseContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersionContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersions;
+using D2ViewerEditor.Application.Features.Documents.Queries.GetDocuments;
 using Microsoft.AspNetCore.Mvc;
 
 namespace D2ViewerEditor.Api.Controllers;
@@ -15,6 +16,22 @@ namespace D2ViewerEditor.Api.Controllers;
 /// </summary>
 public class DocumentStorageController : BaseApiController
 {
+    /// <summary>
+    /// Pobranie listy wszystkich dokumentów (dla administracji)
+    /// </summary>
+    /// <returns>Lista dokumentów bez contentu</returns>
+    [HttpGet]
+    [ProducesResponseType(typeof(List<DocumentListItemDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetDocuments([FromQuery] int skip = 0, [FromQuery] int take = 200)
+    {
+        var query = new GetDocumentsQuery(skip, take);
+        var result = await Mediator.Send(query);
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : BadRequest(result.Error);
+    }
+
     /// <summary>
     /// Upload nowego dokumentu (pierwszy zapis)
     /// </summary>

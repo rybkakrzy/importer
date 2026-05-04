@@ -11,5 +11,18 @@ export const routes: Routes = [
       import('./pages/pdf-viewer/pdf-viewer').then((m) => m.PdfViewerComponent),
   },
   { path: 'pdf-maintenance', component: PdfMaintenanceComponent },
+  {
+    path: 'admin',
+    loadComponent: () =>
+      import('./pages/admin/admin-shell/admin-shell').then((m) => m.AdminShellComponent),
+    children: [
+      { path: '', redirectTo: 'files', pathMatch: 'full' },
+      {
+        path: 'files',
+        loadComponent: () =>
+          import('./pages/admin/admin-files/admin-files').then((m) => m.AdminFilesComponent),
+      },
+    ],
+  },
   { path: '**', redirectTo: '' },
 ];
