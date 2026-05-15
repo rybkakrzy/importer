@@ -181,6 +181,12 @@ export class EditorToolbarComponent {
   @Output() pasteFormat = new EventEmitter<void>();
   @Output() searchInDocument = new EventEmitter<{ text: string; direction: 'next' | 'previous' }>();
   @Output() replaceInDocument = new EventEmitter<{ searchText: string; replaceText: string; all: boolean }>();
+  /**
+   * Emitowane gdy użytkownik klika element toolbara, który przejmie fokus
+   * (input/select). Rodzic powinien wtedy zachować selekcję edytora, żeby
+   * po blur/Enter można było ją przywrócić.
+   */
+  @Output() preserveSelection = new EventEmitter<void>();
   @Output() clearSearch = new EventEmitter<void>();
 
   // Style dokumentu
@@ -222,6 +228,14 @@ export class EditorToolbarComponent {
   // Stan format painter
   formatPainterActive = signal(false);
   private copiedFormat: Partial<EditorState['currentFormatting']> | null = null;
+
+  /**
+   * Znacznik czasu ostatniej manualnej zmiany rozmiaru czcionki (klik +/- lub input).
+   * Przez krótki czas (300 ms) ignorujemy aktualizacje fontSize z editorState — inaczej
+   * read-back z edytora (computed style w pustym ZWS-spanie po wstawieniu) nadpisuje
+   * naszą świeżą wartość starym rozmiarem i input wraca do poprzedniej wartości.
+   */
+  private lastManualFontSizeChange = 0;
 
   // Stan dialogów
   showLinkDialog = signal(false);
@@ -287,9 +301,13 @@ export class EditorToolbarComponent {
   private updateFromEditorState(state: EditorState | null): void {
     if (!state?.currentStyle) return;
 
-    // Aktualizuj rozmiar czcionki
+    // Aktualizuj rozmiar czcionki — pomijamy jeśli user właśnie kliknął +/-/wpisał wartość
+    // (read-back z edytora bywa stary, bo karetka leży w pustym ZWS-spanie).
     if (state.currentStyle.fontSize && state.currentStyle.fontSize > 0) {
-      this.selectedFontSize.set(state.currentStyle.fontSize);
+      const sinceManual = Date.now() - this.lastManualFontSizeChange;
+      if (sinceManual > 300) {
+        this.selectedFontSize.set(state.currentStyle.fontSize);
+      }
     }
 
     // Aktualizuj czcionkę
@@ -449,26 +467,32 @@ export class EditorToolbarComponent {
     const select = event.target as HTMLSelectElement;
     const size = parseInt(select.value, 10);
     this.selectedFontSize.set(size);
+    this.lastManualFontSizeChange = Date.now();
     this.fontSizeChange.emit(size);
   }
 
   /**
-   * Zwiększa rozmiar czcionki
+   * Zwiększa rozmiar czcionki — skacze do następnej wartości ze standardowej listy
+   * (jak w MS Word: 11→12→14→16→18…). Powyżej 72 dorzucamy +2pt liniowo.
    */
   increaseFontSize(): void {
     const currentSize = this.selectedFontSize();
-    const newSize = Math.min(currentSize + 1, 400);
+    const next = this.fontSizes.find(s => s > currentSize);
+    const newSize = next ?? Math.min(currentSize + 2, 400);
     this.selectedFontSize.set(newSize);
+    this.lastManualFontSizeChange = Date.now();
     this.fontSizeChange.emit(newSize);
   }
 
   /**
-   * Zmniejsza rozmiar czcionki
+   * Zmniejsza rozmiar czcionki — skacze do poprzedniej wartości ze standardowej listy.
    */
   decreaseFontSize(): void {
     const currentSize = this.selectedFontSize();
-    const newSize = Math.max(currentSize - 1, 1);
+    const prev = [...this.fontSizes].reverse().find(s => s < currentSize);
+    const newSize = prev ?? Math.max(currentSize - 2, 1);
     this.selectedFontSize.set(newSize);
+    this.lastManualFontSizeChange = Date.now();
     this.fontSizeChange.emit(newSize);
   }
 
@@ -496,6 +520,7 @@ export class EditorToolbarComponent {
     const value = parseInt(input.value, 10);
     if (!isNaN(value) && value >= 1 && value <= 400) {
       this.selectedFontSize.set(value);
+      this.lastManualFontSizeChange = Date.now();
       this.fontSizeChange.emit(value);
     } else {
       // Przywróć poprzednią wartość
@@ -704,13 +729,18 @@ export class EditorToolbarComponent {
 
   /**
    * Zapobiega utracie fokusa z edytora przy klikaniu w toolbar
-   * (oprócz inputów, które muszą otrzymać fokus)
+   * (oprócz inputów, które muszą otrzymać fokus).
+   * Dla input/select emitujemy `preserveSelection` — rodzic zapisuje selekcję
+   * edytora ZANIM fokus przeskoży na pole tekstowe, dzięki czemu po Enter/blur
+   * można ją przywrócić.
    */
   onToolbarMouseDown(event: MouseEvent): void {
     const target = event.target as HTMLElement;
     // Pozwól na fokus tylko dla inputów i selectów
     if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT') {
       event.preventDefault();
+    } else {
+      this.preserveSelection.emit();
     }
   }
 }

@@ -13,8 +13,8 @@
                [style.min-height.cm]="headerHeight()"
                [style.padding-left.px]="pageMargins().left * 37.8"
                [style.padding-right.px]="pageMargins().right * 37.8"
-               (click)="startEditingHeader()"
-               (dblclick)="startEditingHeader()">
+               (click)="startEditingHeader($event)"
+               (dblclick)="startEditingHeader($event)">
             @if (editingSection() === 'header' && $index === 0) {
               <div 
                 #headerContent
@@ -25,7 +25,9 @@
                 (input)="onHeaderInput($event)"
               ></div>
               <!-- Pasek nagłówka w stylu Google Docs -->
-              <div class="header-toolbar" (click)="$event.stopPropagation()">
+              <div class="header-toolbar"
+                   (mousedown)="onHeaderFooterToolbarMouseDown($event)"
+                   (click)="$event.stopPropagation()">
                 <span class="header-toolbar-label">Nagłówek</span>
                 <div class="header-toolbar-spacer"></div>
                 <label class="header-toolbar-checkbox">
@@ -42,9 +44,14 @@
                     </svg>
                   </button>
                   @if (showHeaderOptionsMenu()) {
-                    <div class="header-options-menu" (click)="$event.stopPropagation()">
+                    <div class="header-options-menu"
+                         (mousedown)="$event.preventDefault()"
+                         (click)="$event.stopPropagation()">
                       <button class="menu-item" (click)="openHeaderFormatDialog()">
                         Format nagłówka
+                      </button>
+                      <button class="menu-item" (click)="insertImageIntoActive()">
+                        Wstaw obraz
                       </button>
                       <button class="menu-item" (click)="insertPageNumbers()">
                         Numery stron
@@ -57,7 +64,7 @@
                 </div>
               </div>
             } @else {
-              <div class="header-display" [innerHTML]="getHeaderContent($index)"></div>
+              <div class="header-display" [innerHTML]="getHeaderContentSafe($index)"></div>
             }
           </div>
           
@@ -106,11 +113,13 @@
                [style.min-height.cm]="footerHeight()"
                [style.padding-left.px]="pageMargins().left * 37.8"
                [style.padding-right.px]="pageMargins().right * 37.8"
-               (click)="startEditingFooter()"
-               (dblclick)="startEditingFooter()">
+               (click)="startEditingFooter($event)"
+               (dblclick)="startEditingFooter($event)">
             @if (editingSection() === 'footer' && $index === 0) {
               <!-- Pasek stopki w stylu Google Docs -->
-              <div class="footer-toolbar" (click)="$event.stopPropagation()">
+              <div class="footer-toolbar"
+                   (mousedown)="onHeaderFooterToolbarMouseDown($event)"
+                   (click)="$event.stopPropagation()">
                 <span class="footer-toolbar-label">Stopka</span>
                 <div class="footer-toolbar-spacer"></div>
                 <label class="footer-toolbar-checkbox">
@@ -127,9 +136,14 @@
                     </svg>
                   </button>
                   @if (showFooterOptionsMenu()) {
-                    <div class="footer-options-menu" (click)="$event.stopPropagation()">
+                    <div class="footer-options-menu"
+                         (mousedown)="$event.preventDefault()"
+                         (click)="$event.stopPropagation()">
                       <button class="menu-item" (click)="openFooterFormatDialog()">
                         Format stopki
+                      </button>
+                      <button class="menu-item" (click)="insertImageIntoActive()">
+                        Wstaw obraz
                       </button>
                       <button class="menu-item" (click)="insertPageNumbersFooter()">
                         Numery stron
@@ -150,7 +164,7 @@
                 (input)="onFooterInput($event)"
               ></div>
             } @else {
-              <div class="footer-display" [innerHTML]="getFooterContent($index)"></div>
+              <div class="footer-display" [innerHTML]="getFooterContentSafe($index)"></div>
             }
           </div>
         </div>

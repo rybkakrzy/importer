@@ -67,9 +67,15 @@
   border: 1px solid #ccc;
   border-radius: 4px;
   background: white;
+  color: #333;
   font-size: 13px;
   cursor: pointer;
   outline: none;
+}
+
+.toolbar-select option {
+  color: #333;
+  background: white;
 }
 
 .toolbar-select:hover {
@@ -102,6 +108,7 @@
   border: 1px solid #ccc;
   border-radius: 4px;
   background: white;
+  color: #333;
   font-size: 13px;
   cursor: pointer;
   outline: none;
@@ -119,9 +126,16 @@
 
 .selected-style-label {
   flex: 1;
+  /* Bez min-width:0 element flex z `overflow:hidden` może mieć szerokość 0
+     (intrinsic size = content) i tekst „Normalny" w ogóle się nie renderuje. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+  color: #333;
+  font-size: 13px;
+  line-height: 1.2;
 }
 
 .dropdown-arrow {
@@ -202,6 +216,7 @@
   border-radius: 4px;
   text-align: center;
   font-size: 13px;
+  color: #333;
   outline: none;
   background: white;
 }

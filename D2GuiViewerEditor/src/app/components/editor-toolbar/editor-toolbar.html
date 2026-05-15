@@ -70,10 +70,11 @@
   <div class="toolbar-group">
     <select 
       class="toolbar-select font-family-select"
+      [value]="selectedFontFamily()"
       (change)="onFontFamilyChange($event)"
       title="Czcionka">
       @for (font of fontFamilies; track font) {
-        <option [value]="font" [selected]="font === selectedFontFamily()" [style.font-family]="font">{{ font }}</option>
+        <option [value]="font" [style.font-family]="font">{{ font }}</option>
       }
     </select>
   </div>

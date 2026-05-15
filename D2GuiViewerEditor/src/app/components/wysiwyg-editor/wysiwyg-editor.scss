@@ -349,11 +349,11 @@ body.table-resizing * {
   -webkit-user-select: none !important;
 }
 
-.editor-content .editor-image-wrapper {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display) .editor-image-wrapper {
   display: inline-block;
   position: relative;
   max-width: 100%;
-  margin: 10px 0;
+  margin: 4px 0;
   cursor: grab;
   line-height: 0;
   vertical-align: top;
@@ -363,7 +363,7 @@ body.table-resizing * {
   }
 }
 
-.editor-content .editor-image-wrapper img {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display) .editor-image-wrapper img {
   display: block;
   width: 100%;
   max-width: 100%;
@@ -371,16 +371,16 @@ body.table-resizing * {
   pointer-events: none;
 }
 
-.editor-content .editor-image-wrapper:hover {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper:hover {
   outline: 2px solid #0066cc;
 }
 
-.editor-content .editor-image-wrapper.selected {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper.selected {
   outline: 3px solid #0066cc;
 }
 
 /* Styl podczas przeciągania (przenoszenia) obrazu */
-.editor-content .editor-image-wrapper.image-dragging {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper.image-dragging {
   opacity: 0.35;
   outline: 2px dashed #0066cc;
 }
@@ -434,19 +434,19 @@ body.image-moving * {
 }
 
 /* Wspólne style uchwytów resize */
-.editor-content .image-resize-handle {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .image-resize-handle {
   position: absolute;
   display: none;
   pointer-events: auto;
   z-index: 2;
 }
 
-.editor-content .editor-image-wrapper.selected .image-resize-handle {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper.selected .image-resize-handle {
   display: block;
 }
 
 /* Prawy uchwyt - zmiana szerokości */
-.editor-content .resize-handle-right {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .resize-handle-right {
   right: -4px;
   top: 50%;
   transform: translateY(-50%);
@@ -459,7 +459,7 @@ body.image-moving * {
 }
 
 /* Dolny uchwyt - zmiana wysokości */
-.editor-content .resize-handle-bottom {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .resize-handle-bottom {
   bottom: -4px;
   left: 50%;
   transform: translateX(-50%);
@@ -472,7 +472,7 @@ body.image-moving * {
 }
 
 /* Narożnik - zmiana proporcjonalna */
-.editor-content .resize-handle-corner {
+:is(.editor-content, .header-editor-content, .footer-editor-content) .resize-handle-corner {
   right: -5px;
   bottom: -5px;
   width: 10px;
@@ -628,8 +628,9 @@ body.image-moving * {
 /* Stan edycji */
 .page-header.editing,
 .page-footer.editing {
-  background-color: rgba(66, 133, 244, 0.08);
+  background-color: rgba(66, 133, 244, 0.06);
   z-index: 15;
+  /* WAŻNE: brak margin-bottom/top — żadnego skoku layoutu w trybie edycji */
 }
 
 .page-header.editing {
@@ -647,6 +648,7 @@ body.image-moving * {
   height: 100%;
   display: block;
   overflow: visible;
+  color: #202124; /* domyślny czarny — przesłaniany przez inline color */
 }
 
 .header-display p,
@@ -673,6 +675,7 @@ body.image-moving * {
   outline: none;
   display: block;
   overflow: visible;
+  color: #202124; /* domyślny czarny — przesłaniany przez inline color z execCommand */
 }
 
 .header-editor-content p,
@@ -702,55 +705,61 @@ body.image-moving * {
 /* Pasek toolbar jest teraz głównym wskaźnikiem edycji */
 
 /* ==================== */
-/* Pasek Nagłówka/Stopki - styl Google Docs */
+/* Pasek Nagłówka/Stopki - kompaktowy overlay (nie wpływa na layout) */
 /* ==================== */
 
 .header-toolbar,
 .footer-toolbar {
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 36px;
+  right: 8px;
+  height: 32px;
   background: white;
   border: 1px solid #dadce0;
-  display: flex;
+  border-radius: 16px;
+  display: inline-flex;
+  flex-wrap: nowrap;
   align-items: center;
-  padding: 0 12px;
-  gap: 8px;
-  z-index: 100;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 0 6px 0 12px;
+  gap: 10px;
+  z-index: 200;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+  font-size: 12px;
+  /* Overlay — NIE w normalnym flow, nie przesuwa zawartości */
 }
 
+/* Pasek nagłówka — w prawym górnym rogu nagłówka, lekko unosi się nad nim */
 .header-toolbar {
-  bottom: 0;
-  transform: translateY(100%);
+  top: 4px;
 }
 
+/* Pasek stopki — w prawym dolnym rogu stopki */
 .footer-toolbar {
-  top: 0;
-  transform: translateY(-100%);
+  bottom: 4px;
 }
 
 .header-toolbar-label,
 .footer-toolbar-label {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: #202124;
+  color: #5f6368;
   white-space: nowrap;
+  padding-right: 4px;
+  border-right: 1px solid #e0e0e0;
 }
 
 .header-toolbar-spacer,
 .footer-toolbar-spacer {
-  flex: 1;
+  display: none; /* nie potrzebny w kompaktowym układzie */
 }
 
 .header-toolbar-checkbox,
 .footer-toolbar-checkbox {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   color: #5f6368;
   white-space: nowrap;
   user-select: none;
@@ -758,8 +767,8 @@ body.image-moving * {
 
 .header-toolbar-checkbox input,
 .footer-toolbar-checkbox input {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   accent-color: #1a73e8;
   cursor: pointer;
 }
@@ -779,11 +788,11 @@ body.image-moving * {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 12px;
+  padding: 4px 10px;
   background: transparent;
   border: none;
-  border-radius: 4px;
-  font-size: 13px;
+  border-radius: 12px;
+  font-size: 12px;
   font-weight: 500;
   color: #1a73e8;
   cursor: pointer;

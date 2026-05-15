@@ -52,6 +52,22 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @ViewChildren('pageEditor') pageEditorRefs!: QueryList<ElementRef<HTMLDivElement>>;
   @ViewChild('headerContent') headerContentEl?: ElementRef<HTMLDivElement>;
   @ViewChild('footerContent') footerContentEl?: ElementRef<HTMLDivElement>;
+
+  /**
+   * Zwraca AKTUALNIE edytowany contenteditable: header / footer / aktywna strona body.
+   * Toolbar musi kierować komendy (B/I/U/align/color/font/size/insertImage) tu,
+   * a nie zawsze na body — inaczej formatowanie w header/footer nie zadziała.
+   */
+  private getActiveEditor(): HTMLDivElement | null {
+    const section = this.editingSection();
+    if (section === 'header' && this.headerContentEl?.nativeElement) {
+      return this.headerContentEl.nativeElement;
+    }
+    if (section === 'footer' && this.footerContentEl?.nativeElement) {
+      return this.footerContentEl.nativeElement;
+    }
+    return this.editorContent?.nativeElement ?? null;
+  }
   
   @Input() set content(value: string) {
     // Nie aktualizuj innerHTML jeśli wartość pochodzi z tego samego edytora
@@ -196,6 +212,36 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const safe = this._sanitizer.bypassSecurityTrustHtml(html);
     this._safeHtmlCache[index] = { html, safe };
     return safe;
+  }
+
+  /** Cache SafeHtml dla nagłówków/stopek — żeby preview zachował formatowanie
+   *  inline (color/font-size/text-align/img style="width:..."). Bez tego Angular
+   *  strippuje atrybuty `style` i obraz/rozmiar/kolor "ginie" w trybie podglądu. */
+  private _safeHeaderCache = new Map<number, { html: string; safe: SafeHtml }>();
+  private _safeFooterCache = new Map<number, { html: string; safe: SafeHtml }>();
+
+  getHeaderContentSafe(pageIndex: number): SafeHtml {
+    const html = this.getHeaderContent(pageIndex) ?? '';
+    const cached = this._safeHeaderCache.get(pageIndex);
+    if (cached && cached.html === html) return cached.safe;
+    const safe = this._sanitizer.bypassSecurityTrustHtml(html);
+    this._safeHeaderCache.set(pageIndex, { html, safe });
+    return safe;
+  }
+
+  getFooterContentSafe(pageIndex: number): SafeHtml {
+    const html = this.getFooterContent(pageIndex) ?? '';
+    const cached = this._safeFooterCache.get(pageIndex);
+    if (cached && cached.html === html) return cached.safe;
+    const safe = this._sanitizer.bypassSecurityTrustHtml(html);
+    this._safeFooterCache.set(pageIndex, { html, safe });
+    return safe;
+  }
+
+  /** Inwalidacja cache nagłówka/stopki — wołać po każdej edycji */
+  private invalidateHeaderFooterCache(): void {
+    this._safeHeaderCache.clear();
+    this._safeFooterCache.clear();
   }
 
   // Wysokość strony A4 w pikselach (bez marginesów)
@@ -368,44 +414,53 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     for (const ref of refs) {
-      const editor = ref.nativeElement as HTMLDivElement & { __wysiwygBound?: boolean };
-      if (!editor || editor.__wysiwygBound) continue;
-      editor.__wysiwygBound = true;
-
-      editor.addEventListener('input', () => {
-        this.onContentChange();
-      });
-      editor.addEventListener('paste', (e) => {
-        this.handlePaste(e);
-      });
-      editor.addEventListener('keydown', (e) => {
-        this.handleKeyboard(e);
-      });
-      editor.addEventListener('blur', () => {
-        this.saveSelection();
-      });
-      editor.addEventListener('drop', (e) => {
-        this.handleDrop(e);
-      });
-      editor.addEventListener('click', (e) => {
-        this.handleEditorClick(e);
-      });
-      editor.addEventListener('mousedown', (e) => {
-        this.handleEditorMouseDown(e);
-      });
-      editor.addEventListener('dragstart', (e) => {
-        this.handleEditorDragStart(e);
-      });
-      editor.addEventListener('dragover', (e) => {
-        this.handleEditorDragOver(e);
-      });
-      editor.addEventListener('dragend', () => {
-        this.draggedImageWrapper = null;
-      });
-      editor.addEventListener('mousemove', (e) => {
-        this.handleTableResizeCursor(e);
-      });
+      this.attachEditorListeners(ref.nativeElement);
     }
+  }
+
+  /**
+   * Rejestruje pełen zestaw listenerów (input/paste/keydown/click/mousedown/drag/resize)
+   * dla danego contenteditable. Używane dla każdej strony body oraz dla header/footer
+   * (po pierwszym wejściu w edycję). Idempotentne — flag `__wysiwygBound`.
+   */
+  private attachEditorListeners(editorEl: HTMLDivElement | null | undefined): void {
+    const editor = editorEl as (HTMLDivElement & { __wysiwygBound?: boolean }) | null | undefined;
+    if (!editor || editor.__wysiwygBound) return;
+    editor.__wysiwygBound = true;
+
+    editor.addEventListener('input', () => {
+      this.onContentChange();
+    });
+    editor.addEventListener('paste', (e) => {
+      this.handlePaste(e);
+    });
+    editor.addEventListener('keydown', (e) => {
+      this.handleKeyboard(e);
+    });
+    editor.addEventListener('blur', () => {
+      this.saveSelection();
+    });
+    editor.addEventListener('drop', (e) => {
+      this.handleDrop(e);
+    });
+    editor.addEventListener('click', (e) => {
+      this.handleEditorClick(e);
+    });
+    editor.addEventListener('mousedown', (e) => {
+      this.handleEditorMouseDown(e);
+    });
+    editor.addEventListener('dragstart', (e) => {
+      this.handleEditorDragStart(e);
+    });
+    editor.addEventListener('dragover', (e) => {
+      this.handleEditorDragOver(e);
+    });
+    editor.addEventListener('dragend', () => {
+      this.draggedImageWrapper = null;
+    });
+    editor.addEventListener('mousemove', (e) => {
+      this.handleTableResizeCursor(e);
+    });
   }
 
   private handleEditorClick(event: MouseEvent): void {
@@ -467,7 +522,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const onMouseMove = (moveEvent: MouseEvent) => {
         if (!this.imageResizeState) return;
 
-        const editor = this.editorContent?.nativeElement;
+        // KONTENER = aktywny edytor (body / header / footer) — wrapper.closest
+        const editor = wrapper.closest('.editor-content, .header-editor-content, .footer-editor-content') as HTMLElement | null;
         const editorMaxWidth = (editor?.clientWidth || 900) - 30;
         const st = this.imageResizeState;
         const currentImg = st.wrapper.querySelector('img') as HTMLImageElement | null;
@@ -503,6 +559,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const onMouseUp = () => {
         if (this.imageResizeState?.wrapper) {
           this.imageResizeState.wrapper.setAttribute('draggable', 'true');
+
+          // Po zakończeniu skalowania zapisujemy realny rozmiar na <img>
+          // i aktualizujemy `data-width-emu` / `data-height-emu`, których
+          // używa eksporter DOCX. Inaczej eksport używa ORYGINALNYCH wymiarów
+          // EMU (z importu), ignorując zmianę w edytorze — i obraz w pliku
+          // .docx jest dużo większy niż widać w edytorze.
+          const finalWrapper = this.imageResizeState.wrapper;
+          const finalImg = finalWrapper.querySelector('img') as HTMLImageElement | null;
+          if (finalImg) {
+            const rect = finalImg.getBoundingClientRect();
+            const widthPx = Math.round(rect.width);
+            const heightPx = Math.round(rect.height);
+            if (widthPx > 0 && heightPx > 0) {
+              finalImg.style.width = `${widthPx}px`;
+              finalImg.style.height = `${heightPx}px`;
+              // 1 px = 9525 EMU (przybliżenie używane też po stronie API)
+              const EMU_PER_PX = 9525;
+              finalImg.setAttribute('data-width-emu', String(widthPx * EMU_PER_PX));
+              finalImg.setAttribute('data-height-emu', String(heightPx * EMU_PER_PX));
+            }
+          }
         }
 
         this.imageResizeState = null;
@@ -541,7 +618,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       }
 
       if (this.imageMoveState.isDragging && this.imageDragCaret) {
-        const editor = this.editorContent?.nativeElement;
+        const editor = wrapper.closest('.editor-content, .header-editor-content, .footer-editor-content') as HTMLElement | null;
         const range = editor ? this.getRangeFromPoint(moveEvent.clientX, moveEvent.clientY) : null;
         if (range && editor && editor.contains(range.startContainer) && !wrapper.contains(range.startContainer)) {
           const rect = range.getBoundingClientRect();
@@ -566,7 +643,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         this.imageDragCaret?.remove();
         this.imageDragCaret = null;
 
-        const editor = this.editorContent?.nativeElement;
+        const editor = wrapper.closest('.editor-content, .header-editor-content, .footer-editor-content') as HTMLElement | null;
         if (editor) {
           wrapper.classList.remove('image-dragging');
           const dropRange = this.getRangeFromPoint(upEvent.clientX, upEvent.clientY);
@@ -939,9 +1016,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Obsługa zmiany zawartości
+   * Obsługa zmiany zawartości — automatycznie kieruje na body lub header/footer
+   * zależnie od aktualnie edytowanej sekcji.
    */
   private onContentChange(): void {
+    const section = this.editingSection();
+
+    // Header / footer — emituj headerChange / footerChange
+    if (section === 'header' && this.headerContentEl?.nativeElement) {
+      const html = this.headerContentEl.nativeElement.innerHTML;
+      this._headerHtml.set(html);
+      this.emitHeaderFooterChanges();
+      this.updateFormattingState();
+      return;
+    }
+    if (section === 'footer' && this.footerContentEl?.nativeElement) {
+      const html = this.footerContentEl.nativeElement.innerHTML;
+      this._footerHtml.set(html);
+      this.emitHeaderFooterChanges();
+      this.updateFormattingState();
+      return;
+    }
+
+    // Body
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
@@ -968,12 +1065,24 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Sprawdza czy selekcja jest w edytorze
+   * Sprawdza czy selekcja jest w edytorze (body lub header/footer).
+   * Sprawdzamy WSZYSTKIE strony (multi-page) — nie tylko aktywną, bo
+   * `editorContent` ref aktualizuje się dopiero na focusin, a `selectionchange`
+   * fire'uje też dla strony, na której kursor już jest.
    */
   private isSelectionInEditor(selection: Selection): boolean {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor || !selection.anchorNode) return false;
-    return editor.contains(selection.anchorNode);
+    if (!selection.anchorNode) return false;
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    for (const ref of refs) {
+      if (ref.nativeElement.contains(selection.anchorNode)) return true;
+    }
+    const body = this.editorContent?.nativeElement;
+    if (body && body.contains(selection.anchorNode)) return true;
+    const header = this.headerContentEl?.nativeElement;
+    if (header && header.contains(selection.anchorNode)) return true;
+    const footer = this.footerContentEl?.nativeElement;
+    if (footer && footer.contains(selection.anchorNode)) return true;
+    return false;
   }
 
   /**
@@ -1129,7 +1238,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wykonuje komendę edytora
    */
   executeCommand(command: EditorCommand, value?: string): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     // Upewnij się, że edytor ma focus
@@ -1230,16 +1339,32 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Ustawia rozmiar czcionki
+   * Ustawia rozmiar czcionki.
+   *
+   * Wywoływane z toolbara (input + Enter / blur / +/-). Musi działać poprawnie
+   * w dwóch scenariuszach:
+   *  1. fokus jest w edytorze (klik na +/− z `preventDefault` na mousedown) — selekcja w edytorze istnieje,
+   *  2. fokus przed chwilą był na inputcie toolbara — w `window.getSelection()` jest selekcja inputa
+   *     (NIE w edytorze); musimy odtworzyć selekcję z `savedSelection` ZANIM zawołamy `editor.focus()`,
+   *     bo `focus()` na contenteditable po utracie kursora ustawia caret na początku — i wstawienie
+   *     spana lądowało na początku dokumentu.
    */
   setFontSize(size: number): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     this.currentFontSize = size;
+
+    // Odtwórz selekcję ZANIM dotkniemy fokusu — jeżeli live selection jest poza edytorem
+    // (np. user kliknął w input rozmiaru czcionki), a mamy zapisaną ostatnią pozycję.
+    const live = window.getSelection();
+    const liveInEditor = !!live && live.rangeCount > 0 && this.isSelectionInEditor(live);
+    if (!liveInEditor && this.savedSelection) {
+      this.restoreSelection();
+    }
+
     editor.focus();
 
-    // Jeśli selekcja zaginęła (np. klik w input toolbara) – przywróć zapisaną
     let selection = window.getSelection();
     if ((!selection || selection.rangeCount === 0) && this.savedSelection) {
       this.restoreSelection();
@@ -1253,38 +1378,50 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     const range = selection.getRangeAt(0);
-    
+
     if (range.collapsed) {
       // Kursor bez zaznaczenia - wstaw pusty span z rozmiarem dla kolejnego tekstu
       this.pendingFontSize = size;
-      
+
       // Wstaw zero-width space w span z odpowiednim rozmiarem
       const span = document.createElement('span');
       span.style.fontSize = `${size}pt`;
       span.innerHTML = '\u200B'; // Zero-width space
-      
+
       range.insertNode(span);
-      
+
       // Ustaw kursor wewnątrz spana
       const newRange = document.createRange();
       newRange.setStart(span.firstChild!, 1);
       newRange.setEnd(span.firstChild!, 1);
       selection.removeAllRanges();
       selection.addRange(newRange);
-      
+
+      // Zapisz nową pozycję karetki, żeby kolejne klik +/- znalazły żywą selekcję
+      // a nie zdezaktualizowaną z poprzedniego zapisu.
+      this.savedSelection = newRange.cloneRange();
+      this.updateFormattingState();
       return;
     }
 
     // Jest zaznaczenie - zastosuj rozmiar do zaznaczonego tekstu
     this.applyFontSizeToSelection(size, selection, range);
     this.onContentChange();
+
+    // Po zmianie selekcji w applyFontSizeToSelection — zaktualizuj zapisaną
+    // selekcję, żeby kolejne kliknięcie +/− trafiało dokładnie na ten sam zakres.
+    const after = window.getSelection();
+    if (after && after.rangeCount > 0 && this.isSelectionInEditor(after)) {
+      this.savedSelection = after.getRangeAt(0).cloneRange();
+    }
+    this.updateFormattingState();
   }
 
   /**
    * Aplikuje rozmiar czcionki do zaznaczenia - bez execCommand
    */
   private applyFontSizeToSelection(size: number, selection: Selection, range: Range): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     // Wyodrębnij zawartość zaznaczenia
@@ -1377,7 +1514,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Ustawia rodzinę czcionki
    */
   setFontFamily(fontFamily: string): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     this.currentFontFamily = fontFamily;
@@ -1425,7 +1562,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aplikuje rodzinę czcionki do zaznaczenia
    */
   private applyFontFamilyToSelection(fontFamily: string, selection: Selection, range: Range): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     // Wyodrębnij zawartość zaznaczenia
@@ -1507,7 +1644,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Ustawia kolor tekstu
    */
   setTextColor(color: string): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     editor.focus();
@@ -1526,7 +1663,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aplikuje kolor do zaznaczenia
    */
   private applyColorToSelection(color: string, selection: Selection, range: Range): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     const fragment = range.extractContents();
@@ -1606,7 +1743,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Ustawia kolor tła
    */
   setBackgroundColor(color: string): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     editor.focus();
@@ -1618,23 +1755,23 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private savedSelection: Range | null = null;
 
   /**
-   * Ustawia fokus na edytorze
+   * Ustawia fokus na edytorze (header/footer jeśli edytowany, inaczej body).
    */
   focus(): void {
-    this.editorContent?.nativeElement?.focus();
+    const editor = this.getActiveEditor();
+    editor?.focus();
   }
 
   /**
-   * Zapisuje aktualną selekcję - wywoływane przed focusout
+   * Zapisuje aktualną selekcję - wywoływane przed focusout.
+   * Akceptuje selekcje z body lub header/footer.
    */
   saveSelection(): void {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
-      const editor = this.editorContent?.nativeElement;
-      if (editor && editor.contains(range.commonAncestorContainer)) {
+      if (this.isSelectionInEditor(selection)) {
         this.savedSelection = range.cloneRange();
-        console.log('[saveSelection] Zapisano selekcję:', range.toString());
       }
     }
   }
@@ -1832,7 +1969,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wstawia obraz
    */
   insertImage(src: string, alt: string = ''): void {
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor) return;
 
     const imageId = `img-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
@@ -2012,7 +2149,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   insertTable(config: string): void {
     const [rows, cols] = config.split('x').map(Number);
-    const editor = this.editorContent?.nativeElement;
+    const editor = this.getActiveEditor();
     if (!editor || rows <= 0 || cols <= 0) return;
 
     const colWidth = Math.floor(100 / cols);
@@ -2649,10 +2786,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Opakowuje istniejące elementy <img> (bez wrappera) w editor-image-wrapper
+   * Opakowuje istniejące elementy <img> (bez wrappera) w editor-image-wrapper.
+   * Domyślnie operuje na aktywnym edytorze body; można podać kontener (header/footer/strona).
    */
-  private wrapExistingImages(): void {
-    const editor = this.editorContent?.nativeElement;
+  private wrapExistingImages(container?: HTMLElement | null): void {
+    const editor = container ?? this.editorContent?.nativeElement;
     if (!editor) return;
 
     const images = editor.querySelectorAll('img');
@@ -2670,12 +2808,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       wrapper.setAttribute('contenteditable', 'false');
       wrapper.setAttribute('draggable', 'true');
 
-      // Przenieś width z img na wrapper
+      // Przenieś width z img na wrapper, ale clampuj do szerokości kontenera
+      // (bez tego obraz "rośnie" w wąskim nagłówku — widoczne rozjazdy edit/preview)
+      const containerWidth = editor.clientWidth || 0;
+      let desiredWidth: string | null = null;
       if (img.style.width) {
-        wrapper.style.width = img.style.width;
+        desiredWidth = img.style.width;
+      } else if (img.getAttribute('width')) {
+        desiredWidth = img.getAttribute('width') + 'px';
+      }
+      if (desiredWidth) {
+        // Jeśli zadeklarowane px > kontener → użyj 100% kontenera
+        const m = /^(\d+(?:\.\d+)?)px$/i.exec(desiredWidth);
+        if (m && containerWidth > 0 && parseFloat(m[1]) > containerWidth) {
+          wrapper.style.width = '100%';
+        } else {
+          wrapper.style.width = desiredWidth;
+        }
       }
       wrapper.style.maxWidth = '100%';
 
+      // Wyczyść inline-style szerokości z <img> żeby nie konkurował z wrapperem
+      img.style.removeProperty('width');
+      img.removeAttribute('width');
+      img.removeAttribute('height');
       img.style.maxWidth = '100%';
       img.style.height = 'auto';
       img.setAttribute('draggable', 'false');
@@ -2816,15 +2972,23 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // ================================
 
   /**
-   * Rozpoczyna edycję nagłówka
+   * Rozpoczyna edycję nagłówka. Jeśli przekazano event — kursor zostanie ustawiony
+   * w miejscu kliknięcia. W przeciwnym wypadku trafi na koniec zawartości.
    */
-  startEditingHeader(): void {
+  startEditingHeader(event?: MouseEvent): void {
+    // Jeśli już edytujemy nagłówek, nie restartuj kursora (pozwól natywnemu klikowi go ustawić)
+    if (this.editingSection() === 'header') return;
+    const clickX = event?.clientX;
+    const clickY = event?.clientY;
     this.editingSection.set('header');
-    // Ustaw focus na edytorze nagłówka po renderowaniu
     setTimeout(() => {
-      if (this.headerContentEl?.nativeElement) {
-        this.headerContentEl.nativeElement.innerHTML = this._headerHtml();
-        this.headerContentEl.nativeElement.focus();
+      const el = this.headerContentEl?.nativeElement;
+      if (el) {
+        el.innerHTML = this._headerHtml();
+        this.wrapExistingImages(el);
+        this.attachEditorListeners(el);
+        el.focus();
+        this.placeCaretAtPoint(el, clickX, clickY);
       }
     }, 0);
   }
@@ -2832,14 +2996,50 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   /**
    * Rozpoczyna edycję stopki
    */
-  startEditingFooter(): void {
+  startEditingFooter(event?: MouseEvent): void {
+    if (this.editingSection() === 'footer') return;
+    const clickX = event?.clientX;
+    const clickY = event?.clientY;
     this.editingSection.set('footer');
     setTimeout(() => {
-      if (this.footerContentEl?.nativeElement) {
-        this.footerContentEl.nativeElement.innerHTML = this._footerHtml();
-        this.footerContentEl.nativeElement.focus();
+      const el = this.footerContentEl?.nativeElement;
+      if (el) {
+        el.innerHTML = this._footerHtml();
+        this.wrapExistingImages(el);
+        this.attachEditorListeners(el);
+        el.focus();
+        this.placeCaretAtPoint(el, clickX, clickY);
       }
     }, 0);
+  }
+
+  /**
+   * Ustawia kursor w punkcie (x,y) jeśli trafia w content edytora; w przeciwnym
+   * wypadku ustawia kursor na końcu.
+   */
+  private placeCaretAtPoint(el: HTMLElement, x?: number, y?: number): void {
+    if (typeof x === 'number' && typeof y === 'number') {
+      const range = this.getRangeFromPoint(x, y);
+      if (range && el.contains(range.startContainer)) {
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        return;
+      }
+    }
+    this.placeCaretAtEnd(el);
+  }
+
+  /**
+   * Ustawia kursor na końcu danego contenteditable.
+   */
+  private placeCaretAtEnd(el: HTMLElement): void {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
   }
 
   /**
@@ -2865,11 +3065,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Obsługa input nagłówka
+   * Obsługa input nagłówka — emituje zmiany do parent (saveDocument używa headerContent)
    */
   onHeaderInput(event: Event): void {
     const content = (event.target as HTMLDivElement).innerHTML;
     this._headerHtml.set(content);
+    this.invalidateHeaderFooterCache();
+    this.emitHeaderFooterChanges();
   }
 
   /**
@@ -2885,11 +3087,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Obsługa input stopki
+   * Obsługa input stopki — emituje zmiany do parent
    */
   onFooterInput(event: Event): void {
     const content = (event.target as HTMLDivElement).innerHTML;
     this._footerHtml.set(content);
+    this.invalidateHeaderFooterCache();
+    this.emitHeaderFooterChanges();
   }
 
   /**
@@ -3004,6 +3208,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // ================================
 
   /**
+   * Zapobiega utracie zaznaczenia w nagłówku/stopce przy klikaniu w pasek narzędzi.
+   * Pozwala na fokus tylko dla pól input/select (np. checkbox "Inna pierwsza strona").
+   */
+  onHeaderFooterToolbarMouseDown(event: MouseEvent): void {
+    const target = event.target as HTMLElement;
+    if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA') {
+      event.preventDefault();
+    }
+  }
+
+  /**
    * Toggle menu opcji nagłówka
    */
   toggleHeaderOptionsMenu(event: Event): void {
@@ -3094,6 +3309,44 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this._differentOddEven.set(settings.differentOddEven);
     
     this.emitHeaderFooterChanges();
+  }
+
+  /**
+   * Otwiera file picker i wstawia wybrany obrazek do aktualnie edytowanej
+   * sekcji (header/footer/body). Używane przez menu opcji header/footer.
+   */
+  insertImageIntoActive(): void {
+    this.showHeaderOptionsMenu.set(false);
+    this.showFooterOptionsMenu.set(false);
+
+    // Upewnij się że focus jest w aktywnym edytorze przed otwarciem dialogu
+    const editor = this.getActiveEditor();
+    if (editor) {
+      editor.focus();
+      this.saveSelection();
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const base64 = ev.target?.result as string;
+        if (!base64) return;
+        // Przywróć focus i selekcję — file dialog je gubi
+        const editor2 = this.getActiveEditor();
+        if (editor2) {
+          editor2.focus();
+          this.restoreSelection();
+        }
+        this.insertImage(base64, file.name);
+      };
+      reader.readAsDataURL(file);
+    };
+    input.click();
   }
 
   /**

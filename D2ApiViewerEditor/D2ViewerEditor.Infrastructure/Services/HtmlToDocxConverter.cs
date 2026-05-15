@@ -23,6 +23,26 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private readonly Dictionary<int, int> _abstractNumIds = new(); // track list numbering
 
     /// <summary>
+    /// Część (Part) do której mają być dodawane obrazki w bieżącym kontekście:
+    /// MainDocumentPart dla body, HeaderPart / FooterPart dla nagłówka/stopki.
+    /// Obrazki muszą być powiązane z częścią w której są używane (relationship),
+    /// inaczej Word ich nie wyświetli.
+    /// </summary>
+    private OpenXmlPart? _currentImageContainer;
+
+    /// <summary>
+    /// Czy aktualnie konwertujemy header/footer (wpływa na limit szerokości obrazka).
+    /// </summary>
+    private bool _inHeaderFooter = false;
+
+    /// <summary>
+    /// Domyślny StyleId dla paragrafów w bieżącej sekcji (Header / Footer).
+    /// Aplikowany na paragrafy, które nie mają własnego <c>data-style-id</c>.
+    /// W body pozostaje <c>null</c> → Word użyje stylu Normal.
+    /// </summary>
+    private string? _currentSectionStyleId = null;
+
+    /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
     public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null)
@@ -74,14 +94,35 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             var headerPart = _mainPart.AddNewPart<HeaderPart>();
             var headerElement = new Header();
-            
+
+            // {page}/{pages} placeholders w nagłówku też obsługujemy
+            var headerHtml = header.Html
+                .Replace("{page}", "<span class=\"field-page\"></span>")
+                .Replace("{pages}", "<span class=\"field-numpages\"></span>");
             var htmlDoc = new HtmlDocument();
-            htmlDoc.LoadHtml(header.Html);
-            ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, headerElement);
-            
+            htmlDoc.LoadHtml(headerHtml);
+
+            // Obrazki muszą być dodane do HeaderPart, nie MainDocumentPart
+            var prevContainer = _currentImageContainer;
+            var prevInHF = _inHeaderFooter;
+            var prevSection = _currentSectionStyleId;
+            _currentImageContainer = headerPart;
+            _inHeaderFooter = true;
+            _currentSectionStyleId = "Header";
+            try
+            {
+                ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, headerElement);
+            }
+            finally
+            {
+                _currentImageContainer = prevContainer;
+                _inHeaderFooter = prevInHF;
+                _currentSectionStyleId = prevSection;
+            }
+
             headerPart.Header = headerElement;
             headerPart.Header.Save();
-            
+
             var headerPartId = _mainPart.GetIdOfPart(headerPart);
             AddHeaderReference(headerPartId);
         }
@@ -90,68 +131,237 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             var footerPart = _mainPart.AddNewPart<FooterPart>();
             var footerElement = new Footer();
-            
+
             var htmlDoc = new HtmlDocument();
             var footerHtml = footer.Html
                 .Replace("{page}", "<span class=\"field-page\"></span>")
                 .Replace("{pages}", "<span class=\"field-numpages\"></span>");
             htmlDoc.LoadHtml(footerHtml);
-            ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, footerElement);
-            
+
+            var prevContainer = _currentImageContainer;
+            var prevInHF = _inHeaderFooter;
+            var prevSection = _currentSectionStyleId;
+            _currentImageContainer = footerPart;
+            _inHeaderFooter = true;
+            _currentSectionStyleId = "Footer";
+            try
+            {
+                ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, footerElement);
+            }
+            finally
+            {
+                _currentImageContainer = prevContainer;
+                _inHeaderFooter = prevInHF;
+                _currentSectionStyleId = prevSection;
+            }
+
             footerPart.Footer = footerElement;
             footerPart.Footer.Save();
-            
+
             var footerPartId = _mainPart.GetIdOfPart(footerPart);
             AddFooterReference(footerPartId);
         }
     }
 
     /// <summary>
-    /// Konwertuje HTML na elementy nagłówka/stopki
+    /// Konwertuje HTML na elementy nagłówka/stopki.
+    /// Akceptuje wszystkie tagi obsługiwane przez body (h1-6, p, ul/ol, table, img, blockquote, hr).
+    /// Treść która nie tworzy block-level (np. tekst bez paragrafu, samodzielny &lt;span&gt;) jest
+    /// pakowana w domyślny &lt;p&gt;. Header w DOCX nie może zawierać lużnych Runów.
     /// </summary>
     private void ConvertHtmlToHeaderFooter(HtmlNode node, OpenXmlCompositeElement parent)
     {
+        Paragraph? pendingTextParagraph = null;
+
+        void FlushPending()
+        {
+            if (pendingTextParagraph != null)
+            {
+                if (!pendingTextParagraph.Elements<Run>().Any() && !pendingTextParagraph.Elements<Hyperlink>().Any())
+                {
+                    // pusty paragraf po flushy nie powinien być dodawany
+                }
+                else
+                {
+                    parent.Append(pendingTextParagraph);
+                }
+                pendingTextParagraph = null;
+            }
+        }
+
         foreach (var child in node.ChildNodes)
         {
-            switch (child.Name.ToLower())
+            var name = child.Name.ToLower();
+            switch (name)
             {
-                case "p":
-                    parent.Append(ConvertParagraphElement(child));
+                case "#text":
+                {
+                    var text = child.InnerText;
+                    if (!string.IsNullOrEmpty(text) && !string.IsNullOrWhiteSpace(text))
+                    {
+                        pendingTextParagraph ??= new Paragraph();
+                        pendingTextParagraph.Append(new Run(new Text(text) { Space = SpaceProcessingModeValues.Preserve }));
+                    }
                     break;
+                }
                 case "span":
+                case "strong":
+                case "b":
+                case "em":
+                case "i":
+                case "u":
+                case "s":
+                case "strike":
+                case "sub":
+                case "sup":
+                case "a":
+                {
+                    // Inline-level w header/footer — pakujemy do bieżącego (lub nowego) paragrafu.
+                    // Specjalne klasy field-page / field-numpages = pole liczby strony.
+                    pendingTextParagraph ??= new Paragraph();
                     if (child.HasClass("field-page"))
                     {
-                        var pagePara = new Paragraph(new Run(
-                            new SimpleField { Instruction = " PAGE " }
-                        ));
-                        parent.Append(pagePara);
+                        pendingTextParagraph.Append(new Run(new SimpleField { Instruction = " PAGE " }));
                     }
                     else if (child.HasClass("field-numpages"))
                     {
-                        var numPagesPara = new Paragraph(new Run(
-                            new SimpleField { Instruction = " NUMPAGES " }
-                        ));
-                        parent.Append(numPagesPara);
+                        pendingTextParagraph.Append(new Run(new SimpleField { Instruction = " NUMPAGES " }));
+                    }
+                    else if (name == "a")
+                    {
+                        pendingTextParagraph.Append(ConvertAnchorElement(child));
                     }
                     else
                     {
-                        ConvertHtmlToHeaderFooter(child, parent);
+                        // Reużyj CreateRunsFromNode z dziedziczeniem stylu rodzica (span style=...)
+                        var parentStyle = child.GetAttributeValue("style", "");
+                        RunProperties? base_ = null;
+                        if (!string.IsNullOrEmpty(parentStyle))
+                        {
+                            base_ = new RunProperties();
+                            ApplyRunStyle(base_, parentStyle);
+                            if (!base_.HasChildren) base_ = null;
+                        }
+                        foreach (var run in CreateRunsFromNode(child, base_))
+                        {
+                            pendingTextParagraph.Append(run);
+                        }
                     }
                     break;
+                }
+                case "br":
+                {
+                    pendingTextParagraph ??= new Paragraph();
+                    pendingTextParagraph.Append(new Run(new Break()));
+                    break;
+                }
+                case "img":
+                {
+                    pendingTextParagraph ??= new Paragraph();
+                    var imgRun = CreateImageRun(child);
+                    if (imgRun != null) pendingTextParagraph.Append(imgRun);
+                    break;
+                }
+                case "p":
+                {
+                    FlushPending();
+                    parent.Append(ConvertParagraphElement(child));
+                    break;
+                }
+                case "h1": case "h2": case "h3": case "h4": case "h5": case "h6":
+                {
+                    FlushPending();
+                    var level = int.Parse(name[1].ToString());
+                    parent.Append(ConvertHeadingElement(child, level));
+                    break;
+                }
+                case "ul":
+                case "ol":
+                {
+                    FlushPending();
+                    foreach (var listElement in ConvertListElement(child, name == "ol"))
+                        parent.Append(listElement);
+                    break;
+                }
                 case "table":
+                {
+                    FlushPending();
                     parent.Append(ConvertTableElement(child));
                     break;
-                case "#text":
-                    var text = child.InnerText.Trim();
-                    if (!string.IsNullOrEmpty(text))
-                    {
-                        parent.Append(new Paragraph(new Run(new Text(text) { Space = SpaceProcessingModeValues.Preserve })));
-                    }
+                }
+                case "blockquote":
+                {
+                    FlushPending();
+                    parent.Append(ConvertBlockquoteElement(child));
                     break;
-                default:
+                }
+                case "hr":
+                {
+                    FlushPending();
+                    parent.Append(CreateHorizontalRule());
+                    break;
+                }
+                case "div":
+                case "section":
+                case "article":
+                case "header":
+                case "footer":
+                {
+                    // kontener — zejdź w dzieci
+                    FlushPending();
                     ConvertHtmlToHeaderFooter(child, parent);
                     break;
+                }
+                default:
+                {
+                    // nieznany tag — traktujemy jak inline (zejdź w dzieci do bieżącego paragrafu)
+                    pendingTextParagraph ??= new Paragraph();
+                    foreach (var run in CreateRunsFromNode(child, null))
+                    {
+                        pendingTextParagraph.Append(run);
+                    }
+                    break;
+                }
             }
+        }
+
+        FlushPending();
+
+        // Header/Footer MUSZĄ zawierać co najmniej jeden block-level (np. Paragraph),
+        // inaczej Word odmówi otwarcia dokumentu.
+        if (!parent.Elements<Paragraph>().Any() && !parent.Elements<Table>().Any())
+        {
+            parent.Append(new Paragraph());
+        }
+
+        // Każdy paragraf w header/footer bez własnego stylu otrzymuje domyślny
+        // styl sekcji ("Header"/"Footer"), tak jak robi to Word natywnie.
+        // Dzięki temu czcionka i odstępy są zgodne z konwencją Worda
+        // i tekst nie pojawia się jako "Normal".
+        if (_currentSectionStyleId != null)
+        {
+            foreach (var p in parent.Elements<Paragraph>())
+            {
+                ApplyDefaultSectionStyle(p, _currentSectionStyleId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ustawia <c>ParagraphStyleId</c> dla paragrafu, o ile nie ma już ustawionego stylu.
+    /// Używane dla paragrafów w nagłówku/stopce, by przejęły styl "Header"/"Footer".
+    /// </summary>
+    private static void ApplyDefaultSectionStyle(Paragraph paragraph, string styleId)
+    {
+        var props = paragraph.ParagraphProperties;
+        if (props == null)
+        {
+            props = new ParagraphProperties();
+            paragraph.InsertAt(props, 0);
+        }
+        if (props.ParagraphStyleId == null)
+        {
+            props.InsertAt(new ParagraphStyleId { Val = styleId }, 0);
         }
     }
 
@@ -303,6 +513,86 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             new Indentation { Left = "720" }
         ));
         styles.Append(listParagraph);
+
+        // Styl Nagłówka (Header) — wbudowany styl Worda, używany dla treści
+        // nagłówka strony. Bez niego Word renderuje paragraf nagłówka jako
+        // Normal (bez tab-stopów do prawej/centerowania, bez odstępów),
+        // co powoduje wizualne rozbieżności względem edytora.
+        var headerStyle = new Style
+        {
+            Type = StyleValues.Paragraph,
+            StyleId = "Header"
+        };
+        headerStyle.Append(new StyleName { Val = "header" });
+        headerStyle.Append(new BasedOn { Val = "Normal" });
+        headerStyle.Append(new LinkedStyle { Val = "HeaderChar" });
+        headerStyle.Append(new UIPriority { Val = 99 });
+        headerStyle.Append(new UnhideWhenUsed());
+        headerStyle.Append(new StyleParagraphProperties(
+            new Tabs(
+                new TabStop { Val = TabStopValues.Center, Position = 4536 },
+                new TabStop { Val = TabStopValues.Right, Position = 9072 }
+            ),
+            new SpacingBetweenLines { After = "0", Line = "240", LineRule = LineSpacingRuleValues.Auto }
+        ));
+        styles.Append(headerStyle);
+
+        var headerCharStyle = new Style
+        {
+            Type = StyleValues.Character,
+            StyleId = "HeaderChar",
+            CustomStyle = true
+        };
+        headerCharStyle.Append(new StyleName { Val = "Nagłówek Znak" });
+        headerCharStyle.Append(new BasedOn { Val = "DefaultParagraphFont" });
+        headerCharStyle.Append(new LinkedStyle { Val = "Header" });
+        headerCharStyle.Append(new UIPriority { Val = 99 });
+        styles.Append(headerCharStyle);
+
+        // Styl Stopki (Footer)
+        var footerStyle = new Style
+        {
+            Type = StyleValues.Paragraph,
+            StyleId = "Footer"
+        };
+        footerStyle.Append(new StyleName { Val = "footer" });
+        footerStyle.Append(new BasedOn { Val = "Normal" });
+        footerStyle.Append(new LinkedStyle { Val = "FooterChar" });
+        footerStyle.Append(new UIPriority { Val = 99 });
+        footerStyle.Append(new UnhideWhenUsed());
+        footerStyle.Append(new StyleParagraphProperties(
+            new Tabs(
+                new TabStop { Val = TabStopValues.Center, Position = 4536 },
+                new TabStop { Val = TabStopValues.Right, Position = 9072 }
+            ),
+            new SpacingBetweenLines { After = "0", Line = "240", LineRule = LineSpacingRuleValues.Auto }
+        ));
+        styles.Append(footerStyle);
+
+        var footerCharStyle = new Style
+        {
+            Type = StyleValues.Character,
+            StyleId = "FooterChar",
+            CustomStyle = true
+        };
+        footerCharStyle.Append(new StyleName { Val = "Stopka Znak" });
+        footerCharStyle.Append(new BasedOn { Val = "DefaultParagraphFont" });
+        footerCharStyle.Append(new LinkedStyle { Val = "Footer" });
+        footerCharStyle.Append(new UIPriority { Val = 99 });
+        styles.Append(footerCharStyle);
+
+        // Domyślny styl Run (wymagany jako bazowy dla LinkedStyle)
+        var defaultParagraphFont = new Style
+        {
+            Type = StyleValues.Character,
+            StyleId = "DefaultParagraphFont",
+            Default = true
+        };
+        defaultParagraphFont.Append(new StyleName { Val = "Default Paragraph Font" });
+        defaultParagraphFont.Append(new UIPriority { Val = 1 });
+        defaultParagraphFont.Append(new SemiHidden());
+        defaultParagraphFont.Append(new UnhideWhenUsed());
+        styles.Append(defaultParagraphFont);
 
         stylesPart.Styles = styles;
     }
@@ -1160,30 +1450,73 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
-    /// Tworzy paragraf z obrazem z zachowaniem oryginalnych wymiarów EMU
+    /// Tworzy paragraf z obrazem z zachowaniem oryginalnych wymiarów EMU.
     /// </summary>
     private Paragraph CreateImageParagraph(byte[] imageBytes, string contentType, HtmlNode node)
     {
-        var imagePart = contentType switch
+        var drawing = BuildImageDrawing(imageBytes, contentType, node);
+        return drawing != null ? new Paragraph(new Run(drawing)) : new Paragraph();
+    }
+
+    /// <summary>
+    /// Tworzy inline Run z obrazem (do osadzania w paragrafie header/footer/body).
+    /// </summary>
+    private Run? CreateImageRun(HtmlNode node)
+    {
+        var src = node.GetAttributeValue("src", "");
+        if (string.IsNullOrEmpty(src) || !src.StartsWith("data:")) return null;
+        var m = Regex.Match(src, @"data:([^;]+);base64,(.+)");
+        if (!m.Success) return null;
+        try
         {
-            "image/png" => _mainPart!.AddImagePart(ImagePartType.Png),
-            "image/gif" => _mainPart!.AddImagePart(ImagePartType.Gif),
-            "image/bmp" => _mainPart!.AddImagePart(ImagePartType.Bmp),
-            "image/svg+xml" => _mainPart!.AddImagePart(ImagePartType.Svg),
-            _ => _mainPart!.AddImagePart(ImagePartType.Jpeg)
+            var bytes = System.Convert.FromBase64String(m.Groups[2].Value);
+            var drawing = BuildImageDrawing(bytes, m.Groups[1].Value, node);
+            return drawing != null ? new Run(drawing) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Buduje Drawing dla obrazka, dodaje ImagePart do aktualnej części (body/header/footer).
+    /// </summary>
+    private Drawing? BuildImageDrawing(byte[] imageBytes, string contentType, HtmlNode node)
+    {
+        var container = _currentImageContainer ?? (OpenXmlPart?)_mainPart;
+        if (container == null) return null;
+
+        var imagePartType = contentType switch
+        {
+            "image/png" => ImagePartType.Png,
+            "image/gif" => ImagePartType.Gif,
+            "image/bmp" => ImagePartType.Bmp,
+            "image/svg+xml" => ImagePartType.Svg,
+            _ => ImagePartType.Jpeg
         };
 
-        using var stream = new MemoryStream(imageBytes);
-        imagePart.FeedData(stream);
+        ImagePart imagePart = container switch
+        {
+            MainDocumentPart m => m.AddImagePart(imagePartType),
+            HeaderPart h => h.AddImagePart(imagePartType),
+            FooterPart f => f.AddImagePart(imagePartType),
+            _ => _mainPart!.AddImagePart(imagePartType)
+        };
 
-        var relationshipId = _mainPart!.GetIdOfPart(imagePart);
+        using (var stream = new MemoryStream(imageBytes))
+        {
+            imagePart.FeedData(stream);
+        }
+
+        var relationshipId = container.GetIdOfPart(imagePart);
 
         // Próbuj najpierw użyć oryginalnych wymiarów EMU (zachowanych z DOCX)
         long widthEmu, heightEmu;
-        
+
         var emuWidthAttr = node.GetAttributeValue("data-width-emu", "");
         var emuHeightAttr = node.GetAttributeValue("data-height-emu", "");
-        
+
         if (!string.IsNullOrEmpty(emuWidthAttr) && !string.IsNullOrEmpty(emuHeightAttr) &&
             long.TryParse(emuWidthAttr, out var origWidthEmu) && long.TryParse(emuHeightAttr, out var origHeightEmu))
         {
@@ -1192,30 +1525,49 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
         else
         {
-            // Fallback: parsuj ze stylu CSS
+            // Fallback: parsuj ze stylu CSS (obsługuje liczby zmiennoprzecinkowe)
             var style = node.GetAttributeValue("style", "");
-            var widthMatch = Regex.Match(style, @"width:\s*(\d+)px");
-            var heightMatch = Regex.Match(style, @"height:\s*(\d+)px");
-            
-            var width = widthMatch.Success ? int.Parse(widthMatch.Groups[1].Value) : 200;
-            var height = heightMatch.Success ? int.Parse(heightMatch.Groups[1].Value) : (int)(width * 0.75);
-            
-            widthEmu = width * 9525;
-            heightEmu = height * 9525;
+            var widthMatch = Regex.Match(style, @"width:\s*([\d.]+)px");
+            var heightMatch = Regex.Match(style, @"height:\s*([\d.]+)px");
+
+            var ci = System.Globalization.CultureInfo.InvariantCulture;
+            var width = widthMatch.Success ? double.Parse(widthMatch.Groups[1].Value, ci) : 200;
+            var height = heightMatch.Success ? double.Parse(heightMatch.Groups[1].Value, ci) : width * 0.75;
+
+            // Atrybuty width/height (HTML)
+            if (!widthMatch.Success)
+            {
+                var wAttr = node.GetAttributeValue("width", "");
+                if (!string.IsNullOrEmpty(wAttr) && double.TryParse(wAttr, System.Globalization.NumberStyles.Float, ci, out var wp))
+                    width = wp;
+            }
+            if (!heightMatch.Success)
+            {
+                var hAttr = node.GetAttributeValue("height", "");
+                if (!string.IsNullOrEmpty(hAttr) && double.TryParse(hAttr, System.Globalization.NumberStyles.Float, ci, out var hp))
+                    height = hp;
+            }
+
+            widthEmu = (long)(width * 9525);
+            heightEmu = (long)(height * 9525);
         }
 
-        // Ogranicz do max 15cm szerokości (typowa strona A4 minus marginesy)
-        var maxWidthEmu = 5400000L; // ~15cm
+        // Limit szerokości:
+        //  - body: ~15 cm (5 400 000 EMU)
+        //  - header/footer: ~17 cm (6 120 000 EMU) – w nagłówku obrazki są zwykle szersze
+        var maxWidthEmu = _inHeaderFooter ? 6_120_000L : 5_400_000L;
         if (widthEmu > maxWidthEmu)
         {
             var scale = (double)maxWidthEmu / widthEmu;
             widthEmu = maxWidthEmu;
             heightEmu = (long)(heightEmu * scale);
         }
+        if (widthEmu < 9525) widthEmu = 9525;   // min 1 px
+        if (heightEmu < 9525) heightEmu = 9525;
 
         _imageCounter++;
 
-        var element = new Drawing(
+        return new Drawing(
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.Inline(
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
@@ -1242,8 +1594,6 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" })
             )
         );
-
-        return new Paragraph(new Run(element));
     }
 
     /// <summary>
