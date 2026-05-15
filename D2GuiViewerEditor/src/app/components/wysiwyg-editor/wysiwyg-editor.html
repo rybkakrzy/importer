@@ -1,7 +1,7 @@
 <div class="wysiwyg-editor-wrapper">
   <div class="pages-container">
     <!-- Każda strona A4 -->
-    @for (page of pages(); track $index) {
+    @for (page of pageContents(); track $index) {
       <div class="page-wrapper">
         <div class="page" 
              [class.landscape]="pageOrientation === 'landscape'"
@@ -63,28 +63,41 @@
           
           @if ($index === 0) {
             <div 
-              #editorContent
+              #pageEditor
               class="editor-content"
               contenteditable="true"
               spellcheck="true"
+              [attr.data-page-index]="$index"
               [attr.placeholder]="'Zacznij pisać...'"
               [style.padding-left.px]="pageMargins().left * 37.8"
               [style.padding-right.px]="pageMargins().right * 37.8"
               [style.padding-top.px]="contentPaddingTop()"
               [style.padding-bottom.px]="contentPaddingBottom()"
+              [innerHTML]="getPageContentSafe($index)"
+              (focusin)="setActivePage($index, $event)"
+              (input)="onPageInput($index, $event)"
               (mouseup)="saveSelection()"
               (keyup)="saveSelection()"
               (click)="stopEditingHeaderFooter()"
             ></div>
           } @else {
-            <div class="page-overflow-content"
-                 [style.padding-left.px]="pageMargins().left * 37.8"
-                 [style.padding-right.px]="pageMargins().right * 37.8"
-                 [style.padding-top.px]="contentPaddingTop()"
-                 [style.padding-bottom.px]="contentPaddingBottom()"
-                 [innerHTML]="page"
-                 (click)="stopEditingHeaderFooter()">
-            </div>
+            <div 
+              #pageEditor
+              class="editor-content"
+              contenteditable="true"
+              spellcheck="true"
+              [attr.data-page-index]="$index"
+              [style.padding-left.px]="pageMargins().left * 37.8"
+              [style.padding-right.px]="pageMargins().right * 37.8"
+              [style.padding-top.px]="contentPaddingTop()"
+              [style.padding-bottom.px]="contentPaddingBottom()"
+              [innerHTML]="getPageContentSafe($index)"
+              (focusin)="setActivePage($index, $event)"
+              (input)="onPageInput($index, $event)"
+              (mouseup)="saveSelection()"
+              (keyup)="saveSelection()"
+              (click)="stopEditingHeaderFooter()"
+            ></div>
           }
 
           <!-- Stopka strony -->
@@ -143,7 +156,7 @@
         </div>
         
         <!-- Separator między stronami - styl Google Docs -->
-        @if ($index < pages().length - 1) {
+        @if ($index < pageContents().length - 1) {
           <div class="page-separator"></div>
         }
       </div>

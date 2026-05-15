@@ -531,13 +531,22 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             
             para.Append(props);
 
+            // Buduj base RunProperties ze stylu <li> (dziedziczenie do span/text wewnątrz)
+            RunProperties? liBaseProps = null;
+            if (!string.IsNullOrEmpty(liStyle))
+            {
+                liBaseProps = new RunProperties();
+                ApplyRunStyle(liBaseProps, liStyle);
+                if (!liBaseProps.HasChildren) liBaseProps = null;
+            }
+
             // Dodaj zawartość (bez zagnieżdżonej listy)
             foreach (var liChild in child.ChildNodes)
             {
                 if (liChild.Name.ToLower() == "ul" || liChild.Name.ToLower() == "ol")
                     continue; // Zagnieżdżona lista będzie obsłużona osobno
                     
-                var runs = CreateRunsFromNode(liChild);
+                var runs = CreateRunsFromNode(liChild, liBaseProps);
                 foreach (var run in runs)
                     para.Append(run);
             }
@@ -1313,13 +1322,28 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
-    /// Dodaje inline content do paragrafu
+    /// Dodaje inline content do paragrafu.
+    /// Style font-* / color / font-weight / font-style ustawione na rodzicu (<p>/<h1>/<li>/...)
+    /// dziedziczą się w HTML kaskadowo na dzieci. W DOCX run NIE dziedziczy automatycznie,
+    /// więc budujemy bazowe `RunProperties` ze stylu rodzica i przekazujemy je
+    /// do `CreateRunsFromNode` jako `inheritedProps`.
     /// </summary>
     private void AppendInlineContent(Paragraph paragraph, HtmlNode node)
     {
+        RunProperties? baseRunProps = null;
+        var parentStyle = node.GetAttributeValue("style", "");
+        if (!string.IsNullOrEmpty(parentStyle))
+        {
+            baseRunProps = new RunProperties();
+            ApplyRunStyle(baseRunProps, parentStyle);
+            // jeżeli ApplyRunStyle nic nie dodał, traktuj jako brak
+            if (!baseRunProps.HasChildren)
+                baseRunProps = null;
+        }
+
         foreach (var child in node.ChildNodes)
         {
-            var runs = CreateRunsFromNode(child);
+            var runs = CreateRunsFromNode(child, baseRunProps);
             foreach (var run in runs)
             {
                 paragraph.Append(run);

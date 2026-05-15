@@ -489,7 +489,44 @@ export class DocumentEditorComponent implements OnInit {
   saveDocument(): void {
     const html = this.editor?.getContent() || this.documentContent();
     const fileName = this.originalFileName() || `${this.documentMetadata().title || 'dokument'}.docx`;
-    
+
+    // === DIAGNOSTYKA ZAPISU (do debugowania zgubionych stylów / formatowania) ===
+    try {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const counts = {
+        chars: html.length,
+        h1: tmp.querySelectorAll('h1').length,
+        h2: tmp.querySelectorAll('h2').length,
+        h3: tmp.querySelectorAll('h3').length,
+        p: tmp.querySelectorAll('p').length,
+        b_strong: tmp.querySelectorAll('b,strong').length,
+        i_em: tmp.querySelectorAll('i,em').length,
+        u: tmp.querySelectorAll('u').length,
+        img: tmp.querySelectorAll('img').length,
+        table: tmp.querySelectorAll('table').length,
+        tr: tmp.querySelectorAll('tr').length,
+        td: tmp.querySelectorAll('td').length,
+        pageBreaks: tmp.querySelectorAll('div.page-break').length,
+        inlineStyles: tmp.querySelectorAll('[style]').length,
+        fontSizeAttrs: Array.from(tmp.querySelectorAll('[style*="font-size"]')).slice(0, 5).map(e => (e as HTMLElement).style.fontSize),
+        fontFamilyAttrs: Array.from(tmp.querySelectorAll('[style*="font-family"]')).slice(0, 5).map(e => (e as HTMLElement).style.fontFamily),
+      };
+      console.group('[saveDocument] DIAGNOSTYKA HTML wysyłanego do API');
+      console.log('fileName:', fileName);
+      console.log('counts:', counts);
+      console.log('first 2000 chars:', html.substring(0, 2000));
+      console.log('header:', this.headerContent());
+      console.log('footer:', this.footerContent());
+      console.log('margins:', this.pageSettings().margins);
+      // udostępnij globalnie, żeby można było skopiować przez window.__lastSaveHtml
+      (window as unknown as { __lastSaveHtml?: string }).__lastSaveHtml = html;
+      console.log('Pełny HTML dostępny w window.__lastSaveHtml');
+      console.groupEnd();
+    } catch (e) {
+      console.warn('[saveDocument] diagnostyka failed', e);
+    }
+
     this.isLoading.set(true);
     
     this.documentService.downloadDocument(
@@ -1099,21 +1136,36 @@ export class DocumentEditorComponent implements OnInit {
     const version = this.documentMetadata()?.version ?? '—';
     const date = new Date().toLocaleString('pl-PL');
     const url = window.location.href;
+    const buildNumber = this.buildInfo.buildNumber();
+    const environment = this.buildInfo.environment();
 
-    const subject = encodeURIComponent('Zgłoszenie - Doc2 Editor');
+    const subject = encodeURIComponent('[Doc2 Editor] Zgłoszenie');
+
+    // Wyrównane etykiety dla czytelnej kolumny "key: value"
+    const rows: Array<[string, string]> = [
+      ['Data zgłoszenia',   date],
+      ['Master ID',         masterId],
+      ['Wersja dokumentu',  version],
+      ['Wersja aplikacji',  buildNumber],
+      ['Środowisko',        environment],
+      ['URL',               url],
+    ];
+    const labelWidth = Math.max(...rows.map(([k]) => k.length));
+    const formatted = rows
+      .map(([k, v]) => `  ${k.padEnd(labelWidth)} : ${v}`)
+      .join('\n');
+
     const body = encodeURIComponent(
-      `Opis problemu:\n\n\n` +
-      `---\n` +
-      `### Nie usuwaj poniższych danych: ###\n` +
-      `Data zgłoszenia: ${date}\n` +
-      `Master ID: ${masterId}\n` +
-      `Version: ${version}\n` +
-      `URL: ${url}\n` +
-      `Wersja aplikacji: ${this.buildInfo.buildNumber()}\n` +
-      `Środowisko: ${this.buildInfo.environment()}\n`+
-      `### ------------------------ ###\n` 
-
+      `Dzień dobry,\n\n` +
+      `proszę o opis problemu poniżej:\n\n` +
+      `\n\n\n` +
+      `────────────────────────────────────────────\n` +
+      `  INFORMACJE DIAGNOSTYCZNE — proszę nie usuwać\n` +
+      `────────────────────────────────────────────\n` +
+      `${formatted}\n` +
+      `────────────────────────────────────────────\n`
     );
+
     window.open(`mailto:?subject=${subject}&body=${body}`, '_self');
   }
 

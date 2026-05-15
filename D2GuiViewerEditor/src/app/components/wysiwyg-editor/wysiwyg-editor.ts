@@ -17,6 +17,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { 
   EditorCommand, 
   EditorState, 
@@ -40,7 +41,15 @@ import {
   encapsulation: ViewEncapsulation.None
 })
 export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
-  @ViewChild('editorContent') editorContent!: ElementRef<HTMLDivElement>;
+  /**
+   * Aktywny edytor strony — ustawiany ręcznie przy `focusin` na konkretnej stronie.
+   * Cała istniejąca logika (toolbar, paste, undo, table edit, image drag, search)
+   * pracuje na tym refie. Dzięki temu MVP multi-page nie wymaga zmian
+   * w setkach miejsc kodu.
+   */
+  editorContent!: ElementRef<HTMLDivElement>;
+
+  @ViewChildren('pageEditor') pageEditorRefs!: QueryList<ElementRef<HTMLDivElement>>;
   @ViewChild('headerContent') headerContentEl?: ElementRef<HTMLDivElement>;
   @ViewChild('footerContent') footerContentEl?: ElementRef<HTMLDivElement>;
   
@@ -52,8 +61,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     
     this._content.set(value);
-    if (this.editorContent?.nativeElement && !this._isInternalUpdate) {
-      this.editorContent.nativeElement.innerHTML = value;
+    if (!this._isInternalUpdate) {
+      // Rozbij na strony po znacznikach <div class="page-break">
+      const splitPages = this._splitHtmlIntoPages(value || '<p></p>');
+      this.pageContents.set(splitPages.length ? splitPages : ['<p></p>']);
+      // Po Angular re-render zaktualizuj aktywny edytor i zrepaginuj
+      this._schedulePaginate('content-input');
     }
   }
   
@@ -121,6 +134,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   private _content = signal<string>('');
   private _isInternalUpdate = false;
+  /** Flaga ustawiana na input, czyszczona przy save — pozwala uniknąć ciężkiego getContent() w updateState. */
+  private _isDirty = false;
+  /** Debouncer dla saveToUndoStack + emitContent — nie wykonujemy ich na każde naciśnięcie klawisza. */
+  private _persistTimer: ReturnType<typeof setTimeout> | null = null;
   private undoStack: string[] = [];
   private redoStack: string[] = [];
   private lastSavedContent = '';
@@ -158,9 +175,35 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   // Strony dokumentu - pierwsza strona to edytor, pozostałe to overflow
   pages = signal<string[]>(['']);
-  
+
+  // Multi-page MVP (Wariant A):
+  // pełna treść HTML per strona; każda strona renderuje własny contenteditable
+  pageContents = signal<string[]>(['<p></p>']);
+  // która strona ma aktualnie focus (do operacji toolbar/undo/paste)
+  activePageIndex = signal<number>(0);
+
+  private _sanitizer = inject(DomSanitizer);
+  /** Cache trusted-HTML per strona — KLUCZOWE dla wydajności i contenteditable.
+   *  Bez tego każde change detection tworzy nowy obiekt SafeHtml, Angular widzi
+   *  „zmianę" i rebinduje innerHTML co kasuje kursor + uniemożliwia pisanie. */
+  private _safeHtmlCache: Array<{ html: string; safe: SafeHtml }> = [];
+  getPageContentSafe(index: number): SafeHtml {
+    const html = this.pageContents()[index] ?? '';
+    const cached = this._safeHtmlCache[index];
+    if (cached && cached.html === html) {
+      return cached.safe;
+    }
+    const safe = this._sanitizer.bypassSecurityTrustHtml(html);
+    this._safeHtmlCache[index] = { html, safe };
+    return safe;
+  }
+
   // Wysokość strony A4 w pikselach (bez marginesów)
   private readonly PAGE_HEIGHT_PX = 1122; // ~29.7cm at 96 DPI
+
+  // Paginator: debounce + safety flag
+  private _paginateTimer: ReturnType<typeof setTimeout> | null = null;
+  private _isRepaginating = false;
 
   // Bieżący rozmiar czcionki (dla nowego tekstu gdy nie ma zaznaczenia)
   private currentFontSize = 11;
@@ -241,12 +284,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private lastEmittedPageCount = 1;
 
   ngAfterViewInit(): void {
+    // Ustaw editorContent na pierwszej (aktywnej) stronie i obserwuj zmiany
+    // (np. po repaginacji liczba stron się zmienia).
+    const syncActiveEditor = () => {
+      const refs = this.pageEditorRefs?.toArray() ?? [];
+      const idx = Math.min(this.activePageIndex(), Math.max(0, refs.length - 1));
+      if (refs[idx]) {
+        this.editorContent = refs[idx];
+      }
+    };
+    syncActiveEditor();
+    this.pageEditorRefs?.changes.subscribe(() => {
+      syncActiveEditor();
+      // Po repaginacji ponownie podpinamy listenery do nowych edytorów
+      this.setupEventListeners();
+    });
+
     this.initializeEditor();
     this.setupEventListeners();
     
     // Oblicz strony przy starcie
     setTimeout(() => {
       this.calculatePages();
+      this._schedulePaginate('init');
     }, 100);
     
     // Sprawdzaj podział na strony co 500ms
@@ -262,55 +322,34 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Oblicza liczbę stron na podstawie wysokości zawartości.
-   * Uwaga: nie tworzymy pustych dodatkowych "kartek" w DOM — edytor renderuje
-   * zawsze jedną wizualną ramkę `.page`, która rozciąga się wraz z treścią
-   * (podziały stron z DOCX są zaznaczane kreską `.page-break`).
-   * Liczba stron jest jedynie emitowana przez `pagesChange` na potrzeby
-   * wskaźnika w stopce/pasku.
+   * Emituje aktualną liczbę stron (= długość `pageContents`, czyli zgodną
+   * z wizualnym podziałem po repaginacji Wariantu A).
    */
   private calculatePages(): void {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor) return;
-
-    // Upewnij się, że w DOM jest zawsze dokładnie jedna ramka strony
-    if (this.pages().length !== 1) {
-      this.pages.set(['']);
-    }
-
-    // Dla pustego dokumentu zawsze 1 strona
-    const plainText = (editor.textContent || '').replace(/\u00A0/g, '').trim();
-    const hasMedia = editor.querySelector('img, table, hr, .page-break') !== null;
-    let pageCount: number;
-    if (!plainText && !hasMedia) {
-      pageCount = 1;
-    } else {
-      const contentHeight = editor.scrollHeight;
-      const marginTop = this.pageMargins().top * 37.8;
-      const marginBottom = this.pageMargins().bottom * 37.8;
-      const availableHeight = this.PAGE_HEIGHT_PX - marginTop - marginBottom;
-
-      // Tolerancja na różnice renderowania (1-4px), które potrafią sztucznie dodać stronę
-      const adjustedHeight = Math.max(0, contentHeight - 4);
-      pageCount = Math.max(1, Math.ceil(adjustedHeight / availableHeight));
-    }
-
+    const pageCount = Math.max(1, this.pageContents().length);
     if (pageCount !== this.lastEmittedPageCount) {
       this.lastEmittedPageCount = pageCount;
       this.pagesChange.emit(pageCount);
     }
   }
 
+  /** Zwraca innerHTML edytora (legacy helper – wcześniej usuwał wstrzykiwane separatory stron). */
+  private _getCleanEditorHtml(editor: HTMLElement): string {
+    return editor.innerHTML;
+  }
+
   /**
    * Inicjalizuje edytor
    */
   private initializeEditor(): void {
+    // pageContents jest już zainicjalizowany (np. przez setter content/setContent).
+    // Po renderze Angular nakłada [innerHTML] na każdą stronę.
+    // Tu opakowujemy obrazki i robimy snapshot dla isModified.
     const editor = this.editorContent?.nativeElement;
     if (!editor) return;
 
-    editor.innerHTML = this._content() || '<p></p>';
     this.wrapExistingImages();
-    this.lastSavedContent = editor.innerHTML;
+    this.lastSavedContent = this._getCleanEditorHtml(editor);
     this.saveToUndoStack();
     this.updateState();
   }
@@ -319,66 +358,54 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Konfiguruje nasłuchiwanie zdarzeń
    */
   private setupEventListeners(): void {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor) return;
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    // Globalne nasłuchiwanie selekcji (idempotentne — flag na document)
+    if (!(document as any).__wysiwygSelListener) {
+      document.addEventListener('selectionchange', () => {
+        this.onSelectionChange();
+      });
+      (document as any).__wysiwygSelListener = true;
+    }
 
-    // Input - gdy użytkownik zmienia zawartość
-    editor.addEventListener('input', () => {
-      this.onContentChange();
-    });
+    for (const ref of refs) {
+      const editor = ref.nativeElement as HTMLDivElement & { __wysiwygBound?: boolean };
+      if (!editor || editor.__wysiwygBound) continue;
+      editor.__wysiwygBound = true;
 
-    // Selekcja - gdy użytkownik zaznacza tekst
-    document.addEventListener('selectionchange', () => {
-      this.onSelectionChange();
-    });
-
-    // Paste - specjalna obsługa wklejania
-    editor.addEventListener('paste', (e) => {
-      this.handlePaste(e);
-    });
-
-    // Keyboard shortcuts
-    editor.addEventListener('keydown', (e) => {
-      this.handleKeyboard(e);
-    });
-
-    // Zapisz selekcję gdy edytor traci fokus (np. klik w toolbar)
-    editor.addEventListener('blur', () => {
-      this.saveSelection();
-    });
-
-    // Drop - obsługa przeciągania
-    editor.addEventListener('drop', (e) => {
-      this.handleDrop(e);
-    });
-
-    // Kliknięcia w obrazy (zaznaczanie)
-    editor.addEventListener('click', (e) => {
-      this.handleEditorClick(e);
-    });
-
-    // Resize obrazów
-    editor.addEventListener('mousedown', (e) => {
-      this.handleEditorMouseDown(e);
-    });
-
-    // Drag&drop obrazów wewnątrz dokumentu
-    editor.addEventListener('dragstart', (e) => {
-      this.handleEditorDragStart(e);
-    });
-
-    editor.addEventListener('dragover', (e) => {
-      this.handleEditorDragOver(e);
-    });
-
-    editor.addEventListener('dragend', () => {
-      this.draggedImageWrapper = null;
-    });
-
-    // Kursor resize tabel (wykrywanie krawędzi kolumn/wierszy)
-    editor.addEventListener('mousemove', (e) => {
-      this.handleTableResizeCursor(e);
-    });
+      editor.addEventListener('input', () => {
+        this.onContentChange();
+      });
+      editor.addEventListener('paste', (e) => {
+        this.handlePaste(e);
+      });
+      editor.addEventListener('keydown', (e) => {
+        this.handleKeyboard(e);
+      });
+      editor.addEventListener('blur', () => {
+        this.saveSelection();
+      });
+      editor.addEventListener('drop', (e) => {
+        this.handleDrop(e);
+      });
+      editor.addEventListener('click', (e) => {
+        this.handleEditorClick(e);
+      });
+      editor.addEventListener('mousedown', (e) => {
+        this.handleEditorMouseDown(e);
+      });
+      editor.addEventListener('dragstart', (e) => {
+        this.handleEditorDragStart(e);
+      });
+      editor.addEventListener('dragover', (e) => {
+        this.handleEditorDragOver(e);
+      });
+      editor.addEventListener('dragend', () => {
+        this.draggedImageWrapper = null;
+      });
+      editor.addEventListener('mousemove', (e) => {
+        this.handleTableResizeCursor(e);
+      });
+    }
   }
 
   private handleEditorClick(event: MouseEvent): void {
@@ -2102,11 +2129,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.redoStack.push(current);
       
       const previous = this.undoStack[this.undoStack.length - 1];
-      if (this.editorContent?.nativeElement) {
-        this.editorContent.nativeElement.innerHTML = previous;
-        this._content.set(previous);
-        this.contentChange.emit(previous);
-      }
+      const pages = this._splitHtmlIntoPages(previous);
+      this.pageContents.set(pages);
+      this._content.set(previous);
+      this.contentChange.emit(previous);
+      this._schedulePaginate('undo');
       
       this.updateState();
     }
@@ -2120,11 +2147,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const next = this.redoStack.pop()!;
       this.undoStack.push(next);
       
-      if (this.editorContent?.nativeElement) {
-        this.editorContent.nativeElement.innerHTML = next;
-        this._content.set(next);
-        this.contentChange.emit(next);
-      }
+      const pages = this._splitHtmlIntoPages(next);
+      this.pageContents.set(pages);
+      this._content.set(next);
+      this.contentChange.emit(next);
+      this._schedulePaginate('redo');
       
       this.updateState();
     }
@@ -2134,10 +2161,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Zapisuje do stosu undo
    */
   private saveToUndoStack(): void {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor) return;
-
-    const html = editor.innerHTML;
+    const html = this.getContent();
+    if (!html) return;
     
     // Nie zapisuj jeśli to samo co ostatni wpis
     if (this.undoStack.length > 0 && this.undoStack[this.undoStack.length - 1] === html) {
@@ -2223,18 +2248,25 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Aktualizuje ogólny stan edytora
+   * Aktualizuje ogólny stan edytora (LEKKI — bez getContent()).
+   * isModified ustalamy na podstawie flagi `_isDirty`, którą czyścimy przy save/setContent.
    */
   private updateState(): void {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor) return;
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const fallback = this.editorContent?.nativeElement;
+    if (refs.length === 0 && !fallback) return;
 
-    const text = editor.innerText || '';
+    let text = '';
+    if (refs.length > 0) {
+      text = refs.map(r => r.nativeElement.innerText || '').join('\n');
+    } else if (fallback) {
+      text = fallback.innerText || '';
+    }
     const words = text.trim().split(/\s+/).filter(w => w.length > 0);
 
     this.editorState.update(state => ({
       ...state,
-      isModified: editor.innerHTML !== this.lastSavedContent,
+      isModified: this._isDirty,
       canUndo: this.undoStack.length > 1,
       canRedo: this.redoStack.length > 0,
       wordCount: words.length,
@@ -2244,16 +2276,306 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.stateChange.emit(this.editorState());
   }
 
+  // ===== MULTI-PAGE PAGINATION (MVP - Wariant A) =====
+
+  /** Aktywacja strony przy focusin — przełącza editorContent ref i indeks aktywnej strony. */
+  setActivePage(index: number, _ev: Event): void {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs[index]) {
+      this.editorContent = refs[index];
+      this.activePageIndex.set(index);
+    }
+  }
+
+  /** Input na konkretnej stronie — NIE ustawia pageContents (bo to rebinduje innerHTML wszystkich stron
+   *  i kasuje kursor). Zmienione DOM żyje samo do czasu repaginacji. */
+  onPageInput(index: number, _ev: Event): void {
+    if (this._isRepaginating) return;
+    this._isDirty = true;
+    this._schedulePaginate('input');
+    this._schedulePersist();
+    // lekki update stanu (bez getContent)
+    this.updateState();
+    this.updateFormattingState();
+  }
+
+  /** Debounce ciężkich operacji (undo snapshot + emit contentChange) — 500 ms. */
+  private _schedulePersist(): void {
+    if (this._persistTimer) clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      const html = this.getContent();
+      this._isInternalUpdate = true;
+      this._content.set(html);
+      this.contentChange.emit(html);
+      this._isInternalUpdate = false;
+      // undo snapshot — tylko jeśli różni się od ostatniego
+      if (this.undoStack.length === 0 || this.undoStack[this.undoStack.length - 1] !== html) {
+        this.undoStack.push(html);
+        if (this.undoStack.length > 100) this.undoStack.shift();
+        this.redoStack = [];
+      }
+    }, 500);
+  }
+
+  /** Dzieli HTML wejściowy na strony po znacznikach <div class="page-break"></div>. */
+  private _splitHtmlIntoPages(html: string): string[] {
+    if (!html) return ['<p></p>'];
+    const parts = html.split(/<div[^>]*class=["'][^"']*\bpage-break\b[^"']*["'][^>]*>\s*<\/div>/gi);
+    const cleaned = parts.map(p => p.trim()).filter(p => p.length > 0);
+    return cleaned.length ? cleaned : ['<p></p>'];
+  }
+
+  /** Łączy strony w jeden HTML, oddzielając je <div class="page-break"></div>. */
+  private _joinPagesWithBreaks(pages: string[]): string {
+    return pages.filter(p => p && p.trim().length > 0).join('<div class="page-break"></div>');
+  }
+
+  /** Schedule paginacji z debouncingiem 300 ms. */
+  private _schedulePaginate(_reason: string): void {
+    if (this._paginateTimer) clearTimeout(this._paginateTimer);
+    this._paginateTimer = setTimeout(() => {
+      this._paginateTimer = null;
+      this._repaginateNow();
+    }, 600);
+  }
+
   /**
-   * Pobiera zawartość HTML
+   * Główna paginacja: bierze zawartość każdej strony, łączy, dzieli na kartki A4
+   * z zachowaniem reguły "block-atomic" (paragraf w całości na 1 stronie),
+   * z wyjątkiem tabel — te dzielimy między wierszami.
+   */
+  private _repaginateNow(): void {
+    if (this._isRepaginating) return;
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs.length === 0) {
+      return;
+    }
+
+    this._isRepaginating = true;
+    try {
+      const caret = this._saveGlobalCaret(refs);
+
+      const allBlocks: HTMLElement[] = [];
+      // Flatten: jeśli DOCX import wsadził treść w jeden wrapper <div>/<section>/<article>,
+      // weź jego dzieci. Powtórz dla zagnieżdżonych wrapperów (max 3 poziomy).
+      const flattenChildren = (el: HTMLElement, depth = 0): HTMLElement[] => {
+        const kids = Array.from(el.children) as HTMLElement[];
+        if (depth >= 3) return kids;
+        // Jeśli mamy dokładnie jedno generyczne dziecko (DIV/SECTION/ARTICLE) bez
+        // znaczących stylów blokowych, schodzimy w głąb.
+        if (kids.length === 1) {
+          const c = kids[0];
+          if (c.tagName === 'DIV' || c.tagName === 'SECTION' || c.tagName === 'ARTICLE') {
+            return flattenChildren(c, depth + 1);
+          }
+        }
+        return kids;
+      };
+      for (const ref of refs) {
+        const el = ref.nativeElement;
+        const kids = flattenChildren(el);
+        kids.forEach(child => {
+          allBlocks.push(child.cloneNode(true) as HTMLElement);
+        });
+      }
+      if (allBlocks.length === 0) {
+        allBlocks.push(document.createElement('p'));
+      }
+
+      const marginTop = this.pageMargins().top * 37.8;
+      const marginBottom = this.pageMargins().bottom * 37.8;
+      const headerHpx = this._headerHeight() * 37.8;
+      const footerHpx = this._footerHeight() * 37.8;
+      const padTop = Math.max(0, marginTop - headerHpx);
+      const padBottom = Math.max(0, marginBottom - footerHpx);
+      const availableHeight = Math.max(100, this.PAGE_HEIGHT_PX - headerHpx - footerHpx - padTop - padBottom);
+
+      const probeEd = refs[0].nativeElement;
+      const cs = getComputedStyle(probeEd);
+      const measurer = document.createElement('div');
+      const innerW = probeEd.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      measurer.style.cssText = `position:absolute;left:-99999px;top:0;width:${innerW}px;font-family:${cs.fontFamily};font-size:${cs.fontSize};line-height:${cs.lineHeight};visibility:hidden;`;
+      document.body.appendChild(measurer);
+
+      const measureBlock = (block: HTMLElement): number => {
+        measurer.innerHTML = '';
+        measurer.appendChild(block.cloneNode(true));
+        return measurer.firstElementChild?.getBoundingClientRect().height ?? 0;
+      };
+
+      const pages: HTMLElement[][] = [[]];
+      let currentHeight = 0;
+
+      const pushBlock = (block: HTMLElement) => {
+        const h = measureBlock(block);
+        if (currentHeight + h > availableHeight && pages[pages.length - 1].length > 0) {
+          pages.push([]);
+          currentHeight = 0;
+        }
+        pages[pages.length - 1].push(block);
+        currentHeight += h;
+      };
+
+      for (const block of allBlocks) {
+        if (block.tagName === 'TABLE') {
+          const split = this._splitTableForPagination(
+            block as HTMLTableElement,
+            Math.max(80, availableHeight - currentHeight),
+            availableHeight,
+            measurer
+          );
+          for (let i = 0; i < split.length; i++) {
+            if (i > 0) {
+              pages.push([]);
+              currentHeight = 0;
+            }
+            pages[pages.length - 1].push(split[i]);
+            currentHeight += measureBlock(split[i]);
+          }
+        } else {
+          pushBlock(block);
+        }
+      }
+
+      measurer.remove();
+
+      const newPageContents = pages.map(blocks => {
+        const tmp = document.createElement('div');
+        blocks.forEach(b => tmp.appendChild(b));
+        return tmp.innerHTML || '<p></p>';
+      });
+
+      const current = this.pageContents();
+      const identical = current.length === newPageContents.length
+        && current.every((v, i) => v === newPageContents[i]);
+      if (!identical) {
+        this.pageContents.set(newPageContents);
+        setTimeout(() => this._restoreGlobalCaret(caret), 0);
+      }
+      this.calculatePages();
+    } finally {
+      this._isRepaginating = false;
+    }
+  }
+
+  /** Dzieli tabelę między wierszami; zwraca array <table> dla kolejnych stron. */
+  private _splitTableForPagination(
+    table: HTMLTableElement,
+    firstAvail: number,
+    fullAvail: number,
+    measurer: HTMLElement
+  ): HTMLTableElement[] {
+    const rows = Array.from(table.querySelectorAll('tr')) as HTMLTableRowElement[];
+    if (rows.length === 0) return [table];
+
+    const measureRows = (subset: HTMLTableRowElement[]): number => {
+      const t = table.cloneNode(false) as HTMLTableElement;
+      const tbody = document.createElement('tbody');
+      subset.forEach(r => tbody.appendChild(r.cloneNode(true)));
+      t.appendChild(tbody);
+      measurer.innerHTML = '';
+      measurer.appendChild(t);
+      return t.getBoundingClientRect().height;
+    };
+
+    const chunks: HTMLTableRowElement[][] = [];
+    let bucket: HTMLTableRowElement[] = [];
+    let avail = firstAvail;
+    for (const row of rows) {
+      const tentative = [...bucket, row];
+      const h = measureRows(tentative);
+      if (h > avail && bucket.length > 0) {
+        chunks.push(bucket);
+        bucket = [row];
+        avail = fullAvail;
+      } else {
+        bucket = tentative;
+      }
+    }
+    if (bucket.length > 0) chunks.push(bucket);
+
+    return chunks.map(subset => {
+      const t = table.cloneNode(false) as HTMLTableElement;
+      const tbody = document.createElement('tbody');
+      subset.forEach(r => tbody.appendChild(r.cloneNode(true)));
+      t.appendChild(tbody);
+      return t;
+    });
+  }
+
+  /** Zapamiętuje pozycję kursora jako globalny offset tekstowy (po wszystkich stronach). */
+  private _saveGlobalCaret(refs: ElementRef<HTMLDivElement>[]): { offset: number } | null {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    for (let i = 0; i < refs.length; i++) {
+      const editor = refs[i].nativeElement;
+      if (editor.contains(range.endContainer)) {
+        const pre = range.cloneRange();
+        pre.selectNodeContents(editor);
+        pre.setEnd(range.endContainer, range.endOffset);
+        let total = 0;
+        for (let j = 0; j < i; j++) total += refs[j].nativeElement.innerText.length;
+        return { offset: total + pre.toString().length };
+      }
+    }
+    return null;
+  }
+
+  /** Przywraca kursor po globalnym offsetcie tekstowym. */
+  private _restoreGlobalCaret(caret: { offset: number } | null): void {
+    if (!caret) return;
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    let remaining = caret.offset;
+    for (let i = 0; i < refs.length; i++) {
+      const editor = refs[i].nativeElement;
+      const len = editor.innerText.length;
+      if (remaining <= len) {
+        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+        let node: Node | null;
+        let r = remaining;
+        while ((node = walker.nextNode())) {
+          const nl = node.textContent?.length ?? 0;
+          if (r <= nl) {
+            const range = document.createRange();
+            range.setStart(node, r);
+            range.collapse(true);
+            const sel = window.getSelection();
+            if (sel) {
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+            editor.focus();
+            this.editorContent = refs[i];
+            this.activePageIndex.set(i);
+            return;
+          }
+          r -= nl;
+        }
+        return;
+      }
+      remaining -= len;
+    }
+  }
+
+  /**
+   * Pobiera zawartość HTML — scalone wszystkie strony z markerami <div class="page-break">.
    */
   getContent(): string {
-    const editor = this.editorContent?.nativeElement;
-    if (!editor) return '';
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs.length === 0) {
+      const fallback = this.editorContent?.nativeElement;
+      return fallback ? this._serializeSingleEditor(fallback) : '';
+    }
 
-    // Przechwytuj rzeczywiste wysokości wierszy tabel z DOM (przed klonowaniem)
-    // Dzięki temu wysokości są ZAWSZE w HTML - niezależnie czy pochodzą z drag-resize czy z treści
-    const tableRowHeights: Map<number, { heights: number[] }>  = new Map();
+    const parts = refs.map(r => this._serializeSingleEditor(r.nativeElement));
+    return this._joinPagesWithBreaks(parts);
+  }
+
+  /** Serializuje pojedynczy edytor strony do HTML (z zachowaniem wysokości tabel i odwijaniem image-wrapperów). */
+  private _serializeSingleEditor(editor: HTMLDivElement): string {
+    const tableRowHeights: Map<number, { heights: number[] }> = new Map();
     const liveTables = editor.querySelectorAll('table');
     liveTables.forEach((table, tableIdx) => {
       const rows = table.querySelectorAll('tr');
@@ -2266,7 +2588,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     const clone = editor.cloneNode(true) as HTMLDivElement;
 
-    // Zastosuj przechwycone wysokości do sklonowanych wierszy
     const cloneTables = clone.querySelectorAll('table');
     cloneTables.forEach((table, tableIdx) => {
       const data = tableRowHeights.get(tableIdx);
@@ -2296,7 +2617,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           imgEl.style.width = wrapperWidth;
         }
         imgEl.style.maxWidth = '100%';
-        // Zachowaj height jeśli był ustawiony (nie 'auto')
         if (!imgEl.style.height || imgEl.style.height === 'auto') {
           imgEl.style.height = 'auto';
         }
@@ -2309,18 +2629,23 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Ustawia zawartość HTML
+   * Ustawia zawartość HTML — rozbija na strony po znacznikach <div class="page-break">.
    */
   setContent(html: string): void {
-    if (this.editorContent?.nativeElement) {
-      this.editorContent.nativeElement.innerHTML = html;
+    const pages = this._splitHtmlIntoPages(html || '<p></p>');
+    this.pageContents.set(pages);
+    this._content.set(this._joinPagesWithBreaks(pages));
+    this._isDirty = false;
+    // Po Angular re-render: opakuj obrazki, zapisz snapshot, repaginuj
+    setTimeout(() => {
       this.wrapExistingImages();
-      this._content.set(this.editorContent.nativeElement.innerHTML);
-      this.lastSavedContent = this.editorContent.nativeElement.innerHTML;
-      this.undoStack = [this.editorContent.nativeElement.innerHTML];
+      const merged = this.getContent();
+      this.lastSavedContent = merged;
+      this.undoStack = [merged];
       this.redoStack = [];
       this.updateState();
-    }
+      this._schedulePaginate('setContent');
+    }, 0);
   }
 
   /**
@@ -2372,6 +2697,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   markAsSaved(): void {
     this.lastSavedContent = this.getContent();
+    this._isDirty = false;
     this.updateState();
   }
 
@@ -3007,8 +3333,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private emitContentChange(): void {
     const editor = this.editorContent?.nativeElement;
     if (editor) {
-      this._content.set(editor.innerHTML);
-      this.contentChange.emit(editor.innerHTML);
+      const html = this._getCleanEditorHtml(editor);
+      this._content.set(html);
+      this.contentChange.emit(html);
     }
   }
 }
