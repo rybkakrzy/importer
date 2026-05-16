@@ -666,6 +666,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 {
                     elements.Add(CreatePageBreak());
                 }
+                else if (node.HasClass("sdt-block"))
+                {
+                    elements.Add(BuildSdtBlockFromHtml(node));
+                }
                 else if (node.HasClass("document-content"))
                 {
                     foreach (var child in node.ChildNodes)
@@ -1693,6 +1697,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         foreach (var child in node.ChildNodes)
         {
+            // Inline content control (formant) zachowany z odczytu DOCX — owijamy ponownie w SdtRun.
+            if (child.NodeType == HtmlNodeType.Element
+                && child.Name.Equals("span", StringComparison.OrdinalIgnoreCase)
+                && child.HasClass("sdt-inline"))
+            {
+                var sdtRun = BuildSdtRunFromHtml(child, baseRunProps);
+                if (sdtRun != null)
+                    paragraph.Append(sdtRun);
+                continue;
+            }
+
             var runs = CreateRunsFromNode(child, baseRunProps);
             foreach (var run in runs)
             {
@@ -2207,4 +2222,66 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     private int PxToTwips(int px) => (int)(px / 96.0 * 1440);
+
+    /// <summary>
+    /// Buduje SdtProperties (Tag/Alias) na podstawie atrybutów data-sdt-* z elementu HTML.
+    /// </summary>
+    private static SdtProperties BuildSdtProperties(HtmlNode node)
+    {
+        var props = new SdtProperties();
+        var tag = node.GetAttributeValue("data-sdt-tag", "");
+        var alias = node.GetAttributeValue("data-sdt-alias", "");
+        if (!string.IsNullOrEmpty(alias))
+            props.Append(new SdtAlias { Val = System.Net.WebUtility.HtmlDecode(alias) });
+        if (!string.IsNullOrEmpty(tag))
+            props.Append(new Tag { Val = System.Net.WebUtility.HtmlDecode(tag) });
+        return props;
+    }
+
+    /// <summary>
+    /// Buduje SdtBlock z wrappera &lt;div class="sdt-block"&gt; ze znacznikami data-sdt-*.
+    /// </summary>
+    private SdtBlock BuildSdtBlockFromHtml(HtmlNode node)
+    {
+        var sdt = new SdtBlock();
+        sdt.Append(BuildSdtProperties(node));
+
+        var content = new SdtContentBlock();
+        foreach (var child in node.ChildNodes)
+        {
+            foreach (var el in ConvertHtmlNode(child))
+                content.Append(el);
+        }
+
+        // SdtContentBlock musi mieć przynajmniej jeden Paragraph, inaczej Word
+        // potraktuje SDT jako uszkodzony.
+        if (!content.Elements<Paragraph>().Any() && !content.Elements<Table>().Any())
+            content.Append(new Paragraph());
+
+        sdt.Append(content);
+        return sdt;
+    }
+
+    /// <summary>
+    /// Buduje SdtRun z &lt;span class="sdt-inline"&gt; ze znacznikami data-sdt-*.
+    /// </summary>
+    private SdtRun? BuildSdtRunFromHtml(HtmlNode node, RunProperties? inheritedProps)
+    {
+        var sdt = new SdtRun();
+        sdt.Append(BuildSdtProperties(node));
+
+        var content = new SdtContentRun();
+        // Złóż run-y z dzieci span-a w tym samym kontekście co AppendInlineContent.
+        foreach (var child in node.ChildNodes)
+        {
+            foreach (var run in CreateRunsFromNode(child, inheritedProps))
+                content.Append(run);
+        }
+
+        if (!content.Elements<Run>().Any())
+            content.Append(new Run(new Text("") { Space = SpaceProcessingModeValues.Preserve }));
+
+        sdt.Append(content);
+        return sdt;
+    }
 }

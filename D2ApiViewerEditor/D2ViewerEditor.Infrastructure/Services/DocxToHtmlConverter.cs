@@ -573,6 +573,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                         case SimpleField simpleField:
                             html.Append(ConvertSimpleFieldToHtml(simpleField));
                             break;
+                        case SdtRun sdtRun:
+                            html.Append(ConvertSdtRunToHtml(sdtRun, document));
+                            break;
                     }
                 }
                 
@@ -996,6 +999,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                         break;
                     case SimpleField simpleField:
                         html.Append(ConvertSimpleFieldToHtml(simpleField));
+                        break;
+                    case SdtRun sdtRun:
+                        html.Append(ConvertSdtRunToHtml(sdtRun, document, sourcePart));
                         break;
                 }
             }
@@ -1913,33 +1919,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             
             html.Append($"<tr{rowStyle}>");
             
-            foreach (var cell in row.Elements<TableCell>())
+            // Iteruj komórki uwzględniając komórki opakowane w SDT (Content Control / formant).
+            // SdtCell zawiera SdtContentCell, a w nim faktyczne TableCell — inaczej znikają dane.
+            foreach (var cellLike in row.Elements())
             {
-                var cellProps = cell.TableCellProperties;
-                var cellStyle = GetTableCellStyleDetailed(cell, defaultBorders, defaultPadding);
-                
-                var colspan = "";
-                if (cellProps?.GridSpan?.Val?.Value is > 1)
-                    colspan = $" colspan=\"{cellProps.GridSpan.Val.Value}\"";
-                
-                var rowspan = "";
-                var vMerge = cellProps?.VerticalMerge;
-                if (vMerge != null && vMerge.Val?.Value == MergedCellValues.Restart)
+                if (cellLike is TableCell cell)
                 {
-                    var rsc = CountRowSpan(table, row, cell);
-                    if (rsc > 1) rowspan = $" rowspan=\"{rsc}\"";
+                    AppendTableCellHtml(html, table, row, cell, defaultBorders, defaultPadding, document, sourcePart);
                 }
-                else if (vMerge != null && vMerge.Val == null)
+                else if (cellLike is SdtCell sdtCell)
                 {
-                    continue;
+                    var sdtContent = sdtCell.GetFirstChild<SdtContentCell>();
+                    if (sdtContent != null)
+                    {
+                        foreach (var innerCell in sdtContent.Elements<TableCell>())
+                            AppendTableCellHtml(html, table, row, innerCell, defaultBorders, defaultPadding, document, sourcePart);
+                    }
                 }
-                
-                html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
-                
-                foreach (var para in cell.Elements<Paragraph>())
-                    html.Append(ConvertParagraphToHtml(para, document, sourcePart));
-                
-                html.Append("</td>");
             }
             
             html.Append("</tr>");
@@ -2094,9 +2090,135 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = new StringBuilder();
         var content = sdtBlock.SdtContentBlock;
         if (content != null)
-            foreach (var element in content.Elements())
-                html.Append(ConvertElementToHtml(element, document));
+        {
+            // Marker pozwala odróżnić zawartość pochodzącą z formantu w HTML.
+            // Atrybuty data-* przechowują podstawowe metadane (tag/alias) na potrzeby
+            // ewentualnego round-trip.
+            var props = sdtBlock.SdtProperties;
+            var tag = props?.Elements<Tag>().FirstOrDefault()?.Val?.Value ?? "";
+            var alias = props?.Elements<SdtAlias>().FirstOrDefault()?.Val?.Value ?? "";
+            var dataAttrs = new StringBuilder();
+            if (!string.IsNullOrEmpty(tag)) dataAttrs.Append($" data-sdt-tag=\"{System.Net.WebUtility.HtmlEncode(tag)}\"");
+            if (!string.IsNullOrEmpty(alias)) dataAttrs.Append($" data-sdt-alias=\"{System.Net.WebUtility.HtmlEncode(alias)}\"");
+            html.Append($"<div class=\"sdt-block\"{dataAttrs}>");
+
+            // Zbierz elementy i obsłuż kolejne paragrafy listy tak samo jak w body
+            var elems = content.Elements().ToList();
+            int i = 0;
+            while (i < elems.Count)
+            {
+                var el = elems[i];
+                if (el is Paragraph p && IsListParagraph(p))
+                {
+                    html.Append(ConvertConsecutiveListItems(elems, ref i, document));
+                }
+                else
+                {
+                    html.Append(ConvertElementToHtml(el, document));
+                    i++;
+                }
+            }
+
+            html.Append("</div>");
+        }
         return html.ToString();
+    }
+
+    /// <summary>
+    /// Konwertuje inline-owy SDT (SdtRun — „formant” w treści paragrafu) na HTML.
+    /// Bez tej obsługi cała zawartość formantu znikała przy ładowaniu dokumentu.
+    /// </summary>
+    private string ConvertSdtRunToHtml(SdtRun sdtRun, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
+    {
+        var content = sdtRun.GetFirstChild<SdtContentRun>();
+        if (content == null) return string.Empty;
+
+        var props = sdtRun.SdtProperties;
+        var tag = props?.Elements<Tag>().FirstOrDefault()?.Val?.Value ?? "";
+        var alias = props?.Elements<SdtAlias>().FirstOrDefault()?.Val?.Value ?? "";
+        var dataAttrs = new StringBuilder();
+        if (!string.IsNullOrEmpty(tag)) dataAttrs.Append($" data-sdt-tag=\"{System.Net.WebUtility.HtmlEncode(tag)}\"");
+        if (!string.IsNullOrEmpty(alias)) dataAttrs.Append($" data-sdt-alias=\"{System.Net.WebUtility.HtmlEncode(alias)}\"");
+
+        var inner = new StringBuilder();
+        foreach (var el in content.Elements())
+        {
+            switch (el)
+            {
+                case Run run:
+                    inner.Append(ConvertRunToHtml(run, document, sourcePart));
+                    break;
+                case Hyperlink hl:
+                    inner.Append(ConvertHyperlinkToHtml(hl, document));
+                    break;
+                case SimpleField sf:
+                    inner.Append(ConvertSimpleFieldToHtml(sf));
+                    break;
+                case SdtRun nested:
+                    inner.Append(ConvertSdtRunToHtml(nested, document, sourcePart));
+                    break;
+            }
+        }
+
+        // Pusty formant — wstaw &nbsp; żeby kursor miał się gdzie ustawić.
+        if (inner.Length == 0) inner.Append("&nbsp;");
+
+        return $"<span class=\"sdt-inline\"{dataAttrs}>{inner}</span>";
+    }
+
+    /// <summary>
+    /// Pomocnicza: emituje pojedynczy &lt;td&gt; ze stylami, kolspanami i zawartością.
+    /// Wydzielona, by móc ją wołać zarówno dla zwykłej TableCell jak i z SdtContentCell.
+    /// </summary>
+    private void AppendTableCellHtml(
+        StringBuilder html,
+        Table table,
+        TableRow row,
+        TableCell cell,
+        string defaultBorders,
+        string defaultPadding,
+        WordprocessingDocument document,
+        OpenXmlPart? sourcePart)
+    {
+        var cellProps = cell.TableCellProperties;
+        var cellStyle = GetTableCellStyleDetailed(cell, defaultBorders, defaultPadding);
+
+        var colspan = "";
+        if (cellProps?.GridSpan?.Val?.Value is > 1)
+            colspan = $" colspan=\"{cellProps.GridSpan.Val.Value}\"";
+
+        var rowspan = "";
+        var vMerge = cellProps?.VerticalMerge;
+        if (vMerge != null && vMerge.Val?.Value == MergedCellValues.Restart)
+        {
+            var rsc = CountRowSpan(table, row, cell);
+            if (rsc > 1) rowspan = $" rowspan=\"{rsc}\"";
+        }
+        else if (vMerge != null && vMerge.Val == null)
+        {
+            return;
+        }
+
+        html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
+
+        // Iteruj wszystkie dzieci komórki, by obsłużyć też SdtBlock i Table osadzone bezpośrednio.
+        foreach (var inner in cell.Elements())
+        {
+            switch (inner)
+            {
+                case Paragraph para:
+                    html.Append(ConvertParagraphToHtml(para, document, sourcePart));
+                    break;
+                case Table nestedTable:
+                    html.Append(ConvertTableToHtml(nestedTable, document, sourcePart));
+                    break;
+                case SdtBlock sdt:
+                    html.Append(ConvertSdtBlockToHtml(sdt, document));
+                    break;
+            }
+        }
+
+        html.Append("</td>");
     }
 
     private int TwipsToPx(int twips) => (int)(twips / 1440.0 * 96);
