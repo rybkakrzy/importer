@@ -43,8 +43,22 @@ export class RulerComponent implements OnChanges {
   /** Poziom zoomu (%) */
   @Input() zoomLevel = 100;
 
+  /**
+   * Wcięcie paragrafu (cm) dla aktualnie zaznaczonego bloku (P/UL/OL/LI/TABLE/IMG…).
+   * Gdy ustawione (mode='horizontal'), uchwyty linijki reprezentują lewą/prawą krawędź
+   * paragrafu (margines strony + wcięcie), a przeciągnięcie emituje `blockIndentChange`
+   * zamiast modyfikować marginesy strony — tak jak w MS Word.
+   */
+  @Input() blockIndent: { start: number; end: number } | null = null;
+
   /** Emituje nowe marginesy po zakończeniu przeciągania */
   @Output() marginsChange = new EventEmitter<PageMargins>();
+
+  /**
+   * Emituje nowe wcięcie paragrafu (cm) dla zaznaczonego bloku po zakończeniu
+   * przeciągania. Tylko gdy `blockIndent` jest niepuste (mode='horizontal').
+   */
+  @Output() blockIndentChange = new EventEmitter<{ start?: number; end?: number }>();
 
   readonly CM_TO_PX = 37.795;
 
@@ -78,14 +92,20 @@ export class RulerComponent implements OnChanges {
     return Array.from({ length: Math.floor(this.axisCm) + 1 }, (_, i) => i);
   }
 
-  /** Margines "bliższy" (lewy / górny) w px - scaled */
+  /** Margines "bliższy" (lewy / górny) w px - scaled.
+   *  W trybie poziomym z `blockIndent` uwzględnia wcięcie paragrafu. */
   get startMarginPx(): number {
-    return (this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top) * this.CM_TO_PX * this.scale;
+    const baseCm = this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top;
+    const indentCm = this.mode === 'horizontal' && this.activeBlockIndent ? this.activeBlockIndent.start : 0;
+    return (baseCm + indentCm) * this.CM_TO_PX * this.scale;
   }
 
-  /** Margines "dalszy" (prawy / dolny) w px - scaled */
+  /** Margines "dalszy" (prawy / dolny) w px - scaled.
+   *  W trybie poziomym z `blockIndent` uwzględnia wcięcie paragrafu. */
   get endMarginPx(): number {
-    return (this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom) * this.CM_TO_PX * this.scale;
+    const baseCm = this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom;
+    const indentCm = this.mode === 'horizontal' && this.activeBlockIndent ? this.activeBlockIndent.end : 0;
+    return (baseCm + indentCm) * this.CM_TO_PX * this.scale;
   }
 
   // ────── Drag state ──────
@@ -98,14 +118,27 @@ export class RulerComponent implements OnChanges {
   activeSide = signal<'start' | 'end' | null>(null);
 
   private _tempMargins: PageMargins | null = null;
+  private _tempBlockIndent: { start: number; end: number } | null = null;
 
   get activeMargins(): PageMargins {
     return this._tempMargins ?? this.margins;
   }
 
+  get activeBlockIndent(): { start: number; end: number } | null {
+    return this._tempBlockIndent ?? this.blockIndent;
+  }
+
+  /** Czy w trybie wcięcia paragrafu (horizontal + blockIndent dostarczone) */
+  private get isParagraphIndentMode(): boolean {
+    return this.mode === 'horizontal' && this.blockIndent != null;
+  }
+
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['margins']) {
       this._tempMargins = null;
+    }
+    if (changes['blockIndent']) {
+      this._tempBlockIndent = null;
     }
   }
 
@@ -114,15 +147,18 @@ export class RulerComponent implements OnChanges {
   onStartHandleDown(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    const cm = this.mode === 'horizontal' ? this.margins.left : this.margins.top;
-    this._begin('start', this.mode === 'horizontal' ? e.clientX : e.clientY, cm);
+    // W trybie wcięcia paragrafu pozycja uchwytu = pageMargin + blockIndent
+    const baseCm = this.mode === 'horizontal' ? this.margins.left : this.margins.top;
+    const indentCm = this.isParagraphIndentMode ? (this.blockIndent?.start ?? 0) : 0;
+    this._begin('start', this.mode === 'horizontal' ? e.clientX : e.clientY, baseCm + indentCm);
   }
 
   onEndHandleDown(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    const cm = this.mode === 'horizontal' ? this.margins.right : this.margins.bottom;
-    this._begin('end', this.mode === 'horizontal' ? e.clientX : e.clientY, cm);
+    const baseCm = this.mode === 'horizontal' ? this.margins.right : this.margins.bottom;
+    const indentCm = this.isParagraphIndentMode ? (this.blockIndent?.end ?? 0) : 0;
+    this._begin('end', this.mode === 'horizontal' ? e.clientX : e.clientY, baseCm + indentCm);
   }
 
   // ────── Global events ──────
@@ -139,12 +175,36 @@ export class RulerComponent implements OnChanges {
       ? this._dragStartMarginCm + deltaCm
       : this._dragStartMarginCm - deltaCm;
 
-    // Clamp: min 0.3 cm, keep ≥1 cm content
-    const opposite = this._dragging === 'start'
-      ? (this.mode === 'horizontal' ? this.margins.right : this.margins.bottom)
-      : (this.mode === 'horizontal' ? this.margins.left : this.margins.top);
-    newCm = Math.max(0.3, Math.min(this.axisCm - opposite - 1, newCm));
+    // Pozycja uchwytu vs przeciwległa (żeby zachować ≥1 cm treści)
+    const oppositePosition = this._dragging === 'start'
+      ? (this.mode === 'horizontal'
+          ? this.margins.right + (this.isParagraphIndentMode ? (this.blockIndent?.end ?? 0) : 0)
+          : this.margins.bottom)
+      : (this.mode === 'horizontal'
+          ? this.margins.left + (this.isParagraphIndentMode ? (this.blockIndent?.start ?? 0) : 0)
+          : this.margins.top);
+
+    if (this.isParagraphIndentMode) {
+      // Wcięcie może być ujemne (paragraf wychodzi poza margines strony), ale nie poza
+      // krawędź kartki ani zbliży się do przeciwległego uchwytu na <1cm.
+      newCm = Math.max(0.1, Math.min(this.axisCm - oppositePosition - 1, newCm));
+    } else {
+      newCm = Math.max(0.3, Math.min(this.axisCm - oppositePosition - 1, newCm));
+    }
     newCm = Math.round(newCm * 100) / 100;
+
+    if (this.isParagraphIndentMode) {
+      // newCm = nowa pozycja krawędzi od strony strony → wcięcie = newCm - pageMargin
+      const pageMarginCm = this._dragging === 'start' ? this.margins.left : this.margins.right;
+      const indentCm = Math.max(-pageMarginCm + 0.1, Math.round((newCm - pageMarginCm) * 100) / 100);
+      const base = this.activeBlockIndent ?? { start: 0, end: 0 };
+      this._tempBlockIndent = this._dragging === 'start'
+        ? { ...base, start: indentCm }
+        : { ...base, end: indentCm };
+      this.dragIndicatorPos.set(newCm * this.CM_TO_PX * this.scale * (this._dragging === 'start' ? 1 : 0) +
+        (this._dragging === 'end' ? this.axisPxScaled - newCm * this.CM_TO_PX * this.scale : 0));
+      return;
+    }
 
     const key = this._dragging === 'start'
       ? (this.mode === 'horizontal' ? 'left' : 'top')
@@ -159,13 +219,19 @@ export class RulerComponent implements OnChanges {
   @HostListener('document:mouseup')
   onMouseUp(): void {
     if (!this._dragging) return;
-    if (this._tempMargins) {
+    if (this.isParagraphIndentMode) {
+      if (this._tempBlockIndent) {
+        const side = this._dragging === 'start' ? { start: this._tempBlockIndent.start } : { end: this._tempBlockIndent.end };
+        this.blockIndentChange.emit(side);
+      }
+    } else if (this._tempMargins) {
       this.marginsChange.emit({ ...this._tempMargins });
     }
     this._dragging = null;
     this.isDragging.set(false);
     this.activeSide.set(null);
     this._tempMargins = null;
+    this._tempBlockIndent = null;
   }
 
   // ────── Helpers ──────
@@ -187,12 +253,20 @@ export class RulerComponent implements OnChanges {
   }
 
   get startTooltip(): string {
+    if (this.isParagraphIndentMode) {
+      const v = (this.activeBlockIndent?.start ?? 0).toFixed(2);
+      return `Wcięcie z lewej: ${v} cm`;
+    }
     const s = this.mode === 'horizontal' ? 'Lewy' : 'Górny';
     const v = (this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top).toFixed(2);
     return `${s} margines: ${v} cm`;
   }
 
   get endTooltip(): string {
+    if (this.isParagraphIndentMode) {
+      const v = (this.activeBlockIndent?.end ?? 0).toFixed(2);
+      return `Wcięcie z prawej: ${v} cm`;
+    }
     const s = this.mode === 'horizontal' ? 'Prawy' : 'Dolny';
     const v = (this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom).toFixed(2);
     return `${s} margines: ${v} cm`;

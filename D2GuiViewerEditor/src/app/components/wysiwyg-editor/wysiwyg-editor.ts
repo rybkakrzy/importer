@@ -1016,6 +1016,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Publiczny trigger zmiany zawartości — używany przez parenta po edycji DOM,
+   * której wysywig nie obserwuje (np. linijka modyfikuje margin-left bloku).
+   */
+  triggerContentChange(): void {
+    this.onContentChange();
+  }
+
+  /**
    * Obsługa zmiany zawartości — automatycznie kieruje na body lub header/footer
    * zależnie od aktualnie edytowanej sekcji.
    */

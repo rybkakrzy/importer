@@ -750,7 +750,9 @@
               [margins]="pageSettings().margins"
               [orientation]="pageSettings().orientation"
               [zoomLevel]="zoomLevel()"
+              [blockIndent]="currentBlockIndent()"
               (marginsChange)="onRulerMarginsChange($event)"
+              (blockIndentChange)="onRulerBlockIndentChange($event)"
             />
           </div>
         </div>

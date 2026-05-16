@@ -183,6 +183,17 @@ export class DocumentEditorComponent implements OnInit {
   showMarginGuides = signal(true);
   showRuler = signal(true);
 
+  /**
+   * Wcięcie paragrafu/bloku dla aktualnie zaznaczonego fragmentu (cm względem marginesu strony).
+   * Wczytywane przy każdej zmianie zaznaczenia z `margin-left`/`margin-right` bieżącego bloku
+   * (P/H/UL/OL/LI/TABLE/FIGURE/IMG-wrapper). Używane przez poziomą linijkę — dragowanie
+   * uchwytu modyfikuje TYLKO ten blok, jak w MS Word, a nie marginesy całego dokumentu.
+   */
+  currentBlockIndent = signal<{ start: number; end: number }>({ start: 0, end: 0 });
+
+  /** Konwersja cm ↔ px (96 DPI). */
+  private static readonly CM_TO_PX = 37.795;
+
   // Menu Widok
   showViewMenu = signal(false);
   pageSettings = signal<PageSettings>({
@@ -2227,6 +2238,165 @@ export class DocumentEditorComponent implements OnInit {
       ...s,
       margins: { ...margins }
     }));
+  }
+
+  /**
+   * Obsługuje zmianę wcięcia paragrafu z poziomej linijki (drag & drop).
+   * Zachowuje się jak w MS Word: zmiana dotyczy TYLKO zaznaczonych bloków
+   * (paragraf, lista, tabela, obraz/figura), a NIE marginesów ca\u0142ego dokumentu.
+   */
+  onRulerBlockIndentChange(indent: { start?: number; end?: number }): void {
+    const blocks = this.getSelectedBlocks();
+    if (blocks.length === 0) return;
+
+    for (const block of blocks) {
+      if (indent.start !== undefined) {
+        const cm = Math.max(-this.pageSettings().margins.left + 0.1, indent.start);
+        if (cm === 0) {
+          block.style.removeProperty('margin-left');
+        } else {
+          block.style.marginLeft = `${cm.toFixed(2)}cm`;
+        }
+      }
+      if (indent.end !== undefined) {
+        const cm = Math.max(-this.pageSettings().margins.right + 0.1, indent.end);
+        if (cm === 0) {
+          block.style.removeProperty('margin-right');
+        } else {
+          block.style.marginRight = `${cm.toFixed(2)}cm`;
+        }
+      }
+    }
+
+    // Zaktualizuj sygna\u0142 wci\u0119cia (uchwyty linijki natychmiast podskakuj\u0105 do nowej pozycji)
+    this.currentBlockIndent.update(prev => ({
+      start: indent.start !== undefined ? indent.start : prev.start,
+      end: indent.end !== undefined ? indent.end : prev.end
+    }));
+
+    // Powiadom edytor o modyfikacji (auto-save / dirty flag)
+    this.editor?.triggerContentChange();
+  }
+
+  /**
+   * Nas\u0142uchuje zmian zaznaczenia, \u017ceby zaktualizowa\u0107 odczyt wci\u0119cia paragrafu
+   * dla poziomej linijki.
+   */
+  @HostListener('document:selectionchange')
+  onDocumentSelectionChange(): void {
+    this.updateCurrentBlockIndent();
+  }
+
+  /**
+   * Znajduje wszystkie unikalne bloki nadrz\u0119dne zawarte w aktualnym zaznaczeniu.
+   * Blokiem jest: P, H1\u2013H6, UL, OL, LI, TABLE, FIGURE, BLOCKQUOTE, DIV (poza wrapperami).
+   * Je\u015bli zaznaczona jest grafika \u2014 zwracamy paragraf w kt\u00f3rym jest osadzona (lub IMG).
+   */
+  private getSelectedBlocks(): HTMLElement[] {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return [];
+
+    const range = selection.getRangeAt(0);
+    const blocks: HTMLElement[] = [];
+    const seen = new Set<HTMLElement>();
+    const blockTags = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'TABLE', 'FIGURE', 'BLOCKQUOTE', 'LI', 'IMG']);
+
+    const findBlock = (node: Node | null): HTMLElement | null => {
+      let n = node;
+      while (n && n !== document) {
+        if (n.nodeType === Node.ELEMENT_NODE) {
+          const el = n as HTMLElement;
+          if (blockTags.has(el.tagName)) return el;
+        }
+        n = n.parentNode;
+      }
+      return null;
+    };
+
+    if (range.collapsed) {
+      const b = findBlock(range.startContainer);
+      if (b) blocks.push(b);
+    } else {
+      // Iteruj po w\u0119z\u0142ach mi\u0119dzy startem a ko\u0144cem
+      const walker = document.createTreeWalker(
+        range.commonAncestorContainer,
+        NodeFilter.SHOW_ELEMENT,
+        {
+          acceptNode: (n: Node) => {
+            const el = n as HTMLElement;
+            if (!blockTags.has(el.tagName)) return NodeFilter.FILTER_SKIP;
+            return range.intersectsNode(el) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+          }
+        }
+      );
+      // Dodaj rodzic\u00f3w start/end na wypadek gdyby walker pomin\u0105\u0142
+      const startBlock = findBlock(range.startContainer);
+      if (startBlock) blocks.push(startBlock);
+      let node = walker.nextNode();
+      while (node) {
+        const el = node as HTMLElement;
+        // Pomi\u0144 LI je\u015bli ma rodzica UL/OL w blocks (bo wci\u0119cie aplikujemy do listy)
+        blocks.push(el);
+        node = walker.nextNode();
+      }
+      const endBlock = findBlock(range.endContainer);
+      if (endBlock) blocks.push(endBlock);
+    }
+
+    // Deduplikacja + filtracja: je\u015bli mamy UL/OL i jego LI \u2014 zostaw UL/OL.
+    // Je\u015bli mamy IMG i jego paragraf \u2014 zostaw paragraf (CSS margin na P dzia\u0142a lepiej).
+    const result: HTMLElement[] = [];
+    for (const b of blocks) {
+      if (seen.has(b)) continue;
+      seen.add(b);
+      result.push(b);
+    }
+    // Usu\u0144 LI je\u015bli rodzic UL/OL te\u017c jest w secie
+    const filtered = result.filter(el => {
+      if (el.tagName === 'LI') {
+        const parent = el.parentElement;
+        if (parent && (parent.tagName === 'UL' || parent.tagName === 'OL') && seen.has(parent)) {
+          return false;
+        }
+      }
+      if (el.tagName === 'IMG') {
+        // Zamie\u0144 na rodzica paragrafu
+        let p = el.parentElement;
+        while (p && !['P', 'DIV', 'FIGURE'].includes(p.tagName)) p = p.parentElement;
+        if (p) {
+          if (!seen.has(p)) {
+            seen.add(p);
+            result.push(p);
+          }
+          return false;
+        }
+      }
+      return true;
+    });
+
+    return filtered;
+  }
+
+  /**
+   * Odczytuje wci\u0119cie (margin-left/right) z pierwszego bloku w zaznaczeniu
+   * i zapisuje do `currentBlockIndent`. Warto\u015bci w cm (px / 37.795).
+   */
+  private updateCurrentBlockIndent(): void {
+    const blocks = this.getSelectedBlocks();
+    if (blocks.length === 0) {
+      this.currentBlockIndent.set({ start: 0, end: 0 });
+      return;
+    }
+    const block = blocks[0];
+    const style = window.getComputedStyle(block);
+    const mlPx = parseFloat(style.marginLeft) || 0;
+    const mrPx = parseFloat(style.marginRight) || 0;
+    const start = Math.round((mlPx / DocumentEditorComponent.CM_TO_PX) * 100) / 100;
+    const end = Math.round((mrPx / DocumentEditorComponent.CM_TO_PX) * 100) / 100;
+    const prev = this.currentBlockIndent();
+    if (prev.start !== start || prev.end !== end) {
+      this.currentBlockIndent.set({ start, end });
+    }
   }
 
   // =====================
