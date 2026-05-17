@@ -510,8 +510,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var firstPara = (Paragraph)elements[index];
         var firstNumProps = GetEffectiveNumberingProps(firstPara);
         var (firstNumId, _) = GetEffectiveNumberingInfo(firstPara);
-        var listType = GetListType(firstNumProps, document);
         var firstLevel = GetListLevel(firstPara);
+        var firstInfo = GetListLevelInfo(firstNumProps, firstLevel);
+        var listType = firstInfo.Tag;
         
         // Pobierz wcięcie z definicji numeracji i wylicz padding dla kontenera listy
         var (levelIndentPx, _) = GetNumberingLevelIndentation(firstNumProps, firstLevel);
@@ -519,21 +520,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? levelIndentPx - parentIndentPx 
             : (levelIndentPx > 0 ? levelIndentPx : 36);
         
-        html.Append(listType == "ol" 
-            ? $"<ol style=\"margin:0;padding-left:{listPadding}px;\">" 
-            : $"<ul style=\"margin:0;padding-left:{listPadding}px;\">");
+        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};";
+        var startAttr = (listType == "ol" && firstInfo.Start > 1) ? $" start=\"{firstInfo.Start}\"" : "";
+        html.Append($"<{listType}{startAttr} style=\"{listStyleCss}\">");
         
         while (index < elements.Count)
         {
             if (elements[index] is not Paragraph p || !IsListParagraph(p))
                 break;
             
-            // Sprawdź czy numId się zmienił (inna lista)
+            // Sprawdź czy numId się zmienił (inna lista) — ale tylko gdy też zmienia się typ formatu,
+            // żeby luźne numId-y tej samej listy nie resetowały numeracji.
             var (currentNumId, _) = GetEffectiveNumberingInfo(p);
             var currentLevel = GetListLevel(p);
             
             if (currentNumId != firstNumId && currentLevel <= firstLevel)
-                break;
+            {
+                var currentProps = GetEffectiveNumberingProps(p);
+                var currentInfo = GetListLevelInfo(currentProps, currentLevel);
+                if (currentInfo.Tag != firstInfo.Tag || currentInfo.ListStyleType != firstInfo.ListStyleType)
+                    break;
+            }
             
             if (currentLevel > firstLevel)
             {
@@ -559,6 +566,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 cssStyle = StripIndentationCss(cssStyle);
                 
                 html.Append($"<li style=\"{cssStyle}\">");
+                
+                // Niestandardowy punktator (np. checkbox z Wingdings) — wstaw własny marker
+                if (firstInfo.BulletChar != null)
+                {
+                    var fontCss = !string.IsNullOrEmpty(firstInfo.BulletFont) && 
+                        !firstInfo.BulletFont.ToLowerInvariant().Contains("wingdings") &&
+                        !firstInfo.BulletFont.ToLowerInvariant().Contains("symbol")
+                            ? $"font-family:'{firstInfo.BulletFont}';"
+                            : "";
+                    html.Append($"<span class=\"list-marker\" style=\"display:inline-block;min-width:1.2em;margin-right:0.4em;{fontCss}\">{System.Net.WebUtility.HtmlEncode(firstInfo.BulletChar)}</span>");
+                }
                 
                 foreach (var child in p.Elements())
                 {
@@ -1199,37 +1217,144 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string GetListType(NumberingProperties? numPr, WordprocessingDocument document)
     {
-        if (numPr == null || _numberingPart?.Numbering == null) return "ul";
-        
+        var info = GetListLevelInfo(numPr);
+        return info.Tag;
+    }
+
+    /// <summary>
+    /// Pełna informacja o poziomie listy: tag (ol/ul), CSS list-style-type, znak punktatora
+    /// (gdy niestandardowy), czcionka punktatora oraz początkowa wartość numeracji.
+    /// </summary>
+    private readonly struct ListLevelInfo
+    {
+        public string Tag { get; init; }
+        public string ListStyleType { get; init; }
+        public string? BulletChar { get; init; }
+        public string? BulletFont { get; init; }
+        public int Start { get; init; }
+    }
+
+    private ListLevelInfo GetListLevelInfo(NumberingProperties? numPr, int levelOverride = -1)
+    {
+        var fallback = new ListLevelInfo { Tag = "ul", ListStyleType = "disc", Start = 1 };
+        if (numPr == null || _numberingPart?.Numbering == null) return fallback;
+
         var numId = numPr.NumberingId?.Val?.Value;
-        if (numId == null) return "ul";
-        
-        var level = numPr.NumberingLevelReference?.Val?.Value ?? 0;
-        
+        if (numId == null) return fallback;
+        var level = levelOverride >= 0 ? levelOverride : (numPr.NumberingLevelReference?.Val?.Value ?? 0);
+
         var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
             .FirstOrDefault(n => n.NumberID?.Value == numId);
-        if (numInstance == null) return "ul";
-        
-        var abstractNumId = numInstance.AbstractNumId?.Val?.Value;
-        if (abstractNumId == null) return "ul";
-        
-        var abstractNum = _numberingPart.Numbering.Elements<AbstractNum>()
-            .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
-        if (abstractNum == null) return "ul";
-        
-        var levelDef = abstractNum.Elements<Level>()
-            .FirstOrDefault(l => l.LevelIndex?.Value == level);
-        if (levelDef == null) return "ul";
-        
+        if (numInstance == null) return fallback;
+
+        // LevelOverride wewnątrz NumberingInstance ma pierwszeństwo nad AbstractNum
+        var levelOverrideElem = numInstance.Elements<LevelOverride>()
+            .FirstOrDefault(lo => lo.LevelIndex?.Value == level);
+        Level? levelDef = levelOverrideElem?.GetFirstChild<Level>();
+
+        int startOverride = levelOverrideElem?.StartOverrideNumberingValue?.Val?.Value ?? -1;
+
+        if (levelDef == null)
+        {
+            var abstractNumId = numInstance.AbstractNumId?.Val?.Value;
+            if (abstractNumId == null) return fallback;
+            var abstractNum = _numberingPart.Numbering.Elements<AbstractNum>()
+                .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
+            if (abstractNum == null) return fallback;
+            levelDef = abstractNum.Elements<Level>()
+                .FirstOrDefault(l => l.LevelIndex?.Value == level);
+        }
+        if (levelDef == null) return fallback;
+
         var numFmt = levelDef.NumberingFormat?.Val?.Value;
-        
-        if (numFmt == NumberFormatValues.Decimal) return "ol";
-        if (numFmt == NumberFormatValues.UpperLetter) return "ol";
-        if (numFmt == NumberFormatValues.LowerLetter) return "ol";
-        if (numFmt == NumberFormatValues.UpperRoman) return "ol";
-        if (numFmt == NumberFormatValues.LowerRoman) return "ol";
-        if (numFmt == NumberFormatValues.Bullet) return "ul";
-        return "ul";
+        var levelText = levelDef.LevelText?.Val?.Value ?? string.Empty;
+        var bulletFont = levelDef.NumberingSymbolRunProperties?
+            .GetFirstChild<RunFonts>()?.Ascii?.Value;
+        var start = startOverride > 0
+            ? startOverride
+            : (levelDef.StartNumberingValue?.Val?.Value ?? 1);
+
+        string tag = "ul";
+        string listStyle = "disc";
+        string? bulletChar = null;
+
+        if (numFmt == NumberFormatValues.Decimal) { tag = "ol"; listStyle = "decimal"; }
+        else if (numFmt == NumberFormatValues.DecimalZero) { tag = "ol"; listStyle = "decimal-leading-zero"; }
+        else if (numFmt == NumberFormatValues.UpperLetter) { tag = "ol"; listStyle = "upper-alpha"; }
+        else if (numFmt == NumberFormatValues.LowerLetter) { tag = "ol"; listStyle = "lower-alpha"; }
+        else if (numFmt == NumberFormatValues.UpperRoman) { tag = "ol"; listStyle = "upper-roman"; }
+        else if (numFmt == NumberFormatValues.LowerRoman) { tag = "ol"; listStyle = "lower-roman"; }
+        else if (numFmt == NumberFormatValues.Bullet)
+        {
+            tag = "ul";
+            // LevelText jest na ogół jednym znakiem (np. Wingdings: “þ” → ☑, “l” → •, “o” → ◦, “§” → ▪)
+            var ch = string.IsNullOrEmpty(levelText) ? '\0' : levelText[0];
+            switch (ch)
+            {
+                case '\u2022': case 'l': listStyle = "disc"; break;
+                case 'o': case '\u25E6': listStyle = "circle"; break;
+                case '\u00A7': case '\u25AA': case '\u25FE': listStyle = "square"; break;
+                default:
+                    if (ch != '\0')
+                    {
+                        // Niestandardowy punktator (np. checkbox z Wingdings) — renderujemy własny marker.
+                        listStyle = "none";
+                        bulletChar = MapBulletChar(ch, bulletFont);
+                    }
+                    else
+                    {
+                        listStyle = "disc";
+                    }
+                    break;
+            }
+        }
+        else
+        {
+            // Inne (np. NumberInDash) — fallback do decimal jeśli text wygląda na numer.
+            if (!string.IsNullOrEmpty(levelText) && levelText.Contains("%"))
+            { tag = "ol"; listStyle = "decimal"; }
+        }
+
+        return new ListLevelInfo
+        {
+            Tag = tag,
+            ListStyleType = listStyle,
+            BulletChar = bulletChar,
+            BulletFont = bulletFont,
+            Start = start
+        };
+    }
+
+    /// <summary>
+    /// Mapuje znak punktatora z Wingdings/Symbol na odpowiedni Unicode, lub zwraca znak
+    /// niezmieniony gdy nie wymaga konwersji.
+    /// </summary>
+    private static string MapBulletChar(char ch, string? font)
+    {
+        var f = (font ?? string.Empty).ToLowerInvariant();
+        if (f.Contains("wingdings"))
+        {
+            return ch switch
+            {
+                '\u00FE' => "\u2611", // ☑ zaznaczony checkbox
+                '\u00A8' => "\u2610", // ☐ pusty checkbox
+                '\u00FC' => "\u2714", // ✔ haczyk
+                '\u00A7' => "\u25A0", // ■ wypełniony kwadrat
+                '\u006C' => "\u2022", // • bullet
+                '\u00D8' => "\u2756", // ornament
+                _ => ch.ToString()
+            };
+        }
+        if (f.Contains("symbol"))
+        {
+            return ch switch
+            {
+                '\u00B7' => "\u2022",
+                '\u00A8' => "\u25E6",
+                _ => ch.ToString()
+            };
+        }
+        return ch.ToString();
     }
 
     /// <summary>
@@ -2175,7 +2300,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         Table table,
         TableRow row,
         TableCell cell,
-        string defaultBorders,
+        TableBorders? defaultBorders,
         string defaultPadding,
         WordprocessingDocument document,
         OpenXmlPart? sourcePart)
