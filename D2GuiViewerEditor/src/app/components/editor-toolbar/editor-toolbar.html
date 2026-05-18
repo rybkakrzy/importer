@@ -71,7 +71,9 @@
     <select 
       class="toolbar-select font-family-select"
       [value]="selectedFontFamily()"
+      (mousedown)="onFontFamilyMousedown($event)"
       (change)="onFontFamilyChange($event)"
+      (blur)="onFontFamilyBlur($event)"
       title="Czcionka">
       @for (font of fontFamilies; track font) {
         <option [value]="font" [style.font-family]="font">{{ font }}</option>

@@ -6,6 +6,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
+using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -32,6 +33,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? _themeMinorEastAsia;
     private string? _themeMajorComplexScript;
     private string? _themeMinorComplexScript;
+
+    // Firmowa czcionka — używana, gdy dokument nie definiuje własnej w docDefaults.
+    private readonly DocumentDefaultsOptions _defaults;
+
+    public DocxToHtmlConverter()
+    {
+        _defaults = new DocumentDefaultsOptions();
+    }
+
+    public DocxToHtmlConverter(IOptions<DocumentDefaultsOptions> defaults)
+    {
+        _defaults = defaults?.Value ?? new DocumentDefaultsOptions();
+    }
+
 
     /// <summary>
     /// Konwertuje plik DOCX na HTML
@@ -331,11 +346,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var html = new StringBuilder();
         var containerCss = new StringBuilder();
-        if (!string.IsNullOrEmpty(_defaultFontFamily))
-            containerCss.Append($"font-family:'{_defaultFontFamily}',sans-serif;");
-        if (_defaultFontSizePt.HasValue)
+        // Krój: priorytet ma to, co zdefiniowano w DOCX; gdy brak — używamy firmowej
+        // czcionki z konfiguracji (sekcja DocumentDefaults).
+        var effectiveFontFamily = !string.IsNullOrEmpty(_defaultFontFamily)
+            ? _defaultFontFamily
+            : (!string.IsNullOrWhiteSpace(_defaults.FontFamily) ? _defaults.FontFamily : null);
+        if (!string.IsNullOrEmpty(effectiveFontFamily))
+            containerCss.Append($"font-family:'{effectiveFontFamily}',sans-serif;");
+        var effectiveFontSizePt = _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : (double?)null);
+        if (effectiveFontSizePt.HasValue)
             containerCss.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "font-size:{0:0.##}pt;", _defaultFontSizePt.Value));
+                "font-size:{0:0.##}pt;", effectiveFontSizePt.Value));
 
         if (containerCss.Length > 0)
             html.Append($"<div class=\"document-content\" style=\"{containerCss}\">");
@@ -1737,20 +1758,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         if (fonts == null) return null;
 
-        // Najpierw sprawdź jawne nazwy (najwyższy priorytet zgodnie z OOXML)
-        var name = fonts.Ascii?.Value
-                   ?? fonts.HighAnsi?.Value
-                   ?? fonts.ComplexScript?.Value
-                   ?? fonts.EastAsia?.Value;
-        if (!string.IsNullOrEmpty(name)) return name;
+        // Dla tekstu łacińskiego (przeglądarka renderuje wszystko jednym fontem)
+        // Word używa wyłącznie ascii/hAnsi (i ich theme-owych odpowiedników).
+        // w:cs (Complex Script — arabski, hebrajski) i w:eastAsia (CJK) są stosowane
+        // tylko dla odpowiednich zakresów znaków — NIE wolno spadać na nie jako fallback,
+        // bo wówczas zwykłe runy z `<w:rFonts w:cs="Arial" w:asciiTheme="minorHAnsi"/>`
+        // dostają błędnie "Arial" zamiast firmowego "Calibri".
 
-        // Następnie referencje do motywu
-        if (fonts.AsciiTheme?.Value != null) name = ResolveThemeFont(fonts.AsciiTheme.Value);
-        if (string.IsNullOrEmpty(name) && fonts.HighAnsiTheme?.Value != null) name = ResolveThemeFont(fonts.HighAnsiTheme.Value);
-        if (string.IsNullOrEmpty(name) && fonts.ComplexScriptTheme?.Value != null) name = ResolveThemeFont(fonts.ComplexScriptTheme.Value);
-        if (string.IsNullOrEmpty(name) && fonts.EastAsiaTheme?.Value != null) name = ResolveThemeFont(fonts.EastAsiaTheme.Value);
+        // 1) Jawny ascii
+        if (!string.IsNullOrEmpty(fonts.Ascii?.Value)) return fonts.Ascii!.Value;
 
-        return string.IsNullOrEmpty(name) ? null : name;
+        // 2) Theme dla ascii
+        if (fonts.AsciiTheme?.Value != null)
+        {
+            var resolved = ResolveThemeFont(fonts.AsciiTheme.Value);
+            if (!string.IsNullOrEmpty(resolved)) return resolved;
+        }
+
+        // 3) Jawny hAnsi (high-ANSI: znaki Latin Extended)
+        if (!string.IsNullOrEmpty(fonts.HighAnsi?.Value)) return fonts.HighAnsi!.Value;
+
+        // 4) Theme dla hAnsi
+        if (fonts.HighAnsiTheme?.Value != null)
+        {
+            var resolved = ResolveThemeFont(fonts.HighAnsiTheme.Value);
+            if (!string.IsNullOrEmpty(resolved)) return resolved;
+        }
+
+        return null;
     }
 
     /// <summary>

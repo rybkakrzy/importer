@@ -1,0 +1,64 @@
+// ============================================================================
+// FIRMOWA CZCIONKA — KONFIGURACJA
+// ============================================================================
+// Plik jest pojedynczym miejscem konfiguracji firmowej czcionki dla edytora.
+// Patrz README.md w tym samym katalogu po instrukcję krok po kroku.
+//
+// 1) Wrzuć plik(i) czcionki obok tego pliku (np. `CorporateSans-Regular.woff2`).
+// 2) Ustaw poniżej nazwę kroju w `$corporate-font-family`.
+// 3) Odkomentuj / dodaj bloki @font-face dla każdego pliku, który wgrałeś.
+// 4) Pamiętaj, żeby ta sama nazwa była ustawiona po stronie API
+//    (appsettings.json → DocumentDefaults.FontFamily).
+// ============================================================================
+
+// Nazwa rodziny kroju widoczna dla CSS i przekazywana do DOCX.
+// Pozostaw pustą wartość ('') jeśli chcesz tymczasowo wyłączyć firmową czcionkę
+// i zostawić fallback (Calibri / Segoe UI).
+$corporate-font-family: '' !default;
+
+// Lista zapasowa, używana gdy plik z firmową czcionką jeszcze się nie wczyta
+// albo gdy nazwa kroju jest pusta.
+$corporate-font-fallback: 'Calibri', 'Segoe UI', Arial, sans-serif !default;
+
+// Pełna deklaracja używana w stylach (z fallbackiem).
+// Wystawiamy ją jako CSS custom property, żeby cały edytor mógł ją podpiąć
+// niezależnie od tego, czy korzystasz z SCSS, czy z czystego CSS.
+:root {
+  @if $corporate-font-family != '' {
+    --corporate-font-family: #{$corporate-font-family}, #{$corporate-font-fallback};
+  } @else {
+    --corporate-font-family: #{$corporate-font-fallback};
+  }
+}
+
+// ----------------------------------------------------------------------------
+// @font-face — odkomentuj i dostosuj ścieżki / wagę / styl pod swoje pliki.
+// Ścieżka 'assets/fonts/...' działa z konfiguracji `angular.json` (zob. assets[]).
+// ----------------------------------------------------------------------------
+
+/*
+@font-face {
+  font-family: 'CorporateSans';
+  src: url('/assets/fonts/CorporateSans-Regular.woff2') format('woff2'),
+       url('/assets/fonts/CorporateSans-Regular.woff') format('woff');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'CorporateSans';
+  src: url('/assets/fonts/CorporateSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'CorporateSans';
+  src: url('/assets/fonts/CorporateSans-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+*/

@@ -314,7 +314,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     canUndo: false,
     canRedo: false,
     wordCount: 0,
-    characterCount: 0,
     currentFormatting: {
       bold: false,
       italic: false,
@@ -950,8 +949,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // ======= KONIEC RESIZE TABEL =======
 
   private handleEditorDragStart(event: DragEvent): void {
-    const target = event.target as HTMLElement;
-    const wrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
+    const rawTarget = event.target as Node | null;
+    // event.target może być węzłem tekstowym (np. podczas drag-zaznaczenia tekstu)
+    // — wtedy nie ma metody closest(). Bierzemy najbliższy element nadrzędny.
+    const target: HTMLElement | null = rawTarget instanceof HTMLElement
+      ? rawTarget
+      : (rawTarget?.parentElement ?? null);
+    const wrapper = target?.closest('.editor-image-wrapper') as HTMLElement | null;
     if (!wrapper) {
       return;
     }
@@ -2346,9 +2350,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     let currentBlockFormat = 'p';
 
     if (selection && selection.rangeCount > 0) {
-      let element = selection.anchorNode as HTMLElement;
-      if (element?.nodeType === Node.TEXT_NODE) {
-        element = element.parentElement!;
+      // Wyznacz „element pod karetką" tak, żeby na granicach spanów
+      // (np. selection.anchorNode wskazuje na sam <h1> z offsetem dziecka)
+      // wejść w głąb do faktycznego text-node/span — inaczej odczyt computed
+      // font-family/size wraca z <h1>/<p> zamiast z konkretnego runa.
+      const range = selection.getRangeAt(0);
+      let node: Node | null = range.startContainer;
+      if (node && node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        // Jeżeli zaznaczenie jest niezwinięte, weź dziecko z prawej strony granicy
+        // (start zaznaczenia), żeby trafić w pierwszy zaznaczony span.
+        // Dla zwiniętej karetki też wolimy „następne" dziecko — odpowiada wpisywaniu.
+        const idx = Math.min(range.startOffset, el.childNodes.length - 1);
+        node = el.childNodes[Math.max(idx, 0)] ?? el.lastChild ?? el;
+        // Zejdź do pierwszego liścia (tekst lub element bez dzieci)
+        while (node && node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).firstChild) {
+          node = (node as HTMLElement).firstChild;
+        }
+      }
+      let element: HTMLElement | null = null;
+      if (node?.nodeType === Node.TEXT_NODE) {
+        element = node.parentElement;
+      } else if (node instanceof HTMLElement) {
+        element = node;
       }
 
       if (element) {
@@ -2375,8 +2399,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       }
     }
 
-    // Debug log
-    console.log('[updateFormattingState] fontSize:', fontSize, 'fontFamily:', fontFamily, 'blockFormat:', currentBlockFormat);
+    // Debug log — szczegółowy, żeby diagnozować mismatch toolbar vs DOM.
+    {
+      const dbg: Record<string, unknown> = { fontSize, fontFamily, blockFormat: currentBlockFormat };
+      if (selection && selection.rangeCount > 0) {
+        const r = selection.getRangeAt(0);
+        const sc = r.startContainer;
+        dbg['range'] = {
+          collapsed: r.collapsed,
+          startContainerType: sc.nodeType === Node.TEXT_NODE ? 'TEXT' : sc.nodeType === Node.ELEMENT_NODE ? `EL(${(sc as Element).tagName})` : sc.nodeType,
+          startOffset: r.startOffset,
+          startContainerParent: sc.parentElement ? `<${sc.parentElement.tagName.toLowerCase()} style="${sc.parentElement.getAttribute('style') ?? ''}">` : null,
+        };
+      }
+      console.log('[updateFormattingState]', dbg);
+    }
 
     this.editorState.update(state => ({
       ...state,
@@ -2407,15 +2444,51 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     } else if (fallback) {
       text = fallback.innerText || '';
     }
-    const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+    // Word liczy te\u017c zawarto\u015b\u0107 nag\u0142\u00f3wka i stopki (raz, nie razy liczba stron),
+    // dlatego do\u0142\u0105czamy je tu jednorazowo.
+    const headerText = this.headerContentEl?.nativeElement?.innerText || '';
+    const footerText = this.footerContentEl?.nativeElement?.innerText || '';
+    if (headerText) text += '\n' + headerText;
+    if (footerText) text += '\n' + footerText;
+
+    // Algorytm zliczania s\u0142\u00f3w zbli\u017cony do MS Word:
+    // - traktuje l\u0105czniki (-), apostrofy (', \u2019) i podkre\u015blniki wewn\u0105trz wyrazu jako spoiwo
+    //   (np. "e-mail", "don\u2019t" \u2192 1 s\u0142owo)
+    // - kropki i przecinki mi\u0119dzy cyframi traktuje jako cz\u0119\u015b\u0107 liczby ("3.14", "1,000" \u2192 1)
+    // - separatorami s\u0105 m.in. spacje, tabulatory, my\u015blniki en/em (\u2013, \u2014), uko\u015bniki, znaki interpunkcyjne
+    // - usuwa znaki o zerowej szeroko\u015bci oraz nasze sztuczne placeholdery p\u00f3l ({page}, {pages})
+    const normalized = text
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\{page\}|\{pages\}/g, ' ');
+    const matches = normalized.match(/[\p{L}\p{N}]+(?:[\-_'\u2019][\p{L}\p{N}]+|[.,]\p{N}+)*/gu);
+    const wordCount = matches ? matches.length : 0;
+
+    // Diagnostyka dostępna na żądanie z konsoli: window.__wcDebug() / window.__wcCopy().
+    try {
+      const w = window as unknown as Record<string, unknown>;
+      w['__wcDebug'] = () => {
+        const lines = normalized.split('\n');
+        const perLine = lines.map((line, i) => {
+          const m = line.match(/[\p{L}\p{N}]+(?:[\-_'\u2019][\p{L}\p{N}]+|[.,]\p{N}+)*/gu);
+          return { i, count: m ? m.length : 0, text: line };
+        });
+        console.table(perLine.filter(p => p.count > 0));
+        console.log('TOTAL:', wordCount);
+        console.log('TEXT LENGTH:', normalized.length);
+        return { wordCount, totalLines: lines.length, perLine, text: normalized };
+      };
+      w['__wcCopy'] = async () => {
+        await navigator.clipboard.writeText(normalized);
+        console.log('Skopiowano', normalized.length, 'znaków do schowka.');
+      };
+    } catch { /* ignore */ }
 
     this.editorState.update(state => ({
       ...state,
       isModified: this._isDirty,
       canUndo: this.undoStack.length > 1,
       canRedo: this.redoStack.length > 0,
-      wordCount: words.length,
-      characterCount: text.length
+      wordCount
     }));
 
     this.stateChange.emit(this.editorState());

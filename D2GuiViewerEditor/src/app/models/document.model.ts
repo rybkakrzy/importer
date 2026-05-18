@@ -187,7 +187,6 @@ export interface EditorState {
   canUndo: boolean;
   canRedo: boolean;
   wordCount: number;
-  characterCount: number;
   fontSize?: number;
   fontFamily?: string;
   currentFormatting: TextFormatting;

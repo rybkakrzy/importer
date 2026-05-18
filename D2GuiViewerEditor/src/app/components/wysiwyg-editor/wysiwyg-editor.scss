@@ -139,7 +139,9 @@
   flex: 1;
   background: white;
   outline: none;
-  font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
+  // Firmowa czcionka (z _corporate-font.scss) ma najwyższy priorytet;
+  // fallback zachowuje dotychczasowe wartości na wypadek braku konfiguracji.
+  font-family: var(--corporate-font-family, 'Calibri', 'Segoe UI', Arial, sans-serif);
   font-size: 11pt;
   line-height: 1.15;
   color: #000;
@@ -158,7 +160,7 @@
   width: 100%;
   flex: 1;
   background: white;
-  font-family: 'Calibri', 'Segoe UI', Arial, sans-serif;
+  font-family: var(--corporate-font-family, 'Calibri', 'Segoe UI', Arial, sans-serif);
   font-size: 11pt;
   line-height: 1.15;
   color: #000;

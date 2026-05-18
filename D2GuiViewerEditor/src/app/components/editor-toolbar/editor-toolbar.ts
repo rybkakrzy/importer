@@ -310,15 +310,22 @@ export class EditorToolbarComponent {
       }
     }
 
-    // Aktualizuj czcionkę
+    // Aktualizuj czcionkę.
+    // Dopasowanie najpierw exact, dopiero potem prefix — w przeciwnym razie
+    // „Calibri Light" przez .includes("Calibri") fałszywie normalizuje się do "Calibri".
     if (state.currentStyle.fontFamily) {
-      // Normalizuj nazwę czcionki
-      const fontFamily = state.currentStyle.fontFamily;
-      const matchedFont = this.fontFamilies.find(f => 
-        fontFamily.toLowerCase().includes(f.toLowerCase())
-      );
+      const incoming = state.currentStyle.fontFamily.trim().toLowerCase();
+      let matchedFont = this.fontFamilies.find(f => f.toLowerCase() === incoming);
+      if (!matchedFont) {
+        // Posortuj listę od najdłuższych nazw, żeby „Calibri Light" zwyciężyło nad „Calibri".
+        const byLength = [...this.fontFamilies].sort((a, b) => b.length - a.length);
+        matchedFont = byLength.find(f => incoming.includes(f.toLowerCase()));
+      }
       if (matchedFont) {
         this.selectedFontFamily.set(matchedFont);
+      } else if (state.currentStyle.fontFamily) {
+        // Font spoza listy (np. Tahoma) — pokaż surową nazwę zamiast trzymać starą.
+        this.selectedFontFamily.set(state.currentStyle.fontFamily);
       }
     }
 
@@ -453,10 +460,35 @@ export class EditorToolbarComponent {
   }
 
   /**
+   * Reset selectedIndex „na wejściu" do dropdown’a — dzięki temu (change)
+   * odpali się nawet gdy user wybierze tę samą wartość, która już jest
+   * zaznaczona (typowy use-case: zaaplikuj font Arial na drugim fragmencie,
+   * gdy toolbar nadal pokazuje „Arial" po pierwszym).
+   */
+  onFontFamilyMousedown(event: MouseEvent): void {
+    const select = event.currentTarget as HTMLSelectElement;
+    select.selectedIndex = -1;
+  }
+
+  /**
+   * Jeśli user otworzył dropdown i zamknął bez wyboru (Escape / click obok),
+   * przywróć wizualnie aktualnie zapisaną czcionkę — inaczej select zostanie pusty.
+   */
+  onFontFamilyBlur(event: Event): void {
+    const select = event.currentTarget as HTMLSelectElement;
+    if (!select.value) {
+      select.value = this.selectedFontFamily();
+    }
+  }
+
+  /**
    * Zmienia rodzinę czcionki (event)
    */
   onFontFamilyChange(event: Event): void {
     const select = event.target as HTMLSelectElement;
+    if (!select.value) {
+      return;
+    }
     this.onFontFamilySelect(select.value);
   }
 

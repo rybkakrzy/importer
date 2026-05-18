@@ -6,6 +6,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
 using HtmlAgilityPack;
+using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -21,6 +22,21 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private int _numberingId = 1;
     private NumberingDefinitionsPart? _numberingPart;
     private readonly Dictionary<int, int> _abstractNumIds = new(); // track list numbering
+
+    // Domyślne ustawienia dokumentu (firmowa czcionka itp.). Wstrzykiwane przez DI;
+    // dla benchmarków / testów konstruktor bezparametrowy używa wartości domyślnych.
+    private readonly DocumentDefaultsOptions _defaults;
+
+    public HtmlToDocxConverter()
+    {
+        _defaults = new DocumentDefaultsOptions();
+    }
+
+    public HtmlToDocxConverter(IOptions<DocumentDefaultsOptions> defaults)
+    {
+        _defaults = defaults?.Value ?? new DocumentDefaultsOptions();
+    }
+
 
     /// <summary>
     /// Część (Part) do której mają być dodawane obrazki w bieżącym kontekście:
@@ -411,13 +427,19 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var stylesPart = _mainPart!.AddNewPart<StyleDefinitionsPart>();
         var styles = new Styles();
 
+        // Firmowa czcionka — z konfiguracji (sekcja DocumentDefaults w appsettings.json).
+        var bodyFont = string.IsNullOrWhiteSpace(_defaults.FontFamily) ? "Calibri" : _defaults.FontFamily;
+        var headingFont = string.IsNullOrWhiteSpace(_defaults.HeadingFontFamily) ? bodyFont : _defaults.HeadingFontFamily;
+        // Rozmiar w DOCX jest podawany w pół-punktach (1pt = 2 jednostki).
+        var halfPt = ((int)Math.Round(_defaults.FontSizePt * 2)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
         // Domyślne właściwości dokumentu
         var docDefaults = new DocDefaults(
             new RunPropertiesDefault(
                 new RunPropertiesBaseStyle(
-                    new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri", EastAsia = "Calibri", ComplexScript = "Calibri" },
-                    new FontSize { Val = "22" },
-                    new FontSizeComplexScript { Val = "22" },
+                    new RunFonts { Ascii = bodyFont, HighAnsi = bodyFont, EastAsia = bodyFont, ComplexScript = bodyFont },
+                    new FontSize { Val = halfPt },
+                    new FontSizeComplexScript { Val = halfPt },
                     new Languages { Val = "pl-PL", EastAsia = "pl-PL" }
                 )
             ),
@@ -442,8 +464,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             new SpacingBetweenLines { After = "160", Line = "259", LineRule = LineSpacingRuleValues.Auto }
         ));
         normalStyle.Append(new StyleRunProperties(
-            new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
-            new FontSize { Val = "22" }
+            new RunFonts { Ascii = bodyFont, HighAnsi = bodyFont },
+            new FontSize { Val = halfPt }
         ));
         styles.Append(normalStyle);
 
@@ -476,7 +498,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             
             var runPropsElements = new List<OpenXmlElement>
             {
-                new RunFonts { Ascii = "Calibri Light", HighAnsi = "Calibri Light" },
+                new RunFonts { Ascii = headingFont, HighAnsi = headingFont },
                 new FontSize { Val = headingSizes[i - 1] },
                 new Color { Val = headingColors[i - 1] }
             };
