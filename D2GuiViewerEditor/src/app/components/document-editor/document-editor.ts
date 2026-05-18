@@ -2628,6 +2628,61 @@ export class DocumentEditorComponent implements OnInit {
     this.showInsertTableDialog.set(false);
   }
 
+  // ===== Walidacja rozmiaru tabeli =====
+  // type="number" + min/max nie blokuje wpisania ręcznie —0", „-5" czy 9999
+  // — atrybuty te wpływają tylko na spinner i :invalid. Dlatego trzymamy
+  // jawne sprawdzenie + clamp on blur + disabled na przycisku „Wstaw".
+  private static readonly TABLE_MIN_COLS = 1;
+  private static readonly TABLE_MAX_COLS = 63;   // limit Worda
+  private static readonly TABLE_MIN_ROWS = 1;
+  private static readonly TABLE_MAX_ROWS = 500;
+
+  isTableColumnsValid(): boolean {
+    const v = this.tableDialogData.columns;
+    return Number.isFinite(v) && Number.isInteger(v)
+      && v >= DocumentEditorComponent.TABLE_MIN_COLS && v <= DocumentEditorComponent.TABLE_MAX_COLS;
+  }
+
+  isTableRowsValid(): boolean {
+    const v = this.tableDialogData.rows;
+    return Number.isFinite(v) && Number.isInteger(v)
+      && v >= DocumentEditorComponent.TABLE_MIN_ROWS && v <= DocumentEditorComponent.TABLE_MAX_ROWS;
+  }
+
+  insertTableValidationError(): string | null {
+    if (!this.isTableColumnsValid()) {
+      return `Liczba kolumn musi być liczbą całkowitą z zakresu ${DocumentEditorComponent.TABLE_MIN_COLS}–${DocumentEditorComponent.TABLE_MAX_COLS}.`;
+    }
+    if (!this.isTableRowsValid()) {
+      return `Liczba wierszy musi być liczbą całkowitą z zakresu ${DocumentEditorComponent.TABLE_MIN_ROWS}–${DocumentEditorComponent.TABLE_MAX_ROWS}.`;
+    }
+    return null;
+  }
+
+  clampTableColumns(): void {
+    const v = this.tableDialogData.columns;
+    if (!Number.isFinite(v)) {
+      this.tableDialogData.columns = DocumentEditorComponent.TABLE_MIN_COLS;
+      return;
+    }
+    this.tableDialogData.columns = Math.max(
+      DocumentEditorComponent.TABLE_MIN_COLS,
+      Math.min(DocumentEditorComponent.TABLE_MAX_COLS, Math.floor(v))
+    );
+  }
+
+  clampTableRows(): void {
+    const v = this.tableDialogData.rows;
+    if (!Number.isFinite(v)) {
+      this.tableDialogData.rows = DocumentEditorComponent.TABLE_MIN_ROWS;
+      return;
+    }
+    this.tableDialogData.rows = Math.max(
+      DocumentEditorComponent.TABLE_MIN_ROWS,
+      Math.min(DocumentEditorComponent.TABLE_MAX_ROWS, Math.floor(v))
+    );
+  }
+
   onFixedWidthChange(value: string): void {
     if (value.toLowerCase() === 'auto' || value === '') {
       this.tableDialogData.fixedWidth = 0;
@@ -2640,6 +2695,10 @@ export class DocumentEditorComponent implements OnInit {
   }
 
   applyInsertTable(): void {
+    // Twarda bramka — nawet jeśli ktoś ominie disabled (np. enter), nic nie wstawimy.
+    if (this.insertTableValidationError()) {
+      return;
+    }
     const cols = Math.max(1, Math.min(63, this.tableDialogData.columns));
     const rows = Math.max(1, Math.min(500, this.tableDialogData.rows));
 

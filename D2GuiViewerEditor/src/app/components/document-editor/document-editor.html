@@ -1759,16 +1759,25 @@
               <div class="paragraph-field">
                 <label>Liczba kolumn:</label>
                 <div class="paragraph-spinner">
-                  <input type="number" [(ngModel)]="tableDialogData.columns" min="1" max="63" step="1" class="paragraph-input">
+                  <input type="number" [(ngModel)]="tableDialogData.columns" min="1" max="63" step="1"
+                         class="paragraph-input"
+                         [class.is-invalid]="!isTableColumnsValid()"
+                         (blur)="clampTableColumns()">
                 </div>
               </div>
               <div class="paragraph-field">
                 <label>Liczba wierszy:</label>
                 <div class="paragraph-spinner">
-                  <input type="number" [(ngModel)]="tableDialogData.rows" min="1" max="500" step="1" class="paragraph-input">
+                  <input type="number" [(ngModel)]="tableDialogData.rows" min="1" max="500" step="1"
+                         class="paragraph-input"
+                         [class.is-invalid]="!isTableRowsValid()"
+                         (blur)="clampTableRows()">
                 </div>
               </div>
             </div>
+            @if (insertTableValidationError(); as err) {
+              <div class="dialog-error" role="alert">{{ err }}</div>
+            }
           </fieldset>
 
           <!-- Zachowanie autodopasowania -->
@@ -1804,7 +1813,7 @@
         </div>
 
         <div class="dialog-footer">
-          <button class="btn btn-primary" (click)="applyInsertTable()">Wstaw</button>
+          <button class="btn btn-primary" (click)="applyInsertTable()" [disabled]="!!insertTableValidationError()">Wstaw</button>
           <button class="btn btn-secondary" (click)="closeInsertTableDialog()">Anuluj</button>
         </div>
       </div>

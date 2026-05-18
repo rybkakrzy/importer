@@ -2159,6 +2159,19 @@
   padding: 16px 24px !important;
 }
 
+.insert-table-dialog .paragraph-input.is-invalid {
+  border-color: #d83b01;
+  box-shadow: 0 0 0 1px #d83b01;
+  background-color: #fef6f4;
+}
+
+.insert-table-dialog .dialog-error {
+  margin-top: 8px;
+  color: #d83b01;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .insert-table-dialog .paragraph-checkbox input[type="radio"] {
   width: 16px;
   height: 16px;
