@@ -1392,15 +1392,44 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const range = selection.getRangeAt(0);
 
     if (range.collapsed) {
-      // Kursor bez zaznaczenia - wstaw pusty span z rozmiarem dla kolejnego tekstu
+      // Kursor bez zaznaczenia - ustaw rozmiar dla następnie wpisywanego tekstu.
       this.pendingFontSize = size;
 
-      // Wstaw zero-width space w span z odpowiednim rozmiarem
+      // Jeśli kursor siedzi wewnątrz istniejącego ZWS-spana (wstawionego przez
+      // poprzedni klik +/-), aktualizuj jego font-size zamiast zagnieżdżać nowy.
+      // Dzięki temu nie powstają stosy spanów z różnymi rozmiarami, które utrzymują
+      // duży line-height nawet po powrocie do małego fontu.
+      const containerEl = range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement
+        : range.startContainer as HTMLElement;
+      const isInZwsSpan = containerEl instanceof HTMLSpanElement
+        && containerEl.textContent === '\u200B'
+        && containerEl.style.fontSize !== '';
+
+      if (isInZwsSpan && containerEl) {
+        // Zaktualizuj rozmiar istniejącego ZWS-spana.
+        containerEl.style.fontSize = `${size}pt`;
+        // Umieść kursor za ZWS (pozycja 1) — bez zmiany.
+        const newRange = document.createRange();
+        newRange.setStart(containerEl.firstChild!, Math.min(1, containerEl.firstChild!.textContent!.length));
+        newRange.setEnd(containerEl.firstChild!, Math.min(1, containerEl.firstChild!.textContent!.length));
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+        this.savedSelection = newRange.cloneRange();
+        this.updateFormattingState();
+        return;
+      }
+
+      // Wstaw nowy ZWS-span z żądanym rozmiarem.
       const span = document.createElement('span');
       span.style.fontSize = `${size}pt`;
       span.innerHTML = '\u200B'; // Zero-width space
 
       range.insertNode(span);
+
+      // Usuń stale ZWS-spany w tym samym bloku (z poprzednich kliknięć +/-).
+      // Zostawiamy tylko właśnie wstawiony i ewentualnie spany z prawdziwą treścią.
+      this.removeStaleZwsSpans(span);
 
       // Ustaw kursor wewnątrz spana
       const newRange = document.createRange();
@@ -1438,58 +1467,60 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     // Wyodrębnij zawartość zaznaczenia
     const fragment = range.extractContents();
-    
-    // Funkcja pomocnicza do rekurencyjnego przetwarzania węzłów
-    const processNode = (node: Node): Node => {
+
+    // insideStyledSpan = true gdy węzeł jest już dzieckiem spana z font-size;
+    // węzły tekstowe w tym kontekście NIE powinny być owijane kolejnym spanem —
+    // inaczej każdy cykl zwiększ/zmniejsz dodaje kolejną warstwę zagnieżdżenia,
+    // a każda warstwa wnosi swój line-height do wysokości linii (ogromny odstęp).
+    const processNode = (node: Node, insideStyledSpan = false): Node => {
       if (node.nodeType === Node.TEXT_NODE) {
-        // Węzeł tekstowy - opakuj w span z nowym rozmiarem
+        if (insideStyledSpan) {
+          // Rodzic span już ma ustawiony font-size — klonuj tekst bez owijania.
+          return node.cloneNode(true);
+        }
+        // Tekst na poziomie bloku (bezpośrednio w <p>, <li> itp.) — opakuj w span.
         const span = document.createElement('span');
         span.style.fontSize = `${size}pt`;
         span.textContent = node.textContent;
         return span;
       }
-      
+
       if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node as HTMLElement;
-        
-        // Jeśli to span lub font - nadpisz font-size i zachowaj inne style
+
+        // Jeśli to span lub font — nadpisz font-size, zachowaj inne style.
         if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
           const newSpan = document.createElement('span');
-          
-          // Skopiuj wszystkie style oprócz font-size
+
           if (element.style.cssText) {
             newSpan.style.cssText = element.style.cssText;
           }
-          // Nadpisz font-size
           newSpan.style.fontSize = `${size}pt`;
-          
-          // Kopiuj inne atrybuty font (face -> font-family, color)
+
           if (element.tagName === 'FONT') {
             const fontEl = element as HTMLFontElement;
-            if (fontEl.face) {
-              newSpan.style.fontFamily = fontEl.face;
-            }
-            if (fontEl.color) {
-              newSpan.style.color = fontEl.color;
-            }
+            if (fontEl.face) newSpan.style.fontFamily = fontEl.face;
+            if (fontEl.color) newSpan.style.color = fontEl.color;
           }
-          
-          // Przetwórz dzieci
+
+          // Dzieci spana: przekaż flagę insideStyledSpan=true, żeby teksty
+          // nie były ponownie owijane (eliminuje rosnące zagnieżdżenie).
           Array.from(element.childNodes).forEach(child => {
-            newSpan.appendChild(processNode(child));
+            newSpan.appendChild(processNode(child, true));
           });
-          
+
           return newSpan;
         }
-        
-        // Dla innych elementów (b, i, u, etc.) - zachowaj i przetwórz dzieci
+
+        // Dla innych elementów (b, i, u, sub, sup itp.) — zachowaj, przetwórz dzieci.
+        // Dziedzicz flagę insideStyledSpan (gdy jesteśmy już w strefie spana z fontem).
         const clone = element.cloneNode(false) as HTMLElement;
         Array.from(element.childNodes).forEach(child => {
-          clone.appendChild(processNode(child));
+          clone.appendChild(processNode(child, insideStyledSpan));
         });
         return clone;
       }
-      
+
       return node.cloneNode(true);
     };
     
@@ -1568,6 +1599,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Użyj tej samej logiki co dla font-size
     this.applyFontFamilyToSelection(fontFamily, selection, range);
     this.onContentChange();
+  }
+
+  /**
+   * Usuwa "stale" ZWS-spany (zero-width space, font-size ustawiony, bez innej treści)
+   * z tego samego bloku co `keepSpan`. Takie spany powstają przy klikaniu +/− bez
+   * zaznaczenia — każde kliknięcie wstawiało nowy span, stare pozostawały w DOM
+   * i utrzymywały line-height linii na poziomie największego fontu.
+   */
+  private removeStaleZwsSpans(keepSpan: HTMLElement): void {
+    // Znajdź blok nadrzędny (p, li, div itp.)
+    let block: HTMLElement | null = keepSpan.parentElement;
+    while (block && !['P', 'LI', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'TD', 'TH'].includes(block.tagName)) {
+      block = block.parentElement;
+    }
+    if (!block) return;
+
+    const stale: HTMLElement[] = [];
+    block.querySelectorAll<HTMLElement>('span[style*="font-size"]').forEach(el => {
+      if (el === keepSpan) return;
+      if (el.textContent === '\u200B' && (el.childNodes.length === 0 || (el.childNodes.length === 1 && el.firstChild!.nodeType === Node.TEXT_NODE))) {
+        stale.push(el);
+      }
+    });
+    stale.forEach(el => el.remove());
   }
 
   /**

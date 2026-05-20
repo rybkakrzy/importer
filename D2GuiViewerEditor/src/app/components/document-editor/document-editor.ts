@@ -1325,7 +1325,7 @@ export class DocumentEditorComponent implements OnInit {
    * Zwiększ rozmiar czcionki
    */
   increaseFontSize(): void {
-    const currentSize = this.editorState()?.fontSize || 11;
+    const currentSize = this.editorState()?.currentStyle?.fontSize || 11;
     this.editor?.setFontSize(currentSize + 1);
     this.closeAllMenus();
   }
@@ -1334,7 +1334,7 @@ export class DocumentEditorComponent implements OnInit {
    * Zmniejsz rozmiar czcionki
    */
   decreaseFontSize(): void {
-    const currentSize = this.editorState()?.fontSize || 11;
+    const currentSize = this.editorState()?.currentStyle?.fontSize || 11;
     if (currentSize > 1) {
       this.editor?.setFontSize(currentSize - 1);
     }
@@ -1904,12 +1904,12 @@ export class DocumentEditorComponent implements OnInit {
   }
 
   miniToolbarIncreaseFontSize(): void {
-    const current = this.editorState()?.fontSize ?? 11;
+    const current = this.editorState()?.currentStyle?.fontSize ?? 11;
     this.editor?.setFontSize(current + 1);
   }
 
   miniToolbarDecreaseFontSize(): void {
-    const current = this.editorState()?.fontSize ?? 11;
+    const current = this.editorState()?.currentStyle?.fontSize ?? 11;
     if (current > 1) this.editor?.setFontSize(current - 1);
   }
 
