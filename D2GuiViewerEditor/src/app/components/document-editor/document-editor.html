@@ -1233,16 +1233,16 @@
       <!-- Wiersz 1: Formatowanie tekstu -->
       <div class="mt-row">
         <!-- Font family -->
-        <select class="mt-font-family" [value]="editorState()?.currentStyle?.fontFamily || 'Calibri'"
+        <select class="mt-font-family" [value]="editorState()?.fontFamily || 'Calibri'"
                 (change)="miniToolbarSetFontFamily($any($event.target).value)" title="Czcionka">
           @for (f of commonFonts; track f) {
-            <option [value]="f" [selected]="editorState()?.currentStyle?.fontFamily === f">{{ f }}</option>
+            <option [value]="f" [selected]="editorState()?.fontFamily === f">{{ f }}</option>
           }
         </select>
 
         <!-- Font size -->
         <input type="number" class="mt-font-size"
-               [value]="editorState()?.currentStyle?.fontSize || 11"
+               [value]="editorState()?.fontSize || 11"
                min="1" max="400" step="1"
                (change)="miniToolbarSetFontSize($event)"
                title="Rozmiar czcionki">
