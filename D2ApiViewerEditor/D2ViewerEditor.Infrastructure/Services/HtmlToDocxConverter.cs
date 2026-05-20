@@ -817,8 +817,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Przeskanuj strukturę listy aby określić format dla każdego poziomu
             var levelFormats = new Dictionary<int, bool>();
             ScanListLevels(node, ordered, level, levelFormats);
-            
-            var abstractNumId = CreateAbstractNumbering(levelFormats);
+
+            // Wykryj poziomy z punktatorem obrazkowym (DocxToHtmlConverter wstawia
+            // <span class="list-marker"><img .../></span> jako wizualny marker).
+            // Dla takich poziomów wyłączymy automatyczny punktator Worda, żeby nie
+            // dublować markera (kropka + grafika).
+            var pictureBulletLevels = new HashSet<int>();
+            ScanPictureBulletLevels(node, level, pictureBulletLevels);
+
+            var abstractNumId = CreateAbstractNumbering(levelFormats, pictureBulletLevels);
             numId = CreateNumberingInstance(abstractNumId);
         }
 
@@ -859,9 +866,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Dodaj zawartość (bez zagnieżdżonej listy)
             foreach (var liChild in child.ChildNodes)
             {
-                if (liChild.Name.ToLower() == "ul" || liChild.Name.ToLower() == "ol")
+                var liChildName = liChild.Name.ToLower();
+                if (liChildName == "ul" || liChildName == "ol")
                     continue; // Zagnieżdżona lista będzie obsłużona osobno
-                    
+
+                // <span class="list-marker"> jest artefaktem prezentacyjnym dodanym przez
+                // DocxToHtmlConverter, żeby przeglądarka pokazała niestandardowy punktator
+                // (obrazek lub znak Wingdings/Symbol). Przy eksporcie:
+                //   - jeżeli zawiera <img> (picture bullet) — zachowaj sam obrazek jako
+                //     wiodący inline run; poziom ma format=None, więc Word nie doda
+                //     dodatkowej kropki.
+                //   - tekstowy marker (np. ✓, ✗) pomijamy — Word wstawi własny automatyczny
+                //     punktator z definicji numeracji.
+                if (liChildName == "span" && IsListMarkerSpan(liChild))
+                {
+                    var img = liChild.SelectSingleNode(".//img");
+                    if (img != null)
+                    {
+                        foreach (var run in CreateRunsFromNode(img, liBaseProps))
+                            para.Append(run);
+                    }
+                    continue;
+                }
+
                 var runs = CreateRunsFromNode(liChild, liBaseProps);
                 foreach (var run in runs)
                     para.Append(run);
@@ -910,6 +937,51 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
+    /// Wykrywa poziomy listy, które używają punktatora obrazkowego — czyli mają
+    /// <c>&lt;span class="list-marker"&gt;&lt;img/&gt;&lt;/span&gt;</c> wewnątrz &lt;li&gt;.
+    /// Dla takich poziomów wyłączymy automatyczny punktator Worda.
+    /// </summary>
+    private static void ScanPictureBulletLevels(HtmlNode node, int level, HashSet<int> pictureBulletLevels)
+    {
+        foreach (var child in node.ChildNodes)
+        {
+            if (child.Name.ToLower() != "li") continue;
+
+            // Sprawdź bezpośrednie dzieci <li>, czy któreś z nich jest markerem obrazkowym.
+            foreach (var liChild in child.ChildNodes)
+            {
+                if (liChild.Name.ToLower() != "span") continue;
+                if (!IsListMarkerSpan(liChild)) continue;
+                if (liChild.SelectSingleNode(".//img") != null)
+                {
+                    pictureBulletLevels.Add(level);
+                    break;
+                }
+            }
+
+            var nested = child.SelectNodes("./ul|./ol");
+            if (nested == null) continue;
+            foreach (var nestedList in nested)
+                ScanPictureBulletLevels(nestedList, level + 1, pictureBulletLevels);
+        }
+    }
+
+    /// <summary>
+    /// Czy element to <c>&lt;span class="list-marker"&gt;</c> emitowany przez DocxToHtmlConverter.
+    /// </summary>
+    private static bool IsListMarkerSpan(HtmlNode node)
+    {
+        var cls = node.GetAttributeValue("class", "");
+        if (string.IsNullOrEmpty(cls)) return false;
+        foreach (var token in cls.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (token.Equals("list-marker", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Upewnia się że dokument ma NumberingDefinitionsPart
     /// </summary>
     private void EnsureNumberingPart()
@@ -924,7 +996,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Tworzy definicję abstrakcyjnej numeracji
     /// </summary>
-    private int CreateAbstractNumbering(Dictionary<int, bool> levelFormats)
+    private int CreateAbstractNumbering(Dictionary<int, bool> levelFormats, HashSet<int>? pictureBulletLevels = null)
     {
         var abstractNumId = _numberingId++;
         
@@ -945,8 +1017,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             
             var levelDef = new Level { LevelIndex = lvl };
             levelDef.Append(new StartNumberingValue { Val = 1 });
-            
-            if (isOrdered)
+
+            // Poziom z punktatorem obrazkowym — wyłącz automatyczny marker Worda,
+            // grafika została wstawiona jako wiodący inline run w paragrafie.
+            if (pictureBulletLevels != null && pictureBulletLevels.Contains(lvl))
+            {
+                levelDef.Append(new NumberingFormat { Val = NumberFormatValues.None });
+                levelDef.Append(new LevelText { Val = string.Empty });
+            }
+            else if (isOrdered)
             {
                 var format = lvl switch
                 {
@@ -964,7 +1043,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     new RunFonts { Hint = FontTypeHintValues.Default }
                 ));
             }
-            else
+            else if (!isOrdered)
             {
                 levelDef.Append(new NumberingFormat { Val = NumberFormatValues.Bullet });
                 
