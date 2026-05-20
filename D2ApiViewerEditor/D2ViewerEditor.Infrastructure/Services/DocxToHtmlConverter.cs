@@ -20,6 +20,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private readonly Dictionary<string, string> _styles = new();
     private readonly Dictionary<string, Style> _rawStyles = new();
     private readonly List<DocumentStyle> _documentStyles = new();
+    // Cache: numPicBulletId -> data URI obrazka punktatora (z części numbering)
+    private readonly Dictionary<int, string> _picBulletDataUris = new();
     private int _imageCounter = 0;
     private NumberingDefinitionsPart? _numberingPart;
     private ThemePart? _themePart;
@@ -57,6 +59,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _styles.Clear();
         _rawStyles.Clear();
         _documentStyles.Clear();
+        _picBulletDataUris.Clear();
         _imageCounter = 0;
         _numberingPart = null;
         _themePart = null;
@@ -72,6 +75,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _numberingPart = document.MainDocumentPart?.NumberingDefinitionsPart;
         _themePart = document.MainDocumentPart?.ThemePart;
         LoadThemeFonts();
+        LoadNumberingPictureBullets();
         
         // Załaduj style dokumentu
         var stylesLoaded = ExtractDocumentStyles(document);
@@ -588,8 +592,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 
                 html.Append($"<li style=\"{cssStyle}\">");
                 
-                // Niestandardowy punktator (np. checkbox z Wingdings) — wstaw własny marker
-                if (firstInfo.BulletChar != null)
+                // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker
+                if (firstInfo.BulletImageDataUri != null)
+                {
+                    html.Append($"<span class=\"list-marker\" style=\"display:inline-block;min-width:1.2em;margin-right:0.4em;\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
+                }
+                else if (firstInfo.BulletChar != null)
                 {
                     var fontCss = !string.IsNullOrEmpty(firstInfo.BulletFont) && 
                         !firstInfo.BulletFont.ToLowerInvariant().Contains("wingdings") &&
@@ -953,6 +961,63 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// Ładuje obrazy punktatorów (w:numPicBullet) z części NumberingDefinitions.
+    /// Każdy &lt;w:numPicBullet w:numPicBulletId="N"&gt; zawiera referencję do obrazka
+    /// (VML lub DrawingML), który zapisujemy jako data URI gotowy do osadzenia w HTML.
+    /// </summary>
+    private void LoadNumberingPictureBullets()
+    {
+        if (_numberingPart?.Numbering == null) return;
+
+        // Namespace dla atrybutów w XML (w: i r:).
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+        foreach (var picBullet in _numberingPart.Numbering.Elements<NumberingPictureBullet>())
+        {
+            // Czytamy id i relationship id bezpośrednio z XML — różne wersje SDK
+            // OpenXml mają różne nazwy property na NumberingPictureBullet.
+            int id;
+            string? relId = null;
+            try
+            {
+                var xml = XElement.Parse(picBullet.OuterXml);
+                var idAttr = xml.Attribute(w + "numPicBulletId")?.Value;
+                if (!int.TryParse(idAttr, out id)) continue;
+
+                relId = xml.Descendants()
+                    .Select(e => e.Attribute(r + "id")?.Value
+                                 ?? e.Attribute(r + "embed")?.Value
+                                 ?? e.Attribute(r + "link")?.Value)
+                    .FirstOrDefault(v => !string.IsNullOrEmpty(v));
+            }
+            catch
+            {
+                // Jeśli XML jest uszkodzony, pomijamy ten punktator.
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(relId)) continue;
+
+            try
+            {
+                if (_numberingPart.GetPartById(relId) is ImagePart imagePart)
+                {
+                    using var stream = imagePart.GetStream();
+                    using var ms = new MemoryStream();
+                    stream.CopyTo(ms);
+                    var b64 = System.Convert.ToBase64String(ms.ToArray());
+                    _picBulletDataUris[id] = $"data:{imagePart.ContentType};base64,{b64}";
+                }
+            }
+            catch
+            {
+                // Relacja może nie istnieć albo nie wskazywać na ImagePart — ignorujemy.
+            }
+        }
+    }
+
+    /// <summary>
     /// Konwertuje element OpenXML na HTML
     /// </summary>
     private string ConvertElementToHtml(OpenXmlElement element, WordprocessingDocument document)
@@ -1252,6 +1317,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public string ListStyleType { get; init; }
         public string? BulletChar { get; init; }
         public string? BulletFont { get; init; }
+        public string? BulletImageDataUri { get; init; }
         public int Start { get; init; }
     }
 
@@ -1289,11 +1355,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var numFmt = levelDef.NumberingFormat?.Val?.Value;
         var levelText = levelDef.LevelText?.Val?.Value ?? string.Empty;
-        var bulletFont = levelDef.NumberingSymbolRunProperties?
-            .GetFirstChild<RunFonts>()?.Ascii?.Value;
+        // Word zapisuje krój punktatora w jednym z atrybutów RunFonts (Ascii/HighAnsi/Cs).
+        // Bierzemy pierwszy niepusty — typowo dla Wingdings będzie to HighAnsi.
+        var bulletFontRun = levelDef.NumberingSymbolRunProperties?.GetFirstChild<RunFonts>();
+        var bulletFont = bulletFontRun?.Ascii?.Value
+                         ?? bulletFontRun?.HighAnsi?.Value
+                         ?? bulletFontRun?.ComplexScript?.Value
+                         ?? bulletFontRun?.EastAsia?.Value;
         var start = startOverride > 0
             ? startOverride
             : (levelDef.StartNumberingValue?.Val?.Value ?? 1);
+
+        // Picture bullet (w:lvlPicBulletId) — Word pozwala wstawić obrazek jako punktator.
+        // Jeśli istnieje, użyjemy obrazka zamiast znaku.
+        string? bulletImageDataUri = null;
+        var picBulletId = levelDef.LevelPictureBulletId?.Val?.Value;
+        if (picBulletId.HasValue && _picBulletDataUris.TryGetValue(picBulletId.Value, out var picUri))
+        {
+            bulletImageDataUri = picUri;
+        }
 
         string tag = "ul";
         string listStyle = "disc";
@@ -1308,25 +1388,56 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else if (numFmt == NumberFormatValues.Bullet)
         {
             tag = "ul";
-            // LevelText jest na ogół jednym znakiem (np. Wingdings: “þ” → ☑, “l” → •, “o” → ◦, “§” → ▪)
-            var ch = string.IsNullOrEmpty(levelText) ? '\0' : levelText[0];
-            switch (ch)
+            // Bezpieczne pobranie pierwszego code-pointa (obsługa par surogatów dla emoji).
+            int codePoint = 0;
+            if (!string.IsNullOrEmpty(levelText))
             {
-                case '\u2022': case 'l': listStyle = "disc"; break;
-                case 'o': case '\u25E6': listStyle = "circle"; break;
-                case '\u00A7': case '\u25AA': case '\u25FE': listStyle = "square"; break;
-                default:
-                    if (ch != '\0')
-                    {
-                        // Niestandardowy punktator (np. checkbox z Wingdings) — renderujemy własny marker.
-                        listStyle = "none";
-                        bulletChar = MapBulletChar(ch, bulletFont);
-                    }
-                    else
-                    {
-                        listStyle = "disc";
-                    }
-                    break;
+                codePoint = char.IsHighSurrogate(levelText[0]) && levelText.Length > 1
+                    ? char.ConvertToUtf32(levelText[0], levelText[1])
+                    : levelText[0];
+            }
+
+            // Word zapisuje znaki z fontów symbolicznych (Wingdings/Symbol) często w obszarze
+            // Private Use Area U+F000..U+F0FF. Dla rozpoznawania punktatora interesuje nas
+            // wtedy tylko młodszy bajt.
+            var fontLower = (bulletFont ?? string.Empty).ToLowerInvariant();
+            bool isSymbolicFont = fontLower.Contains("wingdings") || fontLower.Contains("symbol");
+            int lookup = (isSymbolicFont || (codePoint >= 0xF000 && codePoint <= 0xF0FF))
+                ? (codePoint & 0xFF)
+                : codePoint;
+
+            if (bulletImageDataUri != null)
+            {
+                // Picture bullet ma pierwszeństwo — wyłącz natywny punktator HTML.
+                listStyle = "none";
+            }
+            else if (isSymbolicFont)
+            {
+                // Dla fontów symbolicznych ZAWSZE renderujemy własny marker —
+                // znak źródłowy (np. Wingdings 0x6C) w przeglądarce bez Wingdings dałby tofu.
+                listStyle = "none";
+                bulletChar = MapBulletChar(lookup, bulletFont);
+            }
+            else
+            {
+                switch (lookup)
+                {
+                    case 0x2022: case 'l': listStyle = "disc"; break;
+                    case 'o': case 0x25E6: listStyle = "circle"; break;
+                    case 0x00A7: case 0x25AA: case 0x25FE: listStyle = "square"; break;
+                    default:
+                        if (codePoint != 0)
+                        {
+                            // Niestandardowy punktator (np. emoji) — renderujemy własny marker.
+                            listStyle = "none";
+                            bulletChar = MapBulletChar(codePoint, bulletFont);
+                        }
+                        else
+                        {
+                            listStyle = "disc";
+                        }
+                        break;
+                }
             }
         }
         else
@@ -1342,40 +1453,51 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ListStyleType = listStyle,
             BulletChar = bulletChar,
             BulletFont = bulletFont,
+            BulletImageDataUri = bulletImageDataUri,
             Start = start
         };
     }
 
     /// <summary>
     /// Mapuje znak punktatora z Wingdings/Symbol na odpowiedni Unicode, lub zwraca znak
-    /// niezmieniony gdy nie wymaga konwersji.
+    /// niezmieniony gdy nie wymaga konwersji. Obsługuje pełne code-pointy (włącznie z emoji
+    /// poza BMP, np. 🚀 = U+1F680).
     /// </summary>
-    private static string MapBulletChar(char ch, string? font)
+    private static string MapBulletChar(int codePoint, string? font)
     {
         var f = (font ?? string.Empty).ToLowerInvariant();
+
+        // Word zapisuje znaki z fontów symbolicznych (Wingdings, Symbol) często w obszarze
+        // Private Use Area (PUA) U+F000..U+F0FF — to ten sam kod 0xXX, ale „przesunięty”.
+        // Dla mapowania interesuje nas tylko młodszy bajt.
+        int low = codePoint & 0xFF;
+
         if (f.Contains("wingdings"))
         {
-            return ch switch
+            return low switch
             {
-                '\u00FE' => "\u2611", // ☑ zaznaczony checkbox
-                '\u00A8' => "\u2610", // ☐ pusty checkbox
-                '\u00FC' => "\u2714", // ✔ haczyk
-                '\u00A7' => "\u25A0", // ■ wypełniony kwadrat
-                '\u006C' => "\u2022", // • bullet
-                '\u00D8' => "\u2756", // ornament
-                _ => ch.ToString()
+                0xFE => "\u2611", // ☑ zaznaczony checkbox
+                0xA8 => "\u2610", // ☐ pusty checkbox
+                0xFC => "\u2714", // ✔ haczyk
+                0xA7 => "\u25A0", // ■ wypełniony kwadrat
+                0x6C => "\u2022", // • bullet
+                0xD8 => "\u2756", // ornament
+                // Nieznany kod z Wingdings — bezpieczna kropka, lepsza niż „tofu”.
+                _ => "\u2022"
             };
         }
         if (f.Contains("symbol"))
         {
-            return ch switch
+            return low switch
             {
-                '\u00B7' => "\u2022",
-                '\u00A8' => "\u25E6",
-                _ => ch.ToString()
+                0xB7 => "\u2022",
+                0xA8 => "\u25E6",
+                _ => "\u2022"
             };
         }
-        return ch.ToString();
+        // Zwykły Unicode (w tym emoji poza BMP) — buduj poprawny string z code-pointa.
+        try { return char.ConvertFromUtf32(codePoint); }
+        catch { return "\u2022"; }
     }
 
     /// <summary>
