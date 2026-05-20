@@ -18,6 +18,19 @@ RUN dotnet publish D2ViewerEditor.Api/D2ViewerEditor.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
+# LibreOffice headless — używany do rasteryzacji EMF/WMF (vector Windows metafiles)
+# osadzonych w dokumentach DOCX. Bez tego obrazki w formacie metafile nie wyświetlą
+# się w przeglądarce. Instalujemy tylko core + draw (minimalny zestaw do --convert-to).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libreoffice-core \
+        libreoffice-draw \
+        fonts-dejavu \
+    && rm -rf /var/lib/apt/lists/*
+
+# Wskaż binarkę LibreOffice dla aplikacji (omija narzut probe'owania PATH).
+ENV SOFFICE_BIN=/usr/bin/soffice
+
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 USER appuser
 

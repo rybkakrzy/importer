@@ -951,13 +951,222 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         using var stream = imagePart.GetStream();
         using var memoryStream = new MemoryStream();
         stream.CopyTo(memoryStream);
-        
+
+        var rawBytes = memoryStream.ToArray();
+        var contentType = imagePart.ContentType;
+
+        // EMF/WMF to wektorowe formaty Windows — żadna przeglądarka ich nie renderuje.
+        // Próbujemy przekonwertować do PNG (działa na Windows; na innych OS zostaje fallback).
+        if (IsMetafileContentType(contentType))
+        {
+            var png = TryConvertMetafileToPng(rawBytes);
+            if (png != null)
+            {
+                rawBytes = png;
+                contentType = "image/png";
+            }
+        }
+
         _images[relationshipId] = new DocumentImage
         {
             Id = relationshipId,
-            ContentType = imagePart.ContentType,
-            Base64Data = System.Convert.ToBase64String(memoryStream.ToArray())
+            ContentType = contentType,
+            Base64Data = System.Convert.ToBase64String(rawBytes)
         };
+    }
+
+    private static bool IsMetafileContentType(string? contentType)
+    {
+        if (string.IsNullOrEmpty(contentType)) return false;
+        var ct = contentType.ToLowerInvariant();
+        return ct.Contains("emf") || ct.Contains("wmf") || ct.Contains("metafile");
+    }
+
+    /// <summary>
+    /// Konwertuje EMF/WMF do PNG. Najpierw próbuje LibreOffice headless (cross-platform —
+    /// wystarczy zainstalowany w obrazie kontenera), potem System.Drawing na Windows.
+    /// Zwraca null gdy żadna metoda nie jest dostępna albo zawiedzie.
+    /// </summary>
+    private static byte[]? TryConvertMetafileToPng(byte[] metafileBytes)
+    {
+        // 1) LibreOffice działa wszędzie (Linux/Windows/macOS) — preferowany.
+        var viaSoffice = TryConvertWithLibreOffice(metafileBytes);
+        if (viaSoffice != null) return viaSoffice;
+
+        // 2) Fallback Windows-only.
+        if (OperatingSystem.IsWindows())
+        {
+            try { return ConvertMetafileToPngWindows(metafileBytes); }
+            catch { /* swallow */ }
+        }
+
+        return null;
+    }
+
+    private static readonly object _sofficeProbeLock = new();
+    private static string? _sofficeBinaryCache;
+    private static bool _sofficeProbed;
+
+    private static string? ResolveSofficeBinary()
+    {
+        // Pamiętaj wynik wyszukiwania w obrębie procesu, żeby nie startować procesu
+        // sprawdzającego dla każdego obrazka.
+        if (_sofficeProbed) return _sofficeBinaryCache;
+        lock (_sofficeProbeLock)
+        {
+            if (_sofficeProbed) return _sofficeBinaryCache;
+            _sofficeProbed = true;
+
+            // Pozwól wskazać binarkę przez zmienną środowiskową.
+            var fromEnv = Environment.GetEnvironmentVariable("SOFFICE_BIN");
+            if (!string.IsNullOrWhiteSpace(fromEnv) && ProbeBinary(fromEnv))
+            {
+                _sofficeBinaryCache = fromEnv;
+                return _sofficeBinaryCache;
+            }
+
+            string[] candidates = OperatingSystem.IsWindows()
+                ? new[]
+                {
+                    @"C:\Program Files\LibreOffice\program\soffice.exe",
+                    @"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+                    "soffice.exe",
+                    "soffice"
+                }
+                : new[]
+                {
+                    "/usr/bin/soffice",
+                    "/usr/bin/libreoffice",
+                    "soffice",
+                    "libreoffice"
+                };
+
+            foreach (var c in candidates)
+            {
+                if (ProbeBinary(c))
+                {
+                    _sofficeBinaryCache = c;
+                    return _sofficeBinaryCache;
+                }
+            }
+            return null;
+        }
+    }
+
+    private static bool ProbeBinary(string path)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = path,
+                Arguments = "--version",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p == null) return false;
+            if (!p.WaitForExit(3000)) { try { p.Kill(); } catch { } return false; }
+            return p.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    private static byte[]? TryConvertWithLibreOffice(byte[] metafileBytes)
+    {
+        var soffice = ResolveSofficeBinary();
+        if (soffice == null) return null;
+
+        // Wybór rozszerzenia źródła ma znaczenie — LibreOffice wnioskuje filtr z rozszerzenia.
+        var ext = LooksLikeWmf(metafileBytes) ? "wmf" : "emf";
+        var tempDir = Path.Combine(Path.GetTempPath(), "metaconv_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var inputPath = Path.Combine(tempDir, $"in.{ext}");
+            File.WriteAllBytes(inputPath, metafileBytes);
+
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = soffice,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                // Osobny katalog user-profile, żeby równoległe wywołania nie biły się o lock.
+                Arguments = $"--headless -env:UserInstallation=file://{tempDir.Replace('\\', '/')}/profile " +
+                            $"--convert-to png --outdir \"{tempDir}\" \"{inputPath}\""
+            };
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc == null) return null;
+            if (!proc.WaitForExit(30_000))
+            {
+                try { proc.Kill(true); } catch { }
+                return null;
+            }
+            if (proc.ExitCode != 0) return null;
+
+            var outputPath = Path.Combine(tempDir, "in.png");
+            if (!File.Exists(outputPath)) return null;
+            return File.ReadAllBytes(outputPath);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+        }
+    }
+
+    private static bool LooksLikeWmf(byte[] bytes)
+    {
+        // EMF zaczyna się od 0x01 0x00 0x00 0x00 (EMR_HEADER record type).
+        // WMF placeable header: 0xD7 0xCD 0xC6 0x9A; standardowy WMF: 0x01 0x00 0x09 0x00 lub 0x02 0x00 0x09 0x00.
+        if (bytes.Length < 4) return false;
+        if (bytes[0] == 0xD7 && bytes[1] == 0xCD && bytes[2] == 0xC6 && bytes[3] == 0x9A) return true;
+        if (bytes[0] == 0x01 && bytes[1] == 0x00 && bytes[2] == 0x09 && bytes[3] == 0x00) return true;
+        if (bytes[0] == 0x02 && bytes[1] == 0x00 && bytes[2] == 0x09 && bytes[3] == 0x00) return true;
+        return false;
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static byte[] ConvertMetafileToPngWindows(byte[] metafileBytes)
+    {
+        using var src = new MemoryStream(metafileBytes);
+        using var img = System.Drawing.Image.FromStream(src);
+
+        // EMF jest wektorowy — wybieramy sensowny DPI, by zachować ostrość.
+        const float targetDpi = 144f;
+        var widthPx = Math.Max(1, (int)Math.Ceiling(img.Width * targetDpi / Math.Max(1f, img.HorizontalResolution)));
+        var heightPx = Math.Max(1, (int)Math.Ceiling(img.Height * targetDpi / Math.Max(1f, img.VerticalResolution)));
+
+        // Bezpieczne ograniczenie, by nie wyprodukować ogromnego bitmapa.
+        const int maxPx = 4096;
+        if (widthPx > maxPx || heightPx > maxPx)
+        {
+            var scale = Math.Min(maxPx / (double)widthPx, maxPx / (double)heightPx);
+            widthPx = Math.Max(1, (int)(widthPx * scale));
+            heightPx = Math.Max(1, (int)(heightPx * scale));
+        }
+
+        using var bmp = new System.Drawing.Bitmap(widthPx, heightPx, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        bmp.SetResolution(targetDpi, targetDpi);
+        using (var g = System.Drawing.Graphics.FromImage(bmp))
+        {
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g.Clear(System.Drawing.Color.Transparent);
+            g.DrawImage(img, 0, 0, widthPx, heightPx);
+        }
+
+        using var outMs = new MemoryStream();
+        bmp.Save(outMs, System.Drawing.Imaging.ImageFormat.Png);
+        return outMs.ToArray();
     }
 
     /// <summary>
@@ -1006,8 +1215,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     using var stream = imagePart.GetStream();
                     using var ms = new MemoryStream();
                     stream.CopyTo(ms);
-                    var b64 = System.Convert.ToBase64String(ms.ToArray());
-                    _picBulletDataUris[id] = $"data:{imagePart.ContentType};base64,{b64}";
+                    var bytes = ms.ToArray();
+                    var contentType = imagePart.ContentType;
+                    if (IsMetafileContentType(contentType))
+                    {
+                        var png = TryConvertMetafileToPng(bytes);
+                        if (png != null) { bytes = png; contentType = "image/png"; }
+                    }
+                    var b64 = System.Convert.ToBase64String(bytes);
+                    _picBulletDataUris[id] = $"data:{contentType};base64,{b64}";
                 }
             }
             catch
