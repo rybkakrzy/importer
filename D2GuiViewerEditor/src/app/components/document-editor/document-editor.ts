@@ -4,6 +4,7 @@ import {
   ElementRef,
   inject,
   signal,
+  computed,
   HostListener,
   OnInit
 } from '@angular/core';
@@ -113,6 +114,21 @@ export class DocumentEditorComponent implements OnInit {
     'Georgia', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Helvetica',
     'Courier New', 'Lucida Console', 'Palatino Linotype', 'Garamond', 'Book Antiqua'
   ];
+
+  /** Czcionka do pokazania w mini-toolbarze — czyta currentStyle i normalizuje
+   *  do najbliższej pozycji z commonFonts (tak jak robi to main toolbar). */
+  readonly miniToolbarFontFamily = computed(() => {
+    const raw = this.editorState()?.currentStyle?.fontFamily;
+    if (!raw) return 'Calibri';
+    const incoming = raw.trim().toLowerCase();
+    // Exact match
+    const exact = this.commonFonts.find(f => f.toLowerCase() === incoming);
+    if (exact) return exact;
+    // Prefix/includes — od najdłuższych, żeby "Calibri Light" > "Calibri"
+    const byLength = [...this.commonFonts].sort((a, b) => b.length - a.length);
+    const partial = byLength.find(f => incoming.includes(f.toLowerCase()));
+    return partial ?? raw;
+  });
 
   // Menu Narzędzia
   showToolsMenu = signal(false);

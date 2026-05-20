@@ -1233,10 +1233,10 @@
       <!-- Wiersz 1: Formatowanie tekstu -->
       <div class="mt-row">
         <!-- Font family -->
-        <select class="mt-font-family" [value]="editorState()?.fontFamily || 'Calibri'"
+        <select class="mt-font-family" [value]="miniToolbarFontFamily()"
                 (change)="miniToolbarSetFontFamily($any($event.target).value)" title="Czcionka">
           @for (f of commonFonts; track f) {
-            <option [value]="f" [selected]="editorState()?.fontFamily === f">{{ f }}</option>
+            <option [value]="f" [selected]="miniToolbarFontFamily() === f">{{ f }}</option>
           }
         </select>
 
