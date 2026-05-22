@@ -310,7 +310,7 @@
   margin-right: 8px;
 }
 
-.report-btn {
+.header-right .header-btn {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -318,51 +318,28 @@
   padding: 0 12px;
   background: transparent;
   border: 1px solid #ccc;
-  color: #333;
+  color: #000;
   cursor: pointer;
   border-radius: 4px;
   font-size: 13px;
   font-weight: 500;
+  font-family: inherit;
   transition: background 0.15s, border-color 0.15s;
-}
-
-.report-btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-  border-color: #999;
-}
-
-.save-btn,
-.finish-btn {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid #ccc;
-  cursor: pointer;
-  border-radius: 4px;
-  font-size: 13px;
-  font-weight: 500;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.save-btn {
-  background: transparent;
-  color: #333;
 
   &:hover {
     background: rgba(0, 0, 0, 0.06);
     border-color: #999;
   }
-}
 
-.finish-btn {
-  background: #1976d2;
-  border-color: #1976d2;
-  color: #fff;
+  &.header-btn--primary {
+    background: #ff0000;
+    border-color: #ff0000;
+    color: #fff;
 
-  &:hover {
-    background: #1565c0;
-    border-color: #1565c0;
+    &:hover {
+      background: #cc0000;
+      border-color: #cc0000;
+    }
   }
 }
 
@@ -777,6 +754,7 @@
   border: 1px solid #ccc;
   border-radius: 3px;
   cursor: pointer;
+  color: #000;
   transition: all 0.15s;
 }
 

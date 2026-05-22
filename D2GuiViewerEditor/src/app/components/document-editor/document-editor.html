@@ -468,15 +468,14 @@
     
     <div class="header-right">
       <span class="beta-badge">Wersja BETA-Test-DEV</span>
-      <button class="save-btn" (click)="saveDocument()" title="Zapisz">
+      <button class="header-btn" (click)="openReportEmail()" title="Zgłoś problem">
+        <span>Zgłoś</span>
+      </button>
+      <button class="header-btn" (click)="saveDocument()" title="Zapisz">
         <span>Zapisz</span>
       </button>
-      <button class="finish-btn" (click)="finishDocument()" title="Zakończ">
+      <button class="header-btn" (click)="finishDocument()" title="Zakończ">
         <span>Zakończ</span>
-      </button>
-      <!-- Report button -->
-      <button class="report-btn" (click)="openReportEmail()" title="Zgłoś problem">
-        <span>Zgłoś</span>
       </button>
     </div>
   </header>
