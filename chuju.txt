@@ -1,8 +1,0 @@
-Brak drag end drop na obrazkach
-Nowe menu kontekstowe dla zaznaczonego akapitu
-Problemy z marginesami
-Dodanie dashboard (przyciski Nowy plik, Otwórz dokument, Sprawdź dokument) wraz z obsługą przekierowań
-Include PDF Viweera
-Naprawa PDF Vierwera (wyszukiwanie treści, jump to find)
-Dodanie obsługi "nie znaleziono dokumentu" - Dokument o podanym identyfikatorze nie istnieje lub został usunięty.
-Dodanie obsługi "nie można pobrać dokumentu z serwera"

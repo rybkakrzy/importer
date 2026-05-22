@@ -1,0 +1,9 @@
+**/.vs
+**/.git
+**/.gitignore
+**/bin
+**/obj
+**/logs
+**/*.user
+appsettings.local.json
+README.md

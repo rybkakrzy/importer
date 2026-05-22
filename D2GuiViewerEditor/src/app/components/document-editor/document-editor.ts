@@ -1158,6 +1158,10 @@ export class DocumentEditorComponent implements OnInit {
     this.showShadingDropdown.set(false);
   }
 
+  finishDocument(): void {
+    // TODO: implement finish logic
+  }
+
   openReportEmail(): void {
     const masterId = this.documentMasterId() ?? '—';
     const version = this.documentMetadata()?.version ?? '—';
