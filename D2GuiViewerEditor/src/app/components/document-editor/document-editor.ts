@@ -1,18 +1,20 @@
-import { 
-  Component, 
-  ViewChild, 
+import {
+  Component,
+  ViewChild,
   ElementRef,
   inject,
   signal,
   computed,
   HostListener,
-  OnInit
+  OnInit,
+  OnDestroy
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { switchMap, map, filter, distinctUntilChanged } from 'rxjs/operators';
-import { from } from 'rxjs';
+import { from, Observable, Subscription, timer } from 'rxjs';
+import { environment } from '../../../environments/environment';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
@@ -53,7 +55,7 @@ import { DocumentStorageService } from '../../services/document-storage.service'
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
 })
-export class DocumentEditorComponent implements OnInit {
+export class DocumentEditorComponent implements OnInit, OnDestroy {
   @ViewChild(WysiwygEditorComponent) editor!: WysiwygEditorComponent;
   @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
   @ViewChild('verticalRulerBar') verticalRulerBar?: ElementRef<HTMLDivElement>;
@@ -67,6 +69,16 @@ export class DocumentEditorComponent implements OnInit {
   // Stan dokumentu
   documentContent = signal<string>('<p></p>');
   documentMasterId = signal<string | null>(null);
+  /** GUID wersji edytowalnej (v2) — obecny tylko w trybie edycji (?versionId=...). Cel auto-save. */
+  documentVersionId = signal<string | null>(null);
+
+  // Auto-save (nadpisuje wersję edytowalną w miejscu)
+  autoSaveEnabled = signal<boolean>(environment.autoSave?.enabled ?? true);
+  /** Status ostatniego auto-save dla wskaźnika w UI. */
+  autoSaveStatus = signal<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  lastAutoSaveAt = signal<Date | null>(null);
+  private autoSaveSub?: Subscription;
+  private isAutoSaving = false;
   documentMetadata = signal<DocumentMetadata>({
     title: 'Nowy dokument',
     created: new Date().toISOString(),
@@ -271,6 +283,104 @@ export class DocumentEditorComponent implements OnInit {
       distinctUntilChanged()
     ).subscribe(masterId => {
       this.loadFromStorage(masterId!);
+    });
+
+    // versionId obecny tylko w trybie edycji — to cel auto-save (wersja edytowalna v2).
+    this.route.queryParams.pipe(
+      map(params => params['versionId'] as string | undefined),
+      distinctUntilChanged()
+    ).subscribe(versionId => {
+      this.documentVersionId.set(versionId ?? null);
+    });
+
+    this.startAutoSave();
+  }
+
+  ngOnDestroy(): void {
+    this.stopAutoSave();
+  }
+
+  /**
+   * Uruchamia cykliczny auto-save. Interwał z konfiguracji (environment.autoSave.intervalSeconds).
+   * Każdy tick nadpisuje wersję edytowalną tylko gdy: auto-save włączony, jest versionId (tryb edycji)
+   * oraz w edytorze są niezapisane zmiany.
+   */
+  private startAutoSave(): void {
+    this.stopAutoSave();
+    const intervalMs = (environment.autoSave?.intervalSeconds ?? 30) * 1000;
+    this.autoSaveSub = timer(intervalMs, intervalMs).subscribe(() => {
+      if (!this.autoSaveEnabled()) return;
+      if (this.isAutoSaving) return;
+      if (!this.documentVersionId() || !this.documentMasterId()) return;
+      if (!this.editorState()?.isModified) return;
+      this.performAutoSave();
+    });
+  }
+
+  private stopAutoSave(): void {
+    this.autoSaveSub?.unsubscribe();
+    this.autoSaveSub = undefined;
+  }
+
+  /**
+   * Przełącza auto-save (switch w UI). Wyłączenie zatrzymuje cykliczne zapisy.
+   */
+  toggleAutoSave(): void {
+    const next = !this.autoSaveEnabled();
+    this.autoSaveEnabled.set(next);
+    this.autoSaveStatus.set('idle');
+  }
+
+  /**
+   * Buduje request zapisu z bieżącego stanu edytora (HTML + metadane + nagłówek/stopka + marginesy).
+   */
+  private buildSaveRequest() {
+    const html = this.editor?.getContent() || this.documentContent();
+    const fileName = this.originalFileName() || `${this.documentMetadata().title || 'dokument'}.docx`;
+    return {
+      html,
+      originalFileName: fileName,
+      metadata: this.documentMetadata(),
+      header: this.headerContent(),
+      footer: this.footerContent(),
+      margins: this.pageSettings().margins
+    };
+  }
+
+  /**
+   * Serializuje zawartość do DOCX i utrwala przez API.
+   * PUT (nadpisanie wersji edytowalnej v2 w miejscu) gdy jest versionId, inaczej POST (nowa wersja).
+   */
+  private persistDocument(): Observable<unknown> {
+    const masterId = this.documentMasterId()!;
+    const versionId = this.documentVersionId();
+    return this.documentService.saveDocument(this.buildSaveRequest()).pipe(
+      switchMap(blob => from(this.blobToBase64(blob))),
+      switchMap(base64 => versionId
+        ? this.documentStorageService.updateDocumentVersion(masterId, versionId, { content: base64 })
+        : this.documentStorageService.saveDocumentVersion(masterId, { content: base64 })
+      )
+    );
+  }
+
+  /**
+   * Auto-save: nadpisuje wersję edytowalną w tle (ta sama ścieżka co ręczny „Zapisz").
+   */
+  private performAutoSave(): void {
+    this.isAutoSaving = true;
+    this.autoSaveStatus.set('saving');
+
+    this.persistDocument().subscribe({
+      next: () => {
+        this.editor?.markAsSaved();
+        this.lastAutoSaveAt.set(new Date());
+        this.autoSaveStatus.set('saved');
+        this.isAutoSaving = false;
+      },
+      error: () => {
+        this.autoSaveStatus.set('error');
+        this.isAutoSaving = false;
+      }
     });
   }
 
@@ -511,14 +621,49 @@ export class DocumentEditorComponent implements OnInit {
   }
 
   /**
-   * Zapisuje dokument
+   * Zapisuje dokument przez API (ujednolicony zapis — ta sama ścieżka co auto-save).
+   * Nadpisuje wersję edytowalną (v2) w miejscu gdy jest versionId; w przeciwnym razie tworzy nową wersję.
    */
   saveDocument(): void {
-    const html = this.editor?.getContent() || this.documentContent();
-    const fileName = this.originalFileName() || `${this.documentMetadata().title || 'dokument'}.docx`;
+    const masterId = this.documentMasterId();
+    if (!masterId) {
+      // Brak mastera (np. dokument z szablonu, jeszcze nie utrwalony) — pozwól pobrać plik zamiast cichego nic.
+      this.showError('Dokument nie jest powiązany z bazą — użyj „Pobierz dokument".');
+      this.showMenu.set(false);
+      return;
+    }
 
-    // === DIAGNOSTYKA ZAPISU (do debugowania zgubionych stylów / formatowania) ===
+    this.showMenu.set(false);
+    this.isLoading.set(true);
+    this.autoSaveStatus.set('saving');
+
+    this.persistDocument().subscribe({
+      next: () => {
+        this.editor?.markAsSaved();
+        this.lastAutoSaveAt.set(new Date());
+        this.autoSaveStatus.set('saved');
+        this.showSuccess('Dokument został zapisany');
+        this.isLoading.set(false);
+      },
+      error: () => {
+        this.autoSaveStatus.set('error');
+        this.showError('Nie udało się zapisać dokumentu');
+        this.isLoading.set(false);
+      }
+    });
+  }
+
+  /**
+   * Pobiera dokument jako plik DOCX do przeglądarki (dawne „Zapisz").
+   * Nie utrwala w bazie — to lokalna kopia dla użytkownika.
+   */
+  downloadDocument(): void {
+    const request = this.buildSaveRequest();
+    const fileName = request.originalFileName;
+
+    // === DIAGNOSTYKA (do debugowania zgubionych stylów / formatowania) ===
     try {
+      const html = request.html;
       const tmp = document.createElement('div');
       tmp.innerHTML = html;
       const counts = {
@@ -539,52 +684,25 @@ export class DocumentEditorComponent implements OnInit {
         fontSizeAttrs: Array.from(tmp.querySelectorAll('[style*="font-size"]')).slice(0, 5).map(e => (e as HTMLElement).style.fontSize),
         fontFamilyAttrs: Array.from(tmp.querySelectorAll('[style*="font-family"]')).slice(0, 5).map(e => (e as HTMLElement).style.fontFamily),
       };
-      console.group('[saveDocument] DIAGNOSTYKA HTML wysyłanego do API');
+      console.group('[downloadDocument] DIAGNOSTYKA HTML wysyłanego do API');
       console.log('fileName:', fileName);
       console.log('counts:', counts);
       console.log('first 2000 chars:', html.substring(0, 2000));
       console.log('header:', this.headerContent());
       console.log('footer:', this.footerContent());
       console.log('margins:', this.pageSettings().margins);
-      // udostępnij globalnie, żeby można było skopiować przez window.__lastSaveHtml
       (window as unknown as { __lastSaveHtml?: string }).__lastSaveHtml = html;
       console.log('Pełny HTML dostępny w window.__lastSaveHtml');
       console.groupEnd();
     } catch (e) {
-      console.warn('[saveDocument] diagnostyka failed', e);
+      console.warn('[downloadDocument] diagnostyka failed', e);
     }
 
     this.isLoading.set(true);
-    
-    this.documentService.downloadDocument(
-      {
-        html,
-        originalFileName: fileName,
-        metadata: this.documentMetadata(),
-        header: this.headerContent(),
-        footer: this.footerContent(),
-        margins: this.pageSettings().margins
-      },
-      fileName
-    );
-    
-    this.editor?.markAsSaved();
-    this.showSuccess('Dokument został zapisany');
+    this.documentService.downloadDocument(request, fileName);
+    this.showSuccess('Pobrano dokument');
     this.isLoading.set(false);
     this.showMenu.set(false);
-  }
-
-  /**
-   * Zapisuje dokument jako nowy plik
-   */
-  saveDocumentAs(): void {
-    const newName = prompt('Podaj nazwę pliku:', this.documentMetadata().title || 'dokument');
-    
-    if (newName) {
-      this.originalFileName.set(newName.endsWith('.docx') ? newName : `${newName}.docx`);
-      this.documentMetadata.update(m => ({ ...m, title: newName }));
-      this.saveDocument();
-    }
   }
 
   /**

@@ -49,6 +49,9 @@ public class DocumentVersionConfiguration : IEntityTypeConfiguration<DocumentVer
             .HasColumnName("is_active")
             .IsRequired();
 
+        builder.Property(v => v.ModifiedAt)
+            .HasColumnName("modified_at");
+
         // Indeksy
         builder.HasIndex(v => v.DocumentId);
         builder.HasIndex(v => new { v.DocumentId, v.IsActive });

@@ -28,7 +28,9 @@
       "PowerShell(Stop-Process -Id 11160 -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; cd \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ServicesViewerEditor\\\\D2ServicesViewerEditor.Api\"; dotnet build 2>&1 | Select-String -Pattern \"error|Kompilacja|Liczba\" | ForEach-Object { $_.Line })",
       "PowerShell(cd \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ServicesViewerEditor\\\\D2ServicesViewerEditor.Api\"; $env:ASPNETCORE_ENVIRONMENT = \"local\"; dotnet run 2>&1)",
       "PowerShell(Invoke-RestMethod -Uri \"http://localhost:15112/api/health\")",
-      "PowerShell(Rename-Item \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ServicesViewerEditor\\\\D2ServicesViewerEditor.Api\\\\Controllers\\\\IntegrationController.cs\" \"DocumentController.cs\")"
+      "PowerShell(Rename-Item \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ServicesViewerEditor\\\\D2ServicesViewerEditor.Api\\\\Controllers\\\\IntegrationController.cs\" \"DocumentController.cs\")",
+      "Bash(dotnet build *)",
+      "Read(//c/c/Projekty/Jit/ImportParametryzacji/importer/D2GuiViewerEditor/src/app/components/document-editor/**)"
     ]
   }
 }

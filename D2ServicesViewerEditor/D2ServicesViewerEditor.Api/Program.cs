@@ -30,6 +30,19 @@ try
     builder.Services.AddApplication();
     builder.Services.AddInfrastructure(builder.Configuration);
 
+    // Limity uploadu: validator dopuszcza pliki do 100 MB — Kestrel i parser multipart
+    // muszą zezwalać na co najmniej tyle (z drobnym zapasem na nagłówki i metadane).
+    const long MaxUploadBytes = 110L * 1024 * 1024;
+    builder.WebHost.ConfigureKestrel(options =>
+    {
+        options.Limits.MaxRequestBodySize = MaxUploadBytes;
+    });
+    builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+    {
+        options.MultipartBodyLengthLimit = MaxUploadBytes;
+        options.ValueLengthLimit = int.MaxValue;
+    });
+
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
 

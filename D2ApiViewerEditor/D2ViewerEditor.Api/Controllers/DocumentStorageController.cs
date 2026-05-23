@@ -3,7 +3,9 @@ using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVers
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.UpdateDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentBaseContent;
+using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentMetadata;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersionContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersions;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocuments;
@@ -81,6 +83,53 @@ public class DocumentStorageController : BaseApiController
             : result.IsNotFound
                 ? NotFound(new { error = result.Error })
                 : BadRequest(result.Error);
+    }
+
+    /// <summary>
+    /// Nadpisanie istniejącej wersji w miejscu (auto-save edytora).
+    /// Podmienia plik w GCS pod tym samym versionId — nie tworzy nowych wersji.
+    /// Wersja oryginalna (v1) jest nietykalna (zwraca 400).
+    /// </summary>
+    /// <param name="masterId">GUID mastera dokumentu</param>
+    /// <param name="versionId">GUID wersji do nadpisania (edytowalna)</param>
+    /// <param name="request">Nowa zawartość dokumentu</param>
+    [HttpPut("{masterId:guid}/versions/{versionId:guid}")]
+    [ProducesResponseType(typeof(UpdateDocumentVersionResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateDocumentVersion(
+        Guid masterId, Guid versionId, [FromBody] SaveDocumentVersionRequest request)
+    {
+        var command = new UpdateDocumentVersionCommand(
+            MasterId: masterId,
+            VersionId: versionId,
+            Content: request.Content
+        );
+
+        var result = await Mediator.Send(command);
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Pobranie metadanych dokumentu przysłanych przez aplikację zewnętrzną (returnUrl, classification).
+    /// </summary>
+    /// <param name="masterId">GUID mastera dokumentu</param>
+    [HttpGet("{masterId:guid}/metadata")]
+    [ProducesResponseType(typeof(DocumentMetadataDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDocumentMetadata(Guid masterId)
+    {
+        var query = new GetDocumentMetadataQuery(masterId);
+        var result = await Mediator.Send(query);
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : NotFound(new { error = result.Error });
     }
 
     /// <summary>

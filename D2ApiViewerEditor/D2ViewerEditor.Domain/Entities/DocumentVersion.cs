@@ -69,6 +69,22 @@ public class DocumentVersion
     public Document? Document { get; private set; }
 
     /// <summary>
+    /// Data ostatniej modyfikacji zawartości wersji (auto-save nadpisuje plik w miejscu).
+    /// Null dopóki wersja nie została nadpisana po utworzeniu.
+    /// </summary>
+    public DateTime? ModifiedAt { get; private set; }
+
+    /// <summary>
+    /// Nadpisuje zawartość tej wersji w miejscu (auto-save).
+    /// Nie zmienia Id, VersionNumber, StoragePath ani CreatedAt — tylko rozmiar i znacznik modyfikacji.
+    /// </summary>
+    internal void UpdateContent(long sizeInBytes)
+    {
+        SizeInBytes = sizeInBytes;
+        ModifiedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
     /// Aktywuje tę wersję
     /// </summary>
     internal void Activate()

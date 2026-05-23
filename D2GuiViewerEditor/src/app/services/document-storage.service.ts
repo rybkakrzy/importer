@@ -28,6 +28,13 @@ export interface SaveDocumentVersionResult {
   createdAt: string;
 }
 
+export interface UpdateDocumentVersionResult {
+  versionId: string;
+  versionNumber: number;
+  sizeInBytes: number;
+  modifiedAt: string;
+}
+
 export interface DocumentDto {
   masterId: string;
   name: string;
@@ -83,6 +90,24 @@ export class DocumentStorageService {
   ): Observable<SaveDocumentVersionResult> {
     return this.http.post<SaveDocumentVersionResult>(
       `${this.apiUrl}/${masterId}/save`,
+      request
+    );
+  }
+
+  /**
+   * Nadpisanie istniejącej wersji w miejscu (auto-save edytora).
+   * Podmienia plik w GCS pod tym samym versionId — nie tworzy nowych wersji.
+   * @param masterId - GUID mastera dokumentu
+   * @param versionId - GUID wersji edytowalnej do nadpisania
+   * @param request - Nowa zawartość dokumentu w Base64
+   */
+  updateDocumentVersion(
+    masterId: string,
+    versionId: string,
+    request: SaveDocumentVersionRequest
+  ): Observable<UpdateDocumentVersionResult> {
+    return this.http.put<UpdateDocumentVersionResult>(
+      `${this.apiUrl}/${masterId}/versions/${versionId}`,
       request
     );
   }

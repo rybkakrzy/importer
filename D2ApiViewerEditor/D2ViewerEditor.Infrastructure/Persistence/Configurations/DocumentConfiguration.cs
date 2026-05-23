@@ -43,6 +43,10 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
             .IsRequired()
             .HasDefaultValue(false);
 
+        builder.Property(d => d.Metadata)
+            .HasColumnName("metadata")
+            .HasColumnType("text");
+
         // Relacja 1:N z DocumentVersion — backing field _versions
         builder.HasMany(d => d.Versions)
             .WithOne(v => v.Document!)

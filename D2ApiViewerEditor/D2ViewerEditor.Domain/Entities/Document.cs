@@ -10,7 +10,7 @@ public class Document
 
     private Document() { } // EF Core
 
-    public Document(Guid id, string name, string mimeType, string createdBy)
+    public Document(Guid id, string name, string mimeType, string createdBy, string? metadata = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Nazwa dokumentu nie może być pusta", nameof(name));
@@ -24,6 +24,7 @@ public class Document
         CreatedAt = DateTime.UtcNow;
         CreatedBy = createdBy;
         IsDeleted = false;
+        Metadata = metadata;
     }
 
     /// <summary>
@@ -57,6 +58,11 @@ public class Document
     public bool IsDeleted { get; private set; }
 
     /// <summary>
+    /// Metadane przesłane przez aplikację zewnętrzną (JSON, np. returnUrl, classification C1..C4)
+    /// </summary>
+    public string? Metadata { get; private set; }
+
+    /// <summary>
     /// Wersje dokumentu
     /// </summary>
     public IReadOnlyCollection<DocumentVersion> Versions => _versions.AsReadOnly();
@@ -86,6 +92,23 @@ public class Document
         }
 
         _versions.Add(version);
+        return version;
+    }
+
+    /// <summary>
+    /// Nadpisuje zawartość istniejącej wersji w miejscu (auto-save edytora).
+    /// Wersja oryginalna (v1, oryginał przysłany przez aplikację zewnętrzną) jest nietykalna.
+    /// </summary>
+    public DocumentVersion UpdateVersion(Guid versionId, long sizeInBytes)
+    {
+        var version = _versions.FirstOrDefault(v => v.Id == versionId);
+        if (version == null)
+            throw new InvalidOperationException($"Wersja {versionId} nie istnieje");
+
+        if (version.VersionNumber == 1)
+            throw new InvalidOperationException("Nie można nadpisać wersji oryginalnej (v1) — edycji podlega wyłącznie wersja edytowalna");
+
+        version.UpdateContent(sizeInBytes);
         return version;
     }
 
