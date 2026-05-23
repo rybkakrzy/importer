@@ -88,6 +88,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   
   pageMargins = input<PageMargins>({ top: 2.5, bottom: 2.5, left: 2.5, right: 2.5 });
   @Input() pageOrientation: 'portrait' | 'landscape' = 'portrait';
+  /** Tryb tylko-do-odczytu (Krok 2) — blokuje edycję contenteditable. */
+  @Input() readOnly = false;
   @Input() showMarginGuides = true;
   
   // Nagłówek i stopka

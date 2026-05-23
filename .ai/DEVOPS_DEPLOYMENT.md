@@ -12,15 +12,15 @@ Sposób uruchamiania, budowania i wdrażania projektu. Część szczegółów de
 | GUI | `docker/gui.dockerfile` | build `node:22-alpine` → runtime `nginx:1.27-alpine` | EXPOSE 80 | kopiuje `D2GuiViewerEditor/nginx.conf` + `dist/d2-gui-viewereditor/browser` |
 | External API | `D2ServicesViewerEditor/Dockerfile` | `dotnet/aspnet:8.0` | EXPOSE 80/443 | ENTRYPOINT `D2ServicesViewerEditor.Api.dll` |
 
-## Porty DEV (launchSettings)
+## Porty DEV i Swagger
 
-| Usługa | HTTP | HTTPS |
-|---|---|---|
-| Internal API (`D2ApiViewerEditor`) | 5190 | 7190 |
-| External API (`D2ServicesViewerEditor`) | 5000 | 7000 |
-| GUI (`ng serve`) | 4200 | — |
+| Usługa | HTTP | HTTPS | Swagger UI | Źródło portu |
+|---|---|---|---|---|
+| Internal API (`D2ApiViewerEditor`) | 5190 | 7190 | `http://localhost:5190/swagger` | `launchSettings.json` |
+| External API (`D2ServicesViewerEditor`) | 15112 | 15112 | `http://localhost:15112/swagger` | `appsettings.json` → `Urls`, `appsettings.local.json` |
+| GUI (`ng serve`) | 4200 | — | — | `angular.json` |
 
-> Aplikacja zewnętrzna ma rzekomo wołać External API na porcie **15112** (z rozmowy projektowej), ale repo (`launchSettings`) tego nie potwierdza — patrz `RISKS_ASSUMPTIONS.md` A-01.
+> External API używa portu **15112** z klucza `Urls` w `appsettings.json` (`https://0.0.0.0:15112`) / `appsettings.local.json` (`http://localhost:15112`). Profile w `launchSettings.json` (5000/7000) nie są tu źródłem prawdy. Swagger włączony w dev/local (`Swagger.Enabled=true`), wyłączony w bazowym `appsettings.json`.
 
 ## Lokalny start (do potwierdzenia — brak docker-compose w repo)
 

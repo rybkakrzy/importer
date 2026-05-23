@@ -33,7 +33,7 @@ System przyjmuje dokumenty od aplikacji zewnętrznej (External API), edytuje/ogl
 
 1. Krok 2 (podgląd): w GUI dla `?masterId=` ładować v1 przez `GET .../{masterId}/download` zamiast aktywnej wersji; routing PDFViewer vs DocxEditor po `mimeType` z `GET .../{masterId}/metadata` lub `/{masterId}`.
 2. Zaimplementować `finishDocument()` — pobranie `returnUrl` z metadanych i odesłanie pliku.
-3. Potwierdzić port External API (5000 vs 15112) i ujednolicić docs.
+3. (Zamknięte) Port External API = 15112 wg `appsettings.json` `Urls`; Swagger `/swagger`.
 4. Dodać testy: domena `UpdateVersion` (v1 immutable), handler `UpdateDocumentVersionCommand`, serwis GUI auto-save.
 
 ## Niedokończone zmiany

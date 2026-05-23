@@ -71,6 +71,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   documentMasterId = signal<string | null>(null);
   /** GUID wersji edytowalnej (v2) — obecny tylko w trybie edycji (?versionId=...). Cel auto-save. */
   documentVersionId = signal<string | null>(null);
+  /** Tryb tylko-do-odczytu (Krok 2): brak versionId → ładujemy wersję bazową i blokujemy edycję. */
+  readOnly = signal<boolean>(false);
 
   // Auto-save (nadpisuje wersję edytowalną w miejscu)
   autoSaveEnabled = signal<boolean>(environment.autoSave?.enabled ?? true);
@@ -277,20 +279,19 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // Czytamy masterId i versionId RAZEM: versionId decyduje o trybie (edycja vs read-only),
+    // więc musi być znany zanim zdecydujemy, którą wersję załadować.
     this.route.queryParams.pipe(
-      map(params => params['masterId'] as string | undefined),
-      filter(masterId => !!masterId),
-      distinctUntilChanged()
-    ).subscribe(masterId => {
-      this.loadFromStorage(masterId!);
-    });
-
-    // versionId obecny tylko w trybie edycji — to cel auto-save (wersja edytowalna v2).
-    this.route.queryParams.pipe(
-      map(params => params['versionId'] as string | undefined),
-      distinctUntilChanged()
-    ).subscribe(versionId => {
+      map(params => ({
+        masterId: params['masterId'] as string | undefined,
+        versionId: params['versionId'] as string | undefined
+      })),
+      filter(p => !!p.masterId),
+      distinctUntilChanged((a, b) => a.masterId === b.masterId && a.versionId === b.versionId)
+    ).subscribe(({ masterId, versionId }) => {
       this.documentVersionId.set(versionId ?? null);
+      this.readOnly.set(!versionId);
+      this.loadFromStorage(masterId!, versionId ?? null);
     });
 
     this.startAutoSave();
@@ -384,28 +385,54 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  private static readonly DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  private static readonly DOC_MIME = 'application/msword';
+  private static readonly PDF_MIME = 'application/pdf';
+
   /**
-   * Ładuje dokument z bazy danych na podstawie masterId
+   * Ładuje dokument z bazy.
+   * - Tryb edycji (versionId): ładuje WSKAZANĄ wersję edytowalną (Krok 3).
+   * - Tryb read-only (brak versionId): ładuje wersję BAZOWĄ — oryginał (Krok 2, bardzo ważne!).
+   * PDF nie jest obsługiwany w edytorze DOCX → przekierowanie do /viewer.
    */
-  private loadFromStorage(masterId: string): void {
+  private loadFromStorage(masterId: string, versionId: string | null): void {
     this.isLoading.set(true);
     this.errorMessage.set(null);
     this.documentMasterId.set(masterId);
 
-    this.documentStorageService.getDocument(masterId).pipe(
-      switchMap(doc => {
-        const blob = this.documentStorageService.base64ToBlob(doc.content, doc.mimeType);
-        const file = new File([blob], doc.name, { type: doc.mimeType });
-        return this.documentService.openDocument(file).pipe(
-          map(content => ({ content, doc }))
+    this.documentStorageService.getDocumentMetadata(masterId).pipe(
+      switchMap(meta => {
+        const mime = (meta.mimeType || '').toLowerCase();
+
+        // PDF: edytor DOCX nie renderuje PDF — kieruj do PDFViewer (tryb podglądu).
+        if (mime === DocumentEditorComponent.PDF_MIME) {
+          this.router.navigate(['/viewer'], { queryParams: { masterId } });
+          return from(Promise.reject({ handled: true } as const));
+        }
+
+        // Bajty: edycja → wskazana wersja; read-only → wersja bazowa (oryginał).
+        const bytes$ = versionId
+          ? this.documentStorageService.downloadVersion(masterId, versionId)
+          : this.documentStorageService.downloadBaseVersion(masterId);
+
+        const ext = mime === DocumentEditorComponent.DOC_MIME ? '.doc' : '.docx';
+        const fileName = `dokument${ext}`;
+
+        return bytes$.pipe(
+          switchMap(blob => {
+            const file = new File([blob], fileName, { type: mime || DocumentEditorComponent.DOCX_MIME });
+            return this.documentService.openDocument(file).pipe(
+              map(content => ({ content, fileName }))
+            );
+          })
         );
       })
     ).subscribe({
-      next: ({ content, doc }) => {
+      next: ({ content, fileName }) => {
         this.documentContent.set(content.html);
         this.documentMetadata.set(content.metadata);
         this.documentStyles.set(content.styles || []);
-        this.originalFileName.set(doc.name);
+        this.originalFileName.set(fileName);
         this.headerContent.set({
           html: content.header?.html || '',
           height: content.header?.height || 1.25
@@ -414,7 +441,6 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
           html: content.footer?.html || '',
           height: content.footer?.height || 1.25
         });
-        // Wczytaj marginesy strony
         if (content.margins) {
           this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
         }
@@ -425,6 +451,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.isLoading.set(false);
       },
       error: (err) => {
+        if (err?.handled) {
+          // przekierowanie do /viewer — nic nie pokazujemy
+          return;
+        }
         if (err.status === 404) {
           this.documentNotFound.set(true);
         } else {
@@ -625,6 +655,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Nadpisuje wersję edytowalną (v2) w miejscu gdy jest versionId; w przeciwnym razie tworzy nową wersję.
    */
   saveDocument(): void {
+    if (this.readOnly()) {
+      // Tryb podglądu (Krok 2) — wersja bazowa jest nietykalna. Zapis przez API zablokowany.
+      this.showError('Tryb podglądu — dokument jest tylko do odczytu. Użyj „Pobierz dokument", aby zapisać kopię lokalnie.');
+      this.showMenu.set(false);
+      return;
+    }
+
     const masterId = this.documentMasterId();
     if (!masterId) {
       // Brak mastera (np. dokument z szablonu, jeszcze nie utrwalony) — pozwól pobrać plik zamiast cichego nic.

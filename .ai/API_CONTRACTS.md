@@ -7,8 +7,8 @@ Zasady projektowania/zmiany API oraz katalog realnych endpointów obu backendów
 ## Styl API
 
 REST over HTTP/JSON (+ multipart dla plików). Dwa backendy:
-- **Internal API** `D2ApiViewerEditor` — base `http://localhost:5190/api` (DEV). Konsument: GUI.
-- **External API** `D2ServicesViewerEditor` — base `http://localhost:5000/api/v1` (DEV wg launchSettings; patrz RISKS A-01). Konsument: aplikacje źródłowe.
+- **Internal API** `D2ApiViewerEditor` — base `http://localhost:5190/api` (DEV). Swagger UI: `http://localhost:5190/swagger`. Konsument: GUI.
+- **External API** `D2ServicesViewerEditor` — base `http://localhost:15112/api/v1` (DEV; `Urls` w `appsettings.json`). Swagger UI: `http://localhost:15112/swagger` (Swagger włączony w dev/local). Konsument: aplikacje źródłowe.
 
 ## Zasada kompatybilności
 

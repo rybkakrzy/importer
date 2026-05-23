@@ -47,7 +47,10 @@ public class UpdateDocumentVersionCommandHandler
             // Domena pilnuje, że v1 (oryginał) jest nietykalna.
             document.UpdateVersion(request.VersionId, request.Content.Length);
 
-            await _documentRepository.UpdateAsync(document, cancellationToken);
+            // Encja jest już śledzona (GetByIdWithVersionsAsync bez AsNoTracking), więc SaveChanges
+            // utrwala samą zmianę wersji. NIE wołamy UpdateAsync/_context.Update — to oznaczyłoby
+            // cały agregat jako Modified i wygenerowało pełny UPDATE documents (z created_at odczytanym
+            // jako Kind=Unspecified), co Npgsql odrzuca przy zapisie do timestamptz.
             await _documentRepository.SaveChangesAsync(cancellationToken);
 
             return Result<UpdateDocumentVersionResult>.Success(new UpdateDocumentVersionResult(
@@ -64,7 +67,12 @@ public class UpdateDocumentVersionCommandHandler
         }
         catch (Exception ex)
         {
-            return Result<UpdateDocumentVersionResult>.Failure($"Błąd podczas nadpisywania wersji: {ex.Message}");
+            // Rozwiń łańcuch inner exceptions — DbUpdateException chowa realną przyczynę.
+            var details = ex.Message;
+            for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+                details += $" -> {inner.Message}";
+
+            return Result<UpdateDocumentVersionResult>.Failure($"Błąd podczas nadpisywania wersji: {details}");
         }
     }
 }

@@ -35,7 +35,7 @@ Patrz `DEVOPS_DEPLOYMENT.md`. Skrót:
 
 ```bash
 cd D2ApiViewerEditor && dotnet run --project D2ViewerEditor.Api      # 5190
-cd D2ServicesViewerEditor && dotnet run --project D2ServicesViewerEditor.Api  # 5000
+cd D2ServicesViewerEditor && dotnet run --project D2ServicesViewerEditor.Api  # 15112 (swagger: /swagger)
 cd D2GuiViewerEditor && npm install && npm start                     # 4200
 # Wymaga: PostgreSQL (skrypty infra/sql/ 001..005) + GCS/fake-gcs-server (bucket d2viewereditor-documents)
 ```
@@ -54,7 +54,7 @@ cd D2GuiViewerEditor && npm run build               # ostatnio: OK
 | Tryb podglądu (Krok 2) ładuje aktywną wersję (po DOCX = v2), nie v1 oryginał | Medium | Open — przełączyć GUI na `/download` |
 | `finishDocument()` w GUI to TODO (brak zwrotu pliku na returnUrl) | Medium | Open |
 | Ręczny „Zapisz" przy włączonym auto-save jest częściowo redundantny | Low | Akceptowalne (wymuszenie zapisu) |
-| Port External API: repo mówi 5000, rozmowa mówi 15112 | Medium | Do potwierdzenia (RISKS A-01) |
+| Port External API potwierdzony: 15112 (`appsettings.json` → `Urls`) | — | Zamknięte |
 
 ## Ostatni bezpieczny punkt
 

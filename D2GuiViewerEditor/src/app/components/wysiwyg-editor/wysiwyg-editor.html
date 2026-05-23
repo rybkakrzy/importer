@@ -19,7 +19,7 @@
               <div 
                 #headerContent
                 class="header-editor-content"
-                contenteditable="true"
+                [attr.contenteditable]="readOnly ? 'false' : 'true'"
                 spellcheck="true"
                 [attr.placeholder]="''"
                 (input)="onHeaderInput($event)"
@@ -72,7 +72,7 @@
             <div 
               #pageEditor
               class="editor-content"
-              contenteditable="true"
+              [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="true"
               [attr.data-page-index]="$index"
               [attr.placeholder]="'Zacznij pisać...'"
@@ -91,7 +91,7 @@
             <div 
               #pageEditor
               class="editor-content"
-              contenteditable="true"
+              [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="true"
               [attr.data-page-index]="$index"
               [style.padding-left.px]="pageMargins().left * 37.8"
@@ -158,7 +158,7 @@
               <div 
                 #footerContent
                 class="footer-editor-content"
-                contenteditable="true"
+                [attr.contenteditable]="readOnly ? 'false' : 'true'"
                 spellcheck="true"
                 [attr.placeholder]="''"
                 (input)="onFooterInput($event)"

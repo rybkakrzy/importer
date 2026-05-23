@@ -490,12 +490,16 @@
       <button class="header-btn" (click)="openReportEmail()" title="Zgłoś problem">
         <span>Zgłoś</span>
       </button>
-      <button class="header-btn" (click)="saveDocument()" title="Zapisz">
-        <span>Zapisz</span>
-      </button>
-      <button class="header-btn" (click)="finishDocument()" title="Zakończ">
-        <span>Zakończ</span>
-      </button>
+      @if (readOnly()) {
+        <span class="readonly-badge" title="Tylko do odczytu">Podgląd (tylko do odczytu)</span>
+      } @else {
+        <button class="header-btn" (click)="saveDocument()" title="Zapisz">
+          <span>Zapisz</span>
+        </button>
+        <button class="header-btn" (click)="finishDocument()" title="Zakończ">
+          <span>Zakończ</span>
+        </button>
+      }
     </div>
   </header>
 
@@ -802,6 +806,7 @@
           <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
             <d2-wysiwyg-editor
               [content]="documentContent()"
+              [readOnly]="readOnly()"
               [pageMargins]="pageSettings().margins"
               [pageOrientation]="pageSettings().orientation"
               [showMarginGuides]="showMarginGuides()"

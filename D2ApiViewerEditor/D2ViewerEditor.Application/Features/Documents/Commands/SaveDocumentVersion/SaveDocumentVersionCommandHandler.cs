@@ -32,15 +32,16 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
             var storagePath = await _storageService.UploadAsync(
                 versionId, request.Content, document.MimeType, cancellationToken);
 
-            // Dodaj nową wersję z referencją do GCS
+            // Dodaj nową wersję z referencją do GCS (version.Id == klucz obiektu w GCS)
             var newVersion = document.AddVersion(
+                id: versionId,
                 storagePath: storagePath,
                 sizeInBytes: request.Content.Length,
                 createdBy: request.CreatedBy
             );
 
-            // Zapisz metadane w bazie
-            await _documentRepository.UpdateAsync(document, cancellationToken);
+            // Encja jest śledzona — SaveChanges utrwala nową wersję. Nie wołamy _context.Update na całym
+            // agregacie, bo wymusiłby pełny UPDATE documents (created_at jako Kind=Unspecified → błąd Npgsql).
             await _documentRepository.SaveChangesAsync(cancellationToken);
 
             return Result<SaveDocumentVersionResult>.Success(new SaveDocumentVersionResult(

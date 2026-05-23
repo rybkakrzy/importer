@@ -42,8 +42,9 @@ public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentComman
                 createdBy: request.CreatedBy
             );
 
-            // Dodaj pierwszą wersję z referencją do GCS
+            // Dodaj pierwszą wersję z referencją do GCS (version.Id == klucz obiektu w GCS)
             var version = document.AddVersion(
+                id: versionId,
                 storagePath: storagePath,
                 sizeInBytes: request.Content.Length,
                 createdBy: request.CreatedBy

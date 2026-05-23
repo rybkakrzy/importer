@@ -52,6 +52,7 @@ public class IngestExternalDocumentCommandHandler
                 originalVersionId, request.Content, request.MimeType, cancellationToken);
 
             var originalVersion = document.AddVersion(
+                id: originalVersionId,
                 storagePath: originalStoragePath,
                 sizeInBytes: request.Content.Length,
                 createdBy: request.CreatedBy
@@ -67,6 +68,7 @@ public class IngestExternalDocumentCommandHandler
                     copyVersionId, request.Content, request.MimeType, cancellationToken);
 
                 var editableVersion = document.AddVersion(
+                    id: copyVersionId,
                     storagePath: copyStoragePath,
                     sizeInBytes: request.Content.Length,
                     createdBy: request.CreatedBy
@@ -87,8 +89,13 @@ public class IngestExternalDocumentCommandHandler
         }
         catch (Exception ex)
         {
+            // Rozwiń łańcuch inner exceptions — DbUpdateException chowa realną przyczynę (np. brak kolumny, naruszenie constraintu).
+            var details = ex.Message;
+            for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+                details += $" -> {inner.Message}";
+
             return Result<IngestExternalDocumentResult>.Failure(
-                $"Błąd podczas przyjęcia dokumentu zewnętrznego: {ex.Message}");
+                $"Błąd podczas przyjęcia dokumentu zewnętrznego: {details}");
         }
     }
 }

@@ -45,6 +45,13 @@ export interface DocumentDto {
   versionNumber: number;
 }
 
+export interface DocumentMetadataDto {
+  masterId: string;
+  mimeType: string;
+  returnUrl: string | null;
+  classification: string | null;
+}
+
 export interface DocumentVersionDto {
   versionId: string;
   versionNumber: number;
@@ -119,6 +126,31 @@ export class DocumentStorageService {
    */
   getDocument(masterId: string): Observable<DocumentDto> {
     return this.http.get<DocumentDto>(`${this.apiUrl}/${masterId}`);
+  }
+
+  /**
+   * Pobranie metadanych dokumentu (mimeType, returnUrl, classification) — lekkie, bez contentu.
+   * @param masterId - GUID mastera dokumentu
+   */
+  getDocumentMetadata(masterId: string): Observable<DocumentMetadataDto> {
+    return this.http.get<DocumentMetadataDto>(`${this.apiUrl}/${masterId}/metadata`);
+  }
+
+  /**
+   * Pobranie zawartości wersji BAZOWEJ (v1, oryginał) jako Blob — tryb read-only (Krok 2).
+   * @param masterId - GUID mastera dokumentu
+   */
+  downloadBaseVersion(masterId: string): Observable<Blob> {
+    return this.http.get(`${this.apiUrl}/${masterId}/download`, { responseType: 'blob' });
+  }
+
+  /**
+   * Pobranie zawartości KONKRETNEJ wersji jako Blob — tryb edycji (Krok 3, wersja edytowalna).
+   * @param masterId - GUID mastera dokumentu
+   * @param versionId - GUID wersji
+   */
+  downloadVersion(masterId: string, versionId: string): Observable<Blob> {
+    return this.http.get(`${this.apiUrl}/${masterId}/versions/${versionId}/download`, { responseType: 'blob' });
   }
 
   /**

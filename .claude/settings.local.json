@@ -30,7 +30,8 @@
       "PowerShell(Invoke-RestMethod -Uri \"http://localhost:15112/api/health\")",
       "PowerShell(Rename-Item \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ServicesViewerEditor\\\\D2ServicesViewerEditor.Api\\\\Controllers\\\\IntegrationController.cs\" \"DocumentController.cs\")",
       "Bash(dotnet build *)",
-      "Read(//c/c/Projekty/Jit/ImportParametryzacji/importer/D2GuiViewerEditor/src/app/components/document-editor/**)"
+      "Read(//c/c/Projekty/Jit/ImportParametryzacji/importer/D2GuiViewerEditor/src/app/components/document-editor/**)",
+      "Bash(podman exec *)"
     ]
   }
 }

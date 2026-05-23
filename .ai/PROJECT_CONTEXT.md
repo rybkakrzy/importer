@@ -27,7 +27,7 @@ System przyjmuje dokument (DOCX lub PDF) od aplikacji zewnętrznej wraz z metada
 | Projekt | Rola | Port DEV (launchSettings) | Docker |
 |---|---|---|---|
 | `D2ApiViewerEditor` | **Internal API** — obsługuje GUI (CRUD + konwersje + podpisy) | 5190 / 7190 | `docker/api.dockerfile`, EXPOSE 8080 |
-| `D2ServicesViewerEditor` | **External integration API** — przyjmuje dokumenty od aplikacji źródłowych | 5000 / 7000 (patrz RISKS A-01) | `D2ServicesViewerEditor/Dockerfile`, EXPOSE 80/443 |
+| `D2ServicesViewerEditor` | **External integration API** — przyjmuje dokumenty od aplikacji źródłowych | 15112 (`appsettings.json` → `Urls`); Swagger `/swagger` | `D2ServicesViewerEditor/Dockerfile`, EXPOSE 80/443 |
 | `D2GuiViewerEditor` | **Angular SPA** — edytor/viewer | 4200 (`ng serve`) | `docker/gui.dockerfile`, nginx, EXPOSE 80 |
 
 **Kto z kim rozmawia:** aplikacja zewnętrzna → `D2ServicesViewerEditor` (ingest + otwarcie URL do GUI). GUI → `D2ApiViewerEditor`. Aplikacja zewnętrzna nie rozmawia z internal API — sama składa URL do GUI z `MasterId`/`VersionId`.

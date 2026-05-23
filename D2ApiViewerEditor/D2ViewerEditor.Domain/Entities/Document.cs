@@ -68,16 +68,24 @@ public class Document
     public IReadOnlyCollection<DocumentVersion> Versions => _versions.AsReadOnly();
 
     /// <summary>
-    /// Dodaje nową wersję dokumentu
+    /// Dodaje nową wersję dokumentu (generuje nowy GUID wersji).
     /// </summary>
     public DocumentVersion AddVersion(string storagePath, long sizeInBytes, string createdBy)
+        => AddVersion(Guid.NewGuid(), storagePath, sizeInBytes, createdBy);
+
+    /// <summary>
+    /// Dodaje nową wersję z jawnym GUID wersji.
+    /// Używane, gdy plik w storage jest zapisany pod tym samym GUID-em (klucz obiektu = id wersji),
+    /// żeby version.Id i storage_path były spójne.
+    /// </summary>
+    public DocumentVersion AddVersion(Guid id, string storagePath, long sizeInBytes, string createdBy)
     {
         if (string.IsNullOrWhiteSpace(storagePath))
             throw new ArgumentException("Ścieżka storage nie może być pusta", nameof(storagePath));
 
         var versionNumber = _versions.Count + 1;
         var version = new DocumentVersion(
-            id: Guid.NewGuid(),
+            id: id,
             documentId: Id,
             storagePath: storagePath,
             sizeInBytes: sizeInBytes,
