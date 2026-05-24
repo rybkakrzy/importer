@@ -13,6 +13,10 @@ html, body {
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Wyłącz automatyczne powiększanie małego tekstu przez przeglądarki (font boosting),
+     które na dużych monitorach potrafi nadmiernie zwiększać m.in. cyfry na linijce. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {

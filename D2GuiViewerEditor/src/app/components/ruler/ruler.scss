@@ -5,6 +5,10 @@
 
 :host {
   display: block;
+  /* Blokada „font boosting"/text inflation przeglądarek — bez tego małe etykiety linijki
+     potrafią być automatycznie powiększane na dużych monitorach/viewportach. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 /* ─── Tokeny ─── */
@@ -80,10 +84,17 @@ $v-width:  20px;   /* szerokość pionowej linijki */
   top: 50%;
   left: 4px;
   transform: translateY(-50%);
-  font: 600 9px/1 'Segoe UI', Arial, sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.2px;
   color: $ruler-label;
   pointer-events: none;
   white-space: nowrap;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ─── Uchwyty ─── */
@@ -183,10 +194,17 @@ $v-width:  20px;   /* szerokość pionowej linijki */
   top: 3px;
   transform: translateX(-50%) rotate(-90deg);
   transform-origin: center center;
-  font: 600 9px/1 'Segoe UI', Arial, sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.2px;
   color: $ruler-label;
   pointer-events: none;
   white-space: nowrap;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* ─── Uchwyty ─── */

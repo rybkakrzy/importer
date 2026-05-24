@@ -10,6 +10,8 @@ export interface DocumentListItem {
   createdAt: string;
   activeVersionId: string;
   versionNumber: number;
+  /** Lifecycle status: Saved | Editing | Sending | DeliveryFailed | Sent */
+  status: string;
 }
 
 export interface DocumentVersionListItem {

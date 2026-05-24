@@ -27,7 +27,7 @@
             <th class="col-id">ID pliku</th>
             <th class="col-type">Typ</th>
               <th class="col-date">Data utworzenia</th>
-            <th class="col-ver">Wersji</th>
+            <th class="col-status">Status</th>
             <th class="col-action"></th>
           </tr>
           <tr class="col-filters">
@@ -43,7 +43,10 @@
               <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
                      [ngModel]="filterDate()" (ngModelChange)="setFilter('date', $event)" />
             </th>
-            <th class="col-ver"></th>
+            <th class="col-status">
+              <input class="col-filter-input" type="text" placeholder="Filtruj status…"
+                     [ngModel]="filterStatus()" (ngModelChange)="setFilter('status', $event)" />
+            </th>
             <th class="col-action"></th>
           </tr>
         </thead>
@@ -74,7 +77,9 @@
                 </td>
                 <td class="col-type"><span class="chip">{{ friendlyType(doc.mimeType) }}</span></td>
                 <td class="col-date">{{ formatDate(doc.createdAt) }}</td>
-                <td class="col-ver"><span class="ver-badge">{{ doc.versionNumber }}</span></td>
+                <td class="col-status">
+                  <span class="status-badge" [class]="statusClass(doc.status)">{{ statusLabel(doc.status) }}</span>
+                </td>
                 <td class="col-action"></td>
               </tr>
 
@@ -90,7 +95,7 @@
                     </td>
                     <td class="col-type"></td>
                     <td class="col-date">{{ formatDate(ver.createdAt) }}</td>
-                    <td class="col-ver">{{ formatBytes(ver.sizeInBytes) }}</td>
+                    <td class="col-status">{{ formatBytes(ver.sizeInBytes) }}</td>
                     <td class="col-action">
                       <button class="dl-btn dl-btn-sm"
                               [class.loading]="downloadingId() === doc.masterId + '_' + ver.versionId"

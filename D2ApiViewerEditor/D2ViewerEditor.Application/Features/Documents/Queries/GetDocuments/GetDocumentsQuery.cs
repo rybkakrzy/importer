@@ -14,5 +14,6 @@ public record DocumentListItemDto(
     string MimeType,
     DateTime CreatedAt,
     Guid ActiveVersionId,
-    int VersionNumber
+    int VersionNumber,
+    string Status
 );

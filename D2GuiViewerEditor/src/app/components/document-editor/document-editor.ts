@@ -59,6 +59,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   @ViewChild(WysiwygEditorComponent) editor!: WysiwygEditorComponent;
   @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
   @ViewChild('verticalRulerBar') verticalRulerBar?: ElementRef<HTMLDivElement>;
+  @ViewChild('horizontalRulerInner') horizontalRulerInner?: ElementRef<HTMLDivElement>;
 
   private documentService = inject(DocumentService);
   private documentStorageService = inject(DocumentStorageService);
@@ -73,6 +74,19 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   documentVersionId = signal<string | null>(null);
   /** Tryb tylko-do-odczytu (Krok 2): brak versionId → ładujemy wersję bazową i blokujemy edycję. */
   readOnly = signal<boolean>(false);
+
+  /**
+   * Dokument jest aktualnie edytowany przez kogoś innego (status `Editing` na liście).
+   * HOOK: podłączyć pod backendowy `DocumentStatus`, gdy dotrze do edytora — wtedy ustawić
+   * `true`, by ukryć narzędzia edycyjne tak samo jak w trybie tylko-do-odczytu.
+   */
+  lockedByOther = signal<boolean>(false);
+
+  /**
+   * Edycja zablokowana: tryb tylko-do-odczytu LUB dokument zajęty przez kogoś innego.
+   * Steruje ukrywaniem edycyjnych funkcji w toolbarze i menu.
+   */
+  editingDisabled = computed(() => this.readOnly() || this.lockedByOther());
 
   // Auto-save (nadpisuje wersję edytowalną w miejscu)
   autoSaveEnabled = signal<boolean>(environment.autoSave?.enabled ?? true);
@@ -220,6 +234,44 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * uchwytu modyfikuje TYLKO ten blok, jak w MS Word, a nie marginesy całego dokumentu.
    */
   currentBlockIndent = signal<{ start: number; end: number }>({ start: 0, end: 0 });
+
+  /**
+   * Stan linii prowadzącej linijki (jak w MS Word). Renderowana nad kartką podczas
+   * przeciągania uchwytu — w samej linijce (overflow:hidden, 22px) byłaby przycięta.
+   * `offsetPx` to NIEZSKALOWANA odległość od krawędzi strony (lewej/górnej).
+   */
+  rulerGuide = signal<{ active: boolean; axis: 'horizontal' | 'vertical'; offsetPx: number }>({
+    active: false,
+    axis: 'horizontal',
+    offsetPx: 0
+  });
+
+  /** Aktualnie edytowana sekcja (treść / nagłówek / stopka) — z d2-wysiwyg-editor. */
+  editingSection = signal<'header' | 'footer' | 'body'>('body');
+
+  /**
+   * ZMIERZONA geometria edytowanego pasma nagłówka/stopki (cm od górnej krawędzi strony),
+   * z d2-wysiwyg-editor. Pasmo rośnie z treścią (min-height + obraz), więc położenie na
+   * pionowej linijce musi pochodzić z pomiaru DOM, nie z marginesów cm.
+   */
+  sectionGeometry = signal<{ section: 'header' | 'footer'; topCm: number; bottomCm: number } | null>(null);
+
+  /**
+   * Marginesy dla PIONOWEJ linijki. Gdy edytowany jest nagłówek/stopka, biały (aktywny)
+   * obszar linijki odzwierciedla FAKTYCZNE pasmo nagłówka/stopki (z pomiaru DOM) — jak
+   * w MS Word — zamiast globalnego marginesu treści.
+   */
+  verticalRulerMargins = computed<PageMargins>(() => {
+    const m = this.pageSettings().margins;
+    const pageH = this.pageSettings().orientation === 'portrait' ? 29.7 : 21;
+    const section = this.editingSection();
+    const geo = this.sectionGeometry();
+    if ((section === 'header' || section === 'footer') && geo && geo.section === section) {
+      // białe pasmo linijki = [topCm … bottomCm], reszta = szary margines
+      return { ...m, top: Math.max(0, geo.topCm), bottom: Math.max(0, pageH - geo.bottomCm) };
+    }
+    return m;
+  });
 
   /** Konwersja cm ↔ px (96 DPI). */
   private static readonly CM_TO_PX = 37.795;
@@ -1021,9 +1073,15 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const scrollTop = container.scrollTop;
     const scale = this.zoomLevel() / 100;
 
-    // Synchronizuj pionową linijkę ze scrollem
+    // Synchronizuj pionową linijkę ze scrollem (pionowym)
     if (this.verticalRulerBar?.nativeElement) {
       this.verticalRulerBar.nativeElement.scrollTop = scrollTop;
+    }
+
+    // Synchronizuj poziomą linijkę ze scrollem (poziomym) — przesuwamy ją razem z kartką,
+    // żeby podziałka pokrywała się z dokumentem także przy przewijaniu w bok / dużym zoomie.
+    if (this.horizontalRulerInner?.nativeElement) {
+      this.horizontalRulerInner.nativeElement.style.transform = `translateX(${-container.scrollLeft}px)`;
     }
     
     // Wysokość strony A4 w pikselach + margines
@@ -1437,6 +1495,30 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * Globalny skrót wyszukiwania: Ctrl/Cmd+F → Znajdź (oba tryby, w read-only bez zamiany),
+   * Ctrl/Cmd+H → Znajdź i zamień (tylko gdy edycja dozwolona).
+   */
+  @HostListener('document:keydown', ['$event'])
+  onGlobalKeydown(e: KeyboardEvent): void {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const key = e.key.toLowerCase();
+    if (key === 'f') {
+      e.preventDefault();
+      this.openFindReplace();
+    } else if (key === 'h' && !this.editingDisabled()) {
+      e.preventDefault();
+      this.openFindReplace();
+    } else if (key === 'a') {
+      // Ctrl+A → zaznacz tylko treść dokumentu (nie całe body z menu/paskami).
+      // Pomijamy pola formularzy, by nie psuć natywnego zaznaczania w inputach.
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      this.selectAll();
+    }
+  }
+
+  /**
    * Otwiera dialog Znajdź i zamień
    */
   openFindReplace(): void {
@@ -1792,47 +1874,87 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   // =====================
   findText = signal('');
   replaceText = signal('');
+  /** Liczba trafień i indeks bieżącego (do wyświetlenia „x/y" w dialogu). */
+  findResultCount = signal(0);
+  findCurrentIndex = signal(-1);
 
   /**
-   * Znajdź następny
+   * Wyszukiwanie na żywo podczas wpisywania — podświetla wszystkie trafienia i przewija
+   * do pierwszego (przez prawdziwe API edytora, nie ułomne `window.find`).
    */
+  onFindInput(value: string): void {
+    this.findText.set(value);
+    if (!value || !this.editor) {
+      this.editor?.clearSearchHighlights();
+      this.lastSearchText = '';
+      this.findResultCount.set(0);
+      this.findCurrentIndex.set(-1);
+      return;
+    }
+    this.lastSearchText = value;
+    const result = this.editor.searchText(value, 'next');
+    this.findResultCount.set(result.count);
+    this.findCurrentIndex.set(result.currentIndex);
+  }
+
+  /** Następne trafienie (pierwsze wyszukanie, jeśli tekst się zmienił). */
   findNext(): void {
     const text = this.findText();
-    if (!text) return;
+    if (!text || !this.editor) return;
+    const result = text !== this.lastSearchText
+      ? (this.lastSearchText = text, this.editor.searchText(text, 'next'))
+      : this.editor.findNext();
+    this.findResultCount.set(result.count);
+    this.findCurrentIndex.set(result.currentIndex);
+  }
 
-    // Użyj natywnej funkcji window.find
-    (window as any).find(text);
+  /** Poprzednie trafienie. */
+  findPrev(): void {
+    const text = this.findText();
+    if (!text || !this.editor) return;
+    const result = text !== this.lastSearchText
+      ? (this.lastSearchText = text, this.editor.searchText(text, 'previous'))
+      : this.editor.findPrevious();
+    this.findResultCount.set(result.count);
+    this.findCurrentIndex.set(result.currentIndex);
+  }
+
+  /** Zamknij dialog i wyczyść podświetlenia. */
+  closeFindReplace(): void {
+    this.showFindReplace.set(false);
+    this.editor?.clearSearchHighlights();
+    this.lastSearchText = '';
+    this.findResultCount.set(0);
+    this.findCurrentIndex.set(-1);
   }
 
   /**
-   * Zamień
+   * Zamienia bieżące trafienie (tylko gdy edycja dozwolona).
    */
   replaceOne(): void {
-    const findStr = this.findText();
-    const replaceStr = this.replaceText();
-    if (!findStr) return;
-
-    const selection = window.getSelection();
-    if (selection && selection.toString() === findStr) {
-      document.execCommand('insertText', false, replaceStr);
+    if (this.editingDisabled() || !this.editor || !this.findText()) return;
+    if (this.findText() !== this.lastSearchText) {
       this.findNext();
-    } else {
-      this.findNext();
+      return;
     }
+    const result = this.editor.replaceCurrentMatch(this.replaceText());
+    this.findResultCount.set(result.count);
+    this.findCurrentIndex.set(result.currentIndex);
   }
 
   /**
-   * Zamień wszystko
+   * Zamienia wszystkie trafienia (tylko gdy edycja dozwolona).
    */
   replaceAll(): void {
-    const findStr = this.findText();
-    const replaceStr = this.replaceText();
-    if (!findStr) return;
-
-    const content = this.editor?.getContent() || '';
-    const newContent = content.split(findStr).join(replaceStr);
-    this.editor?.setContent(newContent);
-    this.showSuccess(`Zamieniono wszystkie wystąpienia "${findStr}"`);
+    if (this.editingDisabled() || !this.editor || !this.findText()) return;
+    if (this.findText() !== this.lastSearchText) {
+      this.lastSearchText = this.findText();
+      this.editor.searchText(this.findText(), 'next');
+    }
+    const result = this.editor.replaceAllMatches(this.replaceText());
+    this.findResultCount.set(result.count);
+    this.findCurrentIndex.set(result.currentIndex);
+    this.showSuccess(`Zamieniono wszystkie wystąpienia "${this.findText()}"`);
   }
 
   /**
@@ -2413,6 +2535,58 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       ...s,
       margins: { ...margins }
     }));
+  }
+
+  /**
+   * Aktualizuje stan linii prowadzącej linijki (kreska nad kartką podczas drag).
+   */
+  onRulerDragGuide(e: { active: boolean; axis: 'horizontal' | 'vertical'; offsetPx: number }): void {
+    this.rulerGuide.set({ ...e });
+  }
+
+  /**
+   * Reaguje na zmianę edytowanej sekcji (treść / nagłówek / stopka) — przełącza
+   * obrazowanie pionowej linijki na pasmo nagłówka/stopki.
+   */
+  onEditingSectionChange(section: 'header' | 'footer' | 'body'): void {
+    this.editingSection.set(section);
+    if (section === 'body') {
+      this.sectionGeometry.set(null);
+    }
+  }
+
+  /** Przyjmuje zmierzoną geometrię pasma nagłówka/stopki do obrazowania pionowej linijki. */
+  onSectionGeometryChange(geo: { section: 'header' | 'footer'; topCm: number; bottomCm: number }): void {
+    this.sectionGeometry.set(geo);
+  }
+
+  /**
+   * Zmiana z PIONOWEJ linijki.
+   * - tryb `body`: zwykła zmiana górnego/dolnego marginesu strony.
+   * - tryb `header`: dolny uchwyt = dolna krawędź pasma → nowa wysokość nagłówka.
+   * - tryb `footer`: górny uchwyt = górna krawędź pasma → nowa wysokość stopki.
+   * (jak „header/footer from edge" w MS Word). Wysokość spinamy przez setHeaderHeight/
+   * setFooterHeight, co emituje headerChange/footerChange i odświeża pasmo + linijkę.
+   */
+  onVerticalRulerMarginsChange(margins: PageMargins): void {
+    const section = this.editingSection();
+    if (section === 'body') {
+      this.onRulerMarginsChange(margins);
+      return;
+    }
+    const pageH = this.pageSettings().orientation === 'portrait' ? 29.7 : 21;
+    const geo = this.sectionGeometry();
+    if (section === 'header') {
+      const topCm = geo ? Math.max(0, geo.topCm) : 0;
+      const newBottomCm = pageH - margins.bottom; // dolna krawędź pasma nagłówka
+      const newHeight = Math.round((newBottomCm - topCm) * 100) / 100;
+      this.editor?.setHeaderHeight(newHeight);
+    } else if (section === 'footer') {
+      const bottomCm = geo ? geo.bottomCm : pageH - margins.bottom; // dolna krawędź pasma stopki
+      const newTopCm = margins.top; // górna krawędź pasma stopki
+      const newHeight = Math.round((bottomCm - newTopCm) * 100) / 100;
+      this.editor?.setFooterHeight(newHeight);
+    }
   }
 
   /**

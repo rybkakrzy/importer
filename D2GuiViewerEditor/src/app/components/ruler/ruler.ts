@@ -60,6 +60,14 @@ export class RulerComponent implements OnChanges {
    */
   @Output() blockIndentChange = new EventEmitter<{ start?: number; end?: number }>();
 
+  /**
+   * Emituje stan linii prowadzącej (jak w MS Word) podczas przeciągania uchwytu.
+   * `offsetPx` to NIEZSKALOWANA odległość od krawędzi strony (lewej dla horizontal,
+   * górnej dla vertical) — rodzic renderuje kreskę nad kartką, bo wewnątrz linijki
+   * (overflow:hidden, 22px) byłaby przycięta.
+   */
+  @Output() dragGuideChange = new EventEmitter<{ active: boolean; axis: 'horizontal' | 'vertical'; offsetPx: number }>();
+
   readonly CM_TO_PX = 37.795;
 
   // ────── Geometria ──────
@@ -203,6 +211,7 @@ export class RulerComponent implements OnChanges {
         : { ...base, end: indentCm };
       this.dragIndicatorPos.set(newCm * this.CM_TO_PX * this.scale * (this._dragging === 'start' ? 1 : 0) +
         (this._dragging === 'end' ? this.axisPxScaled - newCm * this.CM_TO_PX * this.scale : 0));
+      this._emitGuide(true);
       return;
     }
 
@@ -214,6 +223,7 @@ export class RulerComponent implements OnChanges {
     this.dragIndicatorPos.set(
       this._dragging === 'start' ? newCm * this.CM_TO_PX * this.scale : this.axisPxScaled - newCm * this.CM_TO_PX * this.scale
     );
+    this._emitGuide(true);
   }
 
   @HostListener('document:mouseup')
@@ -232,6 +242,7 @@ export class RulerComponent implements OnChanges {
     this.activeSide.set(null);
     this._tempMargins = null;
     this._tempBlockIndent = null;
+    this._emitGuide(false);
   }
 
   // ────── Helpers ──────
@@ -242,6 +253,20 @@ export class RulerComponent implements OnChanges {
     this._dragStartMarginCm = cm;
     this.isDragging.set(true);
     this.activeSide.set(side);
+    // Początkowa pozycja kreski = aktualna krawędź uchwytu
+    this.dragIndicatorPos.set(
+      side === 'start' ? cm * this.CM_TO_PX * this.scale : this.axisPxScaled - cm * this.CM_TO_PX * this.scale
+    );
+    this._emitGuide(true);
+  }
+
+  /** Emituje stan linii prowadzącej do rodzica (offset niezskalowany od krawędzi strony). */
+  private _emitGuide(active: boolean): void {
+    this.dragGuideChange.emit({
+      active,
+      axis: this.mode,
+      offsetPx: this.dragIndicatorPos() / Math.max(this.scale, 0.0001)
+    });
   }
 
   tickPos(cm: number): number {

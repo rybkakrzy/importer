@@ -167,8 +167,18 @@
               <div class="footer-display" [innerHTML]="getFooterContentSafe($index)"></div>
             }
           </div>
+
+          <!-- Prowadnice marginesów (przerywane linie jak w MS Word / Docs) -->
+          @if (showMarginGuides) {
+            <div class="margin-guides">
+              <div class="margin-guide margin-guide-top" [style.top.px]="pageMargins().top * 37.8"></div>
+              <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMargins().bottom * 37.8"></div>
+              <div class="margin-guide margin-guide-left" [style.left.px]="pageMargins().left * 37.8"></div>
+              <div class="margin-guide margin-guide-right" [style.right.px]="pageMargins().right * 37.8"></div>
+            </div>
+          }
         </div>
-        
+
         <!-- Separator między stronami - styl Google Docs -->
         @if ($index < pageContents().length - 1) {
           <div class="page-separator"></div>

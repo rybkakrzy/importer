@@ -757,6 +757,27 @@
   position: relative;
 }
 
+/* Linia prowadząca linijki (jak w MS Word) — pokazuje krawędź/wcięcie nad kartką.
+   Renderowana wewnątrz .paper-container (układ współrzędnych strony), skalowana
+   przez transform .editor-wrapper. offsetPx jest podawany w px @100%. */
+.ruler-guide-line {
+  position: absolute;
+  pointer-events: none;
+  z-index: 50;
+}
+.ruler-guide-vertical {
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed #0060df;
+}
+.ruler-guide-horizontal {
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed #0060df;
+}
+
 .paper-container.landscape {
   /* zachowane jako hook na orientację; bez własnych wymiarów */
 }

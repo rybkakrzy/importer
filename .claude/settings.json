@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx ng *)"
+      "Bash(npx ng *)",
+      "Bash(cd /c/Projekty/Jit/ImportParametryzacji/importer/D2GuiViewerEditor && cat package.json | grep -A15 '\"scripts\"')",
+      "Read(//c/c/Projekty/Jit/ImportParametryzacji/importer/D2GuiViewerEditor/**)",
+      "Bash(python -c 'import xml.etree.ElementTree as ET,sys; ET.parse\\('\\\\''__TRACKED_VAR__'\\\\''\\); print\\('\\\\''OK'\\\\''\\)')",
+      "Bash(python -c 'import xml.etree.ElementTree as ET; ET.parse\\('\\\\''__TRACKED_VAR__'\\\\''\\); print\\('\\\\''OK'\\\\''\\)')"
     ]
   }
 }

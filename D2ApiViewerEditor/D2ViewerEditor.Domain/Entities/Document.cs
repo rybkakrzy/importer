@@ -25,6 +25,7 @@ public class Document
         CreatedBy = createdBy;
         IsDeleted = false;
         Metadata = metadata;
+        Status = DocumentStatus.Saved;
     }
 
     /// <summary>
@@ -61,6 +62,23 @@ public class Document
     /// Metadane przesłane przez aplikację zewnętrzną (JSON, np. returnUrl, classification C1..C4)
     /// </summary>
     public string? Metadata { get; private set; }
+
+    /// <summary>
+    /// Document lifecycle status (Saved → Editing → Sending → Sent / DeliveryFailed).
+    /// </summary>
+    public DocumentStatus Status { get; private set; }
+
+    /// <summary>Marks the document as being edited (save/auto-save from the editor).</summary>
+    public void MarkEditing() => Status = DocumentStatus.Editing;
+
+    /// <summary>Marks that the file is being sent back to the source app.</summary>
+    public void MarkSending() => Status = DocumentStatus.Sending;
+
+    /// <summary>Marks that the file has been sent.</summary>
+    public void MarkSent() => Status = DocumentStatus.Sent;
+
+    /// <summary>Marks a failed delivery (recipient not responding).</summary>
+    public void MarkDeliveryFailed() => Status = DocumentStatus.DeliveryFailed;
 
     /// <summary>
     /// Wersje dokumentu

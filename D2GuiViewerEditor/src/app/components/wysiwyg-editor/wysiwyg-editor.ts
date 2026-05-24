@@ -143,6 +143,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Output() pagesChange = new EventEmitter<number>();
   @Output() headerChange = new EventEmitter<HeaderFooterContent>();
   @Output() footerChange = new EventEmitter<HeaderFooterContent>();
+  /** Emituje aktualnie edytowaną sekcję (treść / nagłówek / stopka) — używane przez pionową linijkę. */
+  @Output() editingSectionChange = new EventEmitter<'header' | 'footer' | 'body'>();
+  /**
+   * Emituje ZMIERZONĄ geometrię edytowanego pasma nagłówka/stopki (cm od górnej krawędzi
+   * strony 1). Pasmo ma `min-height` i rośnie z treścią (np. obraz), więc pionowa linijka
+   * musi odzwierciedlać faktyczne położenie, a nie wyliczone z marginesów cm.
+   */
+  @Output() sectionGeometryChange = new EventEmitter<{ section: 'header' | 'footer'; topCm: number; bottomCm: number }>();
+
+  /** Obserwator rozmiaru aktywnego pasma nagłówka/stopki (re-emisja geometrii przy zmianie wysokości). */
+  private _sectionResizeObserver?: ResizeObserver;
   @Output() openHeaderFooterSettings = new EventEmitter<{
     headerMargin: number;
     footerMargin: number;
@@ -366,6 +377,48 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this.pageCheckInterval) {
       clearInterval(this.pageCheckInterval);
     }
+    this._sectionResizeObserver?.disconnect();
+  }
+
+  /**
+   * Zaczyna obserwować pasmo aktywnej sekcji (header/footer) i emituje jego zmierzoną
+   * geometrię w cm od górnej krawędzi strony 1. Re-emituje przy zmianie wysokości pasma
+   * (np. po załadowaniu obrazu w nagłówku).
+   */
+  private observeActiveSectionGeometry(): void {
+    this._sectionResizeObserver?.disconnect();
+    const section = this.editingSection();
+    if (section !== 'header' && section !== 'footer') return;
+
+    const inner = section === 'header'
+      ? this.headerContentEl?.nativeElement
+      : this.footerContentEl?.nativeElement;
+    const band = inner?.closest(section === 'header' ? '.page-header' : '.page-footer') as HTMLElement | null;
+    if (!band) return;
+
+    const emit = () => this.emitSectionGeometry(section, band);
+    emit();
+    this._sectionResizeObserver = new ResizeObserver(() => emit());
+    this._sectionResizeObserver.observe(band);
+  }
+
+  /** Mierzy pasmo względem strony (uwzględnia skalę zoomu) i emituje cm od góry strony. */
+  private emitSectionGeometry(section: 'header' | 'footer', band: HTMLElement): void {
+    const page = band.closest('.page') as HTMLElement | null;
+    if (!page) return;
+    const pr = page.getBoundingClientRect();
+    const br = band.getBoundingClientRect();
+    // Skala niezależna od wzrostu pasma: z szerokości strony (stała: A4 21cm / landscape 29.7cm).
+    const expectedWidthPx = (this.pageOrientation === 'portrait' ? 21 : 29.7) * 37.8;
+    const scale = pr.width > 0 ? pr.width / expectedWidthPx : 1;
+    const topCm = ((br.top - pr.top) / scale) / 37.8;
+    const bottomCm = ((br.bottom - pr.top) / scale) / 37.8;
+    this.sectionGeometryChange.emit({ section, topCm, bottomCm });
+  }
+
+  private stopObservingSectionGeometry(): void {
+    this._sectionResizeObserver?.disconnect();
+    this._sectionResizeObserver = undefined;
   }
 
   /**
@@ -1311,7 +1364,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         document.execCommand('removeFormat', false);
         break;
       case 'selectAll':
-        document.execCommand('selectAll', false);
+        this.selectAllContent();
         break;
       case 'undo':
         this.undo();
@@ -3119,6 +3172,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const clickX = event?.clientX;
     const clickY = event?.clientY;
     this.editingSection.set('header');
+    this.editingSectionChange.emit('header');
     setTimeout(() => {
       const el = this.headerContentEl?.nativeElement;
       if (el) {
@@ -3127,6 +3181,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         this.attachEditorListeners(el);
         el.focus();
         this.placeCaretAtPoint(el, clickX, clickY);
+        this.observeActiveSectionGeometry();
       }
     }, 0);
   }
@@ -3139,6 +3194,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const clickX = event?.clientX;
     const clickY = event?.clientY;
     this.editingSection.set('footer');
+    this.editingSectionChange.emit('footer');
     setTimeout(() => {
       const el = this.footerContentEl?.nativeElement;
       if (el) {
@@ -3147,6 +3203,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         this.attachEditorListeners(el);
         el.focus();
         this.placeCaretAtPoint(el, clickX, clickY);
+        this.observeActiveSectionGeometry();
       }
     }, 0);
   }
@@ -3186,6 +3243,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   stopEditingHeaderFooter(): void {
     if (this.editingSection() !== 'body') {
       this.editingSection.set('body');
+      this.editingSectionChange.emit('body');
+      this.stopObservingSectionGeometry();
     }
   }
 
@@ -3567,6 +3626,32 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     });
   }
 
+  /**
+   * Zaznacza WYŁĄCZNIE treść dokumentu (edytory stron), a nie całą stronę przeglądarki.
+   * `document.execCommand('selectAll')` w trybie read-only (brak fokusu w contenteditable)
+   * zaznaczał całe `body` — łącznie z menu, toolbarem i paskiem statusu. Tutaj tworzymy
+   * jeden ciągły zakres od początku pierwszego do końca ostatniego edytora strony.
+   */
+  selectAllContent(): void {
+    const sel = window.getSelection();
+    if (!sel) return;
+
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const editors = refs.length > 0
+      ? refs.map(r => r.nativeElement)
+      : (this.editorContent?.nativeElement ? [this.editorContent.nativeElement] : []);
+    if (editors.length === 0) return;
+
+    const first = editors[0];
+    const last = editors[editors.length - 1];
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(last, last.childNodes.length);
+
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
   // ========== Wyszukiwanie i zamiana ==========
 
   private searchHighlights: HTMLElement[] = [];
@@ -3577,21 +3662,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   searchText(text: string, direction: 'next' | 'previous'): { count: number; currentIndex: number } {
     this.clearSearchHighlights();
-    
-    const editor = this.editorContent?.nativeElement;
-    if (!editor || !text) return { count: 0, currentIndex: -1 };
+
+    // Przeszukujemy WSZYSTKIE strony (nie tylko aktywną) — w kolejności dokumentu.
+    const editors = (this.pageEditorRefs?.toArray() ?? []).map(r => r.nativeElement);
+    if (editors.length === 0 && this.editorContent?.nativeElement) {
+      editors.push(this.editorContent.nativeElement);
+    }
+    if (editors.length === 0 || !text) return { count: 0, currentIndex: -1 };
 
     const searchLower = text.toLowerCase();
-    const treeWalker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
     const matches: { node: Text; index: number }[] = [];
 
-    while (treeWalker.nextNode()) {
-      const node = treeWalker.currentNode as Text;
-      const content = node.textContent || '';
-      let idx = content.toLowerCase().indexOf(searchLower);
-      while (idx !== -1) {
-        matches.push({ node, index: idx });
-        idx = content.toLowerCase().indexOf(searchLower, idx + 1);
+    for (const editor of editors) {
+      const treeWalker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+      while (treeWalker.nextNode()) {
+        const node = treeWalker.currentNode as Text;
+        const content = node.textContent || '';
+        let idx = content.toLowerCase().indexOf(searchLower);
+        while (idx !== -1) {
+          matches.push({ node, index: idx });
+          idx = content.toLowerCase().indexOf(searchLower, idx + 1);
+        }
       }
     }
 
@@ -3722,11 +3813,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   private emitContentChange(): void {
-    const editor = this.editorContent?.nativeElement;
-    if (editor) {
-      const html = this._getCleanEditorHtml(editor);
-      this._content.set(html);
-      this.contentChange.emit(html);
-    }
+    // Agreguj WSZYSTKIE strony — zamiana może dotknąć innej strony niż aktywna.
+    const html = this.getContent();
+    if (!html && !this.editorContent?.nativeElement) return;
+    this._isInternalUpdate = true;
+    this._content.set(html);
+    this.contentChange.emit(html);
+    this._isInternalUpdate = false;
   }
 }

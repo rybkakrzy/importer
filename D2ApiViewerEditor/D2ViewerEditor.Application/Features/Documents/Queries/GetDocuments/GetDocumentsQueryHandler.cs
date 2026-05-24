@@ -28,7 +28,8 @@ public class GetDocumentsQueryHandler : IRequestHandler<GetDocumentsQuery, Resul
                     MimeType: d.MimeType,
                     CreatedAt: d.CreatedAt,
                     ActiveVersionId: activeVersion?.Id ?? Guid.Empty,
-                    VersionNumber: activeVersion?.VersionNumber ?? 0
+                    VersionNumber: activeVersion?.VersionNumber ?? 0,
+                    Status: d.Status.ToString()
                 );
             }).ToList();
 

@@ -14,9 +14,10 @@ export class AdminFilesComponent implements OnInit {
   private adminService = inject(AdminService);
 
   private allDocuments = signal<DocumentWithVersions[]>([]);
-  filterId   = signal('');
-  filterType = signal('');
-  filterDate = signal('');
+  filterId     = signal('');
+  filterType   = signal('');
+  filterDate   = signal('');
+  filterStatus = signal('');
   currentPage = signal(0);
   readonly pageSize = 10;
   isLoading = signal(true);
@@ -25,13 +26,15 @@ export class AdminFilesComponent implements OnInit {
   downloadingId = signal<string | null>(null);
 
   private filteredDocuments = computed(() => {
-    const id   = this.filterId().toLowerCase().trim();
-    const type = this.filterType().toLowerCase().trim();
-    const date = this.filterDate().toLowerCase().trim();
+    const id     = this.filterId().toLowerCase().trim();
+    const type   = this.filterType().toLowerCase().trim();
+    const date   = this.filterDate().toLowerCase().trim();
+    const status = this.filterStatus().toLowerCase().trim();
     return this.allDocuments().filter(d => {
-      if (id   && !d.masterId.toLowerCase().includes(id))                       return false;
-      if (type && !d.mimeType.toLowerCase().includes(type))                     return false;
-      if (date && !this.formatDate(d.createdAt).toLowerCase().includes(date))   return false;
+      if (id     && !d.masterId.toLowerCase().includes(id))                       return false;
+      if (type   && !d.mimeType.toLowerCase().includes(type))                     return false;
+      if (date   && !this.formatDate(d.createdAt).toLowerCase().includes(date))   return false;
+      if (status && !this.statusLabel(d.status).toLowerCase().includes(status))   return false;
       return true;
     });
   });
@@ -44,11 +47,36 @@ export class AdminFilesComponent implements OnInit {
     return this.filteredDocuments().slice(start, start + this.pageSize);
   });
 
-  setFilter(field: 'id' | 'type' | 'date', value: string): void {
-    if (field === 'id')   this.filterId.set(value);
-    if (field === 'type') this.filterType.set(value);
-    if (field === 'date') this.filterDate.set(value);
+  setFilter(field: 'id' | 'type' | 'date' | 'status', value: string): void {
+    if (field === 'id')     this.filterId.set(value);
+    if (field === 'type')   this.filterType.set(value);
+    if (field === 'date')   this.filterDate.set(value);
+    if (field === 'status') this.filterStatus.set(value);
     this.currentPage.set(0);
+  }
+
+  /** Maps the status enum value (from API) to a readable label. */
+  statusLabel(status: string): string {
+    const map: Record<string, string> = {
+      Saved: 'Saved',
+      Editing: 'Editing',
+      Sending: 'Sending to recipient',
+      DeliveryFailed: 'Recipient not responding',
+      Sent: 'Sent'
+    };
+    return map[status] ?? status ?? '—';
+  }
+
+  /** Status chip CSS class (color). */
+  statusClass(status: string): string {
+    const map: Record<string, string> = {
+      Saved: 'status-saved',
+      Editing: 'status-editing',
+      Sending: 'status-sending',
+      DeliveryFailed: 'status-failed',
+      Sent: 'status-sent'
+    };
+    return map[status] ?? 'status-saved';
   }
 
   prevPage(): void { if (this.currentPage() > 0) this.currentPage.update(p => p - 1); }

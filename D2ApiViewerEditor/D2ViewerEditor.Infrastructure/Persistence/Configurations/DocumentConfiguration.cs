@@ -47,6 +47,13 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
             .HasColumnName("metadata")
             .HasColumnType("text");
 
+        builder.Property(d => d.Status)
+            .HasColumnName("status")
+            .HasConversion<string>()
+            .HasMaxLength(40)
+            .IsRequired()
+            .HasDefaultValue(DocumentStatus.Saved);
+
         // Relacja 1:N z DocumentVersion — backing field _versions
         builder.HasMany(d => d.Versions)
             .WithOne(v => v.Document!)

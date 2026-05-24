@@ -158,6 +158,9 @@ export class EditorToolbarComponent {
     return this._editorState;
   }
   
+  /** Gdy true (read-only / dokument zajęty), ukrywamy edycyjne kontrolki — zostaje wyszukiwarka. */
+  @Input() readOnly = false;
+
   @Input() set documentStyles(styles: DocumentStyle[] | null) {
     if (styles && styles.length > 0) {
       this._documentStyles.set(styles);

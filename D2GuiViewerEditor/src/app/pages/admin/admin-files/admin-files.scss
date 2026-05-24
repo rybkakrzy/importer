@@ -124,8 +124,24 @@
 .col-id     { width: 36%; font-size: 13px; }
 .col-type   { width: 12%; }
 .col-date   { width: 22%; color: #6b7280; font-size: 12.5px; }
-.col-ver    { width: 8%; text-align: center; }
+.col-status { width: 16%; }
 .col-action { width: 10%; text-align: right; }
+
+/* ── Status chip ── */
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.status-badge.status-saved   { background: #e8f0fe; color: #1a56db; }   /* Zapisany */
+.status-badge.status-editing { background: #fef3c7; color: #92632e; }   /* W trakcie edycji */
+.status-badge.status-sending { background: #e0e7ff; color: #3730a3; }   /* Wysyłanie do odbiorcy */
+.status-badge.status-failed  { background: #fde2e1; color: #b42318; }   /* Odbiorca nie odbiera */
+.status-badge.status-sent    { background: #dcfce7; color: #15803d; }   /* Wysłany */
 
 /* ── Document row ── */
 .doc-row {
