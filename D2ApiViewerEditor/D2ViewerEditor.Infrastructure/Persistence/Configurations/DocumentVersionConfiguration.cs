@@ -17,7 +17,9 @@ public class DocumentVersionConfiguration : IEntityTypeConfiguration<DocumentVer
 
         builder.Property(v => v.Id)
             .HasColumnName("id")
-            .IsRequired();
+            .ValueGeneratedNever()   // Guid generowany w domenie (AddVersion). Bez tego EF stosuje
+            .IsRequired();           // konwencję ValueGeneratedOnAdd i nową wersję z ustawionym kluczem
+                                     // dodaną do śledzonego dokumentu traktuje jako Modified (UPDATE→0 wierszy).
 
         builder.Property(v => v.DocumentId)
             .HasColumnName("document_id")

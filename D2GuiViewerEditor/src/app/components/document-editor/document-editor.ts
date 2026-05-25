@@ -582,15 +582,22 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
                   name: 'Nowy dokument.docx',
                   mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                   content: base64
-                })
+                }).pipe(
+                  // Nowy dokument = zamiar edycji → twórz wersję edytowalną (v2).
+                  switchMap(result =>
+                    this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
+                      map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
+                    )
+                  )
+                )
               )
             )
           )
         )
       )
     ).subscribe({
-      next: (result) => {
-        this.router.navigate(['/editor'], { queryParams: { masterId: result.masterId } });
+      next: ({ masterId, versionId }) => {
+        this.router.navigate(['/editor'], { queryParams: { masterId, versionId } });
       },
       error: () => {
         this.showError('Nie udało się utworzyć nowego dokumentu');
@@ -627,9 +634,19 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
           name: file.name,
           mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           content: base64
-        }).subscribe({
-          next: (result) => {
-            this.router.navigate(['/editor'], { queryParams: { masterId: result.masterId } });
+        }).pipe(
+          // Ręczne wczytanie z dysku = zamiar edycji → od razu twórz wersję edytowalną (v2)
+          // i otwórz ją w trybie edycji. Oryginał (v1) pozostaje niezmienny; auto-save
+          // nadpisuje tylko v2. (Flow aplikacji zewnętrznej bez zmian: master → read-only,
+          // master+version → edycja.)
+          switchMap(result =>
+            this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
+              map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
+            )
+          )
+        ).subscribe({
+          next: ({ masterId, versionId }) => {
+            this.router.navigate(['/editor'], { queryParams: { masterId, versionId } });
           },
           error: () => {
             this.showError('Nie udało się zapisać dokumentu w bazie danych');

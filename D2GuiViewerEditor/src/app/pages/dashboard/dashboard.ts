@@ -1,6 +1,6 @@
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { switchMap, from, Subscription } from 'rxjs';
+import { switchMap, map, from, Subscription } from 'rxjs';
 import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { DocumentNavigationService } from '../../core/services/document-navigation.service';
@@ -37,18 +37,22 @@ export class DashboardComponent {
                   name: 'Nowy dokument.docx',
                   mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                   content: base64
-                })
+                }).pipe(
+                  // Nowy dokument = zamiar edycji → twórz wersję edytowalną (v2).
+                  switchMap(result =>
+                    this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
+                      map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
+                    )
+                  )
+                )
               )
             )
           )
         )
       )
     ).subscribe({
-      next: (result) => {
-        this.documentNavigation.navigateToDocument(
-          result.masterId,
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        );
+      next: ({ masterId, versionId }) => {
+        this.documentNavigation.navigateToEditableDocument(masterId, versionId);
       },
       error: () => {
         this.isLoading.set(false);
@@ -106,12 +110,17 @@ export class DashboardComponent {
           name: file.name,
           mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
           content: base64
-        }).subscribe({
-          next: (result) => {
-            this.documentNavigation.navigateToDocument(
-              result.masterId,
-              file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            );
+        }).pipe(
+          // Ręczne wczytanie z dysku = zamiar edycji → twórz wersję edytowalną (v2)
+          // i otwórz w trybie edycji. Oryginał (v1) pozostaje niezmienny.
+          switchMap(result =>
+            this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
+              map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
+            )
+          )
+        ).subscribe({
+          next: ({ masterId, versionId }) => {
+            this.documentNavigation.navigateToEditableDocument(masterId, versionId);
           },
           error: () => {
             this.isLoading.set(false);

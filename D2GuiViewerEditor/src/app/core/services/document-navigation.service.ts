@@ -21,6 +21,15 @@ export class DocumentNavigationService {
     }
   }
 
+  /**
+   * Otwiera dokument Word w trybie EDYCJI (masterId + versionId wersji edytowalnej v2).
+   * Używane przy ręcznym wczytaniu/utworzeniu dokumentu przez użytkownika — wtedy
+   * intencją jest edycja, nie podgląd.
+   */
+  navigateToEditableDocument(masterId: string, versionId: string): void {
+    this.router.navigate(['/editor'], { queryParams: { masterId, versionId } });
+  }
+
   isPdf(mimeType: string): boolean {
     return mimeType === MIME_PDF || mimeType.toLowerCase().includes('pdf');
   }
