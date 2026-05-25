@@ -191,6 +191,8 @@ export class EditorToolbarComponent {
    */
   @Output() preserveSelection = new EventEmitter<void>();
   @Output() clearSearch = new EventEmitter<void>();
+  /** Klik w lupę — otwórz panel „Wyszukiwanie" (po lewej), zamiast paska pod toolbarem. */
+  @Output() openSearch = new EventEmitter<void>();
 
   // Style dokumentu
   private _documentStyles = signal<DocumentStyle[]>(DEFAULT_WORD_STYLES);

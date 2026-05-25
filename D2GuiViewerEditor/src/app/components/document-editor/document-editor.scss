@@ -681,6 +681,158 @@
   overflow: hidden;
 }
 
+/* Rozpórka w pasku poziomej linijki = szerokość panelu wyszukiwania (zrównanie z dokumentem) */
+.ruler-h-search-spacer {
+  width: 300px;
+  flex-shrink: 0;
+  background: #e8e8e8;
+  border-right: 1px solid #b0b0b0;
+}
+
+/* ── Panel „Wyszukiwanie" (jak panel Nawigacja w MS Word) — dokowany po lewej ── */
+.search-panel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-right: 1px solid #d0d0d0;
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  z-index: 30;
+}
+
+.search-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+
+  h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #333;
+  }
+}
+
+.search-panel-close {
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  color: #777;
+  cursor: pointer;
+  padding: 0 4px;
+
+  &:hover { color: #222; }
+}
+
+.search-panel-input {
+  position: relative;
+  padding: 10px 12px 6px;
+}
+
+.search-panel-field {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 28px 7px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+
+  &:focus { border-color: #0060df; }
+}
+
+.search-panel-clear {
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: #999;
+  cursor: pointer;
+
+  &:hover { color: #333; }
+}
+
+.search-panel-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 12px 8px;
+  font-size: 12px;
+  color: #666;
+}
+
+.search-panel-nav {
+  display: flex;
+  gap: 2px;
+
+  .search-nav-btn {
+    border: 1px solid #d0d0d0;
+    background: #fafafa;
+    border-radius: 3px;
+    width: 24px;
+    height: 22px;
+    cursor: pointer;
+    color: #555;
+    font-size: 11px;
+
+    &:hover:not(:disabled) { background: #eee; }
+    &:disabled { opacity: 0.4; cursor: default; }
+  }
+}
+
+.search-panel-tabheader {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #0060df;
+  border-bottom: 2px solid #0060df;
+}
+
+.search-panel-results {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.search-result-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid #f0f0f0;
+  background: transparent;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+  line-height: 1.4;
+
+  &:hover { background: #f5f8ff; }
+  &.active { background: #e7f0ff; }
+
+  .search-result-snippet {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    mark {
+      background: #fff3a8;
+      color: inherit;
+      font-weight: 600;
+      padding: 0;
+    }
+  }
+}
+
 /* ── Pionowa linijka — pełna wysokość przy lewej krawędzi ── */
 .ruler-v-bar {
   width: 22px;

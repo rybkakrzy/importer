@@ -1891,9 +1891,18 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   // =====================
   findText = signal('');
   replaceText = signal('');
-  /** Liczba trafień i indeks bieżącego (do wyświetlenia „x/y" w dialogu). */
+  /** Liczba trafień i indeks bieżącego (do wyświetlenia „x z y" w panelu). */
   findResultCount = signal(0);
   findCurrentIndex = signal(-1);
+  /** Lista wyników do panelu „Wyszukiwanie" — fragmenty tekstu z kontekstem wokół trafienia. */
+  searchResults = signal<{ before: string; match: string; after: string }[]>([]);
+
+  /** Odświeża licznik + listę wyników na podstawie aktualnych podświetleń edytora. */
+  private refreshSearchResults(result: { count: number; currentIndex: number }): void {
+    this.findResultCount.set(result.count);
+    this.findCurrentIndex.set(result.currentIndex);
+    this.searchResults.set(this.editor?.getSearchSnippets() ?? []);
+  }
 
   /**
    * Wyszukiwanie na żywo podczas wpisywania — podświetla wszystkie trafienia i przewija
@@ -1906,12 +1915,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.lastSearchText = '';
       this.findResultCount.set(0);
       this.findCurrentIndex.set(-1);
+      this.searchResults.set([]);
       return;
     }
     this.lastSearchText = value;
-    const result = this.editor.searchText(value, 'next');
-    this.findResultCount.set(result.count);
-    this.findCurrentIndex.set(result.currentIndex);
+    this.refreshSearchResults(this.editor.searchText(value, 'next'));
   }
 
   /** Następne trafienie (pierwsze wyszukanie, jeśli tekst się zmienił). */
@@ -1921,8 +1929,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const result = text !== this.lastSearchText
       ? (this.lastSearchText = text, this.editor.searchText(text, 'next'))
       : this.editor.findNext();
-    this.findResultCount.set(result.count);
-    this.findCurrentIndex.set(result.currentIndex);
+    this.refreshSearchResults(result);
   }
 
   /** Poprzednie trafienie. */
@@ -1932,17 +1939,23 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const result = text !== this.lastSearchText
       ? (this.lastSearchText = text, this.editor.searchText(text, 'previous'))
       : this.editor.findPrevious();
-    this.findResultCount.set(result.count);
-    this.findCurrentIndex.set(result.currentIndex);
+    this.refreshSearchResults(result);
   }
 
-  /** Zamknij dialog i wyczyść podświetlenia. */
+  /** Klik na wyniku w panelu — skok do trafienia (podświetlenie + przewinięcie). */
+  goToResult(index: number): void {
+    const result = this.editor?.goToMatch(index);
+    if (result) this.findCurrentIndex.set(result.currentIndex);
+  }
+
+  /** Zamknij panel wyszukiwania i wyczyść podświetlenia. */
   closeFindReplace(): void {
     this.showFindReplace.set(false);
     this.editor?.clearSearchHighlights();
     this.lastSearchText = '';
     this.findResultCount.set(0);
     this.findCurrentIndex.set(-1);
+    this.searchResults.set([]);
   }
 
   /**

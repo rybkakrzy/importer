@@ -3723,6 +3723,43 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Zwraca listę wyników wyszukiwania jako fragmenty tekstu (kontekst wokół trafienia)
+   * — do panelu „Wyszukiwanie". Kolejność zgodna z `searchHighlights` (kolejność dokumentu).
+   */
+  getSearchSnippets(ctx = 32): { before: string; match: string; after: string }[] {
+    return this.searchHighlights.map(mark => {
+      const block = (mark.closest('p,li,h1,h2,h3,h4,h5,h6,td,th,blockquote') as HTMLElement | null)
+        ?? mark.parentElement;
+      const full = block?.textContent ?? mark.textContent ?? '';
+      const match = mark.textContent ?? '';
+      let prefixLen = 0;
+      if (block) {
+        const r = document.createRange();
+        r.setStart(block, 0);
+        r.setEndBefore(mark);
+        prefixLen = r.toString().length;
+      }
+      const start = Math.max(0, prefixLen - ctx);
+      const before = (start > 0 ? '…' : '') + full.substring(start, prefixLen);
+      const afterEnd = prefixLen + match.length + ctx;
+      const after = full.substring(prefixLen + match.length, afterEnd) + (afterEnd < full.length ? '…' : '');
+      return { before, match, after };
+    });
+  }
+
+  /**
+   * Skacze do wyniku o danym indeksie (klik na liście w panelu) — podświetla i przewija.
+   */
+  goToMatch(index: number): { count: number; currentIndex: number } {
+    if (index < 0 || index >= this.searchHighlights.length) {
+      return { count: this.searchHighlights.length, currentIndex: this.currentHighlightIndex };
+    }
+    this.currentHighlightIndex = index;
+    this.highlightCurrent();
+    return { count: this.searchHighlights.length, currentIndex: index };
+  }
+
+  /**
    * Przechodzi do następnego wyniku wyszukiwania
    */
   findNext(): { count: number; currentIndex: number } {
