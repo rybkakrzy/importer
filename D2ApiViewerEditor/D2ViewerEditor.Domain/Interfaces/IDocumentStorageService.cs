@@ -11,6 +11,12 @@ public interface IDocumentStorageService
     Task<string> UploadAsync(Guid versionId, byte[] content, string mimeType, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Zapisuje plik pod jawnie podaną nazwą obiektu (np. niezmienny snapshot "deliveries/{id}") i zwraca tę nazwę.
+    /// Idempotentny: ponowny zapis tej samej nazwy nadpisuje obiekt.
+    /// </summary>
+    Task<string> UploadRawAsync(string objectName, byte[] content, string mimeType, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Pobiera plik binarny ze storage
     /// </summary>
     Task<byte[]> DownloadAsync(string storagePath, CancellationToken cancellationToken = default);

@@ -15,6 +15,7 @@ public class DocumentDbContext : DbContext
 
     public DbSet<Document> Documents => Set<Document>();
     public DbSet<DocumentVersion> DocumentVersions => Set<DocumentVersion>();
+    public DbSet<DocumentDelivery> DocumentDeliveries => Set<DocumentDelivery>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -23,5 +24,6 @@ public class DocumentDbContext : DbContext
         // Stosuj konfiguracje z osobnych klas
         modelBuilder.ApplyConfiguration(new DocumentConfiguration());
         modelBuilder.ApplyConfiguration(new DocumentVersionConfiguration());
+        modelBuilder.ApplyConfiguration(new DocumentDeliveryConfiguration());
     }
 }

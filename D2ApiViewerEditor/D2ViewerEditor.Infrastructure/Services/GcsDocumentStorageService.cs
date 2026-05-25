@@ -39,6 +39,21 @@ public class GcsDocumentStorageService : IDocumentStorageService
         return objectName;
     }
 
+    public async Task<string> UploadRawAsync(string objectName, byte[] content, string mimeType, CancellationToken cancellationToken = default)
+    {
+        using var stream = new MemoryStream(content);
+        await _storageClient.UploadObjectAsync(
+            _bucketName,
+            objectName,
+            mimeType,
+            stream,
+            cancellationToken: cancellationToken);
+
+        _logger.LogInformation("Uploaded {ObjectName} ({Size} bytes) to bucket {Bucket}", objectName, content.Length, _bucketName);
+
+        return objectName;
+    }
+
     public async Task<byte[]> DownloadAsync(string storagePath, CancellationToken cancellationToken = default)
     {
         using var stream = new MemoryStream();

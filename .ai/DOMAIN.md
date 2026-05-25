@@ -16,20 +16,32 @@ Język domenowy, reguły biznesowe i model pojęciowy. Czytaj przed zmianą logi
 | Classification | Klasyfikacja dokumentu: `C1` | `C2` | `C3` | `C4` (obligatoryjna przy ingeście) | Active |
 | ReturnUrl | URL, na który aplikacja zewnętrzna oczekuje zwrotu pliku po „Zakończ" | Active |
 | Metadata | JSON od aplikacji zewnętrznej (`{ returnUrl, classification }`) w kolumnie `documents.metadata` | Active |
+| DocumentStatus | Cykl życia dokumentu: `Saved` → `Editing` → `Sending` → `Sent` / `DeliveryFailed` | Active |
+| DocumentDelivery | Zadanie wysyłki finalnego pliku na `ReturnUrl` (kolejka „Zakończ i wyślij") | Active |
+| DeliveryStatus | Status zadania wysyłki: `Pending` / `Sending` / `RetryScheduled` / `Sent` / `FailedPermanently` / `DeadLettered` | Active |
+| Snapshot (delivery) | Niezmienny obiekt GCS `deliveries/{deliveryId}` zamrożony w chwili „Zakończ" (chroni przed wysłaniem później zmienionej v2) | Active |
 
 ## Encje domenowe
 
 **`Document`** (`D2ViewerEditor.Domain/Entities/Document.cs`) — agregat-root.
-- `Id` (guid_master), `Name`, `MimeType`, `CreatedAt`, `CreatedBy`, `IsDeleted` (soft delete), `Metadata` (string? JSON), `Versions`.
+- `Id` (guid_master), `Name`, `MimeType`, `CreatedAt`, `CreatedBy`, `IsDeleted` (soft delete), `Metadata` (string? JSON), `Status` (`DocumentStatus`, domyślnie `Saved`), `Versions`.
 - `AddVersion(storagePath, sizeInBytes, createdBy)` — tworzy nową wersję i dezaktywuje wszystkie poprzednie.
 - `UpdateVersion(versionId, sizeInBytes)` — nadpisuje istniejącą wersję w miejscu (auto-save); aktualizuje rozmiar + `ModifiedAt`, zachowuje Id/VersionNumber/StoragePath/CreatedAt.
 - `RestoreVersion(versionId)` — dezaktywuje wszystkie, aktywuje wskazaną.
 - `GetActiveVersion()` — może zwrócić null.
+- `MarkEditing()/MarkSending()/MarkSent()/MarkDeliveryFailed()` — przejścia `Status` (wołane przez handlery: auto-save → `Editing`; „Zakończ" → `Sending`; worker → `Sent`/`DeliveryFailed`).
 - `Delete()` — soft delete.
 
 **`DocumentVersion`** (`Domain/Entities/DocumentVersion.cs`) — nie agregat-root.
 - `Id` (guid_wersji), `DocumentId`, `StoragePath` (`documents/{versionId}`), `SizeInBytes`, `VersionNumber`, `CreatedAt`, `CreatedBy`, `IsActive`, `ModifiedAt` (DateTime?).
 - `internal Activate()/Deactivate()/UpdateContent(sizeInBytes)` — mutowane wyłącznie przez agregat `Document`.
+
+**`DocumentDelivery`** (`Domain/Entities/DocumentDelivery.cs`) — aggregate-root kolejki wysyłki „Zakończ i wyślij".
+- `Create(...)` — fabryka; waliduje `recipientUrl` (absolutny http(s)), ustawia `Pending`, `DeadlineAt = teraz + okno (24 h)`.
+- Pola: `Id`, `DocumentId`, `SourceVersionId`, `SnapshotObjectName`/`SnapshotSizeBytes`/`SnapshotSha256`, `RecipientUrl`, `Status` (`DeliveryStatus`), `AttemptCount`, znaczniki czasu (`Created/Updated/FirstAttempt/LastAttempt/NextAttempt/Deadline`), lease (`LockedUntil`/`LockedBy`), `LastError`, `CorrelationId`, `CreatedBy`.
+- `MarkSent()` / `MarkPermanentFailure(error)` / `ScheduleRetryOrDeadLetter(error, backoff)` (retry jeśli `next ≤ DeadlineAt`, inaczej `DeadLettered`) / `Requeue(window)` (ręczne wznowienie zadania w stanie końcowym, oprócz `Sent`).
+- `IsTerminal` = `Sent` ∨ `FailedPermanently` ∨ `DeadLettered`. `IsValidRecipientUrl(url)` — statyczna walidacja URL.
+- Logika wysyłki HTTP/GCS jest w infrastrukturze (`IDeliverySender`, `IDocumentStorageService`); domena decyduje tylko o przejściach stanu.
 
 ## Reguły biznesowe
 
@@ -44,6 +56,10 @@ Język domenowy, reguły biznesowe i model pojęciowy. Czytaj przed zmianą logi
 | BR-007 | `ReturnUrl` wymagany dla DOCX, opcjonalny dla PDF | Active |
 | BR-008 | Backend jest źródłem prawdy dla walidacji; frontend waliduje tylko UX | Active |
 | BR-009 | Podpis cyfrowy to Custom XML Part (RSA-SHA256), nie standardowe OOXML; hash liczony z `MainDocumentPart` | Active |
+| BR-010 | „Zakończ i wyślij" wymaga poprawnego `ReturnUrl` (absolutny http(s)) w metadanych — inaczej operacja odrzucona | Active |
+| BR-011 | Dla jednego dokumentu może istnieć tylko jedno aktywne (nieterminalne) zadanie wysyłki — wymuszone unique partial index; wielokrotne kliknięcie zwraca istniejące zadanie (idempotencja) | Active |
+| BR-012 | Wysyłany jest niezmienny snapshot zamrożony w chwili „Zakończ" (`deliveries/{deliveryId}`), nie bieżąca v2 — auto-save po zakończeniu nie zmienia wysyłanego pliku | Active |
+| BR-013 | Wysyłka jest at-least-once z retry (exponential backoff + jitter, cap 15 min) do twardego limitu 24 h; po przekroczeniu zadanie → `DeadLettered`; błąd non-retryable → `FailedPermanently` | Active |
 
 ## Zasady dla agenta
 

@@ -2,6 +2,7 @@
 using D2ViewerEditor.Infrastructure.Persistence;
 using D2ViewerEditor.Infrastructure.Persistence.Repositories;
 using D2ViewerEditor.Infrastructure.Services;
+using D2ViewerEditor.Infrastructure.Services.Delivery;
 using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Storage.V1;
 using Microsoft.EntityFrameworkCore;
@@ -33,6 +34,25 @@ public static class DependencyInjection
                 options.UseNpgsql(connectionString));
 
             services.AddScoped<IDocumentRepository, DocumentRepository>();
+            services.AddScoped<IDocumentDeliveryRepository, DocumentDeliveryRepository>();
+        }
+
+        // Finish-and-send: kolejka wysyłki + worker
+        var deliveryOptions = new DeliveryWorkerOptions();
+        configuration.GetSection(DeliveryWorkerOptions.SectionName).Bind(deliveryOptions);
+        services.Configure<DeliveryWorkerOptions>(
+            configuration.GetSection(DeliveryWorkerOptions.SectionName));
+
+        services.AddSingleton<IBackoffStrategy, ExponentialJitterBackoff>();
+        services.AddScoped<DeliveryAttemptRunner>();
+        services.AddHttpClient<IDeliverySender, HttpDeliverySender>(client =>
+        {
+            client.Timeout = deliveryOptions.HttpTimeout;
+        });
+
+        if (deliveryOptions.Enabled)
+        {
+            services.AddHostedService<DocumentDeliveryWorker>();
         }
 
         // Google Cloud Storage

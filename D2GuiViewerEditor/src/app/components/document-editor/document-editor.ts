@@ -12,7 +12,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { switchMap, map, filter, distinctUntilChanged } from 'rxjs/operators';
+import { switchMap, map, filter, distinctUntilChanged, takeWhile } from 'rxjs/operators';
 import { from, Observable, Subscription, timer } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
@@ -35,7 +35,7 @@ import {
   SignDocumentRequest
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
-import { DocumentStorageService } from '../../services/document-storage.service';
+import { DocumentStorageService, DeliveryStatus } from '../../services/document-storage.service';
 
 /**
  * Główny komponent edytora dokumentów Word Online
@@ -96,6 +96,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   lastAutoSaveAt = signal<Date | null>(null);
   private autoSaveSub?: Subscription;
   private isAutoSaving = false;
+
+  // Zakończ i wyślij (asynchroniczna wysyłka na returnUrl + polling statusu)
+  isFinishing = signal<boolean>(false);
+  deliveryStatus = signal<DeliveryStatus | null>(null);
+  deliveryId = signal<string | null>(null);
+  private deliveryPollSub?: Subscription;
+  private static readonly DELIVERY_POLL_MS = 4000;
   documentMetadata = signal<DocumentMetadata>({
     title: 'Nowy dokument',
     created: new Date().toISOString(),
@@ -427,6 +434,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopAutoSave();
+    this.deliveryPollSub?.unsubscribe();
     this.vRulerResizeObserver?.disconnect();
   }
 
@@ -1481,8 +1489,77 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.showShadingDropdown.set(false);
   }
 
+  /**
+   * "Zakończ i wyślij": utrwala stan edytora, zleca asynchroniczną wysyłkę na returnUrl
+   * i odpytuje status do stanu końcowego. Wysyłka jest kontynuowana po stronie serwera
+   * nawet po zamknięciu strony (zadanie żyje w bazie, worker dokończy).
+   */
   finishDocument(): void {
-    // TODO: implement finish logic
+    this.showMenu.set(false);
+
+    if (this.readOnly()) {
+      this.showError('Tryb podglądu — dokument jest tylko do odczytu.');
+      return;
+    }
+
+    const masterId = this.documentMasterId();
+    const versionId = this.documentVersionId();
+    if (!masterId || !versionId) {
+      this.showError('Dokument nie jest powiązany z edytowalną wersją — nie można zakończyć i wysłać.');
+      return;
+    }
+
+    if (this.isFinishing()) {
+      return;
+    }
+
+    this.isFinishing.set(true);
+    this.deliveryStatus.set('Pending');
+
+    this.documentService.saveDocument(this.buildSaveRequest()).pipe(
+      switchMap(blob => from(this.blobToBase64(blob))),
+      switchMap(base64 => this.documentStorageService.finishAndSend(masterId, versionId, { content: base64 }))
+    ).subscribe({
+      next: result => {
+        this.deliveryId.set(result.deliveryId);
+        this.deliveryStatus.set(result.status);
+        this.pollDeliveryStatus(result.deliveryId);
+      },
+      error: () => {
+        this.isFinishing.set(false);
+        this.deliveryStatus.set(null);
+        this.showError('Nie udało się rozpocząć wysyłki dokumentu.');
+      }
+    });
+  }
+
+  private pollDeliveryStatus(deliveryId: string): void {
+    this.deliveryPollSub?.unsubscribe();
+
+    const isTerminal = (s: DeliveryStatus) =>
+      s === 'Sent' || s === 'FailedPermanently' || s === 'DeadLettered';
+
+    this.deliveryPollSub = timer(0, DocumentEditorComponent.DELIVERY_POLL_MS).pipe(
+      switchMap(() => this.documentStorageService.getDeliveryStatus(deliveryId)),
+      map(dto => dto.status),
+      takeWhile(status => !isTerminal(status), true)
+    ).subscribe({
+      next: status => {
+        this.deliveryStatus.set(status);
+        if (isTerminal(status)) {
+          this.isFinishing.set(false);
+          if (status === 'Sent') {
+            this.showSuccess('Dokument został wysłany.');
+          } else {
+            this.showError('Wysyłka dokumentu nie powiodła się. Skontaktuj się z administratorem.');
+          }
+        }
+      },
+      error: () => {
+        this.isFinishing.set(false);
+        this.showError('Utracono podgląd statusu wysyłki. Wysyłka może być kontynuowana w tle.');
+      }
+    });
   }
 
   openReportEmail(): void {

@@ -30,7 +30,7 @@ Aplikacja zewnętrzna otwiera GUI po URL (`?masterId=...[&versionId=...]`); GUI 
 D2ViewerEditor.sln
 ├── D2ViewerEditor.Domain          — encje (Document, DocumentVersion), interfejsy, modele, Result<T>
 ├── D2ViewerEditor.Application     — CQRS handlers (Features/...), walidatory, behaviours (Logging, Validation)
-├── D2ViewerEditor.Infrastructure  — EF Core (DbContext, repo, configurations), GCS, konwertery DOCX↔HTML, podpisy, barcode
+├── D2ViewerEditor.Infrastructure  — EF Core (DbContext, repo, configurations), GCS, konwertery DOCX↔HTML, podpisy, barcode, worker wysyłki (Services/Delivery)
 ├── D2ViewerEditor.Api             — kontrolery, Program.cs, DI
 └── *.UnitTests (Api/Application/Domain/Infrastructure) + D2ViewerEditor.Benchmarks
 ```
@@ -45,6 +45,15 @@ D2ViewerEditor.sln
 - **Infrastructure** — EF Core, GCS, konwertery, podpisy.
 
 Kierunek: `Api → Application → Domain`, `Api → Infrastructure`, `Infrastructure → Domain/Application abstractions`.
+
+### Przetwarzanie w tle (worker wysyłki)
+
+Funkcja „Zakończ i wyślij" wprowadza asynchroniczne przetwarzanie:
+
+- `DocumentDeliveryWorker : BackgroundService` (`Infrastructure/Services/Delivery`) — hostowany w procesie **Internal API** (`D2ApiViewerEditor.Api`), rejestrowany przez `AddHostedService` w `Infrastructure/DependencyInjection`. Włączany flagą `DeliveryWorker:Enabled` (pozwala wydzielić wysyłkę na dedykowaną instancję bez zmian kodu).
+- Worker cyklicznie claimuje paczki zadań z tabeli `document_deliveries` (`SELECT ... FOR UPDATE SKIP LOCKED` + lease `locked_until`) i przetwarza je równolegle (`Parallel.ForEachAsync`, limit `MaxConcurrency`), każde zadanie w osobnym DI scope (`DeliveryAttemptRunner`).
+- Wysyłka HTTP: typed `HttpClient` (`HttpDeliverySender`, `IDeliverySender`). Retry: `ExponentialJitterBackoff` (`IBackoffStrategy`). Pliki: niezmienny snapshot w GCS (`IDocumentStorageService.UploadRawAsync`/`DownloadAsync`).
+- Odporność: wiele instancji (SKIP LOCKED), restart (lease — zawieszone `Sending` przejmowane po wygaśnięciu), brak utraty zadań (stan w PostgreSQL). Szczegóły decyzji: `DECISIONS.md` ADR-0005.
 
 ## Frontend — realny podział (`D2GuiViewerEditor/src/app/`)
 

@@ -17,6 +17,12 @@ Terminy techniczne i domenowe używane w projekcie.
 | ReturnUrl | URL zwrotu pliku po „Zakończ" | wymagany dla DOCX |
 | Ingest | Przyjęcie dokumentu od aplikacji zewnętrznej | `D2ServicesViewerEditor` |
 | Custom XML Part | Miejsce przechowywania podpisu w DOCX | namespace `http://schemas.D2ViewerEditor.app/digitalsignatures` |
+| Zakończ i wyślij | Finalizacja dokumentu + asynchroniczna wysyłka na ReturnUrl | `FinishAndSendDocumentCommand` |
+| DocumentStatus | Cykl życia dokumentu (Saved/Editing/Sending/DeliveryFailed/Sent) | kolumna `documents.status` |
+| DocumentDelivery | Zadanie wysyłki w kolejce `document_deliveries` | aggregate-root |
+| DeliveryStatus | Status zadania wysyłki | Pending/Sending/RetryScheduled/Sent/FailedPermanently/DeadLettered |
+| Snapshot (delivery) | Niezmienny plik wysyłki w GCS | obiekt `deliveries/{deliveryId}` |
+| DeadLettered | Zadanie po wyczerpaniu okna retry (24 h) | stan końcowy, nieudany |
 
 ## Terminy techniczne
 
@@ -31,6 +37,11 @@ Terminy techniczne i domenowe używane w projekcie.
 | DTO | obiekt transferu danych | nie utożsamiać z encją |
 | Signal | mechanizm stanu Angular 20 | główny sposób stanu w GUI |
 | Interceptor | przechwytywanie HTTP (Angular) | `http-error.interceptor` |
+| BackgroundService | hostowany worker .NET | `DocumentDeliveryWorker` (wysyłka w tle) |
+| SKIP LOCKED | bezpieczny claim zadań przez wiele instancji | `SELECT ... FOR UPDATE SKIP LOCKED` |
+| Lease | techniczna dzierżawa zadania przez workera | kolumny `locked_until`/`locked_by` (NIE status) |
+| Idempotency-Key | nagłówek POST = `deliveryId` | dedup po stronie odbiorcy (at-least-once) |
+| Backoff + jitter | strategia ponawiania | `ExponentialJitterBackoff` (cap 15 min) |
 
 ## Zasada nazewnictwa
 

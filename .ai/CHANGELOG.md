@@ -13,6 +13,24 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-05-25 — Funkcja „Zakończ i wyślij" (asynchroniczna wysyłka na returnUrl)
+
+### Changed
+- Domena: nowy agregat `DocumentDelivery` (+ enum `DeliveryStatus`: Pending/Sending/RetryScheduled/Sent/FailedPermanently/DeadLettered), interfejsy `IDocumentDeliveryRepository`, `IDeliverySender`, `IBackoffStrategy`. `IDocumentStorageService.UploadRawAsync` (snapshot pod dowolną nazwą).
+- Application: `FinishAndSendDocumentCommand` (+handler+validator), `GetDeliveryStatusQuery`, `RequeueDeliveryCommand`, `GetDeliveriesByStatusQuery`. Idempotencja wielokrotnego kliknięcia (aktywne zadanie per dokument).
+- Infrastructure: `DocumentDeliveryRepository` (claim `FOR UPDATE SKIP LOCKED` + lease), `HttpDeliverySender` (Idempotency-Key), `ExponentialJitterBackoff`, `DeliveryAttemptRunner`, `DocumentDeliveryWorker` (BackgroundService, bounded concurrency, reclaim po crashu). Rejestracja w DI + `DeliveryWorkerOptions` (sekcja `DeliveryWorker`).
+- DB: `infra/sql/007_add_document_deliveries.sql` (tabela + indeksy + unique partial idempotencji + check status). Mapowanie EF `DocumentDeliveryConfiguration` + `DbSet`.
+- API (`DocumentStorageController`): `POST {masterId}/versions/{versionId}/finish` (202), `GET deliveries/{id}`, `GET deliveries?status=`, `POST deliveries/{id}/retry`.
+- GUI: `finishDocument()` (utrwala stan + wysyłka + polling co 4 s do stanu końcowego), serwis `finishAndSend`/`getDeliveryStatus`, sygnały `isFinishing/deliveryStatus/deliveryId`.
+
+### Verified
+- `dotnet build D2ViewerEditor.sln` — OK (0 błędów).
+- `dotnet test` — nowe testy (DocumentDelivery, handler FinishAndSend, validator, backoff) zielone. Jeden WCZEŚNIEJSZY błąd niezwiązany: `SaveDocumentVersionCommandHandlerTests.Handle_ValidCommand_ShouldAddNewVersion` (oczekuje `UpdateAsync`, handler go nie woła po przejściu na płaski zapis) — nie ruszany.
+- GUI: TypeScript kompiluje się; `npm run build` blokuje WCZEŚNIEJSZY budżet `document-editor.scss` (35.7 kB > 32 kB), niezwiązany z tą zmianą.
+
+### Notes
+- Snapshot finalny zamrażany w GCS jako `deliveries/{deliveryId}` (nie wysyłamy później zmodyfikowanej v2). At-least-once + Idempotency-Key. Worker odporny na restart/multi-instancję; `DeliveryWorker:Enabled=false` pozwala wydzielić wysyłkę na dedykowany host.
+
 ## 2026-05-25 — Pionowa linijka per strona + lupa otwiera panel
 
 ### Changed

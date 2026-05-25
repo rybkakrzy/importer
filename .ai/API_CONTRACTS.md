@@ -41,8 +41,12 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 | GET | `/{masterId}/download` | Bajty wersji bazowej (v1, sort po VersionNumber) | plik |
 | GET | `/{masterId}/versions/{versionId}/download` | Bajty konkretnej wersji | plik |
 | POST | `/{masterId}/restore/{versionId}` | Przywróć wersję jako aktywną | `{ message, versionId }` |
+| **POST** | `/{masterId}/versions/{versionId}/finish` | **„Zakończ i wyślij"**: utrwala stan edytora, zamraża snapshot, tworzy zadanie wysyłki. Idempotentne (zwraca istniejące aktywne zadanie). Brak/zły returnUrl → 400 | **202 Accepted** `{ deliveryId, status, statusUrl }` |
+| GET | `/deliveries/{deliveryId}` | Status zadania wysyłki (polling z GUI) | `DeliveryStatusDto { deliveryId, documentId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, lastError?, updatedAt }` |
+| GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`) | `DeliveryListItemDto[]` |
+| POST | `/deliveries/{deliveryId}/retry` | Ręczne ponowienie nieudanego zadania (`DeadLettered`/`FailedPermanently`) | `RequeueDeliveryResult { deliveryId, status }` |
 
-Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }`.
+Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DTO `SaveDocumentVersionRequest` używany też przez `finish`).
 
 ## DocumentController — `/api/document` (operacje bezstanowe, bez DB/GCS)
 

@@ -18,11 +18,12 @@ Agent nie może zgadywać wersji technologii. Musi sprawdzić fakty w repozytori
 | ORM | EF Core 8 (`Microsoft.EntityFrameworkCore` 8.0.12) | `Infrastructure.csproj` |
 | Baza | PostgreSQL via Npgsql (`Npgsql.EntityFrameworkCore.PostgreSQL` 8.0.11) | `Infrastructure.csproj` |
 | Storage | Google Cloud Storage (`Google.Cloud.Storage.V1` 4.10.0); fake-gcs-server w DEV | `Infrastructure` |
+| Worker w tle | `BackgroundService` (`DocumentDeliveryWorker`) + typed `HttpClient` — pakiety `Microsoft.Extensions.Hosting.Abstractions` 8.0.1, `Microsoft.Extensions.Http` 8.0.1 | `Infrastructure.csproj` |
 | DOCX | `DocumentFormat.OpenXml` 3.0.2 + `HtmlAgilityPack` 1.11.61 | `Infrastructure.csproj` |
 | Kody kreskowe | `ZXing.Net` 0.16.9 + `SkiaSharp` 3.116.1 | `Infrastructure.csproj` |
 | Podpisy | RSA-SHA256, Custom XML Part w DOCX (**nie** standardowe OOXML) | `DigitalSignatureService` |
 | Swagger | `Swashbuckle.AspNetCore` 6.5.0 | `Api.csproj` |
-| Testy | **NUnit 4.2.2** + FluentAssertions 8.8.0 + Moq 4.20.72 / NSubstitute 5.3.0 | `*.UnitTests.csproj` |
+| Testy | **NUnit 4.2.2** + FluentAssertions 8.8.0 + Moq 4.20.72 / NSubstitute 5.3.0 (projekty testowe targetują `net9.0`, kod aplikacji `net8.0`) | `*.UnitTests.csproj` |
 | Benchmarki | BenchmarkDotNet (`D2ViewerEditor.Benchmarks`) | projekt |
 
 ## Frontend — `D2GuiViewerEditor`

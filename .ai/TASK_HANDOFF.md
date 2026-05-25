@@ -32,7 +32,7 @@ System przyjmuje dokumenty od aplikacji zewnętrznej (External API), edytuje/ogl
 ## Następne sugerowane kroki
 
 1. Krok 2 (podgląd): w GUI dla `?masterId=` ładować v1 przez `GET .../{masterId}/download` zamiast aktywnej wersji; routing PDFViewer vs DocxEditor po `mimeType` z `GET .../{masterId}/metadata` lub `/{masterId}`.
-2. Zaimplementować `finishDocument()` — pobranie `returnUrl` z metadanych i odesłanie pliku.
+2. (Zrobione 2026-05-25) `finishDocument()` — async wysyłka na returnUrl: kolejka `document_deliveries` + worker `DocumentDeliveryWorker` + snapshot GCS `deliveries/{id}` + retry/backoff 24h. Endpointy `finish`/`deliveries`. Patrz ADR-0005. Pozostało: dodać DB integration testy claimu (SKIP LOCKED) na realnym Postgresie; rozważyć panel admina dla `DeadLettered` (endpoint listy/retry już jest).
 3. (Zamknięte) Port External API = 15112 wg `appsettings.json` `Urls`; Swagger `/swagger`.
 4. Dodać testy: domena `UpdateVersion` (v1 immutable), handler `UpdateDocumentVersionCommand`, serwis GUI auto-save.
 

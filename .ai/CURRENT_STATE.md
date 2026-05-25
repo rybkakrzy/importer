@@ -4,11 +4,11 @@
 
 ## Ostatnia aktualizacja
 
-2026-05-23 — dostosowanie `.ai/` do realnego projektu D2 ViewerEditor + opis funkcji ingest/auto-save.
+2026-05-25 — funkcja „Zakończ i wyślij" (kolejka `document_deliveries` + worker) + audyt i synchronizacja `.ai/` z kodem (status dokumentu, skrypty SQL 006/007, endpointy wysyłki).
 
 ## Aktualny cel prac
 
-Domknięcie przepływu Krok 1–3 (ingest → podgląd → edycja) oraz płaski model zapisu wersji edytowalnej z auto-save.
+Domknięcie przepływu Krok 1–4 (ingest → podgląd → edycja → zakończ i wyślij). Krok 4 zaimplementowany; Krok 2 (podgląd v1) wciąż w toku.
 
 ## Aktualny etap
 
@@ -28,6 +28,8 @@ Domknięcie przepływu Krok 1–3 (ingest → podgląd → edycja) oraz płaski 
 - GUI: mechanizm auto-save (timer, `environment.autoSave { enabled, intervalSeconds: 30 }`), switch „AutoSave", sygnały `documentVersionId/autoSaveEnabled/autoSaveStatus/lastAutoSaveAt`.
 - GUI: ujednolicony „Zapisz" (API, PUT/POST) + „Pobierz dokument" (dawne „Zapisz" = download lokalny). Usunięto `saveDocumentAs()`.
 - Dokumentacja `.ai/` przepisana wg wzorca z `template/`.
+- „Zakończ i wyślij": `FinishAndSendDocumentCommand` + tabela `document_deliveries` (SQL 007) + worker `DocumentDeliveryWorker` (claim `FOR UPDATE SKIP LOCKED`, retry/backoff do 24h, snapshot GCS) + endpointy `finish`/`deliveries`/`retry` + GUI `finishDocument()` z pollingiem. Patrz `DECISIONS.md` ADR-0005.
+- `documents.status` (`DocumentStatus`) + skrypt SQL 006 (dodane przed tą sesją, teraz udokumentowane).
 
 ## Jak uruchomić projekt lokalnie
 
@@ -52,7 +54,9 @@ cd D2GuiViewerEditor && npm run build               # ostatnio: OK
 | Problem | Wpływ | Status |
 |---|---|---|
 | Tryb podglądu (Krok 2) ładuje aktywną wersję (po DOCX = v2), nie v1 oryginał | Medium | Open — przełączyć GUI na `/download` |
-| `finishDocument()` w GUI to TODO (brak zwrotu pliku na returnUrl) | Medium | Open |
+| `finishDocument()` — zaimplementowane: async wysyłka na returnUrl (kolejka `document_deliveries` + worker) | — | Zamknięte |
+| `SaveDocumentVersionCommandHandlerTests` oczekuje `UpdateAsync` (płaski zapis go nie woła) | Low | Open — test do aktualizacji (wcześniejszy) |
+| `npm run build` blokuje budżet `document-editor.scss` (35.7 kB > 32 kB) | Low | Open — wcześniejsze, niezwiązane |
 | Ręczny „Zapisz" przy włączonym auto-save jest częściowo redundantny | Low | Akceptowalne (wymuszenie zapisu) |
 | Port External API potwierdzony: 15112 (`appsettings.json` → `Urls`) | — | Zamknięte |
 

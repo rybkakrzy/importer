@@ -26,7 +26,7 @@ Sposób uruchamiania, budowania i wdrażania projektu. Część szczegółów de
 
 ```bash
 # Wymagane zależności zewnętrzne (uruchamiane poza repo):
-#  - PostgreSQL  (schemat: uruchom skrypty infra/sql/ w kolejności 001..005)
+#  - PostgreSQL  (schemat: uruchom skrypty infra/sql/ w kolejności 001..007)
 #  - GCS lub fake-gcs-server (bucket: d2viewereditor-documents)
 
 # Internal API
@@ -47,6 +47,25 @@ cd D2GuiViewerEditor && npm install && npm start   # http://localhost:4200
 
 - GCS używany na pliki binarne (bucket `d2viewereditor-documents`); w DEV fake-gcs-server.
 - Pozostała infrastruktura (Cloud Run/GKE, Cloud SQL, Secret Manager, IAM) — do potwierdzenia, brak IaC w repo.
+
+## Worker wysyłki (`DeliveryWorker`)
+
+Internal API (`D2ApiViewerEditor.Api`) hostuje `DocumentDeliveryWorker` jako `BackgroundService`. Konfiguracja w `appsettings.json` (sekcja `DeliveryWorker`):
+
+```json
+"DeliveryWorker": {
+  "Enabled": true,            // false → instancja nie przetwarza kolejki (tylko tworzy zadania)
+  "PollInterval": "00:00:15",
+  "BatchSize": 20,
+  "MaxConcurrency": 4,
+  "Lease": "00:05:00",        // dzierżawa claimu; po wygaśnięciu zawieszone zadanie przejmuje inny worker
+  "RetentionWindow": "1.00:00:00", // 24 h — twardy limit retry → DeadLettered
+  "HttpTimeout": "00:00:30"
+}
+```
+
+- Przy wielu replikach API claim `FOR UPDATE SKIP LOCKED` gwarantuje brak duplikatów; można też ustawić `Enabled=false` na replikach obsługujących GUI i `true` na dedykowanej instancji wysyłkowej (wydzielenie bez osobnego projektu/hosta).
+- Worker wymaga skonfigurowanego PostgreSQL i GCS (te same `ConnectionStrings`/`GoogleCloudStorage` co API).
 
 ## Konfiguracja vs sekrety
 

@@ -44,6 +44,7 @@ System przyjmuje dokument (DOCX lub PDF) od aplikacji zewnętrznej wraz z metada
 1. **Ingest** (Krok 1): aplikacja zewnętrzna wysyła plik + metadane → Services API zapisuje (DOCX: oryginał v1 + edytowalna v2; PDF: tylko v1) → zwraca `{ MasterId, VersionId? }`.
 2. **Tryb podglądu** (Krok 2): GUI z `?masterId=` ładuje treść (PDFViewer dla PDF, DocxEditor dla DOCX) w trybie read-only.
 3. **Tryb edycji** (Krok 3): GUI z `?masterId=&versionId=` ładuje wersję edytowalną; użytkownik edytuje, auto-save nadpisuje v2 w miejscu.
+4. **Zakończ i wyślij** (Krok 4): użytkownik kończy pracę → backend zamraża snapshot finalnego pliku i tworzy zadanie wysyłki (`document_deliveries`); worker w tle wysyła plik na `ReturnUrl` z metadanych (asynchronicznie, z retry do 24 h). GUI odpytuje status wysyłki.
 
 ## Cele techniczne
 

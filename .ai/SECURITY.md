@@ -33,6 +33,14 @@ Bezpieczeństwo ma pierwszeństwo przed wygodą implementacji.
 - Format własny (Custom XML Part, RSA-SHA256) — nie standard OOXML. Certyfikaty/hasła przekazywane do `/api/document/sign` są wrażliwe: nie loguj, nie zapisuj.
 - Hash liczony z `MainDocumentPart`; `VerifySignatures` raportuje osobno ważność podpisu RSA i zgodność hasha.
 
+## Wysyłka „Zakończ i wyślij" (returnUrl)
+
+- Realne mechanizmy: `RecipientUrl` (z `documents.metadata`, ustawiany przez aplikację zewnętrzną przy ingeście) jest walidowany jako **absolutny adres http(s)** (`DocumentDelivery.IsValidRecipientUrl`) — inaczej operacja `finish` zwraca 400.
+- Wysyłka jest at-least-once; POST niesie nagłówek `Idempotency-Key = deliveryId` (dedup po stronie odbiorcy) i `X-Content-SHA256`.
+- Klasyfikacja błędów: 4xx wybrane (400/401/403/404/405/422) → `FailedPermanently`; pozostałe/timeout → retry do 24 h.
+- Wysyłany jest niezmienny snapshot (`deliveries/{deliveryId}`), nie bieżąca v2 — nie da się podmienić treści po zakończeniu.
+- **Rekomendacja (nie istniejący stan):** `RecipientUrl` pochodzi z danych zewnętrznych, a worker wykonuje do niego żądania serwerowe — rozważyć ochronę przed SSRF (allowlista hostów/schematów, blokada adresów prywatnych/metadata-endpoint GCP `169.254.169.254`). Obecnie walidowany jest tylko format http(s).
+
 ## Logowanie
 
 Nie loguj: haseł, tokenów, certyfikatów, danych osobowych, surowych payloadów z danymi wrażliwymi. Preferuj structured logging (`ILogger`). Brak `Console.WriteLine` w kodzie aplikacyjnym. (Uwaga: w GUI `document-editor` jest blok diagnostyczny `console.group` przy pobieraniu pliku — nie rozszerzaj go o dane wrażliwe.)

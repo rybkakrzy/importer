@@ -66,6 +66,31 @@ export interface RestoreVersionResponse {
   versionId: string;
 }
 
+export type DeliveryStatus =
+  | 'Pending'
+  | 'Sending'
+  | 'RetryScheduled'
+  | 'Sent'
+  | 'FailedPermanently'
+  | 'DeadLettered';
+
+export interface FinishAndSendResult {
+  deliveryId: string;
+  status: DeliveryStatus;
+  statusUrl: string;
+}
+
+export interface DeliveryStatusDto {
+  deliveryId: string;
+  documentId: string;
+  status: DeliveryStatus;
+  attemptCount: number;
+  lastAttemptAt: string | null;
+  nextAttemptAt: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
 /**
  * Serwis do zarządzania dokumentami z wersjonowaniem
  */
@@ -176,6 +201,32 @@ export class DocumentStorageService {
       `${this.apiUrl}/${masterId}/restore/${versionId}`,
       {}
     );
+  }
+
+  /**
+   * "Zakończ i wyślij": utrwala stan edytora i tworzy zadanie asynchronicznej wysyłki na returnUrl.
+   * Idempotentne — ponowne kliknięcie zwraca to samo zadanie.
+   * @param masterId - GUID mastera dokumentu
+   * @param versionId - GUID wersji edytowalnej
+   * @param request - Aktualna zawartość edytora w Base64
+   */
+  finishAndSend(
+    masterId: string,
+    versionId: string,
+    request: SaveDocumentVersionRequest
+  ): Observable<FinishAndSendResult> {
+    return this.http.post<FinishAndSendResult>(
+      `${this.apiUrl}/${masterId}/versions/${versionId}/finish`,
+      request
+    );
+  }
+
+  /**
+   * Status zadania wysyłki (polling).
+   * @param deliveryId - GUID zadania wysyłki
+   */
+  getDeliveryStatus(deliveryId: string): Observable<DeliveryStatusDto> {
+    return this.http.get<DeliveryStatusDto>(`${this.apiUrl}/deliveries/${deliveryId}`);
   }
 
   /**

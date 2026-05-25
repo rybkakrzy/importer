@@ -10,7 +10,8 @@ Niepewności, ryzyka i założenia. Aktualizuj, gdy czegoś nie da się potwierd
 |---|---|---|---|---|
 | A-01 | External API (`D2ServicesViewerEditor`) działa na porcie 15112 | — | **Potwierdzone**: `appsettings.json` `Urls=https://0.0.0.0:15112`, `appsettings.local.json` `http://localhost:15112`. Swagger: `/swagger` | Closed |
 | A-02 | Lokalny PostgreSQL i GCS uruchamiane są poza repo (brak docker-compose) | Medium | Potwierdzić procedurę bootstrapu z zespołem | Open |
-| A-03 | Schemat bazy bootstrapowany skryptami `infra/sql/` (001..005) w kolejności | Medium | Sprawdzić, czy istnieje runner migracji poza repo | Open |
+| A-03 | Schemat bazy bootstrapowany skryptami `infra/sql/` (001..007) w kolejności | Medium | Sprawdzić, czy istnieje runner migracji poza repo | Open |
+| A-06 | Odbiorca `returnUrl` akceptuje POST z plikiem (octet-stream) i obsługuje `Idempotency-Key` do deduplikacji | Medium | Potwierdzić kontrakt z zespołem aplikacji źródłowej | Open |
 | A-04 | Wersja edytowalna (v2) to dosłowna kopia bajtów oryginału, nie konwersja | Low | Kod `IngestExternalDocumentCommandHandler` (kopia bajtów) — potwierdzić wymaganie | Open |
 | A-05 | Mechanizm auth — niepotwierdzony w tej sesji | Medium | Przejrzeć `Program.cs`/middleware obu API | Open |
 
@@ -23,6 +24,9 @@ Niepewności, ryzyka i założenia. Aktualizuj, gdy czegoś nie da się potwierd
 | R-03 | Auto-save i ręczny „Zapisz" dzielą ścieżkę; przy braku versionId zapis idzie jako nowa wersja (POST) | Low | Low | Świadome zachowanie; udokumentowane w `FEATURES.md` | Open |
 | R-04 | Port External API niepewny → błędne URL integracji | — | — | Zamknięte: port 15112 potwierdzony w `appsettings.json` (`Urls`) | Closed |
 | R-05 | Nieaktualizowana pamięć `.ai/` może wprowadzać w błąd | Medium | High | Aktualizować `CURRENT_STATE`/`TASK_HANDOFF`/`CHANGELOG` po pracy | Open |
+| R-06 | Brak testów integracyjnych claimu wysyłki (`FOR UPDATE SKIP LOCKED` / reclaim po crashu) na realnym PostgreSQL — pokrycie tylko jednostkowe | Medium | Medium | Dodać testy integracyjne repo (Testcontainers/lokalny Postgres) | Open |
+| R-07 | `RecipientUrl` z metadanych zewnętrznych użyty do żądań serwerowych workera → ryzyko SSRF (brak allowlisty/blokady adresów prywatnych) | Medium | Medium | Dodać walidację hosta/schematu poza samym http(s) | Open |
+| R-08 | Ręczny „Zapisz"/auto-save może nadpisać v2 po utworzeniu zadania wysyłki — wysłany jest jednak niezmienny snapshot, więc treść wysyłki się nie zmienia (świadome) | Low | Low | Udokumentowane (BR-012) | Open |
 
 ## Zamknięte
 

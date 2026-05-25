@@ -27,7 +27,7 @@ Umożliwić aplikacjom zewnętrznym oddanie dokumentu (DOCX/PDF) do bezpiecznego
 | Płaski zapis edytowalnej wersji + auto-save | Implemented | `PUT .../versions/{versionId}`, switch AutoSave w GUI |
 | Endpoint metadanych (returnUrl, classification) | Implemented | `GET .../{masterId}/metadata` |
 | Tryb podglądu (Krok 2) — ładowanie v1 dla DOCX | In Progress | GUI wciąż ładuje aktywną wersję; patrz RISKS/FEATURES |
-| Funkcja „Zakończ" (zwrot pliku na returnUrl) | Planned | `finishDocument()` w GUI to TODO |
+| Zakończ i wyślij (Krok 4) — async zwrot pliku na returnUrl | Implemented | `FinishAndSendDocumentCommand` + tabela `document_deliveries` + worker `DocumentDeliveryWorker`; GUI `finishDocument()` z pollingiem. Patrz FEATURES, DECISIONS ADR-0005 |
 
 ## Cele długoterminowe
 

@@ -57,7 +57,9 @@ public class SaveDocumentVersionCommandHandlerTests
 
         await _storageService.Received(1).UploadAsync(
             Arg.Any<Guid>(), Arg.Any<byte[]>(), "application/pdf", Arg.Any<CancellationToken>());
-        await _documentRepository.Received(1).UpdateAsync(existingDocument, Arg.Any<CancellationToken>());
+        // Handler celowo NIE woła UpdateAsync — encja jest śledzona, a pełny Update agregatu
+        // wymusiłby UPDATE documents z created_at jako Kind=Unspecified (błąd Npgsql / timestamptz).
+        await _documentRepository.DidNotReceive().UpdateAsync(Arg.Any<Document>(), Arg.Any<CancellationToken>());
         await _documentRepository.Received(1).SaveChangesAsync(Arg.Any<CancellationToken>());
     }
 
