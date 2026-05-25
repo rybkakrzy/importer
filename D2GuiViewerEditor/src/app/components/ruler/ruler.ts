@@ -44,6 +44,13 @@ export class RulerComponent implements OnChanges {
   @Input() zoomLevel = 100;
 
   /**
+   * Opcjonalna długość osi linijki w cm (tylko vertical). Gdy ustawiona, linijka wypełnia
+   * podziałką FAKTYCZNĄ wysokość kartki — strona z wysokim nagłówkiem bywa wyższa niż A4,
+   * więc bez tego pod podziałką zostawałby pusty obszar. Null = domyślnie A4 (29.7 cm).
+   */
+  @Input() axisLengthCm: number | null = null;
+
+  /**
    * Wcięcie paragrafu (cm) dla aktualnie zaznaczonego bloku (P/UL/OL/LI/TABLE/IMG…).
    * Gdy ustawione (mode='horizontal'), uchwyty linijki reprezentują lewą/prawą krawędź
    * paragrafu (margines strony + wcięcie), a przeciągnięcie emituje `blockIndentChange`
@@ -77,6 +84,9 @@ export class RulerComponent implements OnChanges {
 
   /** Długość osi linijki w cm */
   get axisCm(): number {
+    if (this.mode === 'vertical' && this.axisLengthCm != null && this.axisLengthCm > 0) {
+      return this.axisLengthCm;
+    }
     return this.mode === 'horizontal' ? this.pageWidthCm : this.pageHeightCm;
   }
 

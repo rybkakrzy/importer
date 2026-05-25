@@ -60,6 +60,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   @ViewChild(EditorToolbarComponent) toolbar!: EditorToolbarComponent;
   @ViewChild('verticalRulerBar') verticalRulerBar?: ElementRef<HTMLDivElement>;
   @ViewChild('horizontalRulerInner') horizontalRulerInner?: ElementRef<HTMLDivElement>;
+  @ViewChild('editorScrollContainer') editorScrollContainer?: ElementRef<HTMLDivElement>;
 
   private documentService = inject(DocumentService);
   private documentStorageService = inject(DocumentStorageService);
@@ -273,6 +274,81 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     return m;
   });
 
+  /**
+   * Lista indeksów stron — do renderowania OSOBNEJ pionowej linijki dla każdej strony,
+   * żeby przy przewijaniu linijka restartowała się na granicy kartek (zamiast jednej
+   * „zamrożonej"). Pasek linijki scrolluje 1:1 ze scroll-containerem, a segmenty mają tę
+   * samą geometrię co kartki (wysokość strony + separator), więc idealnie się pokrywają.
+   */
+  pageList = computed(() => Array.from({ length: this.totalPages() }, (_, i) => i));
+
+  /** Wysokość segmentu pionowej linijki = wysokość kartki (px @100%) * zoom (fallback). */
+  vRulerSegmentHeightPx = computed(() =>
+    (this.pageSettings().orientation === 'portrait' ? 1122 : 794) * (this.zoomLevel() / 100)
+  );
+
+  /** Odstęp między segmentami = wysokość separatora stron (8px) * zoom (fallback). */
+  vRulerGapPx = computed(() => 8 * (this.zoomLevel() / 100));
+
+  /**
+   * Zmierzony z DOM układ stron (top + wysokość, w px ze skalą, względem zawartości scrolla).
+   * Strony z wysokim nagłówkiem rosną ponad 1122px — pozycjonowanie absolutne wg zmierzonego
+   * `top` eliminuje kumulację błędów i daje wierne wyrównanie pionowej linijki per strona.
+   */
+  vRulerSegments = signal<{ top: number; height: number }[]>([]);
+
+  /**
+   * Segmenty do renderu: zmierzone jeśli dostępne, inaczej fallback ze stałych.
+   * `axisCm` = wysokość kartki w cm (niezależna od zoomu), by linijka wypełniła podziałką
+   * całą stronę (strona z wysokim nagłówkiem bywa wyższa niż A4).
+   */
+  vRulerSegmentsView = computed(() => {
+    const scale = this.zoomLevel() / 100;
+    const toCm = (px: number) => px / (DocumentEditorComponent.CM_TO_PX * scale);
+    const measured = this.vRulerSegments();
+    if (measured.length === this.totalPages() && measured.length > 0) {
+      return measured.map(s => ({ ...s, axisCm: toCm(s.height) }));
+    }
+    const h = this.vRulerSegmentHeightPx();
+    const g = this.vRulerGapPx();
+    const pad = 20; // padding-top editor-scroll-container
+    const fallbackAxis = this.pageSettings().orientation === 'portrait' ? 29.7 : 21;
+    return this.pageList().map((_, i) => ({ top: pad + i * (h + g), height: h, axisCm: fallbackAxis }));
+  });
+
+  /** Łączna wysokość zawartości paska pionowej linijki (do scrolla 1:1). */
+  vRulerInnerHeight = computed(() => {
+    const segs = this.vRulerSegmentsView();
+    return segs.length ? segs[segs.length - 1].top + segs[segs.length - 1].height : 0;
+  });
+
+  /** Obserwator zmian rozmiaru zawartości — re-mierzy układ stron dla pionowej linijki. */
+  private vRulerResizeObserver?: ResizeObserver;
+
+  /**
+   * Mierzy realny układ stron (top + wysokość każdej kartki) i aktualizuje segmenty linijki.
+   * Wołane w `requestAnimationFrame` (po layoutcie), z guardem równości. Reaguje na faktyczne
+   * zmiany (ładowanie obrazów, edycja) przez ResizeObserver, więc nie zgaduje momentu pomiaru.
+   */
+  private measureVRuler(): void {
+    requestAnimationFrame(() => {
+      const next = this.editor?.getPageLayout() ?? [];
+      const cur = this.vRulerSegments();
+      const same = cur.length === next.length
+        && cur.every((s, i) => Math.abs(s.height - next[i].height) < 0.5 && Math.abs(s.top - next[i].top) < 0.5);
+      if (!same) this.vRulerSegments.set(next);
+    });
+  }
+
+  /** Podpina ResizeObserver na zawartości dokumentu (editor-wrapper), by linijka była zawsze aktualna. */
+  private ensureVRulerObserver(): void {
+    if (this.vRulerResizeObserver) return;
+    const wrapper = this.editorScrollContainer?.nativeElement?.querySelector('.editor-wrapper') as HTMLElement | null;
+    if (!wrapper) return;
+    this.vRulerResizeObserver = new ResizeObserver(() => this.measureVRuler());
+    this.vRulerResizeObserver.observe(wrapper);
+  }
+
   /** Konwersja cm ↔ px (96 DPI). */
   private static readonly CM_TO_PX = 37.795;
 
@@ -351,6 +427,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopAutoSave();
+    this.vRulerResizeObserver?.disconnect();
   }
 
   /**
@@ -1080,11 +1157,24 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   setZoom(level: number): void {
     this.zoomLevel.set(level);
+    this.measureVRuler();
   }
 
   /**
    * Obsługuje scroll aby aktualizować bieżącą stronę
    */
+  /**
+   * Kółko myszy nad pionową linijką nie ma jej przewijać samodzielnie (desync od dokumentu)
+   * — przekierowujemy scroll na obszar dokumentu, który następnie zsynchronizuje linijkę.
+   */
+  onRulerWheel(e: WheelEvent): void {
+    const container = this.editorScrollContainer?.nativeElement;
+    if (!container) return;
+    e.preventDefault();
+    container.scrollTop += e.deltaY;
+    container.scrollLeft += e.deltaX;
+  }
+
   onEditorScroll(event: Event): void {
     const container = event.target as HTMLElement;
     const scrollTop = container.scrollTop;
@@ -1142,6 +1232,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     if (this.currentPage() > pageCount) {
       this.currentPage.set(pageCount);
     }
+    // Zmierz realny układ stron dla pionowej linijki + podepnij obserwator zmian rozmiaru.
+    this.ensureVRulerObserver();
+    this.measureVRuler();
   }
 
   /**

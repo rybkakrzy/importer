@@ -852,8 +852,18 @@
 }
 
 .ruler-v-inner {
-  /* Linijka sama się dostosowuje do zoomu - nie używamy transform */
-  padding-top: 20px;   /* pasuje do editor-scroll-container padding */
+  /* Linijka sama się dostosowuje do zoomu - nie używamy transform.
+     Segmenty pozycjonowane absolutnie wg zmierzonego `top` (offset uwzględnia padding 20px). */
+  position: relative;
+}
+
+/* Segment pionowej linijki = jedna strona, pozycjonowany wg zmierzonego top/height.
+   overflow:hidden ucina ~1px nadmiaru linijki (axisPx≈1123 vs strona 1122). */
+.ruler-v-page {
+  position: absolute;
+  left: 0;
+  right: 0;
+  overflow: hidden;
 }
 
 /* ── Scrollowalny obszar dokumentu ── */
@@ -869,7 +879,8 @@
 }
 
 .editor-wrapper {
-  transition: transform 0.2s ease;
+  /* Bez animacji transform: zoom jest natychmiastowy, dzięki czemu pomiar układu stron
+     dla pionowej linijki (per strona) jest zawsze zgodny z aktualną skalą. */
 }
 
 /* Wskaźnik stron przy scrollowaniu */

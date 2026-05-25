@@ -3652,6 +3652,28 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     sel.addRange(range);
   }
 
+  /**
+   * Zwraca faktyczny układ stron (zmierzony z DOM, w px ze skalą zoomu): wysokość każdej
+   * kartki i odstęp do następnej (separator). Strona z wysokim nagłówkiem rośnie ponad
+   * min-height 1122px, więc do zrównania pionowej linijki per-strona potrzebne są realne
+   * wymiary, nie stałe 1122.
+   */
+  getPageLayout(): { top: number; height: number }[] {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const pages = refs
+      .map(r => r.nativeElement.closest('.page') as HTMLElement | null)
+      .filter((p): p is HTMLElement => !!p);
+    if (pages.length === 0) return [];
+    const scrollEl = pages[0].closest('.editor-scroll-container') as HTMLElement | null;
+    if (!scrollEl) return [];
+    // Pozycja Y odpowiadająca offsetowi 0 w zawartości scrolla (niezależna od przewinięcia).
+    const base = scrollEl.getBoundingClientRect().top - scrollEl.scrollTop;
+    return pages.map(p => {
+      const r = p.getBoundingClientRect();
+      return { top: r.top - base, height: r.height };
+    });
+  }
+
   // ========== Wyszukiwanie i zamiana ==========
 
   private searchHighlights: HTMLElement[] = [];

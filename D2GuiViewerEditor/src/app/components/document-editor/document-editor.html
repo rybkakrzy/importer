@@ -863,22 +863,29 @@
 
       <!-- Pionowa linijka — pełna wysokość, przyklejona do lewej krawędzi -->
       @if (showRuler()) {
-        <div class="ruler-v-bar" #verticalRulerBar>
-          <div class="ruler-v-inner">
-            <d2-ruler
-              mode="vertical"
-              [margins]="verticalRulerMargins()"
-              [orientation]="pageSettings().orientation"
-              [zoomLevel]="zoomLevel()"
-              (marginsChange)="onVerticalRulerMarginsChange($event)"
-              (dragGuideChange)="onRulerDragGuide($event)"
-            />
+        <div class="ruler-v-bar" #verticalRulerBar (wheel)="onRulerWheel($event)">
+          <div class="ruler-v-inner" [style.height.px]="vRulerInnerHeight()">
+            @for (seg of vRulerSegmentsView(); track $index) {
+              <div class="ruler-v-page"
+                   [style.top.px]="seg.top"
+                   [style.height.px]="seg.height">
+                <d2-ruler
+                  mode="vertical"
+                  [margins]="verticalRulerMargins()"
+                  [orientation]="pageSettings().orientation"
+                  [zoomLevel]="zoomLevel()"
+                  [axisLengthCm]="seg.axisCm"
+                  (marginsChange)="onVerticalRulerMarginsChange($event)"
+                  (dragGuideChange)="onRulerDragGuide($event)"
+                />
+              </div>
+            }
           </div>
         </div>
       }
 
       <!-- Scrollowalny obszar dokumentu -->
-      <div class="editor-scroll-container" (scroll)="onEditorScroll($event)" (mouseup)="onEditorMouseUp($event)" (mousedown)="onEditorMouseDown($event)">
+      <div class="editor-scroll-container" #editorScrollContainer (scroll)="onEditorScroll($event)" (mouseup)="onEditorMouseUp($event)" (mousedown)="onEditorMouseDown($event)">
         <div class="editor-wrapper" [style.transform]="'scale(' + zoomLevel() / 100 + ')'" [style.transform-origin]="'top center'">
           <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
             <!-- Linia prowadząca linijki (jak w MS Word) — nad kartką podczas drag uchwytu -->
