@@ -1,0 +1,41 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="02 - Ingest (External API)" id="ingest">
+    <mxGraphModel dx="1100" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="700" math="0" shadow="1" background="#fbfbfd">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="02 — Ingest przez zewnętrzne API (POST /api/v1/document)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#23445d;strokeColor=none;fontColor=#ffffff;fontSize=16;fontStyle=1;align=left;spacingLeft=16;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="8" width="740" height="28" as="geometry" />
+        </mxCell>
+
+        <mxCell id="EXT" value="System zewnętrzny&#10;(Integrator)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=11;rounded=1;shadow=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="130" height="600" as="geometry" /></mxCell>
+        <mxCell id="SVC" value="External API&#10;D2ServicesViewerEditor" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=11;rounded=1;shadow=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="260" y="48" width="130" height="600" as="geometry" /></mxCell>
+        <mxCell id="APP" value="Application&#10;IngestExternalDocumentCommand" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=11;rounded=1;shadow=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="480" y="48" width="130" height="600" as="geometry" /></mxCell>
+        <mxCell id="DB" value="PostgreSQL" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=11;rounded=1;shadow=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="700" y="48" width="130" height="600" as="geometry" /></mxCell>
+        <mxCell id="GCS" value="GCS" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=11;rounded=1;shadow=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="920" y="48" width="130" height="600" as="geometry" /></mxCell>
+
+        <mxCell id="F1" value="alt  [walidacja nie przechodzi: MIME / &gt;100MB / Classification∉C1..C4 / brak ReturnUrl dla DOCX]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#fbe4e3;strokeColor=#b85450;opacity=55;verticalAlign=top;align=left;fontStyle=2;fontSize=10;fontColor=#9c3b36;" vertex="1" parent="1"><mxGeometry x="80" y="215" width="780" height="95" as="geometry" /></mxCell>
+        <mxCell id="F2" value="alt  [DOCX]  /  [PDF]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#e6f0fb;strokeColor=#6c8ebf;opacity=50;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#3b5a78;" vertex="1" parent="1"><mxGeometry x="80" y="380" width="980" height="180" as="geometry" /></mxCell>
+
+        <mxCell id="N" value="Integrator składa URL do GUI z masterId/versionId (?masterId=[&amp;versionId=])." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;shadow=1;" vertex="1" parent="1"><mxGeometry x="40" y="595" width="300" height="44" as="geometry" /></mxCell>
+
+        <mxCell id="e1" value="POST /api/v1/document (multipart: File, ReturnUrl, Classification, [X-Created-By])" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#b85450;fontColor=#9c3b36;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="105" y="150" as="sourcePoint" /><mxPoint x="325" y="150" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e2" value="IngestExternalDocumentCommand" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#82b366;fontColor=#4f7a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="325" y="190" as="sourcePoint" /><mxPoint x="545" y="190" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="e3" value="Failure" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#b85450;fontColor=#9c3b36;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="252" as="sourcePoint" /><mxPoint x="325" y="252" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e4" value="400 { error }" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#b85450;fontColor=#9c3b36;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="325" y="288" as="sourcePoint" /><mxPoint x="105" y="288" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="e5" value="Upload pliku (documents/{versionId})  [OK]" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#d79b00;fontColor=#9a6b00;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="350" as="sourcePoint" /><mxPoint x="985" y="350" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="e6" value="master + v1 (oryginał) + v2 (edytowalna) + metadata(JSON)  [DOCX]" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#d79b00;fontColor=#9a6b00;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="415" as="sourcePoint" /><mxPoint x="765" y="415" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e7" value="{ masterId, versionId }" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#82b366;fontColor=#4f7a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="765" y="451" as="sourcePoint" /><mxPoint x="545" y="451" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="dv" value="[PDF]" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;fontColor=#3b5a78;fontStyle=2;fontSize=10;verticalAlign=top;labelBackgroundColor=#e6f0fb;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="85" y="475" as="sourcePoint" /><mxPoint x="1055" y="475" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e8" value="master + v1 + metadata(JSON)" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#d79b00;fontColor=#9a6b00;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="505" as="sourcePoint" /><mxPoint x="765" y="505" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e9" value="{ masterId, null }" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#82b366;fontColor=#4f7a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="765" y="541" as="sourcePoint" /><mxPoint x="545" y="541" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="e10" value="201 CreateDocumentResponse { masterId, versionId? }" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#82b366;fontColor=#4f7a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="585" as="sourcePoint" /><mxPoint x="105" y="585" as="targetPoint" /></mxGeometry></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
