@@ -13,6 +13,21 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-05-25 — Panel admina „Wysyłki" + uruchomienie migracji DB
+
+### Changed
+- GUI: nowy widok `/admin/deliveries` (`admin-deliveries` component) — lista zadań wysyłki ze statusem, liczbą prób, datami (utworzono/ostatnia/następna/deadline), `locked_by` i ostatnim błędem; przycisk „Ponów" dla `DeadLettered`/`FailedPermanently`. Filtr per kolumna + dropdown statusu (steruje zapytaniem do API) + paginacja klienta, wizualnie spójny z `/admin/files`. Statusy tłumaczone na PL w warstwie prezentacji (enum bez zmian). Link w `admin-shell` nav. Trasa-dziecko w `app.routes.ts`.
+- GUI: `document-storage.service.ts` — `getDeliveriesByStatus(status, skip, take)` + `retryDelivery(id)` + interfejsy `DeliveryListItem`, `RequeueDeliveryResult`.
+- Application: `DeliveryListItemDto` rozszerzony o `LockedUntil` i `LockedBy` (monitoring claimu workera); mapowanie w `GetDeliveriesByStatusQueryHandler`.
+- DB: wykonano skrypty `infra/sql/001`–`007` na lokalnym PostgreSQL (Podman `d2viewereditor_postgres`). 001–006 już istniały (idempotentne), `007` utworzył tabelę `document_deliveries`.
+
+### Verified
+- `dotnet build D2ViewerEditor.sln` — 0 błędów (ostrzeżenia tylko MSB3026 — zablokowane DLL przez działające API/Rider).
+- Weryfikacja schematu: `document_deliveries` z 20 kolumnami, 4 indeksami (w tym partial `ux_..._active_per_document`, `ix_..._due`, `ix_..._stuck`), CHECK statusu, FK do `documents`.
+
+### Notes
+- Zamyka rekomendację „panel admina dla `DeadLettered`" z `TASK_HANDOFF`. Filtry tekstowe działają po stronie klienta na pobranej stronie (jak `admin-files`).
+
 ## 2026-05-25 — Funkcja „Zakończ i wyślij" (asynchroniczna wysyłka na returnUrl)
 
 ### Changed

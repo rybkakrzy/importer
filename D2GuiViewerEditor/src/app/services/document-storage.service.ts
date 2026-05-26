@@ -1,5 +1,5 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 
@@ -89,6 +89,25 @@ export interface DeliveryStatusDto {
   nextAttemptAt: string | null;
   lastError: string | null;
   updatedAt: string;
+}
+
+export interface DeliveryListItem {
+  deliveryId: string;
+  documentId: string;
+  status: DeliveryStatus;
+  attemptCount: number;
+  createdAt: string;
+  lastAttemptAt: string | null;
+  nextAttemptAt: string | null;
+  deadlineAt: string;
+  lastError: string | null;
+  lockedUntil: string | null;
+  lockedBy: string | null;
+}
+
+export interface RequeueDeliveryResult {
+  deliveryId: string;
+  status: DeliveryStatus;
 }
 
 /**
@@ -227,6 +246,28 @@ export class DocumentStorageService {
    */
   getDeliveryStatus(deliveryId: string): Observable<DeliveryStatusDto> {
     return this.http.get<DeliveryStatusDto>(`${this.apiUrl}/deliveries/${deliveryId}`);
+  }
+
+  /**
+   * Lista zadań wysyłki w danym statusie (panel admina / monitoring).
+   * @param status - Status: Pending | Sending | RetryScheduled | Sent | FailedPermanently | DeadLettered
+   * @param skip - Offset paginacji
+   * @param take - Rozmiar strony
+   */
+  getDeliveriesByStatus(status: DeliveryStatus, skip = 0, take = 100): Observable<DeliveryListItem[]> {
+    const params = new HttpParams()
+      .set('status', status)
+      .set('skip', skip)
+      .set('take', take);
+    return this.http.get<DeliveryListItem[]>(`${this.apiUrl}/deliveries`, { params });
+  }
+
+  /**
+   * Ręczne ponowienie nieudanego zadania wysyłki (DeadLettered / FailedPermanently).
+   * @param deliveryId - GUID zadania wysyłki
+   */
+  retryDelivery(deliveryId: string): Observable<RequeueDeliveryResult> {
+    return this.http.post<RequeueDeliveryResult>(`${this.apiUrl}/deliveries/${deliveryId}/retry`, {});
   }
 
   /**

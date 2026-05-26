@@ -1,0 +1,287 @@
+:host { display: block; }
+
+/* ───────────────────────────────────────────────────────────────
+   Bazowe style 1:1 z `admin-files.scss`, aby widok „Wysyłki" był
+   wizualnie identyczny z „Lista plików". Dodatki specyficzne dla
+   wysyłek (mono / locked_by / błąd / banner) na końcu pliku.
+   ─────────────────────────────────────────────────────────────── */
+
+/* ── Page layout ── */
+.admin-page { padding: 32px; }
+
+.page-header { margin-bottom: 20px; }
+
+.header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.page-title { font-size: 20px; font-weight: 600; color: #111827; margin: 0 0 3px; }
+.page-subtitle { font-size: 13px; color: #6b7280; margin: 0; }
+
+/* ── Column filters ── */
+.col-filters th {
+  padding: 5px 8px;
+  background: #fff;
+  border-bottom: 1px solid #aaa;
+}
+
+.col-filter-input {
+  width: 100%;
+  border: 1px solid #bbb;
+  padding: 3px 6px;
+  font-size: 12px;
+  color: #222;
+  background: #fff;
+  outline: none;
+  box-sizing: border-box;
+
+  &::placeholder { color: #ccc; }
+  &:focus { border-color: #888; }
+}
+
+/* ── States ── */
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #6b7280;
+  font-size: 14px;
+  padding: 40px 0;
+  justify-content: center;
+}
+
+.error-banner {
+  display: flex; align-items: center; gap: 8px;
+  background: #fef2f2; color: #b91c1c;
+  border: 1px solid #fecaca; border-radius: 8px;
+  padding: 12px 16px; font-size: 14px;
+}
+
+.empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 10px; padding: 48px; color: #9ca3af; font-size: 14px;
+}
+
+/* ── Spinners ── */
+.spinner {
+  display: inline-block;
+  width: 20px; height: 20px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #f48024;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+.spinner-sm {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 2px solid #e5e7eb;
+  border-top-color: #6b7280;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Table wrapper ── */
+.file-table-wrap {
+  background: #fff;
+  overflow: hidden;
+}
+
+/* ── Table (lekka karta — jak na liście plików) ── */
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,.04);
+
+  thead tr {
+    background: #fff;
+    border-bottom: 1px solid #aaa;
+  }
+
+  th {
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    color: #222;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 8px 10px;
+    color: #222;
+    border-bottom: 1px solid #e8e8e8;
+    vertical-align: middle;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+}
+
+/* ── Status chip ── */
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.status-badge.status-saved   { background: #e8f0fe; color: #1a56db; }
+.status-badge.status-editing { background: #fef3c7; color: #92632e; }
+.status-badge.status-sending { background: #e0e7ff; color: #3730a3; }
+.status-badge.status-failed  { background: #fde2e1; color: #b42318; }
+.status-badge.status-sent    { background: #dcfce7; color: #15803d; }
+
+/* ── Row ── */
+.doc-row {
+  &:hover td { background: #f9fafb; }
+}
+
+.doc-id {
+  font-weight: 500;
+  color: #374151;
+  letter-spacing: .02em;
+}
+
+/* ── Download / action button ── */
+.dl-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12.5px; font-weight: 500;
+  color: #374151; cursor: pointer;
+  transition: background .1s, border-color .1s, color .1s;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+  }
+
+  &.loading, &:disabled { opacity: .6; pointer-events: none; }
+}
+
+.dl-btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* ── Pagination ── */
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 4px 0;
+  background: #fff;
+}
+
+.pag-info { font-size: 12.5px; color: #6b7280; }
+
+.pag-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pag-input {
+  width: 46px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 4px 5px;
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+  &:focus { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+  &::-webkit-outer-spin-button,
+  &::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  -moz-appearance: textfield;
+}
+
+.pag-sep { font-size: 13px; color: #6b7280; }
+
+.pag-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: #374151;
+  padding: 0;
+  transition: background .1s, border-color .1s;
+
+  &:hover:not(:disabled) {
+    background: #eff6ff;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+  }
+
+  &:disabled {
+    opacity: .35;
+    cursor: not-allowed;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────
+   Dodatki specyficzne dla widoku „Wysyłki"
+   ─────────────────────────────────────────────────────────────── */
+
+/* Banner powiadomienia (po ponowieniu) */
+.notice-banner {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+/* Wyrównania kolumn (bez sztywnych szerokości — auto layout) */
+.col-att    { text-align: center; }
+.col-date   { color: #6b7280; font-size: 12.5px; white-space: nowrap; }
+.col-doc,
+.col-lock   { white-space: nowrap; }
+.col-err    { max-width: 240px; }
+.col-action { text-align: right; }
+
+/* Select w wierszu filtrów (dla kolumny Status) */
+select.col-filter-input {
+  cursor: pointer;
+  background: #fff;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.lock-on  { color: #3730a3; font-weight: 600; }
+.lock-off { color: #9ca3af; }
+
+.err-text {
+  display: inline-block;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b42318;
+  vertical-align: bottom;
+}

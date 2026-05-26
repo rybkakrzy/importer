@@ -565,7 +565,7 @@ Zasada kompatybilności: nie zmieniać kontraktu w sposób breaking bez świadom
 | POST | `/{masterId}/restore/{versionId}` | Przywróć wersję |
 | POST | `/{masterId}/versions/{versionId}/finish` | „Zakończ i wyślij” → **202 Accepted** `{ deliveryId, status, statusUrl }` |
 | GET | `/deliveries/{deliveryId}` | Status zadania wysyłki |
-| GET | `/deliveries?status=&skip=&take=` | Lista zadań w statusie (monitoring/admin) |
+| GET | `/deliveries?status=&skip=&take=` | Lista zadań w statusie (monitoring/admin; GUI `/admin/deliveries`). DTO zawiera też `lockedUntil`/`lockedBy` |
 | POST | `/deliveries/{deliveryId}/retry` | Ręczne ponowienie nieudanego zadania |
 
 Pozostałe kontrolery Internal API: `DocumentController` (`/api/document` — operacje bezstanowe: open/save/sign/verify-signatures/templates; `export-pdf` = **501 placeholder**), `BarcodeController` (`/api/barcode`), `HealthController` (`/api/health`).
@@ -586,7 +586,7 @@ Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classifi
 **[Fakt]**
 
 - Angular 20 (standalone components + Signals), TypeScript ~5.8, RxJS ~7.8 (do HTTP), `pdfjs-dist` ^5.5 (PDF). Testy: Vitest ^3.1. **`npm run lint` nie istnieje** w `package.json`.
-- Struktura `src/app`: `components/` (m.in. `document-editor` — główny, ~3.3k linii, `wysiwyg-editor`, `editor-toolbar`, `barcode-dialog`, `ruler`), `pages/` (dashboard, document-editor wrapper, pdf-viewer lazy, admin lazy), `services/` (`document.service`, `document-storage.service`, `barcode.service`, `admin.service`), `core/` (api-config, interceptory `http-error`, global error handler), `models/`.
+- Struktura `src/app`: `components/` (m.in. `document-editor` — główny, ~3.3k linii, `wysiwyg-editor`, `editor-toolbar`, `barcode-dialog`, `ruler`), `pages/` (dashboard, document-editor wrapper, pdf-viewer lazy, `admin/` lazy: `admin-shell` + `admin-files` + `admin-deliveries`), `services/` (`document.service`, `document-storage.service`, `barcode.service`, `admin.service`), `core/` (api-config, interceptory `http-error`, global error handler), `models/`.
 - Wzorzec: komponenty trzymają stan w Signals; HTTP wyłącznie przez serwisy; `api-config.service` centralizuje `apiUrl`.
 
 Wybrane funkcje GUI:
@@ -679,7 +679,7 @@ cd D2GuiViewerEditor && npm run build && npm test
 **[Fakt]**
 
 - Structured logging przez `ILogger` (pipeline `LoggingBehaviour`). Worker loguje w scope `deliveryId` + `correlationId` + `attempt` (utworzenie zadania, claim, wynik próby, błędy).
-- Tabela `document_deliveries` przechowuje ślad audytowy: `attempt_count`, `last_error`, `last_attempt_at`, `correlation_id`, `created_by`. Monitoring liczności: `SELECT status, count(*) FROM document_deliveries GROUP BY status`.
+- Tabela `document_deliveries` przechowuje ślad audytowy: `attempt_count`, `last_error`, `last_attempt_at`, `correlation_id`, `created_by`. Monitoring liczności: `SELECT status, count(*) FROM document_deliveries GROUP BY status`. **[Fakt]** Panel admina `/admin/deliveries` w GUI prezentuje listę zadań per status (filtr, `locked_by`, ostatni błąd) z akcją „Ponów" (`POST /deliveries/{id}/retry`).
 - Zakaz logowania: hasła, tokeny, certyfikaty, dane osobowe, connection stringi, surowe payloady wrażliwe. Brak `Console.WriteLine` w kodzie aplikacyjnym.
 
 **[Do weryfikacji]** Brak potwierdzenia w `.ai` dedykowanego systemu metryk/alertów (Prometheus/OTel/Grafana). Metryki i alerty pojawiają się w `.ai` jako rekomendacje, nie jako wdrożony stan.

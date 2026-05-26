@@ -43,7 +43,7 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 | POST | `/{masterId}/restore/{versionId}` | Przywróć wersję jako aktywną | `{ message, versionId }` |
 | **POST** | `/{masterId}/versions/{versionId}/finish` | **„Zakończ i wyślij"**: utrwala stan edytora, zamraża snapshot, tworzy zadanie wysyłki. Idempotentne (zwraca istniejące aktywne zadanie). Brak/zły returnUrl → 400 | **202 Accepted** `{ deliveryId, status, statusUrl }` |
 | GET | `/deliveries/{deliveryId}` | Status zadania wysyłki (polling z GUI) | `DeliveryStatusDto { deliveryId, documentId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, lastError?, updatedAt }` |
-| GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`) | `DeliveryListItemDto[]` |
+| GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`; widok GUI `/admin/deliveries`) | `DeliveryListItemDto[] { deliveryId, documentId, status, attemptCount, createdAt, lastAttemptAt?, nextAttemptAt?, deadlineAt, lastError?, lockedUntil?, lockedBy }` |
 | POST | `/deliveries/{deliveryId}/retry` | Ręczne ponowienie nieudanego zadania (`DeadLettered`/`FailedPermanently`) | `RequeueDeliveryResult { deliveryId, status }` |
 
 Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DTO `SaveDocumentVersionRequest` używany też przez `finish`).

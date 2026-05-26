@@ -32,7 +32,9 @@ System przyjmuje dokumenty od aplikacji zewnętrznej (External API), edytuje/ogl
 ## Następne sugerowane kroki
 
 1. Krok 2 (podgląd): w GUI dla `?masterId=` ładować v1 przez `GET .../{masterId}/download` zamiast aktywnej wersji; routing PDFViewer vs DocxEditor po `mimeType` z `GET .../{masterId}/metadata` lub `/{masterId}`.
-2. (Zrobione 2026-05-25) `finishDocument()` — async wysyłka na returnUrl: kolejka `document_deliveries` + worker `DocumentDeliveryWorker` + snapshot GCS `deliveries/{id}` + retry/backoff 24h. Endpointy `finish`/`deliveries`. Patrz ADR-0005. Pozostało: dodać DB integration testy claimu (SKIP LOCKED) na realnym Postgresie; rozważyć panel admina dla `DeadLettered` (endpoint listy/retry już jest).
+2. (Zrobione 2026-05-25) `finishDocument()` — async wysyłka na returnUrl: kolejka `document_deliveries` + worker `DocumentDeliveryWorker` + snapshot GCS `deliveries/{id}` + retry/backoff 24h. Endpointy `finish`/`deliveries`. Patrz ADR-0005.
+   - (Zrobione 2026-05-25) Panel admina `/admin/deliveries` (lista + filtry + retry + `locked_by`).
+   - Pozostało: dodać DB integration testy claimu (`FOR UPDATE SKIP LOCKED` / reclaim po crashu) na realnym Postgresie (R-06); rozważyć ochronę SSRF dla `RecipientUrl` (R-07).
 3. (Zamknięte) Port External API = 15112 wg `appsettings.json` `Urls`; Swagger `/swagger`.
 4. Dodać testy: domena `UpdateVersion` (v1 immutable), handler `UpdateDocumentVersionCommand`, serwis GUI auto-save.
 
@@ -41,8 +43,8 @@ System przyjmuje dokumenty od aplikacji zewnętrznej (External API), edytuje/ogl
 | Obszar | Co | Ryzyko |
 |---|---|---|
 | Krok 2 podgląd | ładuje v2 zamiast v1 | użytkownik podglądu widzi edytowalną, nie oryginał |
-| `finishDocument()` | TODO | brak zwrotu pliku do aplikacji źródłowej |
-| Port External API | rozbieżność repo vs ustalenia | błędne URL integracji |
+| Testy integ. claimu wysyłki | brak (R-06) | regresje w `FOR UPDATE SKIP LOCKED` niewykryte jednostkowo |
+| Ochrona SSRF `RecipientUrl` | brak (R-07) | worker robi żądania na adres z danych zewnętrznych |
 
 ## Komendy weryfikacji
 

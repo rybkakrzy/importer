@@ -21,6 +21,7 @@ Funkcje systemu z perspektywy produktu i implementacji. Aktualizuj przy zmianie 
 | PDF viewer | Implemented | n/d (statyczny plik) | `pdf-viewer` (lazy, pdfjs) | `GET .../download` |
 | Eksport PDF | Deprecated/Placeholder | `501 Not Implemented` | — | `POST /api/document/export-pdf` |
 | Zakończ i wyślij (async zwrot na returnUrl) | Implemented | `FinishAndSendDocumentCommand` + worker `DocumentDeliveryWorker` | `finishDocument()` + polling statusu | `POST .../versions/{vid}/finish` (202), `GET/POST .../deliveries/...` |
+| Panel admina wysyłek (monitoring + retry) | Implemented | `GetDeliveriesByStatusQuery`, `RequeueDeliveryCommand` | `admin-deliveries` (`/admin/deliveries`): lista, filtry, `locked_by`, „Ponów" | `GET .../deliveries?status=`, `POST .../deliveries/{id}/retry` |
 
 ## Statusy
 

@@ -22,6 +22,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./pages/admin/admin-files/admin-files').then((m) => m.AdminFilesComponent),
       },
+      {
+        path: 'deliveries',
+        loadComponent: () =>
+          import('./pages/admin/admin-deliveries/admin-deliveries').then((m) => m.AdminDeliveriesComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

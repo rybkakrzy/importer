@@ -4,7 +4,7 @@
 
 ## Ostatnia aktualizacja
 
-2026-05-25 — funkcja „Zakończ i wyślij" (kolejka `document_deliveries` + worker) + audyt i synchronizacja `.ai/` z kodem (status dokumentu, skrypty SQL 006/007, endpointy wysyłki).
+2026-05-25 — panel admina `/admin/deliveries` (lista wysyłek + filtry + retry + `locked_by`, statusy PL) + uruchomienie migracji `infra/sql/001..007` na lokalnym PostgreSQL (Podman). Wcześniej: funkcja „Zakończ i wyślij" (kolejka `document_deliveries` + worker) + audyt/synchronizacja `.ai/` z kodem.
 
 ## Aktualny cel prac
 
@@ -12,7 +12,7 @@ Domknięcie przepływu Krok 1–4 (ingest → podgląd → edycja → zakończ i
 
 ## Aktualny etap
 
-- Branch: `feature/baz-astral-sie-kuta-sb-har`
+- Branch: `feature/baz-astral-obciaga-mb`
 - Główne obszary kodu:
   - `D2ApiViewerEditor/` (internal API + Application/Domain/Infrastructure)
   - `D2ServicesViewerEditor/` (external ingest API)
@@ -30,6 +30,8 @@ Domknięcie przepływu Krok 1–4 (ingest → podgląd → edycja → zakończ i
 - Dokumentacja `.ai/` przepisana wg wzorca z `template/`.
 - „Zakończ i wyślij": `FinishAndSendDocumentCommand` + tabela `document_deliveries` (SQL 007) + worker `DocumentDeliveryWorker` (claim `FOR UPDATE SKIP LOCKED`, retry/backoff do 24h, snapshot GCS) + endpointy `finish`/`deliveries`/`retry` + GUI `finishDocument()` z pollingiem. Patrz `DECISIONS.md` ADR-0005.
 - `documents.status` (`DocumentStatus`) + skrypt SQL 006 (dodane przed tą sesją, teraz udokumentowane).
+- Panel admina `/admin/deliveries` (`admin-deliveries`): lista zadań wysyłki (filtr per kolumna + dropdown statusu + paginacja, spójny z `/admin/files`), `locked_by`/`locked_until`, przycisk „Ponów" (`POST deliveries/{id}/retry`), statusy tłumaczone na PL. `DeliveryListItemDto` rozszerzony o `LockedUntil`/`LockedBy`.
+- Migracje `infra/sql/001..007` wykonane na lokalnym PostgreSQL (Podman `d2viewereditor_postgres`); `007` utworzył `document_deliveries`.
 
 ## Jak uruchomić projekt lokalnie
 
@@ -55,8 +57,8 @@ cd D2GuiViewerEditor && npm run build               # ostatnio: OK
 |---|---|---|
 | Tryb podglądu (Krok 2) ładuje aktywną wersję (po DOCX = v2), nie v1 oryginał | Medium | Open — przełączyć GUI na `/download` |
 | `finishDocument()` — zaimplementowane: async wysyłka na returnUrl (kolejka `document_deliveries` + worker) | — | Zamknięte |
-| `SaveDocumentVersionCommandHandlerTests` oczekuje `UpdateAsync` (płaski zapis go nie woła) | Low | Open — test do aktualizacji (wcześniejszy) |
-| `npm run build` blokuje budżet `document-editor.scss` (35.7 kB > 32 kB) | Low | Open — wcześniejsze, niezwiązane |
+| `SaveDocumentVersionCommandHandlerTests` oczekuje `UpdateAsync` (płaski zapis go nie woła) | Low | Zamknięte — test asercją `DidNotReceive().UpdateAsync` + `Received(1).SaveChangesAsync` |
+| Budżet SCSS `document-editor.scss` przekraczał limit | Low | Zamknięte — `angular.json` `anyComponentStyle` podniesiony (error 48 kB / warn 24 kB) |
 | Ręczny „Zapisz" przy włączonym auto-save jest częściowo redundantny | Low | Akceptowalne (wymuszenie zapisu) |
 | Port External API potwierdzony: 15112 (`appsettings.json` → `Urls`) | — | Zamknięte |
 

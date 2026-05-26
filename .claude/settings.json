@@ -7,7 +7,12 @@
       "Bash(python -c 'import xml.etree.ElementTree as ET,sys; ET.parse\\('\\\\''__TRACKED_VAR__'\\\\''\\); print\\('\\\\''OK'\\\\''\\)')",
       "Bash(python -c 'import xml.etree.ElementTree as ET; ET.parse\\('\\\\''__TRACKED_VAR__'\\\\''\\); print\\('\\\\''OK'\\\\''\\)')",
       "Bash(dotnet test *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "PowerShell(podman ps --format \"{{.Names}} | {{.Image}} | {{.Ports}}\")",
+      "PowerShell(podman exec d2viewereditor_postgres psql -U postgres -d d2viewereditor -t -c \"SELECT string_agg\\(tablename, ', '\\) FROM pg_tables WHERE schemaname='public';\")",
+      "PowerShell(podman exec d2viewereditor_postgres psql -U postgres -d d2viewereditor -c \"\\\\dt\")",
+      "PowerShell(podman exec d2viewereditor_postgres psql -U postgres -d d2viewereditor -c \"\\\\d document_deliveries\")",
+      "PowerShell(dotnet build D2ApiViewerEditor\\\\D2ViewerEditor.sln -v q --nologo 2>&1)"
     ]
   }
 }

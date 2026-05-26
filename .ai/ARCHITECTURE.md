@@ -63,7 +63,7 @@ src/app/
 ├── components/   — document-editor (główny, ~3.3k linii), wysiwyg-editor, editor-toolbar,
 │                   barcode-dialog, file-upload, offline-banner, ruler
 ├── pages/        — dashboard, document-editor (wrapper), pdf-viewer (lazy), pdf-maintenance,
-│                   admin/{admin-shell, admin-files, admin-dashboard} (lazy)
+│                   admin/{admin-shell, admin-files, admin-deliveries, admin-dashboard} (lazy)
 ├── services/     — document.service (stateless file API), document-storage.service (CRUD+GCS),
 │                   barcode.service, admin.service, file-upload
 ├── core/         — services (api-config, build-info, connection-status, document-navigation,

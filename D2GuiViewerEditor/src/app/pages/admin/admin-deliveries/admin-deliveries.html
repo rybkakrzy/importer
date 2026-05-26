@@ -1,0 +1,176 @@
+<div class="admin-page">
+  <div class="page-header">
+    <div class="header-top">
+      <div>
+        <h2 class="page-title">Wysyłki dokumentów</h2>
+      </div>
+    </div>
+  </div>
+
+  @if (notice()) {
+    <div class="notice-banner">{{ notice() }}</div>
+  }
+
+  @if (isLoading()) {
+    <div class="loading-state">
+      <span class="spinner"></span>
+      <span>Ładowanie wysyłek&hellip;</span>
+    </div>
+  } @else if (error()) {
+    <div class="error-banner">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+      {{ error() }}
+    </div>
+  } @else {
+    <div class="file-table-wrap">
+      <table class="file-table">
+        <thead>
+          <tr class="col-headers">
+            <th class="col-id">Zadanie</th>
+            <th class="col-doc">Dokument</th>
+            <th class="col-status">Status</th>
+            <th class="col-att">Próby</th>
+            <th class="col-date">Utworzono</th>
+            <th class="col-date">Ostatnia próba</th>
+            <th class="col-date">Następna próba</th>
+            <th class="col-date">Deadline</th>
+            <th class="col-lock">locked_by</th>
+            <th class="col-err">Ostatni błąd</th>
+            <th class="col-action"></th>
+          </tr>
+          <tr class="col-filters">
+            <th class="col-id">
+              <input class="col-filter-input" type="text" placeholder="Filtruj ID…"
+                     [ngModel]="filterId()" (ngModelChange)="setFilter('id', $event)" />
+            </th>
+            <th class="col-doc">
+              <input class="col-filter-input" type="text" placeholder="Filtruj dokument…"
+                     [ngModel]="filterDoc()" (ngModelChange)="setFilter('doc', $event)" />
+            </th>
+            <th class="col-status">
+              <select class="col-filter-input" [ngModel]="selectedStatus()" (ngModelChange)="setStatus($event)">
+                @for (s of statuses; track s) {
+                  <option [value]="s">{{ statusLabel(s) }}</option>
+                }
+              </select>
+            </th>
+            <th class="col-att">
+              <input class="col-filter-input" type="text" placeholder="Filtruj…"
+                     [ngModel]="filterAtt()" (ngModelChange)="setFilter('att', $event)" />
+            </th>
+            <th class="col-date">
+              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
+                     [ngModel]="filterCreated()" (ngModelChange)="setFilter('created', $event)" />
+            </th>
+            <th class="col-date">
+              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
+                     [ngModel]="filterLastAtt()" (ngModelChange)="setFilter('lastAtt', $event)" />
+            </th>
+            <th class="col-date">
+              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
+                     [ngModel]="filterNextAtt()" (ngModelChange)="setFilter('nextAtt', $event)" />
+            </th>
+            <th class="col-date">
+              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
+                     [ngModel]="filterDeadline()" (ngModelChange)="setFilter('deadline', $event)" />
+            </th>
+            <th class="col-lock">
+              <input class="col-filter-input" type="text" placeholder="Filtruj…"
+                     [ngModel]="filterLock()" (ngModelChange)="setFilter('lock', $event)" />
+            </th>
+            <th class="col-err">
+              <input class="col-filter-input" type="text" placeholder="Filtruj błąd…"
+                     [ngModel]="filterError()" (ngModelChange)="setFilter('error', $event)" />
+            </th>
+            <th class="col-action"></th>
+          </tr>
+        </thead>
+        <tbody>
+          @if (deliveries().length === 0) {
+            <tr><td colspan="11">
+              <div class="empty-state">
+                <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#d1d5db" stroke-width="1.5">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+                <p>Brak wyników</p>
+              </div>
+            </td></tr>
+          } @else {
+            @for (d of deliveries(); track d.deliveryId) {
+              <tr class="doc-row">
+                <td class="col-id"><span class="doc-id" [title]="d.deliveryId">{{ shortId(d.deliveryId) }}</span></td>
+                <td class="col-doc"><span class="mono" [title]="d.documentId">{{ shortId(d.documentId) }}</span></td>
+                <td class="col-status">
+                  <span class="status-badge" [class]="statusClass(d.status)">{{ statusLabel(d.status) }}</span>
+                </td>
+                <td class="col-att">{{ d.attemptCount }}</td>
+                <td class="col-date">{{ formatDate(d.createdAt) }}</td>
+                <td class="col-date">{{ formatDate(d.lastAttemptAt) }}</td>
+                <td class="col-date">{{ formatDate(d.nextAttemptAt) }}</td>
+                <td class="col-date">{{ formatDate(d.deadlineAt) }}</td>
+                <td class="col-lock">
+                  @if (d.lockedBy) {
+                    <span class="mono lock-on" [title]="'locked_until: ' + formatDate(d.lockedUntil)">{{ d.lockedBy }}</span>
+                  } @else {
+                    <span class="lock-off">—</span>
+                  }
+                </td>
+                <td class="col-err">
+                  @if (d.lastError) {
+                    <span class="err-text" [title]="d.lastError">{{ d.lastError }}</span>
+                  } @else {
+                    —
+                  }
+                </td>
+                <td class="col-action">
+                  @if (canRetry(d)) {
+                    <button class="dl-btn dl-btn-sm"
+                            [class.loading]="retryingId() === d.deliveryId"
+                            [disabled]="retryingId() === d.deliveryId"
+                            (click)="retry(d, $event)">
+                      @if (retryingId() === d.deliveryId) {
+                        <span class="spinner-sm"></span>
+                      } @else {
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="23 4 23 10 17 10"/>
+                          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                        </svg>
+                      }
+                      Ponów
+                    </button>
+                  }
+                </td>
+              </tr>
+            }
+          }
+        </tbody>
+      </table>
+
+      <div class="pagination-bar">
+        <span class="pag-info">
+          {{ totalFiltered() === 0 ? 0 : currentPage() * pageSize + 1 }}–{{ pageEnd() }}
+          z {{ totalFiltered() }}
+        </span>
+        <div class="pag-controls">
+          <button class="pag-btn" [disabled]="currentPage() === 0" (click)="prevPage()">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/>
+            </svg>
+          </button>
+          <input class="pag-input" type="number" min="1" [max]="totalPages()"
+                 [value]="currentPage() + 1"
+                 (change)="goToPage($any($event.target).value)"
+                 (keydown.enter)="goToPage($any($event.target).value)" />
+          <span class="pag-sep">/ {{ totalPages() }}</span>
+          <button class="pag-btn" [disabled]="currentPage() >= totalPages() - 1" (click)="nextPage()">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</div>
