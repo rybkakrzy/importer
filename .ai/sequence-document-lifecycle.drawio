@@ -1,205 +1,205 @@
 <mxfile host="app.diagrams.net" type="device">
   <diagram name="Cykl pracy z dokumentem" id="doc-lifecycle">
-    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1750" pageHeight="1850" math="0" shadow="0">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1750" pageHeight="1870" math="0" shadow="1" background="#fbfbfd">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
-        <!-- ===================== TITLE ===================== -->
-        <mxCell id="title" value="D2 ViewerEditor — Cykl pracy z dokumentem (sequence)" style="text;html=1;fontSize=18;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="40" y="8" width="900" height="28" as="geometry" />
+        <!-- ===================== TITLE BANNER ===================== -->
+        <mxCell id="title" value="D2 ViewerEditor — Cykl pracy z dokumentem (sequence)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#23445d;strokeColor=none;fontColor=#ffffff;fontSize=18;fontStyle=1;align=left;spacingLeft=18;verticalAlign=middle;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="8" width="1000" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="━ wywołanie&#10;┄ powrót / wynik" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontColor=#5b6770;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="8" width="180" height="30" as="geometry" />
         </mxCell>
 
         <!-- ===================== LIFELINES ===================== -->
-        <mxCell id="L1" value="Użytkownik" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="40" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L1" value="Użytkownik" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L2" value="Angular SPA&#10;(Editor / PDF Viewer)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
-          <mxGeometry x="240" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L2" value="Angular SPA&#10;(Editor / PDF Viewer)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="235" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L3" value="Internal API&#10;DocumentStorageController" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
-          <mxGeometry x="460" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L3" value="Internal API&#10;DocumentStorageController" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="455" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L4" value="Application / Domain&#10;(MediatR handlers)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
-          <mxGeometry x="680" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L4" value="Application / Domain&#10;(MediatR handlers)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="675" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L5" value="PostgreSQL" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
-          <mxGeometry x="900" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L5" value="PostgreSQL" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="895" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L6" value="Google Cloud&#10;Storage" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
-          <mxGeometry x="1100" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L6" value="Google Cloud&#10;Storage" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1095" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L7" value="DocumentDelivery&#10;Worker" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
-          <mxGeometry x="1320" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L7" value="DocumentDelivery&#10;Worker" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1315" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
-        <mxCell id="L8" value="ReturnUrl&#10;(odbiorca)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=30;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
-          <mxGeometry x="1540" y="48" width="120" height="1760" as="geometry" />
+        <mxCell id="L8" value="ReturnUrl&#10;(odbiorca)" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=12;rounded=1;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1535" y="50" width="130" height="1770" as="geometry" />
         </mxCell>
 
         <!-- ===================== FRAMES (alt/loop) ===================== -->
-        <mxCell id="F1" value="alt [dokument nie istnieje]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;dashed=1;verticalAlign=top;align=left;fontStyle=2;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="80" y="320" width="520" height="110" as="geometry" />
+        <mxCell id="F1" value="alt  [dokument nie istnieje]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#fbe4e3;strokeColor=#b85450;opacity=60;dashed=0;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#9c3b36;" vertex="1" parent="1">
+          <mxGeometry x="80" y="322" width="525" height="110" as="geometry" />
         </mxCell>
-        <mxCell id="F2" value="alt [DOCX]  /  [PDF]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;dashed=1;verticalAlign=top;align=left;fontStyle=2;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="80" y="580" width="1160" height="620" as="geometry" />
+        <mxCell id="F2" value="alt  [DOCX]  /  [PDF]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#e6f0fb;strokeColor=#6c8ebf;opacity=55;dashed=0;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#3b5a78;" vertex="1" parent="1">
+          <mxGeometry x="80" y="582" width="1165" height="620" as="geometry" />
         </mxCell>
-        <mxCell id="F2div" value="[PDF]" style="text;html=1;dashed=1;strokeColor=#6c8ebf;fillColor=none;align=left;verticalAlign=top;fontStyle=2;fontSize=11;labelPosition=center;" vertex="1" parent="1">
-          <mxGeometry x="80" y="1010" width="1160" height="20" as="geometry" />
-        </mxCell>
-        <mxCell id="F2divline" value="" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;" edge="1" parent="1">
+        <mxCell id="F2divline" value="[ PDF ]" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;fontColor=#3b5a78;fontStyle=2;fontSize=11;labelBackgroundColor=#e6f0fb;verticalAlign=top;" edge="1" parent="1">
           <mxGeometry relative="1" as="geometry">
-            <mxPoint x="80" y="1022" as="sourcePoint" />
-            <mxPoint x="1240" y="1022" as="targetPoint" />
+            <mxPoint x="85" y="1024" as="sourcePoint" />
+            <mxPoint x="1240" y="1024" as="targetPoint" />
           </mxGeometry>
         </mxCell>
-        <mxCell id="F3" value="loop [auto-save co 30 s, gdy włączony i jest versionId]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;dashed=1;verticalAlign=top;align=left;fontStyle=2;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="100" y="860" width="500" height="140" as="geometry" />
+        <mxCell id="F3" value="loop  [auto-save co 30 s, gdy włączony i jest versionId]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#e7f3e3;strokeColor=#82b366;opacity=60;dashed=0;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#4f7a3a;" vertex="1" parent="1">
+          <mxGeometry x="100" y="862" width="505" height="140" as="geometry" />
         </mxCell>
-        <mxCell id="F4" value="loop [polling co ~4 s do stanu końcowego]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;dashed=1;verticalAlign=top;align=left;fontStyle=2;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="100" y="1410" width="500" height="80" as="geometry" />
+        <mxCell id="F4" value="loop  [polling co ~4 s do stanu końcowego]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#e7f3e3;strokeColor=#82b366;opacity=60;dashed=0;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#4f7a3a;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1412" width="505" height="80" as="geometry" />
         </mxCell>
-        <mxCell id="F5" value="alt [wynik wysyłki]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#b85450;dashed=1;verticalAlign=top;align=left;fontStyle=2;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1280" y="1640" width="400" height="150" as="geometry" />
+        <mxCell id="F5" value="alt  [wynik wysyłki]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#fbe4e3;strokeColor=#b85450;opacity=55;dashed=0;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#9c3b36;" vertex="1" parent="1">
+          <mxGeometry x="1275" y="1642" width="410" height="160" as="geometry" />
         </mxCell>
 
         <!-- ===================== NOTES ===================== -->
-        <mxCell id="N0" value="[Wymaga potwierdzenia] Brak warstwy auth w repo — dostęp = znajomość masterId. Brak CorporateKey/allowedCorporateKeys." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;" vertex="1" parent="1">
-          <mxGeometry x="620" y="118" width="300" height="60" as="geometry" />
+        <mxCell id="N0" value="[Wymaga potwierdzenia] Brak warstwy auth w repo — dostęp = znajomość masterId. Brak CorporateKey/allowedCorporateKeys." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="120" width="300" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="N1" value="classification → wspólny komponent badge (DOCX i PDF). Brak/empty → brak badge." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;" vertex="1" parent="1">
-          <mxGeometry x="250" y="528" width="300" height="44" as="geometry" />
+        <mxCell id="N1" value="classification → wspólny komponent badge (DOCX i PDF). Brak/empty → brak badge." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="245" y="528" width="300" height="44" as="geometry" />
         </mxCell>
-        <mxCell id="N2" value="Płaski zapis (ADR-0003): nadpisanie v2 w miejscu. v1 chroniona (BR-002 → 400)." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;" vertex="1" parent="1">
-          <mxGeometry x="610" y="900" width="290" height="44" as="geometry" />
+        <mxCell id="N2" value="Płaski zapis (ADR-0003): nadpisanie v2 w miejscu. v1 chroniona (BR-002 → 400)." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="900" width="290" height="44" as="geometry" />
         </mxCell>
-        <mxCell id="N3" value="Snapshot niezmienny deliveries/{id} (SHA-256). Idempotencja: unique partial index (1 aktywne zadanie/dokument)." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;" vertex="1" parent="1">
-          <mxGeometry x="610" y="1248" width="300" height="56" as="geometry" />
+        <mxCell id="N3" value="Snapshot niezmienny deliveries/{id} (SHA-256). Idempotencja: unique partial index (1 aktywne zadanie/dokument)." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="1248" width="300" height="56" as="geometry" />
         </mxCell>
 
         <!-- ===================== MESSAGES ===================== -->
-        <!-- Phase: load -->
-        <mxCell id="e1" value="Wejście w URL ?masterId=[&amp;versionId=]" style="html=1;endArrow=block;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="100" y="150" as="sourcePoint" /><mxPoint x="300" y="150" as="targetPoint" /></mxGeometry>
+        <!-- Phase: load (blue) -->
+        <mxCell id="e1" value="Wejście w URL ?masterId=[&amp;versionId=]" style="html=1;endArrow=block;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="105" y="152" as="sourcePoint" /><mxPoint x="300" y="152" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e2" value="GET /{masterId}/metadata" style="html=1;endArrow=block;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="190" as="sourcePoint" /><mxPoint x="520" y="190" as="targetPoint" /></mxGeometry>
+        <mxCell id="e2" value="GET /{masterId}/metadata" style="html=1;endArrow=block;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="192" as="sourcePoint" /><mxPoint x="520" y="192" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e3" value="GetDocumentMetadataQuery" style="html=1;endArrow=block;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="230" as="sourcePoint" /><mxPoint x="740" y="230" as="targetPoint" /></mxGeometry>
+        <mxCell id="e3" value="GetDocumentMetadataQuery" style="html=1;endArrow=block;fontSize=11;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="232" as="sourcePoint" /><mxPoint x="740" y="232" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e4" value="GetByIdAsync(masterId)" style="html=1;endArrow=block;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="740" y="270" as="sourcePoint" /><mxPoint x="960" y="270" as="targetPoint" /></mxGeometry>
+        <mxCell id="e4" value="GetByIdAsync(masterId)" style="html=1;endArrow=block;fontSize=11;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="740" y="272" as="sourcePoint" /><mxPoint x="960" y="272" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e5" value="Document | null" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="960" y="305" as="sourcePoint" /><mxPoint x="740" y="305" as="targetPoint" /></mxGeometry>
-        </mxCell>
-
-        <!-- F1: not found -->
-        <mxCell id="e6" value="404 { error }" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#b85450;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="362" as="sourcePoint" /><mxPoint x="300" y="362" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e7" value="„Nie znaleziono dokumentu&quot;" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#b85450;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="400" as="sourcePoint" /><mxPoint x="100" y="400" as="targetPoint" /></mxGeometry>
+        <mxCell id="e5" value="Document | null" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="960" y="307" as="sourcePoint" /><mxPoint x="740" y="307" as="targetPoint" /></mxGeometry>
         </mxCell>
 
-        <!-- exists: returns -->
-        <mxCell id="e8" value="{ mimeType, returnUrl?, classification? }" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="740" y="468" as="sourcePoint" /><mxPoint x="520" y="468" as="targetPoint" /></mxGeometry>
+        <!-- F1: not found (red) -->
+        <mxCell id="e6" value="404 { error }" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#b85450;strokeWidth=2;fontColor=#9c3b36;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="364" as="sourcePoint" /><mxPoint x="300" y="364" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e9" value="200 metadata" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="506" as="sourcePoint" /><mxPoint x="300" y="506" as="targetPoint" /></mxGeometry>
-        </mxCell>
-
-        <!-- F2 DOCX branch -->
-        <mxCell id="e11" value="GET .../versions/{versionId}/download (edycja)  |  /{masterId}/download (podgląd)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="618" as="sourcePoint" /><mxPoint x="520" y="618" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e12" value="DownloadAsync(documents/{versionId})" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="656" as="sourcePoint" /><mxPoint x="1160" y="656" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e13" value="bytes  (err → 5xx/404 do GUI)" style="html=1;endArrow=open;dashed=1;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1160" y="694" as="sourcePoint" /><mxPoint x="520" y="694" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e14" value="plik (blob)" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="732" as="sourcePoint" /><mxPoint x="300" y="732" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e15" value="POST /api/document/open (DOCX → HTML)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="770" as="sourcePoint" /><mxPoint x="520" y="770" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e16" value="DocumentContent (HTML)" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="808" as="sourcePoint" /><mxPoint x="300" y="808" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e17" value="render edytora WYSIWYG" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="846" as="sourcePoint" /><mxPoint x="100" y="846" as="targetPoint" /></mxGeometry>
+        <mxCell id="e7" value="„Nie znaleziono dokumentu&quot;" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#b85450;strokeWidth=2;fontColor=#9c3b36;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="402" as="sourcePoint" /><mxPoint x="105" y="402" as="targetPoint" /></mxGeometry>
         </mxCell>
 
-        <!-- F3 autosave loop -->
-        <mxCell id="e18" value="zmiany treści" style="html=1;endArrow=block;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="100" y="912" as="sourcePoint" /><mxPoint x="300" y="912" as="targetPoint" /></mxGeometry>
+        <!-- exists: returns (green/blue) -->
+        <mxCell id="e8" value="{ mimeType, returnUrl?, classification? }" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="740" y="470" as="sourcePoint" /><mxPoint x="520" y="470" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e19" value="PUT /{masterId}/versions/{versionId}  (nadpisanie v2 + SaveChanges, Status=Editing)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="952" as="sourcePoint" /><mxPoint x="520" y="952" as="targetPoint" /></mxGeometry>
+        <mxCell id="e9" value="200 metadata" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="508" as="sourcePoint" /><mxPoint x="300" y="508" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e20" value="200 / błąd → autoSaveStatus = saved | error" style="html=1;endArrow=open;dashed=1;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="988" as="sourcePoint" /><mxPoint x="300" y="988" as="targetPoint" /></mxGeometry>
+
+        <!-- F2 DOCX branch (blue/green/orange) -->
+        <mxCell id="e11" value="GET .../versions/{versionId}/download (edycja)  |  /{masterId}/download (podgląd)" style="html=1;endArrow=block;fontSize=10;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="620" as="sourcePoint" /><mxPoint x="520" y="620" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e12" value="DownloadAsync(documents/{versionId})" style="html=1;endArrow=block;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="658" as="sourcePoint" /><mxPoint x="1160" y="658" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e13" value="bytes  (err → 5xx/404 do GUI)" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1160" y="696" as="sourcePoint" /><mxPoint x="520" y="696" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e14" value="plik (blob)" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="734" as="sourcePoint" /><mxPoint x="300" y="734" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e15" value="POST /api/document/open (DOCX → HTML)" style="html=1;endArrow=block;fontSize=10;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="772" as="sourcePoint" /><mxPoint x="520" y="772" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e16" value="DocumentContent (HTML)" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="810" as="sourcePoint" /><mxPoint x="300" y="810" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e17" value="render edytora WYSIWYG" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="848" as="sourcePoint" /><mxPoint x="105" y="848" as="targetPoint" /></mxGeometry>
+        </mxCell>
+
+        <!-- F3 autosave loop (green) -->
+        <mxCell id="e18" value="zmiany treści" style="html=1;endArrow=block;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="105" y="914" as="sourcePoint" /><mxPoint x="300" y="914" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e19" value="PUT /{masterId}/versions/{versionId}  (nadpisanie v2 + SaveChanges, Status=Editing)" style="html=1;endArrow=block;fontSize=10;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="954" as="sourcePoint" /><mxPoint x="520" y="954" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e20" value="200 / błąd → autoSaveStatus = saved | error" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="990" as="sourcePoint" /><mxPoint x="300" y="990" as="targetPoint" /></mxGeometry>
         </mxCell>
 
         <!-- F2 PDF branch (below divider) -->
-        <mxCell id="e21" value="GET /{masterId}  (DocumentDto z content base64)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="1060" as="sourcePoint" /><mxPoint x="520" y="1060" as="targetPoint" /></mxGeometry>
+        <mxCell id="e21" value="GET /{masterId}  (DocumentDto z content base64)" style="html=1;endArrow=block;fontSize=10;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="1062" as="sourcePoint" /><mxPoint x="520" y="1062" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e22" value="DownloadAsync(documents/{versionId})" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1098" as="sourcePoint" /><mxPoint x="1160" y="1098" as="targetPoint" /></mxGeometry>
+        <mxCell id="e22" value="DownloadAsync(documents/{versionId})" style="html=1;endArrow=block;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1100" as="sourcePoint" /><mxPoint x="1160" y="1100" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e23" value="bytes" style="html=1;endArrow=open;dashed=1;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1160" y="1136" as="sourcePoint" /><mxPoint x="520" y="1136" as="targetPoint" /></mxGeometry>
+        <mxCell id="e23" value="bytes" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1160" y="1138" as="sourcePoint" /><mxPoint x="520" y="1138" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e24" value="DocumentDto { content } → render pdfjs (+ badge klasyfikacji)" style="html=1;endArrow=open;dashed=1;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1174" as="sourcePoint" /><mxPoint x="300" y="1174" as="targetPoint" /></mxGeometry>
-        </mxCell>
-
-        <!-- Finish phase -->
-        <mxCell id="e25" value="klik „Zakończ&quot;" style="html=1;endArrow=block;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="100" y="1228" as="sourcePoint" /><mxPoint x="300" y="1228" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e26" value="POST /{masterId}/versions/{versionId}/finish  (brak/zły ReturnUrl → 400)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="1266" as="sourcePoint" /><mxPoint x="520" y="1266" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e27" value="UploadAsync(v2) + UploadRawAsync(deliveries/{id}) snapshot" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1320" as="sourcePoint" /><mxPoint x="1160" y="1320" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e28" value="1 transakcja: Status=Sending + INSERT document_deliveries(Pending)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1358" as="sourcePoint" /><mxPoint x="960" y="1358" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e29" value="202 { deliveryId, statusUrl }" style="html=1;endArrow=open;dashed=1;fontSize=11;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1396" as="sourcePoint" /><mxPoint x="300" y="1396" as="targetPoint" /></mxGeometry>
+        <mxCell id="e24" value="DocumentDto { content } → render pdfjs (+ badge klasyfikacji)" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1176" as="sourcePoint" /><mxPoint x="300" y="1176" as="targetPoint" /></mxGeometry>
         </mxCell>
 
-        <!-- F4 polling loop -->
-        <mxCell id="e30" value="GET /deliveries/{deliveryId} → { status, attemptCount, lastError? }" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="1455" as="sourcePoint" /><mxPoint x="520" y="1455" as="targetPoint" /></mxGeometry>
+        <!-- Finish phase (purple) -->
+        <mxCell id="e25" value="klik „Zakończ&quot;" style="html=1;endArrow=block;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="105" y="1230" as="sourcePoint" /><mxPoint x="300" y="1230" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e26" value="POST /{masterId}/versions/{versionId}/finish  (brak/zły ReturnUrl → 400)" style="html=1;endArrow=block;fontSize=10;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="1268" as="sourcePoint" /><mxPoint x="520" y="1268" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e27" value="UploadAsync(v2) + UploadRawAsync(deliveries/{id}) snapshot" style="html=1;endArrow=block;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1322" as="sourcePoint" /><mxPoint x="1160" y="1322" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e28" value="1 transakcja: Status=Sending + INSERT document_deliveries(Pending)" style="html=1;endArrow=block;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1360" as="sourcePoint" /><mxPoint x="960" y="1360" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e29" value="202 { deliveryId, statusUrl }" style="html=1;endArrow=open;dashed=1;fontSize=11;strokeColor=#6c8ebf;strokeWidth=2;fontColor=#3b5a78;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="520" y="1398" as="sourcePoint" /><mxPoint x="300" y="1398" as="targetPoint" /></mxGeometry>
         </mxCell>
 
-        <!-- Worker phase -->
-        <mxCell id="e31" value="ClaimDueBatch (SELECT ... FOR UPDATE SKIP LOCKED + lease)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1380" y="1535" as="sourcePoint" /><mxPoint x="960" y="1535" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e32" value="DownloadAsync(deliveries/{id})" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1380" y="1575" as="sourcePoint" /><mxPoint x="1160" y="1575" as="targetPoint" /></mxGeometry>
-        </mxCell>
-        <mxCell id="e33" value="POST snapshot (Idempotency-Key=deliveryId, X-Content-SHA256)" style="html=1;endArrow=block;fontSize=10;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1380" y="1615" as="sourcePoint" /><mxPoint x="1600" y="1615" as="targetPoint" /></mxGeometry>
+        <!-- F4 polling loop (green) -->
+        <mxCell id="e30" value="GET /deliveries/{deliveryId} → { status, attemptCount, lastError? }" style="html=1;endArrow=block;fontSize=10;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="300" y="1457" as="sourcePoint" /><mxPoint x="520" y="1457" as="targetPoint" /></mxGeometry>
         </mxCell>
 
-        <!-- F5 result -->
-        <mxCell id="e34" value="2xx → MarkSent + Document.Status=Sent" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#82b366;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1600" y="1672" as="sourcePoint" /><mxPoint x="1380" y="1672" as="targetPoint" /></mxGeometry>
+        <!-- Worker phase (purple) -->
+        <mxCell id="e31" value="ClaimDueBatch (SELECT ... FOR UPDATE SKIP LOCKED + lease)" style="html=1;endArrow=block;fontSize=10;strokeColor=#9673a6;strokeWidth=2;fontColor=#6b4c84;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1380" y="1537" as="sourcePoint" /><mxPoint x="960" y="1537" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e35" value="5xx/timeout → ScheduleRetry (backoff+jitter); po 24h → DeadLettered" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#d79b00;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1600" y="1718" as="sourcePoint" /><mxPoint x="1380" y="1718" as="targetPoint" /></mxGeometry>
+        <mxCell id="e32" value="DownloadAsync(deliveries/{id})" style="html=1;endArrow=block;fontSize=10;strokeColor=#9673a6;strokeWidth=2;fontColor=#6b4c84;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1380" y="1577" as="sourcePoint" /><mxPoint x="1160" y="1577" as="targetPoint" /></mxGeometry>
         </mxCell>
-        <mxCell id="e36" value="4xx (400/401/403/404/405/422) → FailedPermanently" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#b85450;" edge="1" parent="1">
-          <mxGeometry relative="1" as="geometry"><mxPoint x="1600" y="1762" as="sourcePoint" /><mxPoint x="1380" y="1762" as="targetPoint" /></mxGeometry>
+        <mxCell id="e33" value="POST snapshot (Idempotency-Key=deliveryId, X-Content-SHA256)" style="html=1;endArrow=block;fontSize=10;strokeColor=#9673a6;strokeWidth=2;fontColor=#6b4c84;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1380" y="1617" as="sourcePoint" /><mxPoint x="1600" y="1617" as="targetPoint" /></mxGeometry>
+        </mxCell>
+
+        <!-- F5 result (green/orange/red) -->
+        <mxCell id="e34" value="2xx → MarkSent + Document.Status=Sent" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#82b366;strokeWidth=2;fontColor=#4f7a3a;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1600" y="1674" as="sourcePoint" /><mxPoint x="1380" y="1674" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e35" value="5xx/timeout → ScheduleRetry (backoff+jitter); po 24h → DeadLettered" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#d79b00;strokeWidth=2;fontColor=#9a6b00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1600" y="1720" as="sourcePoint" /><mxPoint x="1380" y="1720" as="targetPoint" /></mxGeometry>
+        </mxCell>
+        <mxCell id="e36" value="4xx (400/401/403/404/405/422) → FailedPermanently" style="html=1;endArrow=open;dashed=1;fontSize=10;strokeColor=#b85450;strokeWidth=2;fontColor=#9c3b36;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="1600" y="1764" as="sourcePoint" /><mxPoint x="1380" y="1764" as="targetPoint" /></mxGeometry>
         </mxCell>
 
       </root>
