@@ -14,6 +14,7 @@ import { CommonModule } from '@angular/common';
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { DocumentStorageService } from '../../services/document-storage.service';
+import { DocumentClassificationBadgeComponent } from '../../components/document-classification-badge/document-classification-badge';
 
 // Worker jest kopiowany do katalogu dist przez angular.json (assets)
 GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -21,7 +22,7 @@ GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 @Component({
   selector: 'd2-pdf-viewer',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, DocumentClassificationBadgeComponent],
   templateUrl: './pdf-viewer.html',
   styleUrl: './pdf-viewer.scss',
 })
@@ -39,6 +40,7 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
   currentPage = signal(1);
   scale = signal(1.5);
   documentName = signal('Dokument PDF');
+  classification = signal<string | null>(null);
 
   // ── Search ──────────────────────────────────────────────────────────────────
   showSearchBar = signal(false);
@@ -90,6 +92,13 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
         this.errorMessage.set('Nie można pobrać dokumentu z serwera.');
         this.isLoading.set(false);
       },
+    });
+
+    // Classification is presentational metadata — fetched independently so a
+    // metadata failure never blocks rendering the PDF.
+    this.storageService.getDocumentMetadata(masterId).subscribe({
+      next: (meta) => this.classification.set(meta.classification),
+      error: () => this.classification.set(null),
     });
   }
 

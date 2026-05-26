@@ -36,6 +36,7 @@ import {
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
 import { DocumentStorageService, DeliveryStatus } from '../../services/document-storage.service';
+import { DocumentClassificationBadgeComponent } from '../document-classification-badge/document-classification-badge';
 
 /**
  * Główny komponent edytora dokumentów Word Online
@@ -50,7 +51,8 @@ import { DocumentStorageService, DeliveryStatus } from '../../services/document-
     WysiwygEditorComponent,
     EditorToolbarComponent,
     BarcodeDialogComponent,
-    RulerComponent
+    RulerComponent,
+    DocumentClassificationBadgeComponent
   ],
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
@@ -96,6 +98,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   lastAutoSaveAt = signal<Date | null>(null);
   private autoSaveSub?: Subscription;
   private isAutoSaving = false;
+
+  // Klasyfikacja dokumentu z metadanych (prezentacyjna; C1..C4 lub wartość spoza słownika)
+  documentClassification = signal<string | null>(null);
 
   // Zakończ i wyślij (asynchroniczna wysyłka na returnUrl + polling statusu)
   isFinishing = signal<boolean>(false);
@@ -540,6 +545,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.documentStorageService.getDocumentMetadata(masterId).pipe(
       switchMap(meta => {
         const mime = (meta.mimeType || '').toLowerCase();
+
+        // Presentational classification from external metadata (does not gate access).
+        this.documentClassification.set(meta.classification ?? null);
 
         // PDF: edytor DOCX nie renderuje PDF — kieruj do PDFViewer (tryb podglądu).
         if (mime === DocumentEditorComponent.PDF_MIME) {

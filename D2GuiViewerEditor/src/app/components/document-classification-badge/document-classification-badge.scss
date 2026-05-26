@@ -1,0 +1,29 @@
+:host { display: inline-flex; }
+
+.classification-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  user-select: none;
+}
+
+.classification-icon { flex-shrink: 0; }
+
+.classification-prefix { font-weight: 500; opacity: .85; }
+.classification-value  { font-weight: 700; letter-spacing: .02em; }
+
+/* Color scale by sensitivity (presentational only) — C1 lowest → C4 highest. */
+.lvl-c1 { background: #e8f0fe; color: #1a56db; border-color: #c3d4fb; }
+.lvl-c2 { background: #fff7e6; color: #92632e; border-color: #f5d9a8; }
+.lvl-c3 { background: #fdeede; color: #b45309; border-color: #f6c89a; }
+.lvl-c4 { background: #fde2e1; color: #b42318; border-color: #f6b4ae; }
+
+/* Unknown / non-dictionary value — neutral, still visible, never blocks. */
+.lvl-unknown { background: #f3f4f6; color: #374151; border-color: #d1d5db; }
