@@ -1,0 +1,50 @@
+<mxfile host="app.diagrams.net" type="device">
+  <diagram name="03 - Ścieżka PDF" id="seq-pdf">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="820" math="0" shadow="1" background="#fbfbfd">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="03 — Ścieżka PDF: podgląd + klasyfikacja" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#23445d;strokeColor=none;fontColor=#ffffff;fontSize=16;fontStyle=1;align=left;spacingLeft=16;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="8" width="640" height="28" as="geometry" />
+        </mxCell>
+
+        <!-- Lifelines -->
+        <mxCell id="U" value="Użytkownik" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=12;rounded=1;shadow=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="40" y="48" width="130" height="720" as="geometry" /></mxCell>
+        <mxCell id="PV" value="PDF Viewer" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=12;rounded=1;shadow=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="260" y="48" width="130" height="720" as="geometry" /></mxCell>
+        <mxCell id="SVC" value="document-storage&#10;.service" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=12;rounded=1;shadow=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1"><mxGeometry x="480" y="48" width="130" height="720" as="geometry" /></mxCell>
+        <mxCell id="API" value="Internal API" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=12;rounded=1;shadow=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="700" y="48" width="130" height="720" as="geometry" /></mxCell>
+        <mxCell id="APP" value="Application&#10;/ Handler" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=12;rounded=1;shadow=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="920" y="48" width="130" height="720" as="geometry" /></mxCell>
+        <mxCell id="GCS" value="GCS" style="shape=umlLifeline;perimeter=lifelinePerimeter;whiteSpace=wrap;html=1;container=0;collapsible=0;size=34;fontStyle=1;fontSize=12;rounded=1;shadow=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="1140" y="48" width="130" height="720" as="geometry" /></mxCell>
+
+        <!-- par frame -->
+        <mxCell id="FP" value="par  [treść PDF]  ||  [klasyfikacja]" style="shape=umlFrame;whiteSpace=wrap;html=1;fillColor=#e6f0fb;strokeColor=#6c8ebf;opacity=50;verticalAlign=top;align=left;fontStyle=2;fontSize=11;fontColor=#3b5a78;" vertex="1" parent="1">
+          <mxGeometry x="80" y="190" width="1200" height="540" as="geometry" />
+        </mxCell>
+        <mxCell id="N1" value="Treść i klasyfikacja pobierane niezależnie — awaria metadanych nie blokuje renderu PDF; brak/empty classification → brak badge." style="shape=note;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;align=left;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="90" width="320" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" value="/viewer?masterId=" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="105" y="160" as="sourcePoint" /><mxPoint x="325" y="160" as="targetPoint" /></mxGeometry></mxCell>
+
+        <!-- treść -->
+        <mxCell id="e2" value="getDocument(masterId)" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="325" y="225" as="sourcePoint" /><mxPoint x="545" y="225" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e3" value="GET /{masterId}" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="261" as="sourcePoint" /><mxPoint x="765" y="261" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e4" value="pobranie dokumentu + aktywnej wersji" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#82b366;fontColor=#4f7a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="765" y="297" as="sourcePoint" /><mxPoint x="985" y="297" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e5" value="DownloadAsync(documents/{versionId})" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#d79b00;fontColor=#9a6b00;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="985" y="333" as="sourcePoint" /><mxPoint x="1205" y="333" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e6" value="błąd → 5xx/404 → „Nie można pobrać dokumentu&quot;" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#b85450;fontColor=#9c3b36;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="1205" y="371" as="sourcePoint" /><mxPoint x="325" y="371" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e7" value="bytes (OK)" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#d79b00;fontColor=#9a6b00;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="1205" y="409" as="sourcePoint" /><mxPoint x="985" y="409" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e8" value="DocumentDto { name, content(base64) }" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#82b366;fontColor=#4f7a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="985" y="445" as="sourcePoint" /><mxPoint x="765" y="445" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e9" value="200 → render pdfjs (canvas + text layer)" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="765" y="481" as="sourcePoint" /><mxPoint x="325" y="481" as="targetPoint" /></mxGeometry></mxCell>
+
+        <!-- divider klasyfikacja -->
+        <mxCell id="dv" value="||  [klasyfikacja — niezależnie]" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;fontColor=#3b5a78;fontStyle=2;fontSize=11;verticalAlign=top;labelBackgroundColor=#e6f0fb;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="85" y="520" as="sourcePoint" /><mxPoint x="1280" y="520" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="e10" value="getDocumentMetadata(masterId)" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="325" y="560" as="sourcePoint" /><mxPoint x="545" y="560" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e11" value="GET /{masterId}/metadata" style="html=1;endArrow=block;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="545" y="596" as="sourcePoint" /><mxPoint x="765" y="596" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="e12" value="{ classification? }" style="html=1;endArrow=open;dashed=1;strokeWidth=2;fontSize=10;strokeColor=#6c8ebf;fontColor=#3b5a78;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="765" y="632" as="sourcePoint" /><mxPoint x="325" y="632" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="P1" value="opt: classification niepuste → badge klasyfikacji" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="1"><mxGeometry x="265" y="660" width="260" height="34" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
