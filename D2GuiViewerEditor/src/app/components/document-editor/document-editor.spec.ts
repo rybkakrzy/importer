@@ -156,3 +156,48 @@ describe('DocumentEditorComponent — przełączanie doku tabela ↔ wyszukiwani
     expect(component.showTablePanel() && component.showFindReplace()).toBe(false);
   });
 });
+
+describe('DocumentEditorComponent — widoczność przycisku „Zakończ" (canFinish)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('jest widoczny, gdy link zwrotny istnieje i jest poprawny', () => {
+    component.returnUrl.set('https://app.example.com/return');
+    expect(component.canFinish()).toBe(true);
+  });
+
+  it('nie jest renderowany, gdy link jest null', () => {
+    component.returnUrl.set(null);
+    expect(component.canFinish()).toBe(false);
+  });
+
+  it('nie jest renderowany, gdy link jest pustym stringiem', () => {
+    component.returnUrl.set('');
+    expect(component.canFinish()).toBe(false);
+  });
+
+  it('nie jest renderowany, gdy link to same białe znaki', () => {
+    component.returnUrl.set('   ');
+    expect(component.canFinish()).toBe(false);
+  });
+
+  it('nie jest renderowany, gdy link jest niepoprawnym URL', () => {
+    component.returnUrl.set('not-a-url');
+    expect(component.canFinish()).toBe(false);
+  });
+});

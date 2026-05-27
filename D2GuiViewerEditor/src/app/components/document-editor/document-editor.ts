@@ -49,6 +49,7 @@ import {
   restoreDefaultTableBorders as restoreDefaultBordersUtil
 } from '../../core/utils/table-style.util';
 import { resolveTableContext } from '../../core/utils/table-context.util';
+import { isValidReturnUrl } from '../../core/utils/return-url.util';
 
 /**
  * Główny komponent edytora dokumentów Word Online
@@ -119,6 +120,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   isFinishing = signal<boolean>(false);
   deliveryStatus = signal<DeliveryStatus | null>(null);
   deliveryId = signal<string | null>(null);
+  /** Link zwrotny z metadanych dokumentu (źródło prawdy dla widoczności „Zakończ"). */
+  returnUrl = signal<string | null>(null);
+  /** „Zakończ" ma sens tylko, gdy istnieje poprawny link do zwrócenia pliku po edycji. */
+  readonly canFinish = computed(() => isValidReturnUrl(this.returnUrl()));
   private deliveryPollSub?: Subscription;
   private static readonly DELIVERY_POLL_MS = 4000;
   documentMetadata = signal<DocumentMetadata>({
@@ -589,6 +594,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.isLoading.set(true);
     this.errorMessage.set(null);
     this.documentMasterId.set(masterId);
+    this.returnUrl.set(null);
 
     this.documentStorageService.getDocumentMetadata(masterId).pipe(
       switchMap(meta => {
@@ -596,6 +602,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
         // Presentational classification from external metadata (does not gate access).
         this.documentClassification.set(meta.classification ?? null);
+        // Source of truth for the "Zakończ" button visibility (Krok 4 return link).
+        this.returnUrl.set(meta.returnUrl ?? null);
 
         // PDF: edytor DOCX nie renderuje PDF — kieruj do PDFViewer (tryb podglądu).
         if (mime === DocumentEditorComponent.PDF_MIME) {

@@ -488,14 +488,12 @@
     <div class="header-right">
       <d2-document-classification-badge [classification]="documentClassification()" />
 
-      <span class="beta-badge">Wersja BETA-Test-DEV</span>
-
       <!-- Przełącznik AutoSave — widoczny tylko w trybie edycji (gdy jest wersja edytowalna) -->
       @if (documentVersionId()) {
-        <label class="autosave-switch" [title]="autoSaveEnabled() ? 'Auto-zapis włączony' : 'Auto-zapis wyłączony'">
+        <label class="autosave-switch" [title]="autoSaveEnabled() ? 'Autozapis włączony' : 'Autozapis wyłączony'">
           <input type="checkbox" [checked]="autoSaveEnabled()" (change)="toggleAutoSave()">
           <span class="autosave-slider"></span>
-          <span class="autosave-label">AutoSave</span>
+          <span class="autosave-label">Autozapis</span>
         </label>
         @if (autoSaveEnabled()) {
           <span class="autosave-status" [class.is-error]="autoSaveStatus() === 'error'">
@@ -521,9 +519,11 @@
         <button class="header-btn" (click)="saveDocument()" title="Zapisz">
           <span>Zapisz</span>
         </button>
-        <button class="header-btn" (click)="finishDocument()" title="Zakończ">
-          <span>Zakończ</span>
-        </button>
+        @if (canFinish()) {
+          <button class="header-btn" (click)="finishDocument()" title="Zakończ">
+            <span>Zakończ</span>
+          </button>
+        }
       }
     </div>
   </header>
