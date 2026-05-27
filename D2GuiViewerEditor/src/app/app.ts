@@ -9,23 +9,14 @@ import { GlobalBannersComponent } from './components/global-banners/global-banne
     <d2-global-banners />
     <router-outlet />
   `,
+  // Shell flex layout lives in global styles.scss (under `d2-root`): the routed
+  // page components are inserted by <router-outlet> and don't inherit this
+  // component's encapsulation attributes, so sizing them here would not apply.
   styles: [`
     :host {
       display: flex;
       flex-direction: column;
       height: 100vh;
-      overflow: hidden;
-    }
-    d2-global-banners {
-      flex-shrink: 0;
-    }
-    d2-dashboard,
-    d2-document-editor,
-    d2-pdf-maintenance,
-    d2-pdf-viewer,
-    d2-admin-shell {
-      flex: 1;
-      min-height: 0;
       overflow: hidden;
     }
   `]

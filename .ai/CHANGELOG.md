@@ -13,6 +13,16 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-05-27 — Fix layoutu: banner środowiska przycinał dolny pasek edytora
+
+### Changed
+- `styles.scss`: layout powłoki (`d2-root` flex column 100vh + `d2-root > d2-global-banners` `flex:0 0 auto` + routowane strony `d2-document-editor`/`d2-dashboard`/`d2-pdf-maintenance`/`d2-pdf-viewer`/`d2-admin-shell` `flex:1 1 0; min-height:0; overflow:hidden`) przeniesiony do **globalnych** (nieenkapsulowanych) styli. **Przyczyna błędu:** reguły flex dla stron były w stylach komponentu `App` (encapsulation Emulated), ale strony są wstawiane przez `<router-outlet>` jako rodzeństwo i NIE dziedziczą atrybutów `_ngcontent` App → selektory `d2-document-editor{flex:1}` nie działały. Edytor zostawał przy `:host{height:100%}` = pełne 100vh; zawsze widoczny banner środowiska (~22px) spychał dolny pasek (zoom / liczba stron / wersja) poza ekran, gdzie `overflow:hidden` go ucinał.
+- `app.ts`: usunięto martwe selektory routowanych komponentów ze styli komponentu (zostaje tylko `:host`), z komentarzem wskazującym globalny layout.
+
+### Verified
+- `npx ng test` — 101/101 passed. `npx ng build` — OK.
+- Manualnie: z widocznym bannerem środowiska edytor mieści się w oknie, dolny pasek (zoom/strony/wersja) w całości widoczny; działa dla 4 kombinacji bannerów.
+
 ## 2026-05-27 — Nazewnictwo admina, dok tabela↔wyszukiwanie, ukrycie pozycji „Wstaw", „Akapit" w toolbarze
 
 ### Changed

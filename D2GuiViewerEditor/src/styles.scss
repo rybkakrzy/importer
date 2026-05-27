@@ -23,6 +23,34 @@ body {
   overflow: hidden;
 }
 
+/* App shell layout — declared globally (not component-scoped) so it reliably
+   applies to the page components inserted by <router-outlet>, which do NOT
+   inherit d2-root's view-encapsulation attributes. Without this the routed page
+   keeps height:100% (resolving to the full 100vh) and the always-on global
+   banners (environment / offline) push its bottom bar — zoom, page count,
+   version — off-screen, where body `overflow:hidden` clips it.
+   The banners keep their intrinsic height; only the page area flexes. */
+d2-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+d2-root > d2-global-banners {
+  flex: 0 0 auto;
+}
+
+d2-root > d2-dashboard,
+d2-root > d2-document-editor,
+d2-root > d2-pdf-maintenance,
+d2-root > d2-pdf-viewer,
+d2-root > d2-admin-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* PDF.js text layer — must be global because Angular scoped CSS doesn't apply
    to elements created dynamically via document.createElement */
 .text-layer span {
