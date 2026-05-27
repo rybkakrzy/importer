@@ -18,6 +18,8 @@ Funkcje systemu z perspektywy produktu i implementacji. Aktualizuj przy zmianie 
 | Podpisy cyfrowe (Custom XML Part) | Implemented | `DigitalSignatureService` | dialog podpisu | `POST /api/document/sign`, `/verify-signatures` |
 | Kody kreskowe / QR | Implemented | `BarcodeGeneratorService` | `barcode-dialog` | `POST /api/barcode/generate` |
 | Szablony dokumentów | Implemented | queries templates | menu szablonów | `GET /api/document/templates` |
+| Konfiguracja tabeli (boczny panel) | Implemented | — | `d2-table-properties-panel` (dok lewy, jak wyszukiwanie; ADR-0006) | n/d (frontend) |
+| Obramowania/linie tabeli (rodzaj, grubość, kolor, miejsce; auto-zakres z zaznaczenia) | Implemented | — | zakładka „Obramowania" w panelu; `table-style.util` `applyBorderToCells`/`classifyBorderTarget` (style inline; ADR-0007) | n/d (frontend) |
 | PDF viewer | Implemented | n/d (statyczny plik) | `pdf-viewer` (lazy, pdfjs) | `GET .../download` |
 | Eksport PDF | Deprecated/Placeholder | `501 Not Implemented` | — | `POST /api/document/export-pdf` |
 | Zakończ i wyślij (async zwrot na returnUrl) | Implemented | `FinishAndSendDocumentCommand` + worker `DocumentDeliveryWorker` | `finishDocument()` + polling statusu | `POST .../versions/{vid}/finish` (202), `GET/POST .../deliveries/...` |

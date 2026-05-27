@@ -27,6 +27,7 @@ import {
   PageMargins,
   HeaderFooterContent
 } from '../../models/document.model';
+import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
 
 /**
  * Komponent edytora WYSIWYG
@@ -1153,25 +1154,44 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Obsługa wklejania
+   * Znacznik czasu, do którego najbliższe zdarzenie `paste` ma zostać potraktowane
+   * jako „Wklej tylko tekst" (ustawiany skrótem Ctrl/Cmd+Shift+V w handleKeyboard).
+   * Używamy okna czasowego zamiast bool, żeby nieużyty skrót nie „zatruł" kolejnego
+   * zwykłego Ctrl+V.
+   */
+  private plainTextPasteUntil = 0;
+
+  /** Zwraca true i konsumuje żądanie, jeśli bieżące wklejenie ma być czystym tekstem. */
+  private consumePlainTextPasteRequest(): boolean {
+    const requested = Date.now() < this.plainTextPasteUntil;
+    this.plainTextPasteUntil = 0;
+    return requested;
+  }
+
+  /**
+   * Obsługa wklejania.
+   *
+   * Ctrl/Cmd+Shift+V → zawsze czysty tekst (preferuj text/plain, fallback z HTML).
+   * Ctrl/Cmd+V → zachowaj formatowanie po sanitizacji; gdy brak HTML, zwykły tekst.
    */
   private handlePaste(e: ClipboardEvent): void {
     e.preventDefault();
-    
+
     const clipboardData = e.clipboardData;
     if (!clipboardData) return;
 
-    // Spróbuj pobrać HTML
-    let html = clipboardData.getData('text/html');
-    
+    const html = clipboardData.getData('text/html');
+    const plain = clipboardData.getData('text/plain');
+
+    if (this.consumePlainTextPasteRequest()) {
+      this.insertText(resolvePlainText(plain, html));
+      return;
+    }
+
     if (html) {
-      // Oczyść HTML z niechcianych elementów
-      html = this.sanitizeHtml(html);
-      this.insertHtml(html);
+      this.insertHtml(this.sanitizeHtml(html));
     } else {
-      // Wklej jako zwykły tekst
-      const text = clipboardData.getData('text/plain');
-      this.insertText(text);
+      this.insertText(normalizeWhitespace(plain));
     }
   }
 
@@ -1210,6 +1230,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     if (e.ctrlKey || e.metaKey) {
+      // Ctrl/Cmd+Shift+V — oznacz najbliższe wklejenie jako „tylko tekst".
+      // Nie wołamy preventDefault: pozwalamy przeglądarce wywołać zdarzenie `paste`,
+      // które obsłuży handlePaste z uwzględnieniem tej flagi.
+      if (e.shiftKey && e.key.toLowerCase() === 'v') {
+        this.plainTextPasteUntil = Date.now() + 1000;
+        return;
+      }
+
       switch (e.key.toLowerCase()) {
         case 'b':
           e.preventDefault();

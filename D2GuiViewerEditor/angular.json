@@ -86,7 +86,13 @@
           "defaultConfiguration": "development"
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "tsConfig": "tsconfig.spec.json",
+            "buildTarget": "d2-gui-viewereditor:build",
+            "runner": "vitest",
+            "setupFiles": ["src/test-setup.ts"]
+          }
         }
       }
     }

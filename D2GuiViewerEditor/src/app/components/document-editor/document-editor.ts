@@ -37,6 +37,18 @@ import {
 import { BuildInfoService } from '../../core/services/build-info.service';
 import { DocumentStorageService, DeliveryStatus } from '../../services/document-storage.service';
 import { DocumentClassificationBadgeComponent } from '../document-classification-badge/document-classification-badge';
+import { TablePropertiesPanelComponent } from '../table-properties-panel/table-properties-panel';
+import {
+  TableBorderLineStyle,
+  TableBorderScope,
+  DEFAULT_TABLE_BORDER
+} from '../../models/table-style.model';
+import {
+  applyBorderToCells,
+  classifyBorderTarget,
+  restoreDefaultTableBorders as restoreDefaultBordersUtil
+} from '../../core/utils/table-style.util';
+import { resolveTableContext } from '../../core/utils/table-context.util';
 
 /**
  * Główny komponent edytora dokumentów Word Online
@@ -52,7 +64,8 @@ import { DocumentClassificationBadgeComponent } from '../document-classification
     EditorToolbarComponent,
     BarcodeDialogComponent,
     RulerComponent,
-    DocumentClassificationBadgeComponent
+    DocumentClassificationBadgeComponent,
+    TablePropertiesPanelComponent
   ],
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
@@ -218,6 +231,34 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   isInTable = signal(false);
   activeTableCell = signal<HTMLTableCellElement | null>(null);
   activeTable = signal<HTMLTableElement | null>(null);
+
+  /**
+   * Boczny panel konfiguracji tabeli (dokowany po lewej, jak panel „Wyszukiwanie").
+   * Otwiera się automatycznie po wejściu karetki w tabelę — chyba że użytkownik
+   * zamknął go ręcznie (`tablePanelManuallyClosed`) albo otwarty jest panel
+   * wyszukiwania, który ma pierwszeństwo w dokowanym obszarze (jeden dok, panel
+   * jawnie wywołany przez użytkownika nie jest wypierany przez kontekstowy).
+   */
+  showTablePanel = signal(false);
+  private tablePanelManuallyClosed = false;
+
+  // Obramowania tabeli: bieżące ustawienia „pióra" (rodzaj/grubość/kolor),
+  // cel zastosowania i ostatnio użyty zakres — do podświetlenia stanu w panelu.
+  tableBorderColor = signal(DEFAULT_TABLE_BORDER.color);
+  tableBorderWidth = signal(DEFAULT_TABLE_BORDER.width);
+  tableBorderStyle = signal<TableBorderLineStyle>(DEFAULT_TABLE_BORDER.style);
+  lastBorderScope = signal<TableBorderScope | null>(null);
+
+  /**
+   * Auto-zakres: opis celu wywnioskowany z bieżącego zaznaczenia (do podpisu
+   * „Zastosowanie: …" w panelu). Zależy od `selectedCells`/`activeTableCell`,
+   * więc aktualizuje się wraz ze zmianą zaznaczenia.
+   */
+  borderTargetInfo = computed(() => {
+    const table = this.activeTable();
+    if (!table) return null;
+    return classifyBorderTarget(table, this.resolveAutoTargetCells(table));
+  });
 
   // Zaznaczanie komórek tabeli (custom cell selection)
   selectedCells = signal<Set<HTMLTableCellElement>>(new Set());
@@ -1146,26 +1187,51 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   private detectTableContext(): void {
     const selection = window.getSelection();
     const editorEl = this.editor?.editorContent?.nativeElement;
-    if (!selection || !editorEl || !selection.anchorNode) {
-      this.isInTable.set(false);
-      this.activeTableCell.set(null);
-      this.activeTable.set(null);
+    const ctx = resolveTableContext(selection?.anchorNode, editorEl);
+
+    // Selekcja poza treścią edytora = interakcja z UI (panel boczny / toolbar).
+    // Zachowujemy ostatni znany kontekst tabeli, żeby kliknięcia w panelu (np.
+    // obramowania) nadal dotyczyły aktywnej tabeli i nie przełączały panelu na
+    // „Wybierz tabelę". Czyszczenie tylko, gdy karetka jest realnie poza tabelą.
+    if (ctx.placement === 'outside-editor') return;
+
+    this.isInTable.set(ctx.placement === 'in-table');
+    this.activeTableCell.set(ctx.cell);
+    this.activeTable.set(ctx.table);
+    if (ctx.placement === 'outside-table') {
+      // Karetka w treści poza tabelą — wyczyść wizualne zaznaczenie komórek, żeby
+      // tabela nie wyglądała na nadal zaznaczoną (spójność stanu z widokiem).
+      this.clearCellSelection();
+    }
+    this.syncTablePanel();
+  }
+
+  /** Reaguje na zmianę selekcji w edytorze (ruch karetki/klik), nie tylko na zmianę treści. */
+  onEditorSelectionChange(): void {
+    this.detectTableContext();
+  }
+
+  /**
+   * Steruje widocznością bocznego panelu tabeli na podstawie kontekstu karetki.
+   * Reguły: panel pojawia się gdy karetka jest w tabeli (zastępuje dawny pasek
+   * tabeli pojawiający się przy `isInTable`), znika po opuszczeniu tabeli, nie
+   * wypiera panelu wyszukiwania i respektuje ręczne zamknięcie przez użytkownika.
+   */
+  private syncTablePanel(): void {
+    if (!this.isInTable() || this.editingDisabled()) {
+      this.showTablePanel.set(false);
+      this.tablePanelManuallyClosed = false;
       return;
     }
-    const node = selection.anchorNode instanceof HTMLElement
-      ? selection.anchorNode
-      : selection.anchorNode.parentElement;
-    if (!node || !editorEl.contains(node)) {
-      this.isInTable.set(false);
-      this.activeTableCell.set(null);
-      this.activeTable.set(null);
-      return;
+    if (!this.showFindReplace() && !this.tablePanelManuallyClosed) {
+      this.showTablePanel.set(true);
     }
-    const cell = node.closest('td, th') as HTMLTableCellElement | null;
-    const table = node.closest('table') as HTMLTableElement | null;
-    this.isInTable.set(!!cell && !!table);
-    this.activeTableCell.set(cell);
-    this.activeTable.set(table);
+  }
+
+  /** Ręczne zamknięcie panelu tabeli (przycisk ×) — nie otwieraj ponownie póki w tej tabeli. */
+  closeTablePanel(): void {
+    this.showTablePanel.set(false);
+    this.tablePanelManuallyClosed = true;
   }
 
   /**
@@ -1351,7 +1417,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       if (!event.shiftKey) {
         this.clearCellSelection();
       }
-    } else if (!target.closest('.table-toolbar') && !target.closest('.context-menu') && !target.closest('.shading-dropdown')) {
+    } else if (!target.closest('.table-toolbar') && !target.closest('.context-menu') && !target.closest('.shading-dropdown') && !target.closest('d2-table-properties-panel')) {
       this.cellSelectionStartCell = null;
       this.clearCellSelection();
     }
@@ -1718,6 +1784,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   openFindReplace(): void {
     this.showFindReplace.set(true);
+    // Wyszukiwanie (jawnie wywołane) przejmuje dokowany obszar po lewej.
+    this.showTablePanel.set(false);
     this.closeAllMenus();
   }
 
@@ -2134,6 +2202,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.findResultCount.set(0);
     this.findCurrentIndex.set(-1);
     this.searchResults.set([]);
+    // Jeśli karetka nadal jest w tabeli, przywróć panel tabeli w zwolnionym doku.
+    this.syncTablePanel();
   }
 
   /**
@@ -3407,7 +3477,83 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.isInTable.set(false);
     this.activeTableCell.set(null);
     this.activeTable.set(null);
+    this.showTablePanel.set(false);
+    this.tablePanelManuallyClosed = false;
     this.notifyEditorChange();
+  }
+
+  // =====================
+  // OBRAMOWANIA / LINIE TABELI (rodzaj, grubość, kolor, miejsce, cel)
+  // =====================
+
+  setTableBorderStyle(style: TableBorderLineStyle): void {
+    this.tableBorderStyle.set(style);
+  }
+
+  setTableBorderColor(color: string): void {
+    this.tableBorderColor.set(color);
+  }
+
+  setTableBorderWidth(width: number): void {
+    if (width >= 1 && width <= 12) this.tableBorderWidth.set(width);
+  }
+
+  /** Resetuje ustawienia „pióra" (rodzaj/grubość/kolor) do wartości domyślnych. */
+  resetTableBorderSettings(): void {
+    this.tableBorderColor.set(DEFAULT_TABLE_BORDER.color);
+    this.tableBorderWidth.set(DEFAULT_TABLE_BORDER.width);
+    this.tableBorderStyle.set(DEFAULT_TABLE_BORDER.style);
+  }
+
+  /**
+   * Stosuje linię w wybranym miejscu do **auto-wykrytego** celu (zaznaczenie /
+   * aktywna komórka). Nie usuwa treści — zmienia tylko style obramowań.
+   */
+  applyTableBorderScope(scope: TableBorderScope): void {
+    const table = this.activeTable();
+    if (!table) return;
+    const cells = this.resolveAutoTargetCells(table);
+    if (cells.length === 0) return;
+    applyBorderToCells(cells, scope, this.currentBorderSettings());
+    this.lastBorderScope.set(scope);
+    this.notifyEditorChange();
+  }
+
+  /** Usuwa wszystkie obramowania w bieżącym celu. */
+  clearTableBorders(): void {
+    this.applyTableBorderScope('none');
+  }
+
+  /** Przywraca domyślną pełną siatkę 1px na całej tabeli i resetuje ustawienia pióra. */
+  restoreDefaultTableBorders(): void {
+    const table = this.activeTable();
+    if (!table) return;
+    restoreDefaultBordersUtil(table);
+    this.resetTableBorderSettings();
+    this.lastBorderScope.set('all');
+    this.notifyEditorChange();
+  }
+
+  /**
+   * Auto-wykrycie celu obramowania z bieżącego zaznaczenia:
+   * zaznaczone komórki → ten zbiór (geometria wiersz/kolumna/zakres/tabela liczona
+   * przez `applyBorderToCells`/`classifyBorderTarget`); brak zaznaczenia → aktywna
+   * komórka (najbezpieczniejszy, intuicyjny domyślny zakres — jak karetka w Word).
+   */
+  private resolveAutoTargetCells(table: HTMLTableElement): HTMLTableCellElement[] {
+    const selected = Array.from(this.selectedCells());
+    if (selected.length > 0) return selected;
+    const cell = this.activeTableCell();
+    if (cell) return [cell];
+    return Array.from(table.querySelectorAll('td, th')) as HTMLTableCellElement[];
+  }
+
+  private currentBorderSettings() {
+    return {
+      color: this.tableBorderColor(),
+      width: this.tableBorderWidth(),
+      style: this.tableBorderStyle()
+    };
   }
 
   /** Scal zaznaczone komórki */

@@ -27,6 +27,7 @@ Niepewności, ryzyka i założenia. Aktualizuj, gdy czegoś nie da się potwierd
 | R-06 | Brak testów integracyjnych claimu wysyłki (`FOR UPDATE SKIP LOCKED` / reclaim po crashu) na realnym PostgreSQL — pokrycie tylko jednostkowe | Medium | Medium | Dodać testy integracyjne repo (Testcontainers/lokalny Postgres) | Open |
 | R-07 | `RecipientUrl` z metadanych zewnętrznych użyty do żądań serwerowych workera → ryzyko SSRF (brak allowlisty/blokady adresów prywatnych) | Medium | Medium | Dodać walidację hosta/schematu poza samym http(s) | Open |
 | R-08 | Ręczny „Zapisz"/auto-save może nadpisać v2 po utworzeniu zadania wysyłki — wysłany jest jednak niezmienny snapshot, więc treść wysyłki się nie zmienia (świadome) | Low | Low | Udokumentowane (BR-012) | Open |
+| R-09 | `WysiwygEditorComponent.sanitizeHtml` (zwykłe Ctrl+V) to sanitizacja regexem — słaba na XSS (np. `<img onerror>` po dziwnym whitespace, `javascript:` w href, osadzone SVG). Treść trafia do `bypassSecurityTrustHtml`. | Medium | High | Wprowadzić DOMPurify (whitelist tagów/atrybutów/protokołów) — wymaga decyzji o zależności; sanitizacja także po stronie backendu przed zapisem/serwowaniem | Open |
 
 ## Zamknięte
 

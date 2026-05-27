@@ -13,6 +13,108 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-05-27 — Bugfix: panel obramowań gubił aktywną tabelę + nieczyszczone zaznaczenie
+
+### Changed
+- GUI: `core/utils/table-context.util.ts` — nowa czysta funkcja `resolveTableContext(anchorNode, editorEl)` → `outside-editor` / `in-table` / `outside-table`. Wydzielona z `detectTableContext`, testowalna.
+- GUI: `document-editor.ts` `detectTableContext()` — **nie czyści już aktywnej tabeli, gdy selekcja jest poza edytorem** (interakcja z panelem/toolbar = zachowaj ostatni kontekst). Czyszczenie tylko gdy karetka jest realnie w treści poza tabelą (`outside-table`) — wtedy dodatkowo `clearCellSelection()` (usuwa klasę `table-cell-selected`).
+- GUI: podpięto `(selectionChange)="onEditorSelectionChange()"` w `document-editor.html` (wcześniej `selectionChange` z edytora był nieobsłużony) — kliknięcie innego akapitu aktualizuje teraz kontekst tabeli i zamyka/aktualizuje panel.
+- GUI: testy `table-context.util.spec.ts` (outside-editor/in-table/outside-table/null) + panel: „border interactions never emit close".
+
+### Verified
+- `npm run build` — OK. `npx ng test --watch=false` — 55 passed (2 stare scaffoldowe `app.spec.ts` padają niezależnie).
+
+### Notes
+- **Przyczyna #1** (panel pokazywał „Wybierz tabelę" po kliknięciu obramowania): `applyTableBorderScope` → `notifyEditorChange()` → `input` → `updateState` → `stateChange` → `detectTableContext`, które przy selekcji poza edytorem (focus w panelu) zerowało `activeTable`. Naprawa: zachowanie kontekstu przy `outside-editor` (model „last known table context").
+- **Przyczyna #2** (tabela nadal wyglądała na zaznaczoną po kliknięciu akapitu): `selectionChange` edytora nie był podpięty, więc sam ruch karetki nie aktualizował kontekstu. Naprawa: podpięcie `selectionChange` + czyszczenie wizualnego zaznaczenia przy `outside-table`.
+- `onPanelMouseDown` (preventDefault na nie-inputach) pozostaje jako komplementarne zabezpieczenie zachowujące karetkę; naprawa działa też, gdyby focus jednak uciekł.
+
+## 2026-05-27 — Auto-wykrywanie zakresu obramowania (ukryty ręczny wybór celu)
+
+### Changed
+- GUI: usunięto ręczny przełącznik celu („Cała tabela / Komórka / Zaznaczenie") z panelu obramowań (`TableBorderTarget`, `TABLE_BORDER_TARGETS`, sekcja „Zakres", `setTableBorderTarget`). Zakres jest teraz **wnioskowany z bieżącego zaznaczenia**.
+- GUI: `core/utils/table-style.util.ts` — nowa czysta funkcja `classifyBorderTarget(table, cells)` → `BorderTargetInfo { kind, rows, cols }`: jedna komórka → `cell`; pełna szerokość → `row`; pełna wysokość → `column`; pełna szer.+wys. → `table`; reszta → `range`; pusty zbiór → `none`.
+- GUI: `document-editor.ts` — `resolveAutoTargetCells` (zaznaczone komórki → ten zbiór; brak → aktywna komórka; dalej cała tabela) + `borderTargetInfo` (computed, reaktywny na `selectedCells`/`activeTableCell`). Klik ikony „gdzie narysować" stosuje linię do auto-celu (`applyBorderToCells` liczy krawędzie względem prostokąta zbioru).
+- GUI: panel pokazuje tylko **podpis** „Zastosowanie: aktywna komórka / zaznaczone komórki (R×C) / cały wiersz / cała kolumna / cała tabela" (read-only, `aria-live`), bez kontrolki wyboru. UX: użytkownik wybiera rodzaj/grubość/kolor linii i klika miejsce — zakres dobiera się sam.
+- GUI: testy — `classifyBorderTarget` (cell/row/column/table/range/none) + panel (podpis zamiast selektora; brak `.table-panel-segmented`).
+
+### Verified
+- `npm run build` — OK. `npx ng test --watch=false` — 49 passed (2 stare scaffoldowe `app.spec.ts` padają niezależnie).
+
+### Notes
+- Domyślny zakres przy samej karetce (brak zaznaczenia) = **aktywna komórka** (jak w MS Word). Wykrycie „cały wiersz/kolumna" działa, gdy użytkownik zaznaczy te komórki (drag custom cell-selection); edytor nie ma osobnego gestu „klik nagłówka wiersza/kolumny" — to świadome ograniczenie, bezpieczny fallback do zaznaczonego zbioru.
+- Tabele z mocno scalonymi komórkami mogą dać przybliżoną *etykietę* zakresu; samo rysowanie obramowania działa zawsze na przekazanym zbiorze komórek.
+
+## 2026-05-27 — Szczegółowy edytor obramowań tabeli (zamiast galerii presetów)
+
+### Changed
+- GUI: **usunięto galerię gotowych stylów tabel** (`TABLE_STYLE_PRESETS`, sekcje „Style tabeli"/„Opcje stylu", `applyTablePreset`, markery `data-table-style*`, `readTableStyleState`). Zakładka „Style" → **„Obramowania"**.
+- GUI: `models/table-style.model.ts` przebudowany pod obramowania: `TableBorderLineStyle` (solid/dashed/dotted/double/none), rozszerzony `TableBorderScope` (all/none/outer/inner/inner-horizontal/inner-vertical/top/bottom/left/right), `TableBorderSettings` z polem `style`, `TableBorderTarget` (table/cell/selection) + listy prezentacyjne (`TABLE_BORDER_LINE_STYLES/_WIDTHS/_COLORS/_SCOPES/_TARGETS`).
+- GUI: `core/utils/table-style.util.ts` — `applyBorderToCells(cells, scope, border)` liczy krawędzie względem prostokąta opisanego na **dowolnym zbiorze komórek** (tabela / komórka / zaznaczenie); `applyBorderScope` deleguje dla całej tabeli; `restoreDefaultTableBorders` przywraca siatkę 1px. Linie kodowane jako `Npx <style> <color>` w inline `border*` — trwałość wg ADR-0007.
+- GUI: `table-properties-panel` — zakładka „Obramowania" z sekcjami: **Zakres** (cel: cała tabela/komórka/zaznaczenie), **Rodzaj linii** (chipy z podglądem), **Grubość linii** (Cienka/Standardowa/Średnia/Gruba), **Kolor linii** (paleta + color picker + reset), **Gdzie narysować** (10 neutralnych ikon SVG: wszystkie/brak/zewn./wewn./poziome/pionowe/góra/dół/lewa/prawa), **Reset** (domyślne obramowanie / usuń obramowania). Podświetlany stan aktywny (rodzaj/grubość/kolor/ostatni zakres/cel).
+- GUI: `document-editor.ts` — sygnały `tableBorderColor/Width/Style/Target` + `lastBorderScope`; metody `applyTableBorderScope` (z rozwiązaniem celu i fallbackiem zaznaczenie→komórka→tabela), `clearTableBorders`, `restoreDefaultTableBorders`, `resetTableBorderSettings`, settery pióra. Usunięto metody presetów.
+- GUI: testy przepisane — `table-style.util.spec.ts` (zakresy, cel komórka/zaznaczenie, rodzaj/grubość linii, restore default) i `table-properties-panel.spec.ts` (zakładka Obramowania, ikony zakresu, zmiana rodzaju/grubości/koloru/celu, reset).
+
+### Verified
+- `npm run build` — OK (tylko istniejące ostrzeżenia budżetu).
+- `npx ng test --watch=false` — 42 passed. Padają tylko 2 stare scaffoldowe `app.spec.ts` (niezwiązane).
+
+### Notes
+- Obramowanie działa na **trzech poziomach**: cała tabela, pojedyncza komórka, zaznaczony fragment (custom cell-selection). „Zaznaczenie" bez zaznaczonych komórek → bezpieczny fallback do aktywnej komórki.
+- Zakresy są **addytywne** (dokładają krawędzie, jak przyciski w Word); „Brak" czyści, „Domyślne obramowanie" przywraca siatkę 1px. Zachowanie treści gwarantowane (modyfikujemy tylko `border*`).
+- Galeria presetów świadomie wycofana w tej iteracji (priorytet: precyzyjna edycja linii). Patrz ADR-0007 (zaktualizowane).
+
+## 2026-05-27 — Stylizacja tabel (gotowe style, obramowania, opcje, reset) + zakładki w panelu
+
+### Changed
+- GUI: nowy model `models/table-style.model.ts` — `TableStylePresetId`, `TableStyleOptions` (headerRow/bandedRows/firstColumn/lastColumn), `TableBorderScope`, `TableBorderSettings`, `TableStylePreset` + `TABLE_STYLE_PRESETS` (6 neutralnych stylów: Prosty, Siatka, Nagłówek, Naprzemienny, Biznesowy, Minimalny).
+- GUI: nowy util `core/utils/table-style.util.ts` — czyste, testowalne funkcje DOM: `applyTablePreset` (idempotentne przeliczenie wyglądu), `applyBorderScope` (all/none/outer/inner), `resetTableStyle` (przywraca domyślny wygląd, zachowuje treść), `readTableStyleState` (odczyt presetu/opcji z markerów `data-*`). Styl utrwalany jako **style inline** na `<table>/<tr>/<td>` — spójnie z istniejącymi akcjami tabeli, przeżywa zapis (HTML→DOCX) i ponowne otwarcie. Patrz ADR-0007.
+- GUI: `table-properties-panel` rozbudowany o **dwie zakładki** — „Układ" (akcje strukturalne: wiersze/kolumny, komórki, rozmiar, wygląd, usuń) i „Style" (gotowe style z miniaturami, opcje stylu, obramowania z kolorem/grubością, reset). Panel pozostaje czysto prezentacyjny (`@Input` stanu, `@Output` per akcja). Dodano wewnętrzny pionowy scroll body (`min-height:0` + `overflow-y:auto`, `:host` stretch).
+- GUI: `document-editor.ts` — sygnały `activeTablePresetId`/`tableStyleOptions`/`tableBorderColor`/`tableBorderWidth`; metody `applyTableStylePreset`/`toggleTableStyleOption`/`applyTableBorderScope`/`setTableBorderColor`/`setTableBorderWidth`/`resetTableStyle` (glue: util na `activeTable()` + `notifyEditorChange()` → auto-save). `detectTableContext()` czyta stan stylu z aktywnej tabeli (`readActiveTableStyle`).
+- GUI: testy `core/utils/table-style.util.spec.ts` (11 przypadków: borders none/outer, preset header/banded, zachowanie treści, recompute toggle, first/last column, reset, persist+read state, defaults) oraz rozszerzone `table-properties-panel.spec.ts` (zakładki, presety, opcje, obramowania, reset).
+
+### Verified
+- `npm run build` — OK (tylko istniejące ostrzeżenia budżetu).
+- `npx ng test --watch=false` — 41 passed (panel + util + badge). Padają tylko 2 stare scaffoldowe `app.spec.ts` (niezwiązane).
+
+### Notes
+- Trwałość: style inline przeżywają round-trip HTML w edytorze i zapis do DOCX. Markery `data-table-style*` (zapamiętany preset/opcje dla panelu) mogą zostać usunięte przez konwersję DOCX — wtedy **wygląd pozostaje** (inline), a panel po ponownym otwarciu pokazuje stan domyślny presetu. Wierność DOCX↔HTML zależy od konwertera serwerowego (to samo ryzyko co istniejące cieniowanie/obramowania).
+- Bez zmian backendu/API/modelu dokumentu (funkcja czysto frontendowa).
+- MVP w pełni: gotowe style, wiersz nagłówka, wiersze naprzemienne, obramowania (kolor/grubość/zakres), reset. Pełne właściwości DOCX (styl linii dashed/double, padding per komórka, wyrównanie pionowe w UI) — etap późniejszy.
+
+## 2026-05-27 — Konfiguracja tabeli przeniesiona do bocznego panelu
+
+### Changed
+- GUI: nowy komponent prezentacyjny `components/table-properties-panel` (`d2-table-properties-panel`) — boczny panel „Ustawienia tabeli" dokowany po lewej, spójny z panelem „Wyszukiwanie" (`.search-panel`). Czysto prezentacyjny: wejścia `hasActiveTable`/`gridLinesVisible`/`shadingColors`, wyjścia per akcja; cała logika operująca na `activeTable()`/`activeTableCell()` pozostaje w `document-editor`.
+- GUI: `document-editor.html` — usunięto poziomy pasek `.table-toolbar` (pojawiający się przy `isInTable()`) oraz pływający `.shading-dropdown`. Wstawiono `<d2-table-properties-panel>` w doku obok panelu wyszukiwania; rozpórka poziomej linijki reaguje teraz na `showFindReplace() || showTablePanel()`.
+- GUI: `document-editor.ts` — sygnał `showTablePanel` + flaga `tablePanelManuallyClosed`; `detectTableContext()` woła `syncTablePanel()` (auto-otwarcie w tabeli, zamknięcie po wyjściu, respekt ręcznego zamknięcia). `openFindReplace()` przejmuje dok (chowa panel tabeli), `closeFindReplace()` przywraca panel tabeli jeśli karetka nadal w tabeli. `tableDeleteTable()` zamyka panel. Panel wykluczony z czyszczenia zaznaczenia komórek w `onCellMouseDown` (scalanie działa). Wszystkie metody `table*()`, `setCellColor`, `clearCellColor` re-użyte bez zmian logiki.
+- GUI (test infra): cel `test` w `angular.json` uzupełniony o `buildTarget`/`tsConfig`/`runner: vitest`/`setupFiles` + nowy `src/test-setup.ts` (Zone.js + zone.js/testing). Wcześniej cel testu nie miał `buildTarget`, więc `ng test` w ogóle się nie uruchamiał.
+- GUI: testy `components/table-properties-panel/table-properties-panel.spec.ts` (stan pusty, render sekcji, emisja wszystkich akcji, kolor cieniowania, etykieta linii siatki, `preventDefault` mousedown).
+
+### Verified
+- `npm run build` — OK (tylko istniejące ostrzeżenia budżetu bundle/SCSS).
+- `npx ng test --watch=false` — panel 6/6 i `document-classification-badge` 4/4 passed (27 passed łącznie). Padają jedynie 2 przestarzałe testy scaffoldowe `app.spec.ts` (asercja „Hello, frontend" + brak providera HttpClient) — niezwiązane z tą zmianą, ujawnione przez naprawę uruchamiania testów.
+
+### Notes
+- Decyzja UX dot. konfliktu z wyszukiwaniem: jeden dok po lewej; wyszukiwanie (jawnie wywołane) ma pierwszeństwo, panel tabeli (kontekstowy) nie wypiera go i wraca po zamknięciu wyszukiwania, jeśli karetka jest nadal w tabeli. Patrz ADR-0006.
+- Stan pusty panelu („Kliknij tabelę…") jest zabezpieczeniem — przy normalnym flow panel zamyka się po opuszczeniu tabeli, więc rzadko widoczny.
+- `app.spec.ts` to stary scaffold (`Hello, frontend`) niepasujący do realnego `App` — do przepisania osobno; nie ruszane w tej zmianie.
+
+## 2026-05-27 — „Wklej tylko tekst" (Paste Text Only) w edytorze WYSIWYG
+
+### Changed
+- GUI: nowy util `core/utils/paste-text.util.ts` — czyste, testowalne funkcje `normalizeWhitespace`, `htmlToText` (paragrafy/nagłówki → nowe linie, listy z markerem `•`/`1.`, komórki tabel rozdzielane tabulatorem, `<a>` → tekst bez URL, pomijanie `script`/`style`) oraz `resolvePlainText` (preferuje `text/plain`, fallback z HTML).
+- GUI: `wysiwyg-editor.ts` — skrót `Ctrl/Cmd+Shift+V` oznacza najbliższe wklejenie jako „tylko tekst" (okno czasowe 1 s, by nieużyty skrót nie wpłynął na kolejne zwykłe Ctrl+V). `handlePaste` przepuszcza wklejenie przez util; ścieżka „tylko tekst" wstawia przez istniejące `insertText` (zachowuje natywne undo i emituje `onContentChange` → auto-save/`contentChange`). Zwykłe Ctrl+V bez zmian (HTML po `sanitizeHtml`).
+- GUI: testy `core/utils/paste-text.util.spec.ts` (17 przypadków: whitespace, nbsp, znaki zero-width, taby/TSV, listy, tabele, linki, script/style).
+
+### Verified
+- `npm run build` — OK (tylko istniejące ostrzeżenia budżetu bundle/SCSS).
+- `npx vitest run --environment jsdom src/app/core/utils/paste-text.util.spec.ts` — 17/17 passed.
+
+### Notes
+- Sanitizacja HTML przy zwykłym wklejaniu nadal opiera się na regexie (`sanitizeHtml`) — patrz R-09 (rekomendacja DOMPurify, wymaga decyzji o zależności).
+- Toolbar/menu kontekstowe „Wklej tylko tekst" (poza zdarzeniem paste, przez `navigator.clipboard.readText()`) — nie wdrożone, kolejny inkrement.
+
 ## 2026-05-25 — Panel admina „Wysyłki" + uruchomienie migracji DB
 
 ### Changed
