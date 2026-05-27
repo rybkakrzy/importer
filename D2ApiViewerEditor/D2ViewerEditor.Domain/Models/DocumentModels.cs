@@ -16,10 +16,14 @@ public class PageMargins
 /// </summary>
 public class HeaderFooterContent
 {
+    /// <summary>Default (odd / primary) header or footer shown on ordinary pages.</summary>
     public string Html { get; set; } = string.Empty;
     public double Height { get; set; } = 1.25;
     public bool DifferentFirstPage { get; set; }
     public string? FirstPageHtml { get; set; }
+    /// <summary>Section enables a distinct even-page header/footer (w:evenAndOddHeaders).</summary>
+    public bool DifferentOddEven { get; set; }
+    public string? EvenHtml { get; set; }
 }
 
 /// <summary>

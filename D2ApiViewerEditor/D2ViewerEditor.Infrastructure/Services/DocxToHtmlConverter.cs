@@ -121,18 +121,53 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var mainPart = document.MainDocumentPart;
         if (mainPart == null) return null;
 
-        var headerPart = mainPart.HeaderParts.FirstOrDefault();
+        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+
+        // Render the section's DEFAULT header (the one Word shows on ordinary pages),
+        // resolved via sectPr/headerReference — NOT HeaderParts.FirstOrDefault(), whose
+        // order is undefined and may return an empty even/first part. Fall back to the
+        // first available part only when the section declares no references.
+        var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default)
+                         ?? mainPart.HeaderParts.FirstOrDefault();
         if (headerPart?.Header == null) return null;
 
-        foreach (var imagePart in headerPart.ImageParts)
-        {
-            LoadImageFromPart(headerPart, imagePart);
-        }
-
-        var html = ConvertHeaderFooterToHtml(headerPart.Header, headerPart, document);
+        var html = ConvertHeaderPartToHtml(headerPart, document);
         if (string.IsNullOrWhiteSpace(html)) return null;
 
-        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        // First-page header is honoured only when the section opts in via titlePg.
+        string? firstPageHtml = null;
+        var differentFirstPage = false;
+        if (HasTitlePage(sectionProps))
+        {
+            var firstPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First);
+            if (firstPart?.Header != null)
+            {
+                var fph = ConvertHeaderPartToHtml(firstPart, document);
+                if (!string.IsNullOrWhiteSpace(fph))
+                {
+                    firstPageHtml = fph;
+                    differentFirstPage = true;
+                }
+            }
+        }
+
+        // Even-page header is honoured only when the document opts in via evenAndOddHeaders.
+        string? evenHtml = null;
+        var differentOddEven = false;
+        if (HasEvenAndOddHeaders(mainPart))
+        {
+            var evenPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even);
+            if (evenPart?.Header != null)
+            {
+                var eh = ConvertHeaderPartToHtml(evenPart, document);
+                if (!string.IsNullOrWhiteSpace(eh))
+                {
+                    evenHtml = eh;
+                    differentOddEven = true;
+                }
+            }
+        }
+
         double headerHeight = 1.5;
         
         var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
@@ -163,7 +198,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return new HeaderFooterContent
         {
             Html = html,
-            Height = Math.Max(0.8, Math.Min(8, headerHeight))
+            Height = Math.Max(0.8, Math.Min(8, headerHeight)),
+            DifferentFirstPage = differentFirstPage,
+            FirstPageHtml = firstPageHtml,
+            DifferentOddEven = differentOddEven,
+            EvenHtml = evenHtml
         };
     }
 
@@ -175,18 +214,49 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var mainPart = document.MainDocumentPart;
         if (mainPart == null) return null;
 
-        var footerPart = mainPart.FooterParts.FirstOrDefault();
+        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+
+        // See ExtractHeader: resolve the DEFAULT footer via sectPr/footerReference rather
+        // than FooterParts.FirstOrDefault(), which can return an empty even/first part.
+        var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default)
+                         ?? mainPart.FooterParts.FirstOrDefault();
         if (footerPart?.Footer == null) return null;
 
-        foreach (var imagePart in footerPart.ImageParts)
-        {
-            LoadImageFromPart(footerPart, imagePart);
-        }
-
-        var html = ConvertHeaderFooterToHtml(footerPart.Footer, footerPart, document);
+        var html = ConvertFooterPartToHtml(footerPart, document);
         if (string.IsNullOrWhiteSpace(html)) return null;
 
-        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        string? firstPageHtml = null;
+        var differentFirstPage = false;
+        if (HasTitlePage(sectionProps))
+        {
+            var firstPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First);
+            if (firstPart?.Footer != null)
+            {
+                var fph = ConvertFooterPartToHtml(firstPart, document);
+                if (!string.IsNullOrWhiteSpace(fph))
+                {
+                    firstPageHtml = fph;
+                    differentFirstPage = true;
+                }
+            }
+        }
+
+        string? evenHtml = null;
+        var differentOddEven = false;
+        if (HasEvenAndOddHeaders(mainPart))
+        {
+            var evenPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even);
+            if (evenPart?.Footer != null)
+            {
+                var eh = ConvertFooterPartToHtml(evenPart, document);
+                if (!string.IsNullOrWhiteSpace(eh))
+                {
+                    evenHtml = eh;
+                    differentOddEven = true;
+                }
+            }
+        }
+
         double footerHeight = 1.5;
         
         var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
@@ -217,8 +287,70 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return new HeaderFooterContent
         {
             Html = html,
-            Height = Math.Max(0.8, Math.Min(8, footerHeight))
+            Height = Math.Max(0.8, Math.Min(8, footerHeight)),
+            DifferentFirstPage = differentFirstPage,
+            FirstPageHtml = firstPageHtml,
+            DifferentOddEven = differentOddEven,
+            EvenHtml = evenHtml
         };
+    }
+
+    /// <summary>
+    /// Resolves the header part referenced by the section for the given type
+    /// (default / first / even). Returns null when the section has no such reference.
+    /// </summary>
+    private static HeaderPart? ResolveHeaderPart(MainDocumentPart mainPart, SectionProperties? sectionProps, HeaderFooterValues type)
+    {
+        var reference = sectionProps?.Elements<HeaderReference>()
+            .FirstOrDefault(r => r.Type != null && r.Type.Value == type);
+        if (reference?.Id?.Value == null) return null;
+        return mainPart.GetPartById(reference.Id.Value) as HeaderPart;
+    }
+
+    private static FooterPart? ResolveFooterPart(MainDocumentPart mainPart, SectionProperties? sectionProps, HeaderFooterValues type)
+    {
+        var reference = sectionProps?.Elements<FooterReference>()
+            .FirstOrDefault(r => r.Type != null && r.Type.Value == type);
+        if (reference?.Id?.Value == null) return null;
+        return mainPart.GetPartById(reference.Id.Value) as FooterPart;
+    }
+
+    /// <summary>
+    /// titlePg present and not explicitly disabled — the section uses a distinct first-page
+    /// header/footer (an empty w:val omitted means "on", matching Word's behaviour).
+    /// </summary>
+    private static bool HasTitlePage(SectionProperties? sectionProps)
+    {
+        var titlePg = sectionProps?.GetFirstChild<TitlePage>();
+        return titlePg != null && (titlePg.Val == null || titlePg.Val.Value);
+    }
+
+    /// <summary>
+    /// Document-level w:evenAndOddHeaders — when present (and not disabled) the section's
+    /// even header/footer reference is shown on even pages. Stored in settings.xml.
+    /// </summary>
+    private static bool HasEvenAndOddHeaders(MainDocumentPart mainPart)
+    {
+        var setting = mainPart.DocumentSettingsPart?.Settings?.GetFirstChild<EvenAndOddHeaders>();
+        return setting != null && (setting.Val == null || setting.Val.Value);
+    }
+
+    private string ConvertHeaderPartToHtml(HeaderPart part, WordprocessingDocument document)
+    {
+        foreach (var imagePart in part.ImageParts)
+        {
+            LoadImageFromPart(part, imagePart);
+        }
+        return ConvertHeaderFooterToHtml(part.Header, part, document);
+    }
+
+    private string ConvertFooterPartToHtml(FooterPart part, WordprocessingDocument document)
+    {
+        foreach (var imagePart in part.ImageParts)
+        {
+            LoadImageFromPart(part, imagePart);
+        }
+        return ConvertHeaderFooterToHtml(part.Footer, part, document);
     }
 
     /// <summary>

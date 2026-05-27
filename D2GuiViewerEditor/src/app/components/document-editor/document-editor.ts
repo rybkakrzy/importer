@@ -634,11 +634,15 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.documentMetadata.set(content.metadata);
         this.documentStyles.set(content.styles || []);
         this.originalFileName.set(fileName);
+        // Spread the whole header/footer so first-page / odd-even variants survive
+        // (not just html + height); fall back to safe defaults when absent.
         this.headerContent.set({
+          ...content.header,
           html: content.header?.html || '',
           height: content.header?.height || 1.25
         });
         this.footerContent.set({
+          ...content.footer,
           html: content.footer?.html || '',
           height: content.footer?.height || 1.25
         });
@@ -834,12 +838,15 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.documentStyles.set(content.styles || []);
         this.originalFileName.set(file.name);
         
-        // Wczytaj nagłówek i stopkę (resetuj jeśli brak w dokumencie)
+        // Wczytaj nagłówek i stopkę (resetuj jeśli brak w dokumencie).
+        // Spread the whole object so first-page / odd-even variants are not lost.
         this.headerContent.set({
+          ...content.header,
           html: content.header?.html || '',
           height: content.header?.height || 1.25
         });
         this.footerContent.set({
+          ...content.footer,
           html: content.footer?.html || '',
           height: content.footer?.height || 1.25
         });

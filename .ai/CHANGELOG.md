@@ -13,6 +13,28 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-05-28 — Import nagłówka/stopki: wybór wg referencji sekcji (default + first-page)
+### Changed
+- Backend `DocxToHtmlConverter`: `ExtractHeader`/`ExtractFooter` rozwiązują part przez `sectPr`/`HeaderReference`/`FooterReference` typu **Default** zamiast `HeaderParts.FirstOrDefault()` (kolejność partów była niezdefiniowana → mógł trafić pusty even/first). Dodano helpery `ResolveHeaderPart`/`ResolveFooterPart`/`HasTitlePage` oraz `ConvertHeaderPartToHtml`/`ConvertFooterPartToHtml`. Pierwsza strona (`titlePg`) → `DifferentFirstPage`+`FirstPageHtml` (model domeny już miał te pola). Fallback do `FirstOrDefault` gdy sekcja nie ma referencji.
+- Frontend `document-editor.ts`: oba miejsca ładowania (`loadFromStorage` + ścieżka `openDocument`) spread'ują cały obiekt `content.header`/`content.footer`, zamiast rekonstruować tylko `{html,height}` → wariant first-page/odd-even nie jest gubiony na granicy TS.
+### Verified
+- Backend build OK; `dotnet test` filtr Header/Footer + SectionReference: **10/10 pass** (5 nowych w `DocxToHtmlConverterSectionReferenceTests`, 5 istniejących).
+- Frontend `tsc --noEmit` OK.
+- Diagnoza na realnym `stupki.docx`: 3 nagłówki (even/default/first) + 3 stopki, brak `titlePg`/`evenAndOddHeaders`; default=header2 (logo + „ING Bank … Obciągalski"), default footer=footer2 (8pt, #808080). Stary kod mógł renderować pusty even part.
+### Notes
+- R-10 częściowo zamknięte (default + first-page). Pozostaje: even/odd (brak pól w modelu backendu) i wiele sekcji.
+- `stupki.docx` NIE dodano jako fixture (treść wulgarna) — testy używają syntetycznego DOCX o tej samej strukturze.
+
+## 2026-05-28 — Import nagłówka/stopki: wariant even/odd + uzupełnienie .ai
+### Changed
+- Domena `HeaderFooterContent`: dodane `DifferentOddEven` + `EvenHtml` (obok `DifferentFirstPage`/`FirstPageHtml`).
+- `DocxToHtmlConverter`: helper `HasEvenAndOddHeaders` (czyta `settings.xml/evenAndOddHeaders`); `ExtractHeader/ExtractFooter` czytają referencję **Even** gdy włączone → `EvenHtml`/`DifferentOddEven`. „Default" = strona nieparzysta.
+- `.ai/FEATURES.md`: nowa sekcja „Feature: Nagłówek i stopka (import + edycja)" + 2 wiersze w tabeli statusu (instrukcja dla agenta: NIE używać `FirstOrDefault` jako głównej ścieżki, spread'ować cały obiekt header/footer).
+### Verified
+- Backend build OK; testy Header/Footer + SectionReference: **13/13 pass** (3 nowe even/odd).
+### Notes
+- **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
+
 ## 2026-05-27 — Fix layoutu: banner środowiska przycinał dolny pasek edytora
 
 ### Changed

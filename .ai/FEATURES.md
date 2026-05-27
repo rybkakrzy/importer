@@ -24,6 +24,8 @@ Funkcje systemu z perspektywy produktu i implementacji. Aktualizuj przy zmianie 
 | Eksport PDF | Deprecated/Placeholder | `501 Not Implemented` | — | `POST /api/document/export-pdf` |
 | Zakończ i wyślij (async zwrot na returnUrl) | Implemented | `FinishAndSendDocumentCommand` + worker `DocumentDeliveryWorker` | `finishDocument()` + polling statusu | `POST .../versions/{vid}/finish` (202), `GET/POST .../deliveries/...` |
 | Panel admina wysyłek (monitoring + retry) | Implemented | `GetDeliveriesByStatusQuery`, `RequeueDeliveryCommand` | `admin-deliveries` (`/admin/deliveries`): lista, filtry, `locked_by`, „Ponów" | `GET .../deliveries?status=`, `POST .../deliveries/{id}/retry` |
+| Edycja nagłówka/stopki (Word-like) | Implemented | konwersja DOCX↔HTML (`DocxToHtmlConverter`/`HtmlToDocxConverter`) | `wysiwyg-editor`: wejście (db)klik, kontekstowy toolbar, „Zamknij", first/odd/even, numery stron | część `save`/`PUT` (header/footer w `SaveDocumentRequest`) |
+| Import nagłówka/stopki: wybór wariantu sekcji | Implemented (import: default+first+even) | `ExtractHeader/ExtractFooter` wg `sectPr`/refs + `titlePg`/`evenAndOddHeaders` | spread pełnego obiektu header/footer | — |
 
 ## Statusy
 
@@ -82,3 +84,24 @@ Brak (na dzień aktualizacji) testów integracyjnych claimu na realnym PostgreSQ
 
 ### Uwaga dla agenta
 Endpointy istnieją (`/download` zwraca v1), ale GUI w trybie `?masterId=` ładuje aktualną wersję (po ingeście DOCX = v2), a nie v1. Aby tryb podglądu pokazywał oryginał, trzeba przełączyć ładowanie na `GET .../{masterId}/download`. Patrz `RISKS_ASSUMPTIONS.md` (R-02).
+
+## Feature: Nagłówek i stopka (import + edycja)
+
+### Cel
+Wierne odwzorowanie nagłówka/stopki z DOCX oraz edycja w trybie zbliżonym do Worda (wejście klikiem/dwuklikiem, kontekstowy toolbar „Nagłówek"/„Stopka", „Zamknij nagłówek i stopkę", wariant pierwszej strony / parzysty-nieparzysty, numery stron).
+
+### Import (DOCX → HTML) — `DocxToHtmlConverter`
+- **Wybór wariantu wg sekcji, nie kolejności partów.** `ExtractHeader`/`ExtractFooter` rozwiązują part przez `sectPr` → `HeaderReference`/`FooterReference` typu **Default** (helpery `ResolveHeaderPart`/`ResolveFooterPart`). Fallback do `HeaderParts.FirstOrDefault()` tylko gdy sekcja nie deklaruje referencji. **Nie używać `FirstOrDefault()` jako głównej ścieżki** — kolejność partów jest niezdefiniowana i może trafić pusty even/first (gubi logo/tekst).
+- **Pierwsza strona:** czytana tylko gdy `sectPr/titlePg` (helper `HasTitlePage`) → `DifferentFirstPage` + `FirstPageHtml`.
+- **Parzysty/nieparzysty:** czytany tylko gdy `settings.xml/evenAndOddHeaders` (helper `HasEvenAndOddHeaders`) → `DifferentOddEven` + `EvenHtml`. „Default" = strona nieparzysta/podstawowa.
+- Rozmiar/krój: kontener `.header-footer-content` niesie domyślny font z `docDefaults` (patrz R-11). Run bez własnego `w:sz`/`w:rFonts` dziedziczy rozmiar dokumentu, nie edytora.
+- Model: `HeaderFooterContent { Html, Height, DifferentFirstPage, FirstPageHtml, DifferentOddEven, EvenHtml }` (Domain) ↔ TS `HeaderFooterContent` (te same pola + `oddHtml`). Front (`document-editor.ts`) **spread'uje cały obiekt** na obu ścieżkach load — nie rekonstruować `{html,height}`, bo gubi warianty.
+
+### Edycja (frontend) — `wysiwyg-editor`
+- `editingSection` ('header'|'footer'|'body'); `getActiveEditable()` kieruje komendy formatowania do aktywnego regionu (nie body).
+- Wejście: `startEditingHeader`/`startEditingFooter` (klik/dblclik). Wyjście: `stopEditingHeaderFooter()`. Outputs: `headerChange`/`footerChange`/`editingSectionChange`.
+- Persist: `buildSaveRequest()` → `header`/`footer` w `SaveDocumentRequest` → `HtmlToDocxConverter.AddHeaderAndFooter` (tworzy `HeaderPart`/`FooterPart` + referencje + obrazy w part).
+
+### Ograniczenia / otwarte
+- **Round-trip save** zapisuje obecnie wariant **default** (`AddHeaderAndFooter`); first-page/even na zapisie nie są jeszcze serializowane do osobnych partów + ustawień (`titlePg`/`evenAndOddHeaders`). Import je odczytuje, ale ponowny zapis je spłaszcza. Patrz `RISKS_ASSUMPTIONS.md` R-10 (partial) / R-11.
+- **Wiele sekcji** (`sectPr` per-section) nieobsługiwane — brany pierwszy `SectionProperties` z body.
