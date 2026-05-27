@@ -1,0 +1,113 @@
+import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { EditorToolbarComponent } from './editor-toolbar';
+import { EditorCommand, EditorState } from '../../models/document.model';
+
+/**
+ * Testy przycisku „Cofnij" (undo) i „Ponów" (redo) w pasku narzędzi.
+ *
+ * Sprawdzają WIRING przycisku (widoczność, stan disabled/enabled, emitowaną komendę),
+ * niezależnie od samego mechanizmu historii edytora (ten żyje w WysiwygEditorComponent
+ * i opiera się na contenteditable/execCommand, których jsdom nie wspiera — patrz
+ * scenariusz manualny w .ai/CHANGELOG.md).
+ */
+describe('EditorToolbarComponent — przyciski undo/redo', () => {
+  let fixture: ComponentFixture<EditorToolbarComponent>;
+  let component: EditorToolbarComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [EditorToolbarComponent],
+    }).compileComponents();
+    fixture = TestBed.createComponent(EditorToolbarComponent);
+    component = fixture.componentInstance;
+  });
+
+  function makeState(partial: Partial<EditorState>): EditorState {
+    return {
+      isModified: false,
+      canUndo: false,
+      canRedo: false,
+      wordCount: 0,
+      currentFormatting: {
+        bold: false, italic: false, underline: false,
+        strikethrough: false, subscript: false, superscript: false,
+      },
+      currentStyle: {},
+      ...partial,
+    };
+  }
+
+  function btn(titlePrefix: string): HTMLButtonElement {
+    const el = Array.from(fixture.nativeElement.querySelectorAll('button'))
+      .find((b) => (b as HTMLElement).getAttribute('title')?.startsWith(titlePrefix));
+    return el as HTMLButtonElement;
+  }
+
+  it('renderuje przyciski Cofnij i Ponów w trybie edycji', () => {
+    component.readOnly = false;
+    fixture.detectChanges();
+    expect(btn('Cofnij')).toBeTruthy();
+    expect(btn('Ponów')).toBeTruthy();
+  });
+
+  it('Cofnij jest disabled, gdy nie ma czego cofnąć (canUndo=false)', () => {
+    component.editorState = makeState({ canUndo: false });
+    fixture.detectChanges();
+    expect(btn('Cofnij').disabled).toBe(true);
+  });
+
+  it('Cofnij jest enabled po wykonaniu operacji (canUndo=true) i emituje komendę undo', () => {
+    component.editorState = makeState({ canUndo: true });
+    fixture.detectChanges();
+
+    const undoBtn = btn('Cofnij');
+    expect(undoBtn.disabled).toBe(false);
+
+    const emitted: { command: EditorCommand; value?: string }[] = [];
+    component.command.subscribe((e) => emitted.push(e));
+    undoBtn.click();
+
+    expect(emitted).toEqual([{ command: 'undo', value: undefined }]);
+  });
+
+  it('Ponów jest disabled, gdy redoStack jest pusty (canRedo=false)', () => {
+    component.editorState = makeState({ canRedo: false });
+    fixture.detectChanges();
+    expect(btn('Ponów').disabled).toBe(true);
+  });
+
+  it('Ponów jest enabled po cofnięciu (canRedo=true) i emituje komendę redo', () => {
+    component.editorState = makeState({ canRedo: true });
+    fixture.detectChanges();
+
+    const redoBtn = btn('Ponów');
+    expect(redoBtn.disabled).toBe(false);
+
+    const emitted: { command: EditorCommand; value?: string }[] = [];
+    component.command.subscribe((e) => emitted.push(e));
+    redoBtn.click();
+
+    expect(emitted).toEqual([{ command: 'redo', value: undefined }]);
+  });
+
+  it('w trybie tylko-do-odczytu przyciski edycyjne (undo/redo) są ukryte', () => {
+    component.readOnly = true;
+    fixture.detectChanges();
+    expect(btn('Cofnij')).toBeFalsy();
+    expect(btn('Ponów')).toBeFalsy();
+  });
+
+  it('renderuje przycisk „Akapit" z aria-label i emituje openParagraph po kliknięciu', () => {
+    component.readOnly = false;
+    fixture.detectChanges();
+
+    const akapit = btn('Akapit');
+    expect(akapit).toBeTruthy();
+    expect(akapit.getAttribute('aria-label')).toBe('Akapit');
+
+    let opened = 0;
+    component.openParagraph.subscribe(() => opened++);
+    akapit.click();
+    expect(opened).toBe(1);
+  });
+});

@@ -1,12 +1,12 @@
 import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
-import { OfflineBannerComponent } from './components/offline-banner/offline-banner';
+import { GlobalBannersComponent } from './components/global-banners/global-banners';
 
 @Component({
   selector: 'd2-root',
-  imports: [RouterOutlet, OfflineBannerComponent],
+  imports: [RouterOutlet, GlobalBannersComponent],
   template: `
-    <d2-offline-banner />
+    <d2-global-banners />
     <router-outlet />
   `,
   styles: [`
@@ -16,7 +16,7 @@ import { OfflineBannerComponent } from './components/offline-banner/offline-bann
       height: 100vh;
       overflow: hidden;
     }
-    d2-offline-banner {
+    d2-global-banners {
       flex-shrink: 0;
     }
     d2-dashboard,

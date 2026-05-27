@@ -226,21 +226,52 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string ConvertHeaderFooterToHtml(OpenXmlCompositeElement headerFooter, OpenXmlPart part, WordprocessingDocument document)
     {
-        var html = new StringBuilder();
+        var inner = new StringBuilder();
 
         foreach (var element in headerFooter.Elements())
         {
             if (element is Paragraph para)
             {
-                html.Append(ConvertParagraphToHtml(para, document, part));
+                inner.Append(ConvertParagraphToHtml(para, document, part));
             }
             else if (element is Table table)
             {
-                html.Append(ConvertTableToHtml(table, document, part));
+                inner.Append(ConvertTableToHtml(table, document, part));
             }
         }
 
-        return html.ToString();
+        if (inner.Length == 0) return string.Empty;
+
+        // Owijamy treść w kontener z domyślnym krojem/rozmiarem czcionki z docDefaults —
+        // analogicznie do body (.document-content). Bez tego runy nagłówka/stopki bez
+        // własnego w:sz / w:rFonts dziedziczyłyby DOMYŚLNY ROZMIAR EDYTORA (zbyt duży),
+        // a nie rozmiar dokumentu Word. To naprawia „za duży tekst" w nagłówku/stopce.
+        var css = BuildDefaultContainerCss();
+        var openTag = css.Length > 0
+            ? $"<div class=\"header-footer-content\" style=\"{css}\">"
+            : "<div class=\"header-footer-content\">";
+        return openTag + inner + "</div>";
+    }
+
+    /// <summary>
+    /// Buduje CSS kontenera z efektywnym domyślnym krojem i rozmiarem czcionki
+    /// (z w:docDefaults/rPrDefault; gdy brak — z konfiguracji DocumentDefaults).
+    /// Wspólne dla body oraz nagłówka/stopki, żeby runy bez własnego rPr dziedziczyły
+    /// rozmiar dokumentu, a nie domyślny rozmiar edytora.
+    /// </summary>
+    private string BuildDefaultContainerCss()
+    {
+        var css = new StringBuilder();
+        var effectiveFontFamily = !string.IsNullOrEmpty(_defaultFontFamily)
+            ? _defaultFontFamily
+            : (!string.IsNullOrWhiteSpace(_defaults.FontFamily) ? _defaults.FontFamily : null);
+        if (!string.IsNullOrEmpty(effectiveFontFamily))
+            css.Append($"font-family:'{effectiveFontFamily}',sans-serif;");
+        var effectiveFontSizePt = _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : (double?)null);
+        if (effectiveFontSizePt.HasValue)
+            css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "font-size:{0:0.##}pt;", effectiveFontSizePt.Value));
+        return css.ToString();
     }
 
     /// <summary>
@@ -349,18 +380,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         LoadDocumentImages(document);
 
         var html = new StringBuilder();
-        var containerCss = new StringBuilder();
-        // Krój: priorytet ma to, co zdefiniowano w DOCX; gdy brak — używamy firmowej
-        // czcionki z konfiguracji (sekcja DocumentDefaults).
-        var effectiveFontFamily = !string.IsNullOrEmpty(_defaultFontFamily)
-            ? _defaultFontFamily
-            : (!string.IsNullOrWhiteSpace(_defaults.FontFamily) ? _defaults.FontFamily : null);
-        if (!string.IsNullOrEmpty(effectiveFontFamily))
-            containerCss.Append($"font-family:'{effectiveFontFamily}',sans-serif;");
-        var effectiveFontSizePt = _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : (double?)null);
-        if (effectiveFontSizePt.HasValue)
-            containerCss.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "font-size:{0:0.##}pt;", effectiveFontSizePt.Value));
+        var containerCss = BuildDefaultContainerCss();
 
         if (containerCss.Length > 0)
             html.Append($"<div class=\"document-content\" style=\"{containerCss}\">");

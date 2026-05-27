@@ -650,7 +650,22 @@ body.image-moving * {
   height: 100%;
   display: block;
   overflow: visible;
-  color: #202124; /* domyślny czarny — przesłaniany przez inline color */
+}
+
+/* Domyślny krój/rozmiar/kolor nagłówka i stopki = domyślne dokumentu (jak body
+ * .editor-content). Bez tego treść bez jawnego font-size dziedziczyłaby domyślny
+ * rozmiar przeglądarki (~16px), przez co tekst był „za duży". Kontener z backendu
+ * (.header-footer-content z font-size z docDefaults) ma wyższą specyficzność i
+ * nadpisuje te wartości, gdy DOCX je definiuje; inline color/size runów zawsze
+ * wygrywa. Czarny (#000) odpowiada wordowemu kolorowi „auto". */
+.header-display,
+.footer-display,
+.header-editor-content,
+.footer-editor-content {
+  font-family: var(--corporate-font-family, 'Calibri', 'Segoe UI', Arial, sans-serif);
+  font-size: 11pt;
+  line-height: 1.15;
+  color: #000;
 }
 
 .header-display p,

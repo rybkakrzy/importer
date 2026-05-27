@@ -189,26 +189,31 @@
                   </div>
                 }
               </div>
-              <div class="dropdown-separator"></div>
-              <button class="dropdown-item" (click)="openBarcodeDialog()">
-                <svg viewBox="0 0 24 24" width="18" height="18">
-                  <path fill="currentColor" d="M3 11h8V3H3v8zm2-6h4v4H5V5zm8-2v8h8V3h-8zm6 6h-4V5h4v4zM3 21h8v-8H3v8zm2-6h4v4H5v-4zm13-2h-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/>
-                </svg>
-                QR Code / Kod kreskowy
-              </button>
-              <div class="dropdown-separator"></div>
-              <button class="dropdown-item" (click)="insertHorizontalLine()">
-                <svg viewBox="0 0 24 24" width="18" height="18">
-                  <path fill="currentColor" d="M4 11h16v2H4z"/>
-                </svg>
-                Linia pozioma
-              </button>
-              <button class="dropdown-item" (click)="insertPageBreak()">
-                <svg viewBox="0 0 24 24" width="18" height="18">
-                  <path fill="currentColor" d="M18 20H6v-3H4v3c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-3h-2v3zM6 4h12v3h2V4c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v3h2V4zm5 8h2v2h-2v-2zm-4 0h2v2H7v-2zm8 0h2v2h-2v-2z"/>
-                </svg>
-                Podział strony
-              </button>
+              <!-- Ukryte na życzenie (QR / Linia pozioma / Podział strony) — pozycje schowane,
+                   logika (openBarcodeDialog / insertHorizontalLine / insertPageBreak) zostaje.
+                   Ustaw warunek na true, aby przywrócić. -->
+              @if (false) {
+                <div class="dropdown-separator"></div>
+                <button class="dropdown-item" (click)="openBarcodeDialog()">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M3 11h8V3H3v8zm2-6h4v4H5V5zm8-2v8h8V3h-8zm6 6h-4V5h4v4zM3 21h8v-8H3v8zm2-6h4v4H5v-4zm13-2h-2v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/>
+                  </svg>
+                  QR Code / Kod kreskowy
+                </button>
+                <div class="dropdown-separator"></div>
+                <button class="dropdown-item" (click)="insertHorizontalLine()">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M4 11h16v2H4z"/>
+                  </svg>
+                  Linia pozioma
+                </button>
+                <button class="dropdown-item" (click)="insertPageBreak()">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M18 20H6v-3H4v3c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-3h-2v3zM6 4h12v3h2V4c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v3h2V4zm5 8h2v2h-2v-2zm-4 0h2v2H7v-2zm8 0h2v2h-2v-2z"/>
+                  </svg>
+                  Podział strony
+                </button>
+              }
               <div class="dropdown-separator"></div>
               <button class="dropdown-item" (click)="editHeader(); closeAllMenus()">
                 <svg viewBox="0 0 24 24" width="18" height="18">
@@ -546,6 +551,7 @@
     (replaceInDocument)="onReplaceInDocument($event)"
     (clearSearch)="onClearSearch()"
     (openSearch)="openFindReplace()"
+    (openParagraph)="openParagraphDialog()"
     (preserveSelection)="editor.saveSelection()"
   />
   }
@@ -1291,6 +1297,9 @@
         <span class="context-menu-shortcut">Ctrl+A</span>
       </button>
 
+      <!-- POZYCJE ROZSZERZONE (ukryte na życzenie — sterowane contextMenuExtrasVisible).
+           Markup zachowany; ustaw contextMenuExtrasVisible=true aby przywrócić. -->
+      @if (contextMenuExtrasVisible()) {
       <div class="context-menu-separator"></div>
 
       <!-- AKAPIT (wyrównanie + interlinia) -->
@@ -1444,6 +1453,7 @@
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M16 5v14l-11-7z"/></svg>
           <span>Wyrównaj obraz do prawej</span>
         </button>
+      }
       }
     </div>
   }

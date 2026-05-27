@@ -13,6 +13,71 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-05-27 — Nazewnictwo admina, dok tabela↔wyszukiwanie, ukrycie pozycji „Wstaw", „Akapit" w toolbarze
+
+### Changed
+- **Admin — nazewnictwo** (`Wysyłki` → `Pliki do wysłania`): `admin-shell.html` (nav), `admin-deliveries.html` (tytuł strony + tekst ładowania), `admin-deliveries.ts` (komunikat błędu). Nie ruszano nazw technicznych (trasa `deliveries`, klasy, DTO, statusy — np. status „Wysyłanie" zostaje, bo to stan akcji, nie nazwa obszaru).
+- **Dok boczny — przełączanie tabela ↔ wyszukiwanie** (`document-editor.ts` `syncTablePanel`): naprawiono konflikt — gdy karetka wraca do tabeli przy otwartym wyszukiwaniu, dok przełącza się na formatowanie tabeli (zamyka wyszukiwanie przez `closeFindReplace()`). Wcześniej warunek `!showFindReplace()` blokował pokazanie panelu tabeli (ADR-0006 „search ma pierwszeństwo" — świadomie nadpisane wg decyzji zadania). Dok ma jeden aktywny tryb; `tablePanelManuallyClosed` (×) nadal respektowane; ESC/X bez zmian.
+- **Menu „Wstaw" — ukryte pozycje** (`document-editor.html`): QR Code / Kod kreskowy, Linia pozioma, Podział strony owinięte w `@if (false)` (ukryte, logika `openBarcodeDialog`/`insertHorizontalLine`/`insertPageBreak` zostaje). Separatory uporządkowane — brak pustych grup/podwójnych separatorów.
+- **Toolbar — przycisk „Akapit"** (`editor-toolbar`): nowy `@Output() openParagraph` + przycisk w grupie „Listy i wcięcia" (ta sama ikona co menu „Narzędzia"), podpięty w `document-editor.html` do istniejącego `openParagraphDialog()` — bez duplikacji dialogu/logiki. `aria-label="Akapit"`. Menu „Narzędzia" bez zmian.
+
+### Verified
+- `npx ng test` — **101/101 passed (12 plików)**; nowe/rozszerzone: `admin-shell.spec.ts` (3), `editor-toolbar.spec.ts` (+1 „Akapit" = 7), `document-editor.spec.ts` (+5 przełączanie doku = 12).
+- `npx ng build` — OK (tylko istniejące ostrzeżenia budżetu).
+
+### Notes
+- **QR/barcode** dostępne też przez `(insertBarcode)` toolbara, ale toolbar NIE renderuje widocznego przycisku QR — więc ukrycie w menu „Wstaw" wystarcza. `insertHorizontalLine`/`insertPageBreak` były tylko w menu „Wstaw". **Do potwierdzenia:** czy ukryć też dialog kodu kreskowego z innych ścieżek (obecnie brak innej widocznej).
+- **Scenariusz manualny menu „Wstaw"**: otwórz „Wstaw" → brak QR/Linia pozioma/Podział strony; widoczne: Obraz, Tabela, (separator), Nagłówek/Stopka… — bez pustych grup.
+- **Scenariusz manualny dok**: klik w tabelę → panel formatowania; lupa/Ctrl+F → wyszukiwanie; ponowny klik w tabelę → panel wraca do formatowania (wyszukiwanie zamknięte); ESC i × zamykają dok.
+
+## 2026-05-27 — Globalny banner środowiska + naprawa layoutu paska braku API
+
+### Changed
+- **Nowy kontener bannerów** `d2-global-banners` (`components/global-banners/`) — renderowany w `App` w normalnym flow flex (zamiast bezpośredniego `<d2-offline-banner>`). Stała kolejność: banner środowiska na górze, pasek offline/API pod nim. Bannery są w flow → `App` (`:host` flex column, 100vh) rezerwuje ich wysokość, edytor (`flex:1`) nigdy nie jest przykrywany — stabilne dla 4 kombinacji (brak / tylko env / tylko API / oba).
+- **Nowy banner środowiska** `d2-environment-banner` (`components/environment-banner/`) — prezentacyjny; źródło środowiska = `BuildInfoService.environment()` (jedyne wiarygodne: health-check API z fallbackiem na front-config — **uwaga:** brak `fileReplacements` w `angular.json`, więc `environment.ts` jest zawsze `PRD`, dlatego nie używamy go wprost). Mapowanie przez czystą funkcję `core/utils/environment-banner.util.ts` (`resolveEnvironmentBanner`): Local→niebieski, DEV→zielony, UAT/TST→jasnożółty, PRE→purpurowy, PROD/PRD→ukryty, nieznane→neutralny fallback `Wersja {nazwa}`. `role="status"`, kontrast AA.
+- **Naprawa paska braku API** (`offline-banner.scss`): usunięto arbitralny `z-index: 10000` (pasek jest w flow — wysoki z-index tylko ryzykował przebicie przez modale edytora o z-index 1000–2000); dodano `width:100%` i komentarz o roli `position: relative` (kotwica przycisku ×). Logika wykrywania (`ConnectionStatusService`: online/offline + health-check 30 s + interceptor) **bez zmian** — poprawka czysto prezentacyjno-layoutowa.
+- `App` (`app.ts`): import `GlobalBannersComponent`, selektor `d2-global-banners` w `:host` (`flex-shrink:0`).
+- Naprawiono nieaktualny scaffold `app.spec.ts` (oczekiwał „Hello, frontend"): teraz `provideRouter([])` + stub `BuildInfoService`/`ConnectionStatusService`, asercja montażu `d2-global-banners`.
+
+### Verified
+- `npx ng test` — **92/92 passed (11 plików)**; nowe specy: `environment-banner.util.spec.ts` (10), `environment-banner.spec.ts` (10: pełna macierz env + reaktywność + role), `global-banners.spec.ts` (4: kolejność, widoczność offline, niezależność, prod). Suite w pełni zielony (naprawiony `app.spec.ts`).
+- `npx ng build` — OK (tylko istniejące ostrzeżenia budżetu).
+
+### Notes
+- **Scenariusz manualny**: na DEV/UAT/itd. (gdy API health zwraca env) pojawia się kolorowy pasek na górze, ponad paskiem offline; oba w flow, edytor/toolbar/panel boczny nieprzykryte. Gdy API niedostępne — pasek offline pod bannerem env; gdy API wróci — znika. Na PROD (PRD) banner env ukryty.
+- Banner reaguje na health-check: do pierwszej odpowiedzi env=PRD (front fallback) → ukryty (brak migotania błędną etykietą), po odpowiedzi API pokazuje właściwe środowisko.
+
+## 2026-05-27 — ESC zamyka boczny panel + weryfikacja przycisku „Cofnij" (undo)
+
+### Changed
+- Frontend `document-editor.ts`: nowy `@HostListener('document:keydown.escape')` (`onEscapeKeydown`) zamyka aktywny boczny panel (Wyszukiwanie / właściwości+stylizacja tabeli) tą samą logiką co przycisk × (`closeFindReplace` / `closeTablePanel`), przez wspólną metodę `closeActiveSidePanel()`. Listener jest na `document` (panel może nie mieć focusu — karetka w edytorze). Pierwszeństwo: jeśli ESC obsłużył już szczegółowy handler (`event.defaultPrevented`, np. deselekcja obrazu w `wysiwyg-editor`) albo otwarty jest dialog/menu kontekstowe (`isAnyDialogOpen()`/`showContextMenu()`) — panel nie jest ruszany; gdy żaden panel nie jest otwarty — brak skutków. Focus wraca do edytora tylko, gdy był wewnątrz panelu.
+- Brak zmian mechanizmu undo: przeanalizowano i potwierdzono poprawność. Przycisk „Cofnij" w `editor-toolbar` (`(click)="executeCommand('undo')"`, `[disabled]="!editorState?.canUndo"`) używa tej samej metody `WysiwygEditorComponent.undo()` co skrót Ctrl+Z (`handleKeyboard`). Operacje tabeli (wiersze/kolumny/obramowania/scal/kolor) trafiają do historii przez `notifyEditorChange()` → syntetyczny `input` → `onContentChange` → `saveToUndoStack()`.
+
+### Verified
+- `npx ng test` — nowe specy: `editor-toolbar.spec.ts` (6) + `document-editor.spec.ts` (7) = 13/13 passed; cała reszta bez regresji (jedyne czerwone to znany, niezależny scaffold `app.spec.ts` — brak `_HttpClient`).
+- `npx ng build` — OK (tylko istniejące ostrzeżenia budżetu SCSS/initial).
+- Undo na poziomie contenteditable/`execCommand` nie jest testowalny w jsdom — scenariusz manualny niżej.
+
+### Notes
+- **Scenariusz manualny undo** (uruchom GUI, otwórz dokument do edycji): (1) wpisz tekst → przycisk „Cofnij" się aktywuje → klik cofa wpis; (2) zaznacz tekst, kliknij **B** (bold) → „Cofnij" cofa pogrubienie; (3) klik w tabelę → panel tabeli → dodaj wiersz / zmień obramowanie → „Cofnij" cofa operację tabeli; (4) Ctrl+Z daje ten sam efekt co przycisk; (5) „Ponów"/Ctrl+Y przywraca; (6) brak błędów w konsoli; (7) gdy stos pusty — „Cofnij" jest wyszarzony.
+- **Scenariusz manualny ESC**: otwórz panel Wyszukiwania → ESC zamyka; klik w tabelę (panel właściwości/stylizacji) → ESC zamyka; ESC przy zamkniętym panelu → nic; zaznacz obraz w edytorze przy otwartym panelu → ESC najpierw odznacza obraz (panel zostaje), kolejny ESC zamyka panel; otwarty dialog (np. wstaw tabelę) + ESC → panel w tle zostaje.
+- Redundancja w `wysiwyg-editor`: każdy edytor strony ma jednocześnie `(input)="onPageInput()"` (debounce 500 ms) ORAZ `addEventListener('input', …)` → `onContentChange()` (snapshot natychmiastowy). Undo działa, ale jest granularne (per znak). Nie ruszano — poza zakresem, ryzyko regresji undo dla tabel (zależnych od ścieżki `onContentChange`).
+
+## 2026-05-27 — Fix odwzorowania nagłówka/stopki DOCX→HTML (za duży tekst, kolor, fallback)
+
+### Changed
+- Backend `DocxToHtmlConverter`: nagłówek/stopka są teraz owijane w `<div class="header-footer-content" style="font-family:..;font-size:..pt">` z domyślnym krojem/rozmiarem z `w:docDefaults/rPrDefault` — analogicznie do body `.document-content`. Wydzielono wspólny helper `BuildDefaultContainerCss()` (body + header/footer). **Przyczyna „za dużego tekstu":** runy nagłówka/stopki bez własnego `w:sz`/`w:rFonts` nie miały żadnego kontenera z domyślnym rozmiarem (body go miało), więc dziedziczyły domyślny rozmiar EDYTORA, nie dokumentu.
+- Frontend `wysiwyg-editor.scss`: `.header-display/.footer-display/.header-editor-content/.footer-editor-content` dostały domyślny `font-family` (corporate var), `font-size:11pt`, `line-height:1.15`, `color:#000` — fallback dla dokumentów bez kontenera z backendu oraz dla regionu edycji. Usunięto `color:#202124` (Word „auto" = czarny). Kontener z backendu (inline font-size z docDefaults) ma wyższą specyficzność i nadpisuje, gdy DOCX definiuje rozmiar; inline color/size runów zawsze wygrywa.
+- Testy backendu: `DocxToHtmlConverterHeaderFooterTests` (5) — kontener z docDefault 10pt w nagłówku i stopce, zachowanie jawnego koloru (`#1F3864`/`#C00000`) i rozmiaru (8pt = 16 half-points), brak docDefaults → kontener bez wymuszonego rozmiaru.
+
+### Verified
+- `dotnet build` Infrastructure — OK (0 błędów). `dotnet test --filter DocxToHtmlConverterHeaderFooter` — 5/5 passed.
+- `npm run build` (front) — OK.
+
+### Notes
+- Jednostki: `w:sz` jest w half-points → `pt = sz/2` (potwierdzone w `GetRunStyleClean`/`ConvertRunPropertiesToCss` i teraz w kontenerze docDefaults).
+- **Niezałatwione (udokumentowane):** R-10 — bierzemy tylko `HeaderParts.FirstOrDefault()`, bez default/first-page/even-odd i bez wielu sekcji; R-11 — round-trip rozmiaru nagłówka zależy od `docDefaults` (kontener spłaszczany przy zapisie, fallback frontu 11pt zapewnia spójność wizualną).
+
 ## 2026-05-27 — Bugfix: panel obramowań gubił aktywną tabelę + nieczyszczone zaznaczenie
 
 ### Changed

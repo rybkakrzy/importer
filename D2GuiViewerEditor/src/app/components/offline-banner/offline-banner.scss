@@ -9,8 +9,11 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 1.2;
-  z-index: 10000;
+  width: 100%;
   animation: slideDown 0.3s ease-out;
+  /* `relative` only anchors the absolutely-positioned close button. The banner
+     sits in normal flex flow inside d2-global-banners, so it reserves layout
+     height and never overlaps the editor — no stacking-context hacks needed. */
   position: relative;
 
   &__text {

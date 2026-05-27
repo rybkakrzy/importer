@@ -157,6 +157,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   contextSubmenu = signal<string | null>(null);
   contextMenuTargetCell = signal<HTMLElement | null>(null);
   contextMenuTargetImage = signal<HTMLImageElement | null>(null);
+  /**
+   * Widoczność „rozszerzonych" pozycji menu kontekstowego (wyrównanie/interlinia/wcięcia,
+   * sekcje Tabela i Grafika). Na życzenie menu pokazuje tylko podstawowe operacje:
+   * Cofnij, Ponów, Wytnij, Kopiuj, Wklej, Wklej bez formatowania, Zaznacz wszystko.
+   * Markup pozostaje w szablonie (ukryty, nie usunięty) — wystarczy ustawić `true`, aby przywrócić.
+   */
+  contextMenuExtrasVisible = signal(false);
 
   // Mini toolbar nad zaznaczeniem
   showMiniToolbar = signal(false);
@@ -235,9 +242,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   /**
    * Boczny panel konfiguracji tabeli (dokowany po lewej, jak panel „Wyszukiwanie").
    * Otwiera się automatycznie po wejściu karetki w tabelę — chyba że użytkownik
-   * zamknął go ręcznie (`tablePanelManuallyClosed`) albo otwarty jest panel
-   * wyszukiwania, który ma pierwszeństwo w dokowanym obszarze (jeden dok, panel
-   * jawnie wywołany przez użytkownika nie jest wypierany przez kontekstowy).
+   * zamknął go ręcznie (`tablePanelManuallyClosed`). Dok ma jeden aktywny tryb na
+   * raz: ponowne zaznaczenie tabeli wypiera otwarte wyszukiwanie (zamyka je) i
+   * pokazuje formatowanie tabeli — patrz `syncTablePanel`.
    */
   showTablePanel = signal(false);
   private tablePanelManuallyClosed = false;
@@ -1223,15 +1230,78 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.tablePanelManuallyClosed = false;
       return;
     }
-    if (!this.showFindReplace() && !this.tablePanelManuallyClosed) {
-      this.showTablePanel.set(true);
+    if (this.tablePanelManuallyClosed) {
+      return;
     }
+    // Re-selecting a table takes over the docked area: the user's context is now
+    // the table, so close search (if open) and show table formatting. The dock has
+    // a single active mode at a time — table selection wins over an open search panel.
+    if (this.showFindReplace()) {
+      this.closeFindReplace();
+    }
+    this.showTablePanel.set(true);
   }
 
   /** Ręczne zamknięcie panelu tabeli (przycisk ×) — nie otwieraj ponownie póki w tej tabeli. */
   closeTablePanel(): void {
     this.showTablePanel.set(false);
     this.tablePanelManuallyClosed = true;
+  }
+
+  /**
+   * ESC zamyka aktywny boczny panel (Wyszukiwanie / właściwości tabeli) — przez tę
+   * samą logikę co przycisk × (`closeFindReplace` / `closeTablePanel`). Reguły:
+   *  - jeśli bardziej szczegółowy handler już obsłużył ESC (np. deselekcja obrazu
+   *    w edytorze woła `preventDefault`) — nie ruszamy panelu (`defaultPrevented`),
+   *  - otwarte dialogi/modale i menu kontekstowe mają pierwszeństwo (własne zamykanie),
+   *  - gdy żaden panel nie jest otwarty, ESC nie robi nic (brak skutków ubocznych).
+   * Listener jest na `document`, bo panel może nie mieć focusu (karetka w edytorze).
+   */
+  @HostListener('document:keydown.escape', ['$event'])
+  onEscapeKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return;
+    if (this.isAnyDialogOpen() || this.showContextMenu()) return;
+    if (!this.showFindReplace() && !this.showTablePanel()) return;
+
+    event.preventDefault();
+    this.closeActiveSidePanel();
+  }
+
+  /**
+   * Zamyka aktualnie otwarty boczny panel tą samą drogą co przycisk ×.
+   * Jeśli focus był wewnątrz panelu (np. pole wyszukiwania), przywraca go do
+   * edytora — sensowne miejsce, bez tworzenia osobnego systemu focus-trap.
+   */
+  closeActiveSidePanel(): void {
+    const focusInPanel = !!(document.activeElement as HTMLElement | null)
+      ?.closest('.search-panel, d2-table-properties-panel');
+
+    if (this.showFindReplace()) {
+      this.closeFindReplace();
+    } else if (this.showTablePanel()) {
+      this.closeTablePanel();
+    }
+
+    if (focusInPanel) {
+      this.editor?.focus();
+    }
+  }
+
+  /**
+   * Czy otwarty jest jakikolwiek modal/dialog edytora. Mają one własne zamykanie
+   * (przycisk ×) i pierwszeństwo nad regułą ESC dla bocznego panelu — inaczej ESC
+   * przy otwartym dialogu zamykałby panel w tle zamiast (przyszłościowo) dialog.
+   */
+  private isAnyDialogOpen(): boolean {
+    return this.showTemplates()
+      || this.showPageSetup()
+      || this.showHeaderFooterDialog()
+      || this.showBarcodeDialog()
+      || this.showParagraphDialog()
+      || this.showInsertTableDialog()
+      || this.showPropertiesDialog()
+      || this.showSignatureDialog()
+      || this.showLeaveDialog();
   }
 
   /**

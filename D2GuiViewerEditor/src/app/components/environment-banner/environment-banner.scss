@@ -1,0 +1,52 @@
+.env-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 3px 16px;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-align: center;
+  user-select: none;
+
+  &__text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Per-environment palette. Text colour chosen for AA contrast against each background. */
+.env-banner--local {
+  background: #1565c0;
+  color: #ffffff;
+}
+
+.env-banner--dev {
+  background: #2e7d32;
+  color: #ffffff;
+}
+
+.env-banner--test {
+  background: #fde68a;
+  color: #4a3b00;
+}
+
+.env-banner--pre {
+  background: #6a1b9a;
+  color: #ffffff;
+}
+
+.env-banner--unknown {
+  background: #455a64;
+  color: #ffffff;
+}
+
+@media print {
+  .env-banner {
+    display: none !important;
+  }
+}

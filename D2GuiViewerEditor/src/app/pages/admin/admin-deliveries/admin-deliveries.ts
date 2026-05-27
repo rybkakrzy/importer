@@ -90,7 +90,7 @@ export class AdminDeliveriesComponent implements OnInit {
         this.isLoading.set(false);
       },
       error: () => {
-        this.error.set('Nie udało się załadować listy wysyłek.');
+        this.error.set('Nie udało się załadować listy plików do wysłania.');
         this.isLoading.set(false);
       }
     });
