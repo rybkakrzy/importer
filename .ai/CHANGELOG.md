@@ -35,6 +35,49 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-28 — Faza 2: audyt trybu edycji nagłówka/stopki (vs spec)
+### Changed (gap fixes)
+- **Routing wariantu na edycji (rule 10: bez pozornej edycji).** `wysiwyg-editor.ts`:
+  - `startEditingHeader`/`startEditingFooter` ładuje teraz wariant aktywny na stronie 0 (`_headerFirstPageHtml` gdy `differentFirstPage`, inaczej `_headerHtml`) — wcześniej zawsze ładował default niezależnie od wyświetlanego wariantu.
+  - `onHeaderInput`/`onFooterInput` zapisuje do tego samego sygnału co załadowany wariant (nie do `_headerHtml` zawsze) — wcześniej edycja first-page niewidocznie nadpisywała default.
+  - `onHeaderBlur`/`onFooterBlur`: analogicznie + wywołują `emitHeaderFooterChanges()` zamiast emitować niekompletne `{html, height}` (gubiło inne warianty u parenta).
+  - `_computeHeaderContent`/`_computeFooterContent`: w trybie odd/even strona nieparzysta używa **kanonicznego** `_headerHtml`/`_footerHtml` (= „default" w OOXML), bo backend nie posyła osobnego `oddHtml`. Even strony bez zmian (`_headerEvenHtml`).
+- **ESC zamyka tryb edycji nagłówka/stopki** (`document-editor.ts` `onEscapeKeydown`): gdy `editingSection() !== 'body'`, deleguje do `editor.stopEditingHeaderFooter()` i `preventDefault`. Tryb ma pierwszeństwo nad bocznymi panelami (wyszukiwanie, panel tabeli), bo to ostatnio aktywowany kontekst.
+- **Przycisk „Zamknij nagłówek i stopkę"** dodany w obu toolbarach nagłówka i stopki (`wysiwyg-editor.html`, `wysiwyg-editor.scss` — `.header-toolbar-close`/`.footer-toolbar-close`, ten sam akcent co istniejący `1a73e8` w toolbarach). Pełni rolę „głównej" akcji wyjścia z trybu (spec funkcjonalny #3).
+- Nowy plik testów `wysiwyg-editor.spec.ts` (7 testów): routing default vs first-page (header+footer), pełne emisje variantów, odd=canonical default, dokument bez nagłówka, `stopEditingHeaderFooter`. `document-editor.spec.ts` +4 testy ESC dla header/footer + pierwszeństwo nad side panel + no-op w body.
+### Verified
+- `npm test` (`ng test` → vitest): **131/131 pass** (15 plików; 11 nowych testów Phase 2).
+- `tsc --noEmit`: OK.
+### Notes / ograniczenia
+- **Edycja even-page nieosiągalna z UI** — template renderuje contenteditable tylko dla strony 0; even-page edytowanie wymagałoby dodatkowego wejścia (nie w tym MVP). Even-page wciąż jest persistowany w round-trip (z importu).
+- Toolbar główny (`d2-editor-toolbar`) — formatowanie tekstu — działa na aktywnym `editingSection` przez `getActiveEditable()` (istniejący kod, bez zmian); confirmed via existing wiring `executeCommand` (linia 1335 wysiwyg-editor).
+- Undo/redo dla header/footer — `saveToUndoStack` jest wywoływany przez `onHeaderInput`/`onFooterInput` ścieżkę (`emitContent` debouncer); istniejące, bez zmian.
+
+## 2026-05-28 — Faza 1b: pomiary wierności importu nag/stopki (stupki.docx)
+### Changed
+- Nowy plik `DocxToHtmlConverterFidelityTests.cs` (9 testów) — struktura odzwierciedla rzeczywisty `stupki.docx` (A4, pgMar 1417 twips, header/footer=708, obraz extent 1272540×327354 EMU, stopka L/C/R):
+  - geometria: `Header.Height`/`Footer.Height` ≈ 1.25 cm; `Margins` ≈ 2.5 cm;
+  - font family: dziedziczony z `docDefaults` (kontener `.header-footer-content` niesie `font-family`);
+  - obraz: EMU → 133×34 px (`EmuToPx = emu/914400*96`), aspect zachowany w ±1 px (test 4:1 stays 4:1), `data-width-emu`/`data-height-emu` zachowane do round-tripu;
+  - alignment akapitów w stopce: kolejność L/C/R zachowana, `text-align:center/right` emitowane.
+- Diagnoza realnego `stupki.docx` potwierdza brak gapów na powyższych ścieżkach (T1-T12 z `<test_requirements>`; T3-T6 już objęte `DocxToHtmlConverterHeaderFooterTests`).
+### Verified
+- Pełny `D2ViewerEditor.Infrastructure.UnitTests`: **43/43 pass** (9 nowych fidelity).
+### Notes
+- `stupki.docx` nie używa tabel layoutowych ani anchor-positioned images — pokrycie tych przypadków pozostaje syntetyczne / przyszłe.
+- Pozostaje R-11 (round-trip rozmiaru z `docDefaults` przez wrapper `.header-footer-content`) — bez sygnału z `stupki.docx`.
+
+## 2026-05-28 — Round-trip first/even header/footer (zapis)
+### Changed
+- `HtmlToDocxConverter.AddHeaderAndFooter` zrefaktorowany: wydzielone `WriteHeaderPart`/`WriteFooterPart(html, type)` tworzą osobne `HeaderPart`/`FooterPart` per wariant (Default/First/Even) i wstawiają `HeaderReference`/`FooterReference` z odpowiednim `Type` (helpery `AddHeaderReference(id, type)`/`AddFooterReference(id, type)` zamiast hard-coded Default).
+- Dodane `EnsureTitlePage` (wstawia `TitlePage` do `sectPr`, gdy emitowany wariant First) i `EnsureEvenAndOddHeaders` (wstawia `EvenAndOddHeaders` do `settings.xml`, gdy emitowany wariant Even). Helper `GetOrCreateSectionProps`.
+- Nowy plik testów `HeaderFooterRoundTripTests.cs` (6 testów): write → read potwierdza, że `DifferentFirstPage`/`FirstPageHtml`/`DifferentOddEven`/`EvenHtml` przeżywają round-trip (header i footer, każdy wariant oddzielnie, plus „all combined").
+### Verified
+- Backend build OK; pełny `D2ViewerEditor.Infrastructure.UnitTests`: **34/34 pass** (6 nowych round-trip).
+### Notes
+- Zamyka brakujący kawałek: edycja wariantu first/even w UI jest teraz trwała (reguła 10).
+- Pozostaje OPEN: **wiele sekcji** (`sectPr` per-section) — `R-10` zaktualizowany.
+
 ## 2026-05-27 — Fix layoutu: banner środowiska przycinał dolny pasek edytora
 
 ### Changed

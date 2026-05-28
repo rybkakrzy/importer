@@ -26,6 +26,7 @@ Funkcje systemu z perspektywy produktu i implementacji. Aktualizuj przy zmianie 
 | Panel admina wysyłek (monitoring + retry) | Implemented | `GetDeliveriesByStatusQuery`, `RequeueDeliveryCommand` | `admin-deliveries` (`/admin/deliveries`): lista, filtry, `locked_by`, „Ponów" | `GET .../deliveries?status=`, `POST .../deliveries/{id}/retry` |
 | Edycja nagłówka/stopki (Word-like) | Implemented | konwersja DOCX↔HTML (`DocxToHtmlConverter`/`HtmlToDocxConverter`) | `wysiwyg-editor`: wejście (db)klik, kontekstowy toolbar, „Zamknij", first/odd/even, numery stron | część `save`/`PUT` (header/footer w `SaveDocumentRequest`) |
 | Import nagłówka/stopki: wybór wariantu sekcji | Implemented (import: default+first+even) | `ExtractHeader/ExtractFooter` wg `sectPr`/refs + `titlePg`/`evenAndOddHeaders` | spread pełnego obiektu header/footer | — |
+| Round-trip first/even header/footer (zapis) | Implemented (single-section) | `HtmlToDocxConverter.WriteHeaderPart`/`WriteFooterPart(html, type)` + `EnsureTitlePage`/`EnsureEvenAndOddHeaders` | bez zmian (model TS już ma pola) | część `PUT .../versions/{vid}` (przez `SaveDocumentRequest`) |
 
 ## Statusy
 
@@ -99,9 +100,19 @@ Wierne odwzorowanie nagłówka/stopki z DOCX oraz edycja w trybie zbliżonym do 
 
 ### Edycja (frontend) — `wysiwyg-editor`
 - `editingSection` ('header'|'footer'|'body'); `getActiveEditable()` kieruje komendy formatowania do aktywnego regionu (nie body).
-- Wejście: `startEditingHeader`/`startEditingFooter` (klik/dblclik). Wyjście: `stopEditingHeaderFooter()`. Outputs: `headerChange`/`footerChange`/`editingSectionChange`.
-- Persist: `buildSaveRequest()` → `header`/`footer` w `SaveDocumentRequest` → `HtmlToDocxConverter.AddHeaderAndFooter` (tworzy `HeaderPart`/`FooterPart` + referencje + obrazy w part).
+- Wejście: `startEditingHeader`/`startEditingFooter` (klik/dblclik) — ładuje wariant aktywny na stronie 0 (`firstPageHtml` gdy `differentFirstPage`, inaczej `_headerHtml`/`_footerHtml`).
+- Wyjście: `stopEditingHeaderFooter()` — wywoływane przez (1) przycisk **„Zamknij nagłówek i stopkę"** w toolbarze, (2) **ESC** (`onEscapeKeydown` w `document-editor.ts` deleguje do editora; tryb ma pierwszeństwo nad bocznymi panelami), (3) klik w body editor.
+- Routing wariantu (rule 10 — bez pozornej edycji): `onHeaderInput`/`onFooterInput` i `onHeaderBlur`/`onFooterBlur` zapisują do tego samego sygnału, z którego załadowano (`_headerFirstPageHtml` gdy `differentFirstPage`, inaczej `_headerHtml`). Blur dodatkowo woła `emitHeaderFooterChanges()` — partial emit by zgubił inne warianty u parenta.
+- W trybie odd/even strona nieparzysta używa kanonicznego `_headerHtml`/`_footerHtml` (= „default" w OOXML; backend nie posyła osobnego `oddHtml`). Even — osobny `_headerEvenHtml`.
+- Outputs: `headerChange`/`footerChange` emitują **pełny obiekt** ze wszystkimi wariantami (`html`, `firstPageHtml`, `evenHtml`, flagi); `editingSectionChange` synchronizuje stan w `document-editor`.
+- Persist: `buildSaveRequest()` → `header`/`footer` w `SaveDocumentRequest` → `HtmlToDocxConverter.AddHeaderAndFooter` (emituje Default + opcjonalnie First/Even jako osobne party + `titlePg`/`evenAndOddHeaders`).
+
+### Round-trip (HTML → DOCX) — `HtmlToDocxConverter`
+- `AddHeaderAndFooter` zawsze emituje wariant **Default**. Jeśli `HeaderFooterContent.DifferentFirstPage && FirstPageHtml` — emituje dodatkowy `HeaderPart`/`FooterPart` typu **First** i ustawia `TitlePage` w `sectPr` (`EnsureTitlePage`). Jeśli `DifferentOddEven && EvenHtml` — emituje dodatkowy part typu **Even** i ustawia `EvenAndOddHeaders` w `settings.xml` (`EnsureEvenAndOddHeaders`).
+- Pomocnicze: `WriteHeaderPart(html, type)`/`WriteFooterPart(html, type)` (jedna ścieżka konwersji per part, scoping obrazów do tego konkretnego HeaderPart/FooterPart); `AddHeaderReference(id, type)`/`AddFooterReference(id, type)`.
+- Edycja wariantu first/even w UI jest trwała (rule 10): pole modelu → osobny part → ref → re-import.
 
 ### Ograniczenia / otwarte
-- **Round-trip save** zapisuje obecnie wariant **default** (`AddHeaderAndFooter`); first-page/even na zapisie nie są jeszcze serializowane do osobnych partów + ustawień (`titlePg`/`evenAndOddHeaders`). Import je odczytuje, ale ponowny zapis je spłaszcza. Patrz `RISKS_ASSUMPTIONS.md` R-10 (partial) / R-11.
-- **Wiele sekcji** (`sectPr` per-section) nieobsługiwane — brany pierwszy `SectionProperties` z body.
+- **Edycja even-page nieosiągalna z UI** — template `wysiwyg-editor.html` renderuje contenteditable tylko dla strony 0 (`@if (editingSection() === 'header' && $index === 0)`). Wariant even jest *czytany* z DOCX i *zachowywany* na zapisie (round-trip), ale nie da się go edytować bezpośrednio w GUI. Wymagałoby dodatkowego punktu wejścia (np. „Edytuj nagłówek parzystej strony" w menu Opcje albo edytowalność strony 2).
+- **Wiele sekcji** (`sectPr` per-section, każda ze swoimi referencjami) nieobsługiwane — brany pierwszy `SectionProperties` z body przy imporcie i jeden przy zapisie. Patrz `RISKS_ASSUMPTIONS.md` R-10 (multi-section).
+- Round-trip rozmiaru z `docDefaults` (`.header-footer-content` wrapper) — patrz R-11.
