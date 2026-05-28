@@ -41,13 +41,15 @@ describe('HeaderFooterPanelComponent', () => {
     expect(btn(/Usuń stopkę/)).not.toBeNull();
   });
 
-  it('emits close when the "Zamknij nagłówek i stopkę" button is clicked', () => {
+  it('emits close when the header X button is clicked', () => {
     component.section = 'header';
     render();
     let closed = 0;
     component.close.subscribe(() => closed++);
 
-    btn(/^Zamknij nagłówek i stopkę$/)!.click();
+    // The X is the only close trigger in the panel (the primary CTA was removed
+    // to free workspace — ESC and the X are the two consistent exits).
+    btn(/^×$/)!.click();
 
     expect(closed).toBe(1);
   });

@@ -101,20 +101,3 @@
   &:hover { background: rgba(197, 34, 31, 0.08); }
 }
 
-// Primary CTA — "Zamknij nagłówek i stopkę". Matches the previous button in
-// the floating toolbar so users keep the same visual anchor for that action.
-.hf-panel__primary {
-  margin: 12px;
-  padding: 8px 12px;
-  background: #1a73e8;
-  border: 1px solid #1a73e8;
-  border-radius: 4px;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.12s;
-
-  &:hover { background: #1765c1; }
-  &:focus-visible { outline: 2px solid #1765c1; outline-offset: 2px; }
-}
