@@ -678,15 +678,17 @@
 
       <!-- Panel nagłówka i stopki — zastępuje dawny pływający pasek nad dokumentem -->
       @if (showHeaderFooterPanel()) {
+        <!-- editor is a non-null @ViewChild; the panel only renders after editingSection
+             becomes header/footer, which is emitted by the editor itself. -->
         <d2-header-footer-panel
           [section]="editingSection()"
-          [differentFirstPage]="editor?.differentFirstPage() ?? false"
-          (close)="editor?.stopEditingHeaderFooter()"
-          (toggleDifferentFirstPage)="editor?.toggleDifferentFirstPage()"
-          (openFormatDialog)="editingSection() === 'footer' ? editor?.openFooterFormatDialog() : editor?.openHeaderFormatDialog()"
-          (insertImage)="editor?.insertImageIntoActive()"
-          (insertPageNumbers)="editingSection() === 'footer' ? editor?.insertPageNumbersFooter() : editor?.insertPageNumbers()"
-          (removeSection)="editingSection() === 'footer' ? editor?.removeFooter() : editor?.removeHeader()"
+          [differentFirstPage]="editor.differentFirstPage()"
+          (close)="editor.stopEditingHeaderFooter()"
+          (toggleDifferentFirstPage)="editor.toggleDifferentFirstPage()"
+          (openFormatDialog)="editingSection() === 'footer' ? editor.openFooterFormatDialog() : editor.openHeaderFormatDialog()"
+          (insertImage)="editor.insertImageIntoActive()"
+          (insertPageNumbers)="editingSection() === 'footer' ? editor.insertPageNumbersFooter() : editor.insertPageNumbers()"
+          (removeSection)="editingSection() === 'footer' ? editor.removeFooter() : editor.removeHeader()"
         />
       }
 
