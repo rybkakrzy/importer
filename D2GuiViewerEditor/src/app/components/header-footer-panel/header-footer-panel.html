@@ -1,0 +1,51 @@
+<aside class="hf-panel" role="region" aria-label="Edycja nagłówka i stopki">
+  <div class="hf-panel__header">
+    <h3>Nagłówek i stopka</h3>
+    <button type="button"
+            class="hf-panel__close"
+            (click)="close.emit()"
+            title="Zamknij">×</button>
+  </div>
+
+  <div class="hf-panel__context" aria-live="polite">
+    Edytujesz: <strong>{{ sectionLabel() }}</strong>
+  </div>
+
+  <section class="hf-panel__group">
+    <h4>Widok</h4>
+    <label class="hf-panel__row">
+      <input type="checkbox"
+             [checked]="differentFirstPage"
+             (change)="toggleDifferentFirstPage.emit()">
+      <span>Inna pierwsza strona</span>
+    </label>
+  </section>
+
+  <section class="hf-panel__group">
+    <h4>Wstaw</h4>
+    <button type="button" class="hf-panel__action" (click)="insertImage.emit()">
+      Wstaw obraz
+    </button>
+    <button type="button" class="hf-panel__action" (click)="insertPageNumbers.emit()">
+      Numery stron
+    </button>
+  </section>
+
+  <section class="hf-panel__group">
+    <h4>Ustawienia</h4>
+    <button type="button" class="hf-panel__action" (click)="openFormatDialog.emit()">
+      {{ formatLabel() }}
+    </button>
+    <button type="button"
+            class="hf-panel__action hf-panel__action--danger"
+            (click)="removeSection.emit()">
+      {{ removeLabel() }}
+    </button>
+  </section>
+
+  <button type="button"
+          class="hf-panel__primary"
+          (click)="close.emit()">
+    Zamknij nagłówek i stopkę
+  </button>
+</aside>

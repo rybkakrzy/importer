@@ -488,22 +488,25 @@
     <div class="header-right">
       <d2-document-classification-badge [classification]="documentClassification()" />
 
-      <!-- Przełącznik AutoSave — widoczny tylko w trybie edycji (gdy jest wersja edytowalna) -->
+      <!-- Przełącznik AutoSave — widoczny tylko w trybie edycji (gdy jest wersja edytowalna).
+           Status renderowany zawsze (gdy włączony) by uniknąć reflow toolbara przy toggle. -->
       @if (documentVersionId()) {
         <label class="autosave-switch" [title]="autoSaveEnabled() ? 'Autozapis włączony' : 'Autozapis wyłączony'">
           <input type="checkbox" [checked]="autoSaveEnabled()" (change)="toggleAutoSave()">
           <span class="autosave-slider"></span>
           <span class="autosave-label">Autozapis</span>
         </label>
-        @if (autoSaveEnabled()) {
-          <span class="autosave-status" [class.is-error]="autoSaveStatus() === 'error'">
+        <span class="autosave-status"
+              [class.is-error]="autoSaveStatus() === 'error'"
+              [class.is-empty]="!autoSaveEnabled() || autoSaveStatus() === 'idle'">
+          @if (autoSaveEnabled()) {
             @switch (autoSaveStatus()) {
               @case ('saving') { Zapisywanie… }
               @case ('saved') { Zapisano @if (lastAutoSaveAt()) { o {{ lastAutoSaveAt() | date:'HH:mm:ss' }} } }
               @case ('error') { Błąd auto-zapisu }
             }
-          </span>
-        }
+          }
+        </span>
       }
 
       <button class="header-btn" (click)="openReportEmail()" title="Zgłoś problem">
@@ -562,7 +565,7 @@
     @if (showRuler()) {
       <div class="ruler-h-bar">
         <!-- Rozpórka równa panelowi bocznemu (wyszukiwanie / tabela), by linijka pozioma była zrównana z dokumentem -->
-        @if (showFindReplace() || showTablePanel()) {
+        @if (showFindReplace() || showTablePanel() || showHeaderFooterPanel()) {
           <div class="ruler-h-search-spacer"></div>
         }
         <div class="ruler-h-gutter"></div>
@@ -670,6 +673,20 @@
           (toggleGridLines)="tableToggleGridLines()"
           (setCellColor)="setCellColor($event)"
           (clearCellColor)="clearCellColor()"
+        />
+      }
+
+      <!-- Panel nagłówka i stopki — zastępuje dawny pływający pasek nad dokumentem -->
+      @if (showHeaderFooterPanel()) {
+        <d2-header-footer-panel
+          [section]="editingSection()"
+          [differentFirstPage]="editor?.differentFirstPage() ?? false"
+          (close)="editor?.stopEditingHeaderFooter()"
+          (toggleDifferentFirstPage)="editor?.toggleDifferentFirstPage()"
+          (openFormatDialog)="editingSection() === 'footer' ? editor?.openFooterFormatDialog() : editor?.openHeaderFormatDialog()"
+          (insertImage)="editor?.insertImageIntoActive()"
+          (insertPageNumbers)="editingSection() === 'footer' ? editor?.insertPageNumbersFooter() : editor?.insertPageNumbers()"
+          (removeSection)="editingSection() === 'footer' ? editor?.removeFooter() : editor?.removeHeader()"
         />
       }
 

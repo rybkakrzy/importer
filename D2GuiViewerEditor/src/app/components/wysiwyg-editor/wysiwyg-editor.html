@@ -16,7 +16,7 @@
                (click)="startEditingHeader($event)"
                (dblclick)="startEditingHeader($event)">
             @if (editingSection() === 'header' && $index === 0) {
-              <div 
+              <div
                 #headerContent
                 class="header-editor-content"
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
@@ -24,51 +24,7 @@
                 [attr.placeholder]="''"
                 (input)="onHeaderInput($event)"
               ></div>
-              <!-- Pasek nagłówka w stylu Google Docs -->
-              <div class="header-toolbar"
-                   (mousedown)="onHeaderFooterToolbarMouseDown($event)"
-                   (click)="$event.stopPropagation()">
-                <span class="header-toolbar-label">Nagłówek</span>
-                <div class="header-toolbar-spacer"></div>
-                <label class="header-toolbar-checkbox">
-                  <input type="checkbox" 
-                         [checked]="differentFirstPage()" 
-                         (change)="toggleDifferentFirstPage()">
-                  <span>Inna pierwsza strona</span>
-                </label>
-                <div class="header-toolbar-options">
-                  <button class="header-options-btn" (click)="toggleHeaderOptionsMenu($event)">
-                    Opcje
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M7 10l5 5 5-5z"/>
-                    </svg>
-                  </button>
-                  @if (showHeaderOptionsMenu()) {
-                    <div class="header-options-menu"
-                         (mousedown)="$event.preventDefault()"
-                         (click)="$event.stopPropagation()">
-                      <button class="menu-item" (click)="openHeaderFormatDialog()">
-                        Format nagłówka
-                      </button>
-                      <button class="menu-item" (click)="insertImageIntoActive()">
-                        Wstaw obraz
-                      </button>
-                      <button class="menu-item" (click)="insertPageNumbers()">
-                        Numery stron
-                      </button>
-                      <button class="menu-item" (click)="removeHeader()">
-                        Usuń nagłówek
-                      </button>
-                    </div>
-                  }
-                </div>
-                <button class="header-toolbar-close"
-                        type="button"
-                        title="Zamknij nagłówek i stopkę"
-                        (click)="stopEditingHeaderFooter()">
-                  Zamknij nagłówek i stopkę
-                </button>
-              </div>
+              <!-- Pasek nagłówka przeniesiony do d2-header-footer-panel (dock po lewej). -->
             } @else {
               <div class="header-display" [innerHTML]="getHeaderContentSafe($index)"></div>
             }
@@ -122,52 +78,8 @@
                (click)="startEditingFooter($event)"
                (dblclick)="startEditingFooter($event)">
             @if (editingSection() === 'footer' && $index === 0) {
-              <!-- Pasek stopki w stylu Google Docs -->
-              <div class="footer-toolbar"
-                   (mousedown)="onHeaderFooterToolbarMouseDown($event)"
-                   (click)="$event.stopPropagation()">
-                <span class="footer-toolbar-label">Stopka</span>
-                <div class="footer-toolbar-spacer"></div>
-                <label class="footer-toolbar-checkbox">
-                  <input type="checkbox" 
-                         [checked]="differentFirstPage()" 
-                         (change)="toggleDifferentFirstPage()">
-                  <span>Inna pierwsza strona</span>
-                </label>
-                <div class="footer-toolbar-options">
-                  <button class="footer-options-btn" (click)="toggleFooterOptionsMenu($event)">
-                    Opcje
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M7 10l5 5 5-5z"/>
-                    </svg>
-                  </button>
-                  @if (showFooterOptionsMenu()) {
-                    <div class="footer-options-menu"
-                         (mousedown)="$event.preventDefault()"
-                         (click)="$event.stopPropagation()">
-                      <button class="menu-item" (click)="openFooterFormatDialog()">
-                        Format stopki
-                      </button>
-                      <button class="menu-item" (click)="insertImageIntoActive()">
-                        Wstaw obraz
-                      </button>
-                      <button class="menu-item" (click)="insertPageNumbersFooter()">
-                        Numery stron
-                      </button>
-                      <button class="menu-item" (click)="removeFooter()">
-                        Usuń stopkę
-                      </button>
-                    </div>
-                  }
-                </div>
-                <button class="footer-toolbar-close"
-                        type="button"
-                        title="Zamknij nagłówek i stopkę"
-                        (click)="stopEditingHeaderFooter()">
-                  Zamknij nagłówek i stopkę
-                </button>
-              </div>
-              <div 
+              <!-- Pasek stopki przeniesiony do d2-header-footer-panel (dock po lewej). -->
+              <div
                 #footerContent
                 class="footer-editor-content"
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"

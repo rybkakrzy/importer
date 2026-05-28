@@ -367,9 +367,10 @@ body.table-resizing * {
 
 :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display) .editor-image-wrapper img {
   display: block;
-  width: 100%;
   max-width: 100%;
-  height: auto;
+  // No `width: 100%` / `height: auto` — those would override the img's inline
+  // width/height kept by wrapExistingImages and rescale the image on entering
+  // edit mode (rule 14).
   pointer-events: none;
 }
 

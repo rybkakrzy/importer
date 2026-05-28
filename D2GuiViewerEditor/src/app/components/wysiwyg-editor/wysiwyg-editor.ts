@@ -91,7 +91,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Input() pageOrientation: 'portrait' | 'landscape' = 'portrait';
   /** Tryb tylko-do-odczytu (Krok 2) — blokuje edycję contenteditable. */
   @Input() readOnly = false;
-  @Input() showMarginGuides = true;
+  @Input() showMarginGuides = false;
   
   // Nagłówek i stopka
   @Input() set headerContent(value: HeaderFooterContent | undefined) {
@@ -3027,32 +3027,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       wrapper.setAttribute('contenteditable', 'false');
       wrapper.setAttribute('draggable', 'true');
 
-      // Przenieś width z img na wrapper, ale clampuj do szerokości kontenera
-      // (bez tego obraz "rośnie" w wąskim nagłówku — widoczne rozjazdy edit/preview)
-      const containerWidth = editor.clientWidth || 0;
-      let desiredWidth: string | null = null;
-      if (img.style.width) {
-        desiredWidth = img.style.width;
-      } else if (img.getAttribute('width')) {
-        desiredWidth = img.getAttribute('width') + 'px';
-      }
-      if (desiredWidth) {
-        // Jeśli zadeklarowane px > kontener → użyj 100% kontenera
-        const m = /^(\d+(?:\.\d+)?)px$/i.exec(desiredWidth);
-        if (m && containerWidth > 0 && parseFloat(m[1]) > containerWidth) {
-          wrapper.style.width = '100%';
-        } else {
-          wrapper.style.width = desiredWidth;
-        }
-      }
+      // Keep the img's inline width/height untouched so the editor renders the
+      // image at the same size as the read-only display (rule 14 — no apparent
+      // resize on entering edit mode). The wrapper is inline-block, so it
+      // shrinks to fit the image; clamping to container width is delegated to
+      // the img's own `max-width: 100%`.
       wrapper.style.maxWidth = '100%';
-
-      // Wyczyść inline-style szerokości z <img> żeby nie konkurował z wrapperem
-      img.style.removeProperty('width');
-      img.removeAttribute('width');
-      img.removeAttribute('height');
       img.style.maxWidth = '100%';
-      img.style.height = 'auto';
       img.setAttribute('draggable', 'false');
 
       img.parentNode?.insertBefore(wrapper, img);

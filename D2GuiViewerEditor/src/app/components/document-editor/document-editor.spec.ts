@@ -273,3 +273,61 @@ describe('DocumentEditorComponent — ESC zamyka edycję nagłówka/stopki', () 
     expect(ev.defaultPrevented).toBe(false);
   });
 });
+
+describe('DocumentEditorComponent — koordynacja panelu Nagłówek/Stopka z Find/Tables', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('panel nagłówka/stopki jest otwarty, gdy editingSection != body i brak innych paneli', () => {
+    component.editingSection.set('header');
+    component.showFindReplace.set(false);
+    component.showTablePanel.set(false);
+    expect(component.showHeaderFooterPanel()).toBe(true);
+  });
+
+  it('panel nagłówka/stopki ustępuje miejsca panelowi „Znajdź", gdy oba są aktywne', () => {
+    component.editingSection.set('header');
+    component.showFindReplace.set(true);
+    expect(component.showHeaderFooterPanel()).toBe(false);
+  });
+
+  it('panel nagłówka/stopki ustępuje miejsca panelowi tabeli', () => {
+    component.editingSection.set('footer');
+    component.showTablePanel.set(true);
+    expect(component.showHeaderFooterPanel()).toBe(false);
+  });
+
+  it('po zamknięciu „Znajdź" panel nagłówka wraca, jeżeli edycja trwa', () => {
+    component.editingSection.set('header');
+    component.showFindReplace.set(true);
+    expect(component.showHeaderFooterPanel()).toBe(false);
+
+    component.showFindReplace.set(false);
+
+    expect(component.showHeaderFooterPanel()).toBe(true);
+  });
+
+  it('zamknięcie edycji (editingSection = body) zamyka panel', () => {
+    component.editingSection.set('header');
+    expect(component.showHeaderFooterPanel()).toBe(true);
+
+    component.editingSection.set('body');
+
+    expect(component.showHeaderFooterPanel()).toBe(false);
+  });
+});

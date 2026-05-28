@@ -38,6 +38,7 @@ import { BuildInfoService } from '../../core/services/build-info.service';
 import { DocumentStorageService, DeliveryStatus } from '../../services/document-storage.service';
 import { DocumentClassificationBadgeComponent } from '../document-classification-badge/document-classification-badge';
 import { TablePropertiesPanelComponent } from '../table-properties-panel/table-properties-panel';
+import { HeaderFooterPanelComponent } from '../header-footer-panel/header-footer-panel';
 import {
   TableBorderLineStyle,
   TableBorderScope,
@@ -66,7 +67,8 @@ import { isValidReturnUrl } from '../../core/utils/return-url.util';
     BarcodeDialogComponent,
     RulerComponent,
     DocumentClassificationBadgeComponent,
-    TablePropertiesPanelComponent
+    TablePropertiesPanelComponent,
+    HeaderFooterPanelComponent
   ],
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
@@ -290,7 +292,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   // Ustawienia strony
   showPageSetup = signal(false);
-  showMarginGuides = signal(true);
+  // Domyślnie ukryte — użytkownik może je pokazać przez menu Widok lub dialog Ustawienia strony.
+  showMarginGuides = signal(false);
   showRuler = signal(true);
 
   /**
@@ -314,6 +317,18 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   /** Aktualnie edytowana sekcja (treść / nagłówek / stopka) — z d2-wysiwyg-editor. */
   editingSection = signal<'header' | 'footer' | 'body'>('body');
+
+  /**
+   * Header/footer side panel — replaces the old floating toolbar over the page.
+   * Mutually exclusive with the Find / Table panels (single docked mode); when
+   * Find or the Table panel is open it takes precedence and HF stays hidden but
+   * the underlying edit mode keeps running so re-closing them brings it back.
+   */
+  showHeaderFooterPanel = computed(() =>
+    this.editingSection() !== 'body'
+    && !this.showFindReplace()
+    && !this.showTablePanel()
+  );
 
   /**
    * ZMIERZONA geometria edytowanego pasma nagłówka/stopki (cm od górnej krawędzi strony),
