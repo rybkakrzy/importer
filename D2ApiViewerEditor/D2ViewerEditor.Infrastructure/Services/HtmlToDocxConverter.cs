@@ -100,7 +100,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
-    /// Dodaje nagłówek i stopkę do dokumentu
+    /// Writes the document's headers and footers. The default variant is always emitted;
+    /// first-page (DifferentFirstPage + FirstPageHtml) and even (DifferentOddEven + EvenHtml)
+    /// variants are emitted as additional parts with type=First/Even references, and the
+    /// section/settings opt-ins (titlePg, evenAndOddHeaders) are written so Word/round-trip
+    /// import picks them up.
     /// </summary>
     private void AddHeaderAndFooter(WordprocessingDocument document, HeaderFooterContent? header, HeaderFooterContent? footer)
     {
@@ -108,75 +112,142 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         if (header != null && !string.IsNullOrWhiteSpace(header.Html))
         {
-            var headerPart = _mainPart.AddNewPart<HeaderPart>();
-            var headerElement = new Header();
+            WriteHeaderPart(header.Html, HeaderFooterValues.Default);
 
-            // {page}/{pages} placeholders w nagłówku też obsługujemy
-            var headerHtml = header.Html
-                .Replace("{page}", "<span class=\"field-page\"></span>")
-                .Replace("{pages}", "<span class=\"field-numpages\"></span>");
-            var htmlDoc = new HtmlDocument();
-            htmlDoc.LoadHtml(headerHtml);
-
-            // Obrazki muszą być dodane do HeaderPart, nie MainDocumentPart
-            var prevContainer = _currentImageContainer;
-            var prevInHF = _inHeaderFooter;
-            var prevSection = _currentSectionStyleId;
-            _currentImageContainer = headerPart;
-            _inHeaderFooter = true;
-            _currentSectionStyleId = "Header";
-            try
+            if (header.DifferentFirstPage && !string.IsNullOrWhiteSpace(header.FirstPageHtml))
             {
-                ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, headerElement);
-            }
-            finally
-            {
-                _currentImageContainer = prevContainer;
-                _inHeaderFooter = prevInHF;
-                _currentSectionStyleId = prevSection;
+                WriteHeaderPart(header.FirstPageHtml!, HeaderFooterValues.First);
+                EnsureTitlePage();
             }
 
-            headerPart.Header = headerElement;
-            headerPart.Header.Save();
-
-            var headerPartId = _mainPart.GetIdOfPart(headerPart);
-            AddHeaderReference(headerPartId);
+            if (header.DifferentOddEven && !string.IsNullOrWhiteSpace(header.EvenHtml))
+            {
+                WriteHeaderPart(header.EvenHtml!, HeaderFooterValues.Even);
+                EnsureEvenAndOddHeaders(document);
+            }
         }
 
         if (footer != null && !string.IsNullOrWhiteSpace(footer.Html))
         {
-            var footerPart = _mainPart.AddNewPart<FooterPart>();
-            var footerElement = new Footer();
+            WriteFooterPart(footer.Html, HeaderFooterValues.Default);
 
-            var htmlDoc = new HtmlDocument();
-            var footerHtml = footer.Html
-                .Replace("{page}", "<span class=\"field-page\"></span>")
-                .Replace("{pages}", "<span class=\"field-numpages\"></span>");
-            htmlDoc.LoadHtml(footerHtml);
-
-            var prevContainer = _currentImageContainer;
-            var prevInHF = _inHeaderFooter;
-            var prevSection = _currentSectionStyleId;
-            _currentImageContainer = footerPart;
-            _inHeaderFooter = true;
-            _currentSectionStyleId = "Footer";
-            try
+            if (footer.DifferentFirstPage && !string.IsNullOrWhiteSpace(footer.FirstPageHtml))
             {
-                ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, footerElement);
-            }
-            finally
-            {
-                _currentImageContainer = prevContainer;
-                _inHeaderFooter = prevInHF;
-                _currentSectionStyleId = prevSection;
+                WriteFooterPart(footer.FirstPageHtml!, HeaderFooterValues.First);
+                EnsureTitlePage();
             }
 
-            footerPart.Footer = footerElement;
-            footerPart.Footer.Save();
-
-            var footerPartId = _mainPart.GetIdOfPart(footerPart);
-            AddFooterReference(footerPartId);
+            if (footer.DifferentOddEven && !string.IsNullOrWhiteSpace(footer.EvenHtml))
+            {
+                WriteFooterPart(footer.EvenHtml!, HeaderFooterValues.Even);
+                EnsureEvenAndOddHeaders(document);
+            }
         }
+    }
+
+    private void WriteHeaderPart(string html, HeaderFooterValues type)
+    {
+        var headerPart = _mainPart!.AddNewPart<HeaderPart>();
+        var headerElement = new Header();
+
+        var prepared = html
+            .Replace("{page}", "<span class=\"field-page\"></span>")
+            .Replace("{pages}", "<span class=\"field-numpages\"></span>");
+        var htmlDoc = new HtmlDocument();
+        htmlDoc.LoadHtml(prepared);
+
+        // Image relationships must be scoped to THIS part — Word won't resolve cross-part rIds.
+        var prevContainer = _currentImageContainer;
+        var prevInHF = _inHeaderFooter;
+        var prevSection = _currentSectionStyleId;
+        _currentImageContainer = headerPart;
+        _inHeaderFooter = true;
+        _currentSectionStyleId = "Header";
+        try
+        {
+            ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, headerElement);
+        }
+        finally
+        {
+            _currentImageContainer = prevContainer;
+            _inHeaderFooter = prevInHF;
+            _currentSectionStyleId = prevSection;
+        }
+
+        headerPart.Header = headerElement;
+        headerPart.Header.Save();
+
+        AddHeaderReference(_mainPart.GetIdOfPart(headerPart), type);
+    }
+
+    private void WriteFooterPart(string html, HeaderFooterValues type)
+    {
+        var footerPart = _mainPart!.AddNewPart<FooterPart>();
+        var footerElement = new Footer();
+
+        var prepared = html
+            .Replace("{page}", "<span class=\"field-page\"></span>")
+            .Replace("{pages}", "<span class=\"field-numpages\"></span>");
+        var htmlDoc = new HtmlDocument();
+        htmlDoc.LoadHtml(prepared);
+
+        var prevContainer = _currentImageContainer;
+        var prevInHF = _inHeaderFooter;
+        var prevSection = _currentSectionStyleId;
+        _currentImageContainer = footerPart;
+        _inHeaderFooter = true;
+        _currentSectionStyleId = "Footer";
+        try
+        {
+            ConvertHtmlToHeaderFooter(htmlDoc.DocumentNode, footerElement);
+        }
+        finally
+        {
+            _currentImageContainer = prevContainer;
+            _inHeaderFooter = prevInHF;
+            _currentSectionStyleId = prevSection;
+        }
+
+        footerPart.Footer = footerElement;
+        footerPart.Footer.Save();
+
+        AddFooterReference(_mainPart.GetIdOfPart(footerPart), type);
+    }
+
+    private void EnsureTitlePage()
+    {
+        var sectionProps = GetOrCreateSectionProps();
+        if (sectionProps == null) return;
+        if (!sectionProps.Elements<TitlePage>().Any())
+        {
+            sectionProps.Append(new TitlePage());
+        }
+    }
+
+    private static void EnsureEvenAndOddHeaders(WordprocessingDocument document)
+    {
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return;
+        var settingsPart = mainPart.DocumentSettingsPart ?? mainPart.AddNewPart<DocumentSettingsPart>();
+        settingsPart.Settings ??= new Settings();
+        if (!settingsPart.Settings.Elements<EvenAndOddHeaders>().Any())
+        {
+            settingsPart.Settings.AppendChild(new EvenAndOddHeaders());
+        }
+        settingsPart.Settings.Save();
+    }
+
+    private SectionProperties? GetOrCreateSectionProps()
+    {
+        var body = _mainPart?.Document?.Body;
+        if (body == null) return null;
+        var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
+        if (sectionProps == null)
+        {
+            sectionProps = new SectionProperties();
+            body.Append(sectionProps);
+        }
+        return sectionProps;
     }
 
     /// <summary>
@@ -381,42 +452,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
     }
 
-    private void AddHeaderReference(string headerPartId)
+    private void AddHeaderReference(string headerPartId, HeaderFooterValues type)
     {
-        var body = _mainPart?.Document?.Body;
-        if (body == null) return;
-
-        var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
-        if (sectionProps == null)
-        {
-            sectionProps = new SectionProperties();
-            body.Append(sectionProps);
-        }
-
-        sectionProps.InsertAt(new HeaderReference
-        {
-            Type = HeaderFooterValues.Default,
-            Id = headerPartId
-        }, 0);
+        var sectionProps = GetOrCreateSectionProps();
+        if (sectionProps == null) return;
+        sectionProps.InsertAt(new HeaderReference { Type = type, Id = headerPartId }, 0);
     }
 
-    private void AddFooterReference(string footerPartId)
+    private void AddFooterReference(string footerPartId, HeaderFooterValues type)
     {
-        var body = _mainPart?.Document?.Body;
-        if (body == null) return;
-
-        var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
-        if (sectionProps == null)
-        {
-            sectionProps = new SectionProperties();
-            body.Append(sectionProps);
-        }
-
-        sectionProps.InsertAt(new FooterReference
-        {
-            Type = HeaderFooterValues.Default,
-            Id = footerPartId
-        }, 0);
+        var sectionProps = GetOrCreateSectionProps();
+        if (sectionProps == null) return;
+        sectionProps.InsertAt(new FooterReference { Type = type, Id = footerPartId }, 0);
     }
 
     /// <summary>
