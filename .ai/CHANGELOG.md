@@ -35,6 +35,22 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — UX poprawki: autozapis, prowadnice, obrazy nagłówka, panel boczny
+### Changed
+- **Autozapis (stabilny layout).** `document-editor.html`: `.autosave-status` jest teraz renderowany ZAWSZE (gdy `documentVersionId()` istnieje), a stan idle/disabled emituje pusty content (klasa `is-empty`). `min-width:70px` rezerwuje przestrzeń, więc toggle nie powoduje reflow toolbara — przyciski Zgłoś/Zapisz/Zakończ nie skaczą.
+- **Prowadnice marginesów domyślnie ukryte.** `document-editor.ts` `showMarginGuides = signal(false)`, `wysiwyg-editor.ts` `@Input() showMarginGuides = false`. Menu/dialog Widok dalej działają (toggle bez zmian).
+- **Obraz nagłówka — brak reskalowania w trybie edycji.** `wysiwyg-editor.ts` `wrapExistingImages` NIE usuwa już inline `width`/`height` z `<img>`; CSS `.editor-image-wrapper img { width: 100%; height: auto }` zmieniony na samo `max-width: 100%` (rule 14 — bez „pozornego" reskalu). `display: inline-block` wrappera kurczy się do obrazu; obraz w edycji ma ten sam rozmiar co w podglądzie.
+- **Pasek nagłówka/stopki → panel boczny `d2-header-footer-panel`.** Nowy komponent (TS+HTML+SCSS+spec) w `components/header-footer-panel/`, dokowany w tym samym slocie co `Wyszukiwanie` i `d2-table-properties-panel` (szerokość 300px, ten sam akcent #1a73e8). Sekcje: Widok („Inna pierwsza strona"), Wstaw (Obraz, Numery stron), Ustawienia (Format nagłówka/stopki, Usuń nagłówek/stopkę), Primary CTA „Zamknij nagłówek i stopkę". Stateless — wszystkie akcje delegowane do `wysiwyg-editor` (rule 9 — brak równoległej logiki).
+  - Stary pływający `.header-toolbar`/`.footer-toolbar` USUNIĘTY z `wysiwyg-editor.html` (SCSS pozostaje jako martwy, nie używany — możliwe usunięcie w follow-up).
+  - Koordynacja single-mode: `showHeaderFooterPanel = computed(() => editingSection() !== 'body' && !showFindReplace() && !showTablePanel())`. Find / Tables mają pierwszeństwo (spec #10); po ich zamknięciu HF panel wraca, jeśli edycja trwa. ESC nadal deleguje do `editor.stopEditingHeaderFooter()` (Phase 2 commit) → zamyka edycję → zamyka panel.
+  - Pozioma linijka: spacer `ruler-h-search-spacer` reaguje też na `showHeaderFooterPanel()`.
+- Nowy test `header-footer-panel.spec.ts` (6) + `document-editor.spec.ts` +5 (koordynacja Find/Tables/HF, ESC).
+### Verified
+- `tsc --noEmit` OK; `npm test` → **142/142 pass** (16 plików).
+### Notes / ograniczenia
+- **Top-margin drag w trybie edycji nagłówka**: usunięcie pływającego paska eliminuje overlay, który zasłaniał obszar interakcji nad/obok nagłówka. Rzeczywiste przeciągnięcie zależy od linijki pionowej (`d2-ruler` mode=vertical) — pełna weryfikacja wymaga manualnego testu w przeglądarce; w razie pozostałego konfliktu warto sprawdzić `z-index` `.page-header.editing` (obecnie 15) vs ruler.
+- Nieużywane reguły SCSS `.header-toolbar`/`.footer-toolbar`/`.header-options-btn` itp. zostają jako dead-code (nie wpływają na layout). Czyszczenie — follow-up.
+
 ## 2026-05-28 — Faza 2: audyt trybu edycji nagłówka/stopki (vs spec)
 ### Changed (gap fixes)
 - **Routing wariantu na edycji (rule 10: bez pozornej edycji).** `wysiwyg-editor.ts`:
