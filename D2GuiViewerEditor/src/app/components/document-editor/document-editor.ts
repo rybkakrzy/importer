@@ -1276,6 +1276,15 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   onEscapeKeydown(event: KeyboardEvent): void {
     if (event.defaultPrevented) return;
     if (this.isAnyDialogOpen() || this.showContextMenu()) return;
+
+    // Header/footer edit mode takes precedence over side panels — it's the most
+    // recently entered context and the spec lists ESC as a way to leave it.
+    if (this.editingSection() !== 'body') {
+      event.preventDefault();
+      this.editor?.stopEditingHeaderFooter();
+      return;
+    }
+
     if (!this.showFindReplace() && !this.showTablePanel()) return;
 
     event.preventDefault();

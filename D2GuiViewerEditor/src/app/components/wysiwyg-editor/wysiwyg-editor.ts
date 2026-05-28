@@ -3204,7 +3204,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     setTimeout(() => {
       const el = this.headerContentEl?.nativeElement;
       if (el) {
-        el.innerHTML = this._headerHtml();
+        // Load the variant currently shown on page 0 so the editor matches the
+        // displayed content (rule 10 — no apparent editing).
+        el.innerHTML = this._differentFirstPage()
+          ? this._headerFirstPageHtml()
+          : this._headerHtml();
         this.wrapExistingImages(el);
         this.attachEditorListeners(el);
         el.focus();
@@ -3226,7 +3230,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     setTimeout(() => {
       const el = this.footerContentEl?.nativeElement;
       if (el) {
-        el.innerHTML = this._footerHtml();
+        el.innerHTML = this._differentFirstPage()
+          ? this._footerFirstPageHtml()
+          : this._footerHtml();
         this.wrapExistingImages(el);
         this.attachEditorListeners(el);
         el.focus();
@@ -3281,11 +3287,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onHeaderBlur(): void {
     const content = this.headerContentEl?.nativeElement?.innerHTML || '';
-    this._headerHtml.set(content);
-    this.headerChange.emit({
-      html: content,
-      height: this._headerHeight()
-    });
+    if (this._differentFirstPage()) {
+      this._headerFirstPageHtml.set(content);
+    } else {
+      this._headerHtml.set(content);
+    }
+    // Emit the full header (incl. firstPage/even variants) — partial emit on blur
+    // would drop the other variants in the parent's signal.
+    this.emitHeaderFooterChanges();
     // Nie kończymy edycji od razu, pozwalamy na kliknięcie poza nagłówkiem
   }
 
@@ -3294,7 +3303,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onHeaderInput(event: Event): void {
     const content = (event.target as HTMLDivElement).innerHTML;
-    this._headerHtml.set(content);
+    // Write to the variant the user is actually editing on page 0; otherwise the
+    // first-page edit would silently overwrite the default content.
+    if (this._differentFirstPage()) {
+      this._headerFirstPageHtml.set(content);
+    } else {
+      this._headerHtml.set(content);
+    }
     this.invalidateHeaderFooterCache();
     this.emitHeaderFooterChanges();
   }
@@ -3304,11 +3319,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onFooterBlur(): void {
     const content = this.footerContentEl?.nativeElement?.innerHTML || '';
-    this._footerHtml.set(content);
-    this.footerChange.emit({
-      html: content,
-      height: this._footerHeight()
-    });
+    if (this._differentFirstPage()) {
+      this._footerFirstPageHtml.set(content);
+    } else {
+      this._footerHtml.set(content);
+    }
+    this.emitHeaderFooterChanges();
   }
 
   /**
@@ -3316,7 +3332,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onFooterInput(event: Event): void {
     const content = (event.target as HTMLDivElement).innerHTML;
-    this._footerHtml.set(content);
+    if (this._differentFirstPage()) {
+      this._footerFirstPageHtml.set(content);
+    } else {
+      this._footerHtml.set(content);
+    }
     this.invalidateHeaderFooterCache();
     this.emitHeaderFooterChanges();
   }
@@ -3325,14 +3345,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wylicza zawartość nagłówka dla danej strony (używane wewnętrznie przez computed)
    */
   private _computeHeaderContent(pageIndex: number): string {
-    // Pierwsza strona z inną treścią
+    // First-page variant wins over odd/even for page 0.
     if (this._differentFirstPage() && pageIndex === 0) {
       return this._headerFirstPageHtml();
     }
-    // Różne parzyste/nieparzyste
+    // In odd/even mode, "default" (Word's reference type=default) IS the odd content
+    // — the canonical source is _headerHtml. Even pages use the dedicated even signal.
     if (this._differentOddEven()) {
       const isOdd = (pageIndex + 1) % 2 === 1;
-      return isOdd ? this._headerOddHtml() : this._headerEvenHtml();
+      return isOdd ? this._headerHtml() : this._headerEvenHtml();
     }
     return this._headerHtml();
   }
@@ -3350,14 +3371,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private _computeFooterContent(pageIndex: number): string {
     let content: string;
-    // Pierwsza strona z inną treścią
     if (this._differentFirstPage() && pageIndex === 0) {
       content = this._footerFirstPageHtml();
-    } 
-    // Różne parzyste/nieparzyste
+    }
+    // See _computeHeaderContent: "default" = odd; canonical source is _footerHtml.
     else if (this._differentOddEven()) {
       const isOdd = (pageIndex + 1) % 2 === 1;
-      content = isOdd ? this._footerOddHtml() : this._footerEvenHtml();
+      content = isOdd ? this._footerHtml() : this._footerEvenHtml();
     } else {
       content = this._footerHtml();
     }

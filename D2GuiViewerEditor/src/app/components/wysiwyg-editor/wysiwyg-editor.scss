@@ -821,6 +821,24 @@ body.image-moving * {
   background: rgba(26, 115, 232, 0.08);
 }
 
+// "Zamknij nagłówek i stopkę" — primary close action, mirrors Word's blue button.
+.header-toolbar-close,
+.footer-toolbar-close {
+  margin-left: 8px;
+  padding: 4px 12px;
+  background: #1a73e8;
+  border: 1px solid #1a73e8;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+
+  &:hover { background: #1765c1; }
+  &:focus-visible { outline: 2px solid #1765c1; outline-offset: 2px; }
+}
+
 .header-options-btn svg,
 .footer-options-btn svg {
   transition: transform 0.15s;

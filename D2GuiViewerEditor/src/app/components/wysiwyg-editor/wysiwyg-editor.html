@@ -62,6 +62,12 @@
                     </div>
                   }
                 </div>
+                <button class="header-toolbar-close"
+                        type="button"
+                        title="Zamknij nagłówek i stopkę"
+                        (click)="stopEditingHeaderFooter()">
+                  Zamknij nagłówek i stopkę
+                </button>
               </div>
             } @else {
               <div class="header-display" [innerHTML]="getHeaderContentSafe($index)"></div>
@@ -154,6 +160,12 @@
                     </div>
                   }
                 </div>
+                <button class="footer-toolbar-close"
+                        type="button"
+                        title="Zamknij nagłówek i stopkę"
+                        (click)="stopEditingHeaderFooter()">
+                  Zamknij nagłówek i stopkę
+                </button>
               </div>
               <div 
                 #footerContent

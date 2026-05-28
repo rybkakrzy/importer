@@ -201,3 +201,75 @@ describe('DocumentEditorComponent — widoczność przycisku „Zakończ" (canFi
     expect(component.canFinish()).toBe(false);
   });
 });
+
+describe('DocumentEditorComponent — ESC zamyka edycję nagłówka/stopki', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  function esc(): KeyboardEvent {
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    component.onEscapeKeydown(ev);
+    return ev;
+  }
+
+  it('zamyka tryb edycji nagłówka po ESC (preventDefault + delegacja do editor)', () => {
+    component.editingSection.set('header');
+    let stopped = false;
+    (component as any).editor = { stopEditingHeaderFooter: () => { stopped = true; } };
+
+    const ev = esc();
+
+    expect(stopped).toBe(true);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('zamyka tryb edycji stopki po ESC', () => {
+    component.editingSection.set('footer');
+    let stopped = false;
+    (component as any).editor = { stopEditingHeaderFooter: () => { stopped = true; } };
+
+    const ev = esc();
+
+    expect(stopped).toBe(true);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('tryb nagłówka/stopki ma pierwszeństwo nad panelem wyszukiwania', () => {
+    component.editingSection.set('header');
+    component.showFindReplace.set(true);
+    let stopped = false;
+    (component as any).editor = { stopEditingHeaderFooter: () => { stopped = true; } };
+
+    esc();
+
+    expect(stopped).toBe(true);
+    // Panel wyszukiwania nie zostaje przedwcześnie zamknięty — nadrzędna akcja to wyjście z header/footer.
+    expect(component.showFindReplace()).toBe(true);
+  });
+
+  it('w trybie body ESC nie ruga editor.stopEditingHeaderFooter', () => {
+    component.editingSection.set('body');
+    let stopped = false;
+    (component as any).editor = { stopEditingHeaderFooter: () => { stopped = true; } };
+
+    const ev = esc();
+
+    expect(stopped).toBe(false);
+    expect(ev.defaultPrevented).toBe(false);
+  });
+});
