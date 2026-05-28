@@ -35,6 +35,15 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — Panel nagłówka/stopki: porządek wizualny + NG8107
+### Changed
+- **Usunięty primary CTA „Zamknij nagłówek i stopkę"** z `d2-header-footer-panel`. Był wizualnie redundantny z X w nagłówku panelu i z ESC (oba wciąż delegują do `editor.stopEditingHeaderFooter()`). Dock jest spójny z `Wyszukiwanie` i panelem tabeli — X jako jedyne zamknięcie z panelu. Spec testu zaktualizowany: zamiast Primary asercja na X.
+- **NG8107 (Angular template lint)**: bindingi panelu w `document-editor.html` używały `editor?.method()`, ale `editor` jest `@ViewChild` z `editor!:` (non-null) i panel renderuje się tylko po `editingSection() !== 'body'`, które emituje sam edytor — więc operand zawsze ≠ null. Zmienione 9 wystąpień `editor?.` → `editor.`; semantyka bez zmian, ng serve nie emituje już warningów NG8107.
+### Verified
+- `tsc --noEmit` OK; `npm test` → **142/142 pass**; `ng serve` bez NG8107.
+### Notes
+- Pełna lista wyjść z trybu edycji: X w nagłówku panelu, ESC, klik w body editor.
+
 ## 2026-05-29 — UX poprawki: autozapis, prowadnice, obrazy nagłówka, panel boczny
 ### Changed
 - **Autozapis (stabilny layout).** `document-editor.html`: `.autosave-status` jest teraz renderowany ZAWSZE (gdy `documentVersionId()` istnieje), a stan idle/disabled emituje pusty content (klasa `is-empty`). `min-width:70px` rezerwuje przestrzeń, więc toggle nie powoduje reflow toolbara — przyciski Zgłoś/Zapisz/Zakończ nie skaczą.
