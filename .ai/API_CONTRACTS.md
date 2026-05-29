@@ -82,6 +82,19 @@ Standardowe health checki.
 |---|---|---|
 | POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, obligatoryjna). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
 | GET | `/api/v1/document/{documentId}` | Placeholder (read flow niezaimplementowany) |
+| **PUT** | `/api/v1/document/{masterId}/callback-url` | **Aktualizacja URL do wysyłki po „Zakończ"**. Body: `{ "url": "https://..." }`. Walidacja przez `DocumentDelivery.IsValidRecipientUrl` (absolutny http/https, ≤ 2048 znaków). Zapisuje w `documents.metadata.returnUrl` (zachowuje `classification`). Idempotentny. Blokowany w stanach `Sending`/`Sent`/`DeliveryFailed`. → 204 / 400 / 404 / 409 |
+| **POST** | `/api/v1/document/{masterId}/unlock` | **Odblokowanie dokumentu**. Body opcjonalne: `{ "reason": "..." }` (logowane). W tej domenie `DocumentStatus.Editing` = „trzymany przez edytora", więc unlock = `Editing → Saved` (dodano `Document.MarkSaved()`). Idempotentny: `Saved` → 200 z `Changed=false`. Blokowany dla stanów wysyłki (409). → 200 `UnlockDocumentResult { masterId, changed }` / 404 / 409 |
+| **GET** | `/api/v1/document/{masterId}/status` | **Status dokumentu**. → 200 `DocumentStatusDto { masterId, status, isLocked, hasCallbackUrl, activeVersionId?, activeVersionNumber?, activeVersionModifiedAt?, latestDelivery? { deliveryId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, deadlineAt } }`. Pełny `callbackUrl` celowo NIE jest zwracany (może zawierać token — surfacowany tylko jako boolean `hasCallbackUrl`). / 404 |
+
+### Decyzja `masterGuid` vs `versionGuid` dla trzech nowych endpointów
+
+Wszystkie trzy używają **wyłącznie `masterGuid`** — uzasadnienie:
+
+| Endpoint | Identyfikator | Dlaczego nie `versionGuid` |
+|---|---|---|
+| `PUT .../callback-url` | `masterGuid` | `returnUrl` żyje w `documents.metadata` (master), wspólny dla wszystkich wersji. Po „Zakończ" worker pracuje na **zamrożonej** `RecipientUrl` w `DocumentDelivery` (snapshot) — edycja metadanych później nie psuje już-zakolejkowanej wysyłki, ale też nie ma sensu wymuszać konkretnej wersji. |
+| `POST .../unlock` | `masterGuid` | Brak osobnego user-locka w domenie. „Lock" = `Document.Status == Editing` (frontend pokazuje to jako `lockedByOther`). Status na poziomie master → `versionGuid` nic nie wnosi. Worker-lease `LockedUntil`/`LockedBy` na `DocumentDelivery` to inny mechanizm i nie powinien być odblokowywany z zewnątrz. |
+| `GET .../status` | `masterGuid` | Status jest atrybutem master; wersje nie mają własnego statusu. Odpowiedź niesie `activeVersionId` + `latestDelivery` dla pełnego obrazu cyklu życia. |
 
 Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2" }`.
 

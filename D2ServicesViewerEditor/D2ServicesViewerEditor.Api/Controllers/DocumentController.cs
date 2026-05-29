@@ -1,5 +1,8 @@
 using System.Text.Json;
 using D2ViewerEditor.Application.Features.Documents.Commands.IngestExternalDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.UnlockDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.UpdateCallbackUrl;
+using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentStatus;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -109,6 +112,95 @@ public class DocumentController : ControllerBase
         }));
     }
 
+    /// <summary>
+    /// Aktualizuje URL, na który system odeśle plik po zakończeniu edycji ("Zakończ i wyślij").
+    /// URL przechowywany w metadanych dokumentu master (obok klasyfikacji). Operacja jest
+    /// idempotentna — ten sam URL w kolejnym wywołaniu nie zmienia stanu. Brak po stronie
+    /// dokumentu w stanie wysyłki / wysłanym / nieudanej wysyłce (409 Conflict).
+    /// </summary>
+    [HttpPut("{masterId:guid}/callback-url")]
+    [Consumes("application/json")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpdateCallbackUrl(
+        [FromRoute] Guid masterId,
+        [FromBody] UpdateCallbackUrlRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(
+            new UpdateCallbackUrlCommand(masterId, request?.Url),
+            cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            // The URL itself is intentionally NOT logged — it may carry an integration token.
+            _logger.LogInformation("Callback URL updated for document {MasterId}.", masterId);
+            return NoContent();
+        }
+        if (result.IsNotFound)
+            return NotFound(new { error = result.Error });
+
+        // Domain-level rejection (terminal/in-flight state) → 409 keeps it distinct from a
+        // validation error (URL format mismatch → 400).
+        var conflict = result.Error != null
+            && result.Error.StartsWith("Nie można zaktualizować callback URL", StringComparison.OrdinalIgnoreCase);
+        return conflict
+            ? Conflict(new { error = result.Error })
+            : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Odblokowuje dokument przetrzymywany w edytorze. W tej domenie status
+    /// <c>Editing</c> jest sygnałem "trzymany przez edytora" (frontend pokazuje go jako
+    /// <c>lockedByOther</c>), więc unlock = przejście <c>Editing → Saved</c>.
+    /// Idempotentne dla <c>Saved</c> (200 OK, changed=false). Blokowane dla stanów
+    /// wysyłkowych (409 Conflict).
+    /// </summary>
+    [HttpPost("{masterId:guid}/unlock")]
+    [Consumes("application/json")]
+    [ProducesResponseType(typeof(UnlockDocumentResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UnlockDocument(
+        [FromRoute] Guid masterId,
+        [FromBody] UnlockDocumentRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(
+            new UnlockDocumentCommand(masterId, request?.Reason),
+            cancellationToken);
+
+        if (result.IsSuccess)
+            return Ok(result.Value);
+        if (result.IsNotFound)
+            return NotFound(new { error = result.Error });
+        return Conflict(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Zwraca aktualny stan dokumentu (status cyklu życia, aktywna wersja, najnowsze zadanie
+    /// wysyłki, flaga <c>HasCallbackUrl</c>). Status jest na poziomie master — wersje nie
+    /// mają własnego statusu, więc endpoint identyfikuje dokument jedynie przez
+    /// <c>masterGuid</c>. Pełny <c>callbackUrl</c> NIE jest zwracany (może zawierać token).
+    /// </summary>
+    [HttpGet("{masterId:guid}/status")]
+    [ProducesResponseType(typeof(DocumentStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetDocumentStatus(
+        [FromRoute] Guid masterId,
+        CancellationToken cancellationToken)
+    {
+        var result = await _mediator.Send(new GetDocumentStatusQuery(masterId), cancellationToken);
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : NotFound(new { error = result.Error });
+    }
+
     private static string ResolveMimeType(IFormFile file)
     {
         if (!string.IsNullOrWhiteSpace(file.ContentType))
@@ -152,3 +244,9 @@ public enum DocumentClassification
     C3 = 3,
     C4 = 4
 }
+
+/// <summary>Request body for PUT /api/v1/document/{masterId}/callback-url.</summary>
+public record UpdateCallbackUrlRequest(string? Url);
+
+/// <summary>Request body for POST /api/v1/document/{masterId}/unlock (Reason optional, audited).</summary>
+public record UnlockDocumentRequest(string? Reason);

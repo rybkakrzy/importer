@@ -81,6 +81,22 @@ public class Document
     public void MarkDeliveryFailed() => Status = DocumentStatus.DeliveryFailed;
 
     /// <summary>
+    /// Reverts the document back to <see cref="DocumentStatus.Saved"/>.
+    /// Used by the external "unlock" action — a document in <see cref="DocumentStatus.Editing"/>
+    /// is treated as held by the editor, so unlocking == returning it to Saved. Not allowed for
+    /// terminal/in-flight delivery states (Sending/Sent/DeliveryFailed) — those are owned by the
+    /// delivery pipeline and must not be reset from outside.
+    /// </summary>
+    public void MarkSaved() => Status = DocumentStatus.Saved;
+
+    /// <summary>
+    /// Replaces the external metadata JSON blob (e.g. when the source app updates the
+    /// completion callback URL). The caller is responsible for shape/contents — the entity
+    /// only owns the value; structure validation lives in the application layer.
+    /// </summary>
+    public void UpdateMetadata(string? metadata) => Metadata = metadata;
+
+    /// <summary>
     /// Wersje dokumentu
     /// </summary>
     public IReadOnlyCollection<DocumentVersion> Versions => _versions.AsReadOnly();

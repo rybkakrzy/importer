@@ -35,6 +35,28 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — External API: 3 nowe endpointy (callback URL / unlock / status)
+### Changed
+- **Domena.** `Document` dostaje dwie nowe metody (mirror `MarkEditing/Sending/...`):
+  - `MarkSaved()` — odwraca `Editing → Saved` (przeznaczone wyłącznie dla unlock; stany wysyłki forbidden po stronie handlera).
+  - `UpdateMetadata(string?)` — ustawia metadane (JSON); walidacja struktury w warstwie aplikacji.
+- **Application.** Trzy nowe jednostki MediatR w `Features/Documents/`:
+  - `Commands/UpdateCallbackUrl/{Command,Handler}` — walidacja URL przez `DocumentDelivery.IsValidRecipientUrl` (ten sam, co worker), limit 2048 znaków, zachowuje `classification` w JSON, blokuje stany `Sending`/`Sent`/`DeliveryFailed`.
+  - `Commands/UnlockDocument/{Command,Handler}` — `Editing → Saved`; idempotentne dla `Saved` (`Result { Changed=false }`), blokowane dla stanów wysyłki. Logowane (poziom Info, z opcjonalnym `Reason`).
+  - `Queries/GetDocumentStatus/{Query,Handler}` — `DocumentStatusDto { masterId, status, isLocked, hasCallbackUrl, activeVersionId?, activeVersionNumber?, activeVersionModifiedAt?, latestDelivery? }`. Pełny `callbackUrl` celowo nie surfacowany (może zawierać token).
+- **External API.** `D2ServicesViewerEditor.Api/Controllers/DocumentController` rozszerzony o:
+  - `PUT /api/v1/document/{masterId:guid}/callback-url` → 204/400/404/409. URL nigdy nie trafia do logów.
+  - `POST /api/v1/document/{masterId:guid}/unlock` → 200 `UnlockDocumentResult { masterId, changed }` / 404 / 409.
+  - `GET /api/v1/document/{masterId:guid}/status` → 200 `DocumentStatusDto` / 404.
+- **Decyzja kontraktowa** (`.ai/API_CONTRACTS.md`): wszystkie trzy operują na **`masterGuid`** (returnUrl w master metadata; status = atrybut master; brak osobnego user-locka — `Editing` to ten lock). Tabela rozstrzygnięć w API_CONTRACTS.
+### Verified
+- `dotnet build` obu solucji OK (0 błędów).
+- Pełna solucja backendu: Domain 57 + Application 172 (+25 nowych) + Api 33 + Infrastructure 43 = **305/305 pass**; Integration 6 skipped (DB-bound).
+### Notes
+- **Autoryzacja**: nowe endpointy używają tego samego mechanizmu co istniejący `POST /api/v1/document` (obecnie brak `[Authorize]` w `D2ServicesViewerEditor` — match z istniejącą konwencją; ewentualne wprowadzenie auth schematu pokryje WSZYSTKIE endpointy zewnętrzne jednym przepisem).
+- **SSRF**: walidacja URL ogranicza protokoły do http(s) i kapuje długość; brak allowlisty hostów (świadome — match z obecnym podejściem ingestu, ślad w RISKS R-07).
+- **Concurrency**: `UpdateCallbackUrl` / `UnlockDocument` modyfikują agregat `Document` przez repo + `SaveChangesAsync` (EF Core change tracker + transakcja na poziomie SaveChanges); pełna optymistyczna kontrola wersji nie istnieje (brak `RowVersion`) — zgodne z resztą domeny.
+
 ## 2026-05-29 — Menu „Pomoc" + status autozapisu w stopce
 ### Changed
 - **Nowa zakładka menu „Pomoc"** w `document-editor.html` (ostatnia po „Widok"), z jedną pozycją dropdown **„Zgłoś"** → wywołuje istniejące `openReportEmail()` (bez duplikacji logiki — ta sama metoda co dawny przycisk). Sygnał `showHelpMenu = signal(false)` + `toggleHelpMenu()` zgodne z konwencją innych menu (zamyka pozostałe przez `closeAllMenus()`, którego rozszerzono o nowy sygnał). `openReportEmail()` woła teraz `closeAllMenus()` na początku — pozycja w dropdownie zamyka go po kliknięciu, spójnie z resztą menu.
