@@ -155,7 +155,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     heightPx: number;
     aspectRatio: number;
     alignment: 'left' | 'center' | 'right' | null;
-    positionMode: 'inline' | 'front' | 'behind';
+    positionMode: 'inline' | 'square' | 'topBottom' | 'front' | 'behind';
+    border: { enabled: boolean; color: string; widthPx: number; style: 'solid' | 'dashed' | 'dotted' };
+    crop: { left: number; right: number; top: number; bottom: number };
   } | null>();
   /**
    * Emituje ZMIERZONĄ geometrię edytowanego pasma nagłówka/stopki (cm od górnej krawędzi
@@ -1138,13 +1140,36 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const aspectRatio = heightPx > 0 ? widthPx / heightPx : 1;
     const para = wrapper.closest('p, div, h1, h2, h3, h4, h5, h6') as HTMLElement | null;
     const align = para?.style.textAlign as 'left' | 'center' | 'right' | '' | undefined;
-    const mode = (wrapper.dataset['posMode'] as 'inline' | 'front' | 'behind' | undefined) ?? 'inline';
+    const rawMode = (wrapper.dataset['posMode'] ?? 'inline');
+    const allowed = new Set(['inline', 'square', 'topBottom', 'front', 'behind']);
+    const positionMode = (allowed.has(rawMode) ? rawMode : 'inline') as
+      'inline' | 'square' | 'topBottom' | 'front' | 'behind';
+
+    const borderWidthPx = parseInt(img.dataset['borderWidth'] ?? '0', 10);
+    const borderColor = img.dataset['borderColor'] || '#000000';
+    const borderStyleAttr = img.dataset['borderStyle'] as 'solid' | 'dashed' | 'dotted' | undefined;
+    const border = {
+      enabled: borderWidthPx > 0,
+      color: borderColor,
+      widthPx: borderWidthPx > 0 ? borderWidthPx : 1,
+      style: borderStyleAttr ?? 'solid',
+    };
+
+    const crop = {
+      left: parseFloat(img.dataset['cropL'] ?? '0') || 0,
+      right: parseFloat(img.dataset['cropR'] ?? '0') || 0,
+      top: parseFloat(img.dataset['cropT'] ?? '0') || 0,
+      bottom: parseFloat(img.dataset['cropB'] ?? '0') || 0,
+    };
+
     this.imageSelectionChange.emit({
       widthPx,
       heightPx,
       aspectRatio,
       alignment: align === 'left' || align === 'center' || align === 'right' ? align : null,
-      positionMode: mode === 'front' || mode === 'behind' ? mode : 'inline',
+      positionMode,
+      border,
+      crop,
     });
   }
 
@@ -1155,24 +1180,43 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * to both the wrapper (CSS hook) and the inner &lt;img&gt; (so the DOCX exporter sees it
    * on the round-trippable element) so import / export can reproduce it.
    */
-  setSelectedImagePositionMode(mode: 'inline' | 'front' | 'behind'): void {
+  setSelectedImagePositionMode(mode: 'inline' | 'square' | 'topBottom' | 'front' | 'behind'): void {
     const wrapper = this.selectedImageWrapper;
     if (!wrapper) return;
     const img = wrapper.querySelector('img') as HTMLImageElement | null;
     if (!img) return;
 
+    // Always clear previous floating-only state, then re-apply per the new mode.
+    delete wrapper.dataset['xPx'];
+    delete wrapper.dataset['yPx'];
+    img.removeAttribute('data-x-emu');
+    img.removeAttribute('data-y-emu');
+    wrapper.style.removeProperty('position');
+    wrapper.style.removeProperty('left');
+    wrapper.style.removeProperty('top');
+    wrapper.style.removeProperty('z-index');
+    wrapper.style.removeProperty('pointer-events');
+    wrapper.style.removeProperty('float');
+    wrapper.style.removeProperty('clear');
+    wrapper.style.removeProperty('display');
+    wrapper.style.removeProperty('margin');
+
     if (mode === 'inline') {
       delete wrapper.dataset['posMode'];
       delete img.dataset['posMode'];
-      delete wrapper.dataset['xPx'];
-      delete wrapper.dataset['yPx'];
-      img.removeAttribute('data-x-emu');
-      img.removeAttribute('data-y-emu');
-      wrapper.style.removeProperty('position');
-      wrapper.style.removeProperty('left');
-      wrapper.style.removeProperty('top');
-      wrapper.style.removeProperty('z-index');
-      wrapper.style.removeProperty('pointer-events');
+    } else if (mode === 'square') {
+      // Float-based wrap — text fills around the rectangular bounding box.
+      wrapper.dataset['posMode'] = 'square';
+      img.dataset['posMode'] = 'square';
+      wrapper.style.float = 'left';
+      wrapper.style.margin = '0 12px 8px 0';
+    } else if (mode === 'topBottom') {
+      // Block + clear:both — text sits above and below the image, not beside it.
+      wrapper.dataset['posMode'] = 'topBottom';
+      img.dataset['posMode'] = 'topBottom';
+      wrapper.style.display = 'block';
+      wrapper.style.clear = 'both';
+      wrapper.style.margin = '8px auto';
     } else {
       // Anchor the wrapper at its current rendered position so the switch is visually
       // stable — no jump to (0,0). Coords are relative to the nearest paginated page.
@@ -1181,10 +1225,75 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const rect = wrapper.getBoundingClientRect();
       const xPx = Math.max(0, Math.round(rect.left - (pageRect?.left ?? 0)));
       const yPx = Math.max(0, Math.round(rect.top - (pageRect?.top ?? 0)));
-      this.applyFloatingPosition(wrapper, img, mode, xPx, yPx);
+      this.applyFloatingPosition(wrapper, img, mode as 'front' | 'behind', xPx, yPx);
     }
     this.onContentChange();
     this.emitImageSelectionState();
+  }
+
+  /**
+   * Border state — when enabled, applied as inline CSS on the img so it survives the
+   * HTML round-trip; mirrored to data-border-* attributes for the DOCX exporter, which
+   * maps them to a:ln in pic:spPr.
+   */
+  setSelectedImageBorder(border: {
+    enabled: boolean; color: string; widthPx: number; style: 'solid' | 'dashed' | 'dotted';
+  }): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img) return;
+    if (!border.enabled || border.widthPx <= 0) {
+      img.style.removeProperty('border');
+      img.style.removeProperty('border-width');
+      img.style.removeProperty('border-style');
+      img.style.removeProperty('border-color');
+      delete img.dataset['borderWidth'];
+      delete img.dataset['borderColor'];
+      delete img.dataset['borderStyle'];
+    } else {
+      const w = Math.max(1, Math.min(20, Math.round(border.widthPx)));
+      const color = /^#[0-9a-fA-F]{6}$/.test(border.color) ? border.color : '#000000';
+      img.style.border = `${w}px ${border.style} ${color}`;
+      img.dataset['borderWidth'] = String(w);
+      img.dataset['borderColor'] = color;
+      img.dataset['borderStyle'] = border.style;
+    }
+    this.onContentChange();
+    this.emitImageSelectionState();
+  }
+
+  /**
+   * Crop state — % from each side. Rendered with CSS clip-path: inset() so the
+   * original raster stays intact. Persisted via data-crop-* attrs the DOCX exporter
+   * maps to a:srcRect (Word's "trim from each side" model).
+   */
+  setSelectedImageCrop(crop: { left: number; right: number; top: number; bottom: number }): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img) return;
+    const clamp = (v: number) => Math.max(0, Math.min(95, Math.round(v)));
+    const l = clamp(crop.left), r = clamp(crop.right), t = clamp(crop.top), b = clamp(crop.bottom);
+    if (l === 0 && r === 0 && t === 0 && b === 0) {
+      img.style.removeProperty('clip-path');
+      delete img.dataset['cropL'];
+      delete img.dataset['cropR'];
+      delete img.dataset['cropT'];
+      delete img.dataset['cropB'];
+    } else {
+      img.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
+      img.dataset['cropL'] = String(l);
+      img.dataset['cropR'] = String(r);
+      img.dataset['cropT'] = String(t);
+      img.dataset['cropB'] = String(b);
+    }
+    this.onContentChange();
+    this.emitImageSelectionState();
+  }
+
+  resetSelectedImageCrop(): void {
+    this.setSelectedImageCrop({ left: 0, right: 0, top: 0, bottom: 0 });
   }
 
   private applyFloatingPosition(
@@ -3285,6 +3394,31 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         const xPx = Math.round((Number(img.getAttribute('data-x-emu') ?? 0)) / 9525);
         const yPx = Math.round((Number(img.getAttribute('data-y-emu') ?? 0)) / 9525);
         this.applyFloatingPosition(wrapper, img, posMode, xPx, yPx);
+      } else if (posMode === 'square') {
+        wrapper.dataset['posMode'] = 'square';
+        wrapper.style.float = 'left';
+        wrapper.style.margin = '0 12px 8px 0';
+      } else if (posMode === 'topBottom') {
+        wrapper.dataset['posMode'] = 'topBottom';
+        wrapper.style.display = 'block';
+        wrapper.style.clear = 'both';
+        wrapper.style.margin = '8px auto';
+      }
+
+      // Restore border + crop from data attributes set by the DOCX importer or a
+      // previous edit. They're applied as inline CSS on the <img> for round-trip.
+      const bw = parseInt(img.dataset['borderWidth'] ?? '0', 10);
+      if (bw > 0) {
+        const bc = img.dataset['borderColor'] || '#000000';
+        const bs = (img.dataset['borderStyle'] as 'solid' | 'dashed' | 'dotted') ?? 'solid';
+        img.style.border = `${bw}px ${bs} ${bc}`;
+      }
+      const cl = parseFloat(img.dataset['cropL'] ?? '0') || 0;
+      const cr = parseFloat(img.dataset['cropR'] ?? '0') || 0;
+      const ct = parseFloat(img.dataset['cropT'] ?? '0') || 0;
+      const cb = parseFloat(img.dataset['cropB'] ?? '0') || 0;
+      if (cl > 0 || cr > 0 || ct > 0 || cb > 0) {
+        img.style.clipPath = `inset(${ct}% ${cr}% ${cb}% ${cl}%)`;
       }
 
       ['right', 'bottom', 'corner'].forEach(type => {

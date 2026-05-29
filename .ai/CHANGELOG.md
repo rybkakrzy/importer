@@ -35,6 +35,36 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — Word-like obraz: 7 trybów zawijania + obramowanie + przycinanie (a:ln + a:srcRect round-trip)
+### Changed
+- **Panel obrazu** rozszerzony do pełnego Word-like UX:
+  - **Zawijaj tekst** (7 trybów wg menu Worda): Równo&nbsp;z&nbsp;tekstem / Ramka / Góra&nbsp;i&nbsp;dół / Za&nbsp;tekstem / Przed&nbsp;tekstem (5 działa) + Przylegle / Na&nbsp;wskroś (2 disabled — wymagają reflow tekstu wokół kształtu, niedostępne natywnie w HTML/CSS). Grid 2 kolumny.
+  - **Obramowanie**: checkbox włącz/wyłącz, color picker, grubość (1–20 px), styl (ciągła / przerywana / kropkowana).
+  - **Przytnij**: 4 pola % (lewo/prawo/góra/dół, 0–95%) + przycisk „Resetuj przycięcie". Każde pole emituje `cropChange` z aktualnym vector.
+  - Wszystkie kontrolki są stateless — emity przekazują się do public methods na `wysiwyg-editor`.
+- **`wysiwyg-editor` — nowe public methods**:
+  - `setSelectedImagePositionMode` rozszerzony o `'square'` i `'topBottom'` (oprócz `'inline'`, `'front'`, `'behind'`). Square: `float: left; margin: 0 12px 8px 0;`. TopBottom: `display: block; clear: both; margin: 8px auto;`. Inline / front / behind bez zmian.
+  - `setSelectedImageBorder({enabled, color, widthPx, style})` — aplikuje inline CSS `border: Npx style #hex` na `<img>` + persist na `data-border-width/color/style`. Walidacja hex.
+  - `setSelectedImageCrop({left, right, top, bottom})` — `clip-path: inset(t% r% b% l%)` na `<img>` + persist na `data-crop-l/r/t/b` (clamp 0–95).
+  - `resetSelectedImageCrop()` — zero-out crop.
+  - `emitImageSelectionState` rozszerzony o pełen snapshot `border` + `crop` z atrybutów (default-safe gdy brak).
+- **`wrapExistingImages`** przywraca po loadzie:
+  - tryb `square` / `topBottom` z `data-pos-mode` (`float: left` / `display: block + clear: both`),
+  - border z `data-border-*` jako inline CSS,
+  - crop z `data-crop-*` jako `clip-path`.
+- **Backend `HtmlToDocxConverter.BuildImageDrawing`** (round-trip save):
+  - Border: `data-border-width/color/style` na `<img>` → `a:ln` w `pic:spPr` z `a:solidFill srgbClr` + `a:prstDash` (mapowanie `solid`→`Solid`, `dashed`→`Dash`, `dotted`→`Dot`). Width: px×9525 EMU. Walidacja hex — niepoprawny kolor → border pomijany (silent fail-safe).
+  - Crop: `data-crop-l/r/t/b` (%) → `a:srcRect` na `pic:blipFill` z l/t/r/b w 1/1000 procenta.
+- **Backend `DocxToHtmlConverter.ConvertDrawingToHtml`** (round-trip import): czyta `a:ln` (width, srgb, dash) i `a:srcRect` (l/t/r/b) → emituje `data-border-*` i `data-crop-*` na `<img>`. Plus istniejące `data-pos-mode`/`data-x-emu`/`data-y-emu`/`data-width-emu`/`data-height-emu`.
+### Verified
+- `dotnet build` (Infrastructure) OK; nowe `ImageBorderCropRoundTripTests` (**7/7 pass**: border solid/dashed/dotted, bad-color fail-safe, crop 4-side round-trip, no-attrs-after-plain-image). `ImageFloatingRoundTripTests` (4/4 pass).
+- `tsc --noEmit` OK; `npm test`: **164/164 pass** (17 plików; +4 nowe testy panelu: 7 wrap modes z disabled, emisja 5 supported, border toggle, crop clamp 95, resetCrop).
+### Notes / ograniczenia (zaktualizowane)
+- **Przylegle / Na wskroś** — HTML/CSS nie ma natywnego mechanizmu reflow tekstu wokół arbitralnego kształtu. Pozostają jako disabled w panelu (UI mówi prawdę o tym, co działa).
+- **Drag w obrębie strony** dalej działa tylko dla `front`/`behind` (absolute). Dla `square`/`topBottom` (float/block) drag pozostaje inline-drop-into-DOM (rule 14 — sensowne dla float).
+- **Crop**: clamp 0–95% per side (pozostawia widoczny obraz). Mapowanie do OOXML 1/1000 procenta (standardowa skala `a:srcRect`).
+- **Border**: tylko jednolity kolor + 3 style. Patterny / gradienty / 3D efekty — out of scope.
+
 ## 2026-05-29 — Word-like floating: „Przed tekstem" / „Za tekstem" + drag w obrębie strony + round-trip wp:anchor
 ### Changed
 - **Tryby pozycji obrazu** (panel boczny): zastąpiono info-only sekcję 3 prawdziwymi przyciskami: **„W tekście"** (inline), **„Przed"** (float over text), **„Za"** (float behind text). Aktywny tryb podświetlony. `ImageSelectionState` rozszerzony o `positionMode: 'inline' | 'front' | 'behind'`. Nowy `@Output() positionModeChange` w panelu.

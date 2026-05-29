@@ -11,7 +11,30 @@ import { FormsModule } from '@angular/forms';
  * remove for inline images. Floating (wp:anchor) wrap modes are deferred to the
  * next iteration — see .ai/FEATURES.md for the limitation note.
  */
-export type ImagePositionMode = 'inline' | 'front' | 'behind';
+/**
+ * Word's "Zawijaj tekst" menu collapsed to the modes we can faithfully render in
+ * HTML/CSS. The two square/tight variants that need text reflow around an arbitrary
+ * shape (Przylegle / Na wskroś) are intentionally absent from the type — the panel
+ * surfaces them as disabled so the UI tells the truth about what works.
+ */
+export type ImagePositionMode = 'inline' | 'square' | 'topBottom' | 'front' | 'behind';
+
+export type ImageBorderStyle = 'solid' | 'dashed' | 'dotted';
+
+export interface ImageBorderState {
+  enabled: boolean;
+  color: string;       // #RRGGBB
+  widthPx: number;     // 0 when disabled
+  style: ImageBorderStyle;
+}
+
+export interface ImageCropState {
+  /** Percentages 0–100 — the slice of the image hidden on each side. */
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
 
 export interface ImageSelectionState {
   widthPx: number;
@@ -19,6 +42,8 @@ export interface ImageSelectionState {
   aspectRatio: number;
   alignment: 'left' | 'center' | 'right' | null;
   positionMode: ImagePositionMode;
+  border: ImageBorderState;
+  crop: ImageCropState;
 }
 
 @Component({
@@ -48,6 +73,9 @@ export class ImagePropertiesPanelComponent {
   @Output() removeImage = new EventEmitter<void>();
   @Output() resetAspect = new EventEmitter<void>();
   @Output() positionModeChange = new EventEmitter<ImagePositionMode>();
+  @Output() borderChange = new EventEmitter<ImageBorderState>();
+  @Output() cropChange = new EventEmitter<ImageCropState>();
+  @Output() resetCrop = new EventEmitter<void>();
 
   private readonly _state = signal<ImageSelectionState | null>(null);
   // Mirror the state into editable inputs so typing doesn't fight the snapshot.
@@ -82,6 +110,23 @@ export class ImagePropertiesPanelComponent {
 
   protected setMode(mode: ImagePositionMode): void {
     this.positionModeChange.emit(mode);
+  }
+
+  protected setBorder(patch: Partial<ImageBorderState>): void {
+    const cur = this.current()?.border;
+    if (!cur) return;
+    this.borderChange.emit({ ...cur, ...patch });
+  }
+
+  protected setCrop(side: 'left' | 'right' | 'top' | 'bottom', value: number): void {
+    const cur = this.current()?.crop;
+    if (!cur) return;
+    const safe = Math.max(0, Math.min(95, Math.round(value)));
+    this.cropChange.emit({ ...cur, [side]: safe });
+  }
+
+  protected resetCropClick(): void {
+    this.resetCrop.emit();
   }
 
   /** Min 16 px — matches the hard floor in wysiwyg-editor's resize-end logic. */

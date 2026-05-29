@@ -333,7 +333,11 @@ describe('DocumentEditorComponent — koordynacja panelu Nagłówek/Stopka z Fin
 
   it('panel obrazu ma pierwszeństwo nad panelem nagłówka/stopki', () => {
     component.editingSection.set('header');
-    component.selectedImage.set({ widthPx: 100, heightPx: 50, aspectRatio: 2, alignment: null, positionMode: 'inline' });
+    component.selectedImage.set({
+      widthPx: 100, heightPx: 50, aspectRatio: 2, alignment: null, positionMode: 'inline',
+      border: { enabled: false, color: '#000000', widthPx: 1, style: 'solid' },
+      crop: { left: 0, right: 0, top: 0, bottom: 0 },
+    });
     expect(component.showImagePanel()).toBe(true);
     expect(component.showHeaderFooterPanel()).toBe(false);
   });

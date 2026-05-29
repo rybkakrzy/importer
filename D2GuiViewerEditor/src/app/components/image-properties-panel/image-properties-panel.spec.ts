@@ -35,6 +35,8 @@ describe('ImagePropertiesPanelComponent', () => {
     aspectRatio: 240 / 160,
     alignment: 'center',
     positionMode: 'inline',
+    border: { enabled: false, color: '#000000', widthPx: 1, style: 'solid' },
+    crop: { left: 0, right: 0, top: 0, bottom: 0 },
   };
 
   it('shows the empty hint when no image is selected', () => {
@@ -130,32 +132,66 @@ describe('ImagePropertiesPanelComponent', () => {
     expect(closed).toBe(1);
   });
 
-  it('shows position-mode buttons + active state for the current mode', () => {
+  it('shows the 7 Word-like wrap modes (2 disabled) with active state for current', () => {
     component.state = { ...sample, positionMode: 'behind' };
     render();
-    const behindBtn = btn(/^Za$/)!;
-    expect(behindBtn.classList.contains('is-active')).toBe(true);
-    const inlineBtn = btn(/W tekście/)!;
-    expect(inlineBtn.classList.contains('is-active')).toBe(false);
+    expect(btn(/Za tekstem/)!.classList.contains('is-active')).toBe(true);
+    expect(btn(/Równo z tekstem/)!.classList.contains('is-active')).toBe(false);
+    expect(btn(/Przylegle/)!.disabled).toBe(true);
+    expect(btn(/Na wskroś/)!.disabled).toBe(true);
   });
 
-  it('emits positionModeChange when one of the three buttons is clicked', () => {
+  it('emits positionModeChange for the 5 supported wrap modes', () => {
     component.state = sample;
     render();
     const seen: string[] = [];
     component.positionModeChange.subscribe(v => seen.push(v));
 
-    btn(/^Przed$/)!.click();
-    btn(/^Za$/)!.click();
-    btn(/W tekście/)!.click();
+    btn(/Równo z tekstem/)!.click();
+    btn(/Ramka/)!.click();
+    btn(/Góra i dół/)!.click();
+    btn(/Przed tekstem/)!.click();
+    btn(/Za tekstem/)!.click();
 
-    expect(seen).toEqual(['front', 'behind', 'inline']);
+    expect(seen).toEqual(['inline', 'square', 'topBottom', 'front', 'behind']);
   });
 
-  it('points out the square/tight roadmap explicitly in the panel UI', () => {
+  it('toggles the border on and emits the change with default style/color/width', () => {
     component.state = sample;
     render();
-    expect(text()).toContain('Square/tight wrap');
-    expect(text()).toContain('w przygotowaniu');
+    const events: any[] = [];
+    component.borderChange.subscribe(v => events.push(v));
+
+    const checkbox = fixture.nativeElement.querySelectorAll('input[type=checkbox]')[1] as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+
+    expect(events.length).toBe(1);
+    expect(events[0].enabled).toBe(true);
+  });
+
+  it('emits cropChange with clamped value (max 95%)', () => {
+    component.state = sample;
+    render();
+    const events: any[] = [];
+    component.cropChange.subscribe(v => events.push(v));
+
+    const leftInput = fixture.nativeElement.querySelectorAll('.img-panel__row--crop input')[0] as HTMLInputElement;
+    leftInput.value = '120';
+    leftInput.dispatchEvent(new Event('change'));
+
+    expect(events.length).toBe(1);
+    expect(events[0].left).toBe(95);
+  });
+
+  it('emits resetCrop via the dedicated button', () => {
+    component.state = sample;
+    render();
+    let calls = 0;
+    component.resetCrop.subscribe(() => calls++);
+
+    btn(/Resetuj przycięcie/)!.click();
+
+    expect(calls).toBe(1);
   });
 });

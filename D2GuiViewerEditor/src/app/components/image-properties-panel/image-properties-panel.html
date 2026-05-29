@@ -75,28 +75,119 @@
     </section>
 
     <section class="img-panel__group">
-      <h4>Pozycja względem tekstu</h4>
-      <div class="img-panel__align-row img-panel__align-row--three">
+      <h4>Zawijaj tekst</h4>
+      <div class="img-panel__wrap-grid">
         <button type="button"
                 class="img-panel__icon-btn"
                 [class.is-active]="s.positionMode === 'inline'"
                 (click)="setMode('inline')"
-                title="W tekście (płynie z akapitem)">W&nbsp;tekście</button>
+                title="Równo z tekstem (inline)">Równo&nbsp;z&nbsp;tekstem</button>
         <button type="button"
                 class="img-panel__icon-btn"
-                [class.is-active]="s.positionMode === 'front'"
-                (click)="setMode('front')"
-                title="Przed tekstem (warstwa nad tekstem)">Przed</button>
+                [class.is-active]="s.positionMode === 'square'"
+                (click)="setMode('square')"
+                title="Ramka — tekst opływa prostokątnie">Ramka</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.positionMode === 'topBottom'"
+                (click)="setMode('topBottom')"
+                title="Góra i dół — tekst nad i pod obrazem">Góra&nbsp;i&nbsp;dół</button>
         <button type="button"
                 class="img-panel__icon-btn"
                 [class.is-active]="s.positionMode === 'behind'"
                 (click)="setMode('behind')"
-                title="Za tekstem (warstwa pod tekstem)">Za</button>
+                title="Za tekstem (warstwa pod tekstem)">Za&nbsp;tekstem</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.positionMode === 'front'"
+                (click)="setMode('front')"
+                title="Przed tekstem (warstwa nad tekstem)">Przed&nbsp;tekstem</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                disabled
+                title="Wymaga reflow tekstu wokół kształtu — w przygotowaniu">Przylegle</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                disabled
+                title="Wymaga reflow tekstu wokół kształtu — w przygotowaniu">Na&nbsp;wskroś</button>
       </div>
-      <p class="img-panel__hint">
-        Tryby <strong>Przed</strong> i <strong>Za</strong> pozwalają przeciągać
-        obraz swobodnie po stronie. Square/tight wrap — w przygotowaniu.
-      </p>
+    </section>
+
+    <section class="img-panel__group">
+      <h4>Obramowanie</h4>
+      <label class="img-panel__row img-panel__row--checkbox">
+        <input type="checkbox"
+               [checked]="s.border.enabled"
+               (change)="setBorder({ enabled: $any($event.target).checked })">
+        <span>Obramowanie</span>
+      </label>
+      @if (s.border.enabled) {
+        <label class="img-panel__row">
+          <span>Kolor</span>
+          <input type="color"
+                 [value]="s.border.color"
+                 (input)="setBorder({ color: $any($event.target).value })">
+        </label>
+        <label class="img-panel__row">
+          <span>Grubość</span>
+          <input type="number"
+                 min="1"
+                 max="20"
+                 step="1"
+                 [value]="s.border.widthPx"
+                 (change)="setBorder({ widthPx: +$any($event.target).value })">
+          <span class="img-panel__unit">px</span>
+        </label>
+        <label class="img-panel__row">
+          <span>Styl</span>
+          <select [value]="s.border.style"
+                  (change)="setBorder({ style: $any($event.target).value })">
+            <option value="solid">Ciągła</option>
+            <option value="dashed">Przerywana</option>
+            <option value="dotted">Kropkowana</option>
+          </select>
+        </label>
+      }
+    </section>
+
+    <section class="img-panel__group">
+      <h4>Przytnij</h4>
+      <div class="img-panel__crop-grid">
+        <label class="img-panel__row img-panel__row--crop">
+          <span>Lewy</span>
+          <input type="number" min="0" max="95" step="1"
+                 [value]="s.crop.left"
+                 (change)="setCrop('left', +$any($event.target).value)">
+          <span class="img-panel__unit">%</span>
+        </label>
+        <label class="img-panel__row img-panel__row--crop">
+          <span>Prawy</span>
+          <input type="number" min="0" max="95" step="1"
+                 [value]="s.crop.right"
+                 (change)="setCrop('right', +$any($event.target).value)">
+          <span class="img-panel__unit">%</span>
+        </label>
+        <label class="img-panel__row img-panel__row--crop">
+          <span>Górny</span>
+          <input type="number" min="0" max="95" step="1"
+                 [value]="s.crop.top"
+                 (change)="setCrop('top', +$any($event.target).value)">
+          <span class="img-panel__unit">%</span>
+        </label>
+        <label class="img-panel__row img-panel__row--crop">
+          <span>Dolny</span>
+          <input type="number" min="0" max="95" step="1"
+                 [value]="s.crop.bottom"
+                 (change)="setCrop('bottom', +$any($event.target).value)">
+          <span class="img-panel__unit">%</span>
+        </label>
+      </div>
+      <button type="button"
+              class="img-panel__action"
+              (click)="resetCropClick()"
+              title="Przywróć pełen kadr">
+        Resetuj przycięcie
+      </button>
     </section>
 
     <section class="img-panel__group">

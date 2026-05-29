@@ -104,6 +104,37 @@
   grid-template-columns: repeat(3, 1fr);
 }
 
+// Wrap-mode grid mimics Word's dropdown stack — 7 options laid out 2 per row.
+.img-panel__wrap-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+
+  > .img-panel__icon-btn {
+    padding: 8px 6px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+
+    &[disabled] {
+      cursor: not-allowed;
+      opacity: 0.5;
+      &:hover { background: transparent; }
+    }
+  }
+}
+
+.img-panel__crop-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 8px;
+}
+
+.img-panel__row--crop {
+  > span:first-child { flex: 0 0 48px; font-size: 12px; }
+  input[type="number"] { min-width: 40px; }
+}
+
 .img-panel__icon-btn {
   padding: 6px 0;
   background: #fff;

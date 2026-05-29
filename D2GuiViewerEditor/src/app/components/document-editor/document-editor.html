@@ -689,6 +689,9 @@
           (lockAspectChange)="imageLockAspect.set($event)"
           (alignmentChange)="editor.setSelectedImageAlignment($event)"
           (positionModeChange)="editor.setSelectedImagePositionMode($event)"
+          (borderChange)="editor.setSelectedImageBorder($event)"
+          (cropChange)="editor.setSelectedImageCrop($event)"
+          (resetCrop)="editor.resetSelectedImageCrop()"
           (removeImage)="editor.removeSelectedImage(); selectedImage.set(null)"
           (resetAspect)="editor.resetSelectedImageAspect()"
         />

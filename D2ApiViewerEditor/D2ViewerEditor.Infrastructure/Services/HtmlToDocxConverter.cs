@@ -1726,22 +1726,64 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var posMode = node.GetAttributeValue("data-pos-mode", "");
         var isFloating = posMode == "front" || posMode == "behind";
 
+        // Optional border (a:ln in pic:spPr): width in EMU = px * 9525.
+        int.TryParse(node.GetAttributeValue("data-border-width", "0"), out var borderWidthPx);
+        var borderColor = node.GetAttributeValue("data-border-color", "").TrimStart('#');
+        var borderStyle = node.GetAttributeValue("data-border-style", "solid");
+
+        // Optional crop (a:srcRect on pic:blipFill): l/t/r/b in 1/1000 of a percent.
+        int.TryParse(node.GetAttributeValue("data-crop-l", "0"), out var cropL);
+        int.TryParse(node.GetAttributeValue("data-crop-r", "0"), out var cropR);
+        int.TryParse(node.GetAttributeValue("data-crop-t", "0"), out var cropT);
+        int.TryParse(node.GetAttributeValue("data-crop-b", "0"), out var cropB);
+        var hasCrop = cropL > 0 || cropR > 0 || cropT > 0 || cropB > 0;
+
+        // BlipFill — with optional srcRect carrying the crop percentages.
+        var blip = new DocumentFormat.OpenXml.Drawing.Blip { Embed = relationshipId };
+        var blipFill = new DocumentFormat.OpenXml.Drawing.Pictures.BlipFill(blip);
+        if (hasCrop)
+        {
+            blipFill.Append(new DocumentFormat.OpenXml.Drawing.SourceRectangle
+            {
+                Left = cropL * 1000,
+                Right = cropR * 1000,
+                Top = cropT * 1000,
+                Bottom = cropB * 1000
+            });
+        }
+        blipFill.Append(new DocumentFormat.OpenXml.Drawing.Stretch(new DocumentFormat.OpenXml.Drawing.FillRectangle()));
+
+        // ShapeProperties — with optional outline (a:ln) for the border.
+        var shapeProps = new DocumentFormat.OpenXml.Drawing.Pictures.ShapeProperties(
+            new DocumentFormat.OpenXml.Drawing.Transform2D(
+                new DocumentFormat.OpenXml.Drawing.Offset { X = 0, Y = 0 },
+                new DocumentFormat.OpenXml.Drawing.Extents { Cx = widthEmu, Cy = heightEmu }),
+            new DocumentFormat.OpenXml.Drawing.PresetGeometry(
+                new DocumentFormat.OpenXml.Drawing.AdjustValueList())
+            { Preset = DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle });
+        if (borderWidthPx > 0 && System.Text.RegularExpressions.Regex.IsMatch(borderColor, "^[0-9A-Fa-f]{6}$"))
+        {
+            var dashStyle = borderStyle switch
+            {
+                "dashed" => DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Dash,
+                "dotted" => DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Dot,
+                _ => DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Solid
+            };
+            shapeProps.Append(new DocumentFormat.OpenXml.Drawing.Outline(
+                new DocumentFormat.OpenXml.Drawing.SolidFill(
+                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = borderColor.ToUpperInvariant() }),
+                new DocumentFormat.OpenXml.Drawing.PresetDash { Val = dashStyle })
+            { Width = borderWidthPx * 9525 });
+        }
+
         var graphic = new DocumentFormat.OpenXml.Drawing.Graphic(
             new DocumentFormat.OpenXml.Drawing.GraphicData(
                 new DocumentFormat.OpenXml.Drawing.Pictures.Picture(
                     new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureProperties(
                         new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualDrawingProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
                         new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureDrawingProperties()),
-                    new DocumentFormat.OpenXml.Drawing.Pictures.BlipFill(
-                        new DocumentFormat.OpenXml.Drawing.Blip { Embed = relationshipId },
-                        new DocumentFormat.OpenXml.Drawing.Stretch(new DocumentFormat.OpenXml.Drawing.FillRectangle())),
-                    new DocumentFormat.OpenXml.Drawing.Pictures.ShapeProperties(
-                        new DocumentFormat.OpenXml.Drawing.Transform2D(
-                            new DocumentFormat.OpenXml.Drawing.Offset { X = 0, Y = 0 },
-                            new DocumentFormat.OpenXml.Drawing.Extents { Cx = widthEmu, Cy = heightEmu }),
-                        new DocumentFormat.OpenXml.Drawing.PresetGeometry(
-                            new DocumentFormat.OpenXml.Drawing.AdjustValueList())
-                        { Preset = DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle }))
+                    blipFill,
+                    shapeProps)
             )
             { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" });
 

@@ -2457,11 +2457,44 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 + $" data-x-emu=\"{xEmu}\" data-y-emu=\"{yEmu}\"";
         }
 
+        // Optional border (a:ln) — width in EMU → px, color from solidFill srgbClr, dash style.
+        var borderAttrs = string.Empty;
+        var outline = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Outline>().FirstOrDefault();
+        if (outline != null && outline.Width != null && outline.Width.Value > 0)
+        {
+            var borderWidthPx = Math.Max(1, (int)Math.Round(outline.Width.Value / 9525.0));
+            var srgb = outline.Descendants<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>().FirstOrDefault();
+            var color = srgb?.Val?.Value;
+            if (!string.IsNullOrEmpty(color) && System.Text.RegularExpressions.Regex.IsMatch(color, "^[0-9A-Fa-f]{6}$"))
+            {
+                var dash = outline.GetFirstChild<DocumentFormat.OpenXml.Drawing.PresetDash>();
+                var style = "solid";
+                if (dash?.Val?.Value == DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Dash) style = "dashed";
+                else if (dash?.Val?.Value == DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Dot) style = "dotted";
+                borderAttrs = $" data-border-width=\"{borderWidthPx}\" data-border-color=\"#{color}\" data-border-style=\"{style}\"";
+            }
+        }
+
+        // Optional crop (a:srcRect) — l/t/r/b in 1/1000 of a percent → percent.
+        var cropAttrs = string.Empty;
+        var srcRect = drawing.Descendants<DocumentFormat.OpenXml.Drawing.SourceRectangle>().FirstOrDefault();
+        if (srcRect != null)
+        {
+            var l = (srcRect.Left?.Value ?? 0) / 1000;
+            var r = (srcRect.Right?.Value ?? 0) / 1000;
+            var t = (srcRect.Top?.Value ?? 0) / 1000;
+            var b = (srcRect.Bottom?.Value ?? 0) / 1000;
+            if (l > 0 || r > 0 || t > 0 || b > 0)
+            {
+                cropAttrs = $" data-crop-l=\"{l}\" data-crop-r=\"{r}\" data-crop-t=\"{t}\" data-crop-b=\"{b}\"";
+            }
+        }
+
         return $"<img src=\"data:{contentType};base64,{base64Data}\" " +
                $"style=\"max-width:100%;width:{width}px;height:{height}px;\" " +
                $"data-image-id=\"{relationshipId}\" " +
                $"data-width-emu=\"{widthEmu}\" data-height-emu=\"{heightEmu}\"" +
-               $"{posAttrs} />";
+               $"{posAttrs}{borderAttrs}{cropAttrs} />";
     }
 
     /// <summary>
