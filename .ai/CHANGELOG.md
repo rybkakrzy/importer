@@ -35,6 +35,21 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — Word-like pozycjonowanie obrazów (MVP) — selection-driven side panel
+### Changed
+- **Nowy komponent `d2-image-properties-panel`** (`components/image-properties-panel/`: TS+HTML+SCSS+spec) — czwarty docked panel w istniejącym slocie (Wyszukiwanie / Tabele / Nagłówek+Stopka / **Obraz**). Stateless: każda zmiana w polu emituje output do parenta, parent woła publiczne metody na `wysiwyg-editor`. Sekcje: Rozmiar (szer./wys. + zachowaj proporcje + „Przywróć proporcje"), Wyrównanie (L/C/R/—; aplikowane do akapitu nadrzędnego), Opływanie (info-only — floating w przygotowaniu), Usuń obraz.
+- **`wysiwyg-editor` outputs i public API**:
+  - Nowy `@Output() imageSelectionChange = EventEmitter<{ widthPx, heightPx, aspectRatio, alignment } | null>` — emitowany przy `selectImageWrapper`, `clearSelectedImage`, po resize-end i po drop-end.
+  - Nowe metody publiczne: `setSelectedImageWidth(px, lockAspect=true)`, `setSelectedImageHeight(px, lockAspect=true)`, `setSelectedImageAlignment('left'|'center'|'right'|null)`, `resetSelectedImageAspect()`, `removeSelectedImage()`. Wszystkie reuse istniejącego pipeline: aktualizacja inline `style.width/height` + `data-width-emu`/`data-height-emu` (parametry konsumowane przez `HtmlToDocxConverter` przy eksporcie), po czym `onContentChange()` → debounced undo-stack + autozapis.
+- **`document-editor`**: signal `selectedImage` + `imageLockAspect` (default true) + computed `showImagePanel = selectedImage() !== null && !showFindReplace() && !showTablePanel()`. **Panel obrazu ma pierwszeństwo nad panelem nagłówka/stopki** (HF wpuszcza — `showHeaderFooterPanel` rozszerzony o `&& !showImagePanel()`), żeby użytkownik mógł formatować logo w edytowanym nagłówku. Ruler-h-spacer wpuszcza dodatkowy panel.
+- **Roundtrip**: rozmiar już round-tripuje przez istniejące `data-*-emu` na `<img>` (czytane w `DocxToHtmlConverter`/`HtmlToDocxConverter`). Pozycja inline (kolejność w DOM) round-tripuje przez sam HTML. Alignment przez `text-align` na akapicie (zachowane w obie strony — patrz `DocxToHtmlConverterFidelityTests`).
+### Verified
+- `tsc --noEmit` OK; `npm test`: **160/160 pass** (17 plików; +9 nowych `image-properties-panel.spec.ts` + 1 koordynacja w `document-editor.spec.ts`).
+### Notes / ograniczenia MVP
+- **Floating positioning (wp:anchor) odłożone do następnej iteracji.** Word-like wrap modes (square / tight / through / top-and-bottom / behind / in-front-of) nie są obsługiwane w tym MVP. Panel pokazuje sekcję „Opływanie tekstu" jako info-only („W tekście (inline). Floating w przygotowaniu.") — UI nie udaje funkcji, której nie ma. Roadmap: rozszerzenie `DocxToHtmlConverter`/`HtmlToDocxConverter` o `wp:anchor`/`wp:positionH`/`wp:positionV`/`wp:wrap*` + signal modelu w editor (`data-pos-mode="floating"`, `data-x-emu`, `data-y-emu`, `data-wrap`).
+- **Drag** (przenoszenie obrazu w obrębie strony) i **resize** (uchwyty rogu + boków, corner = aspect-locked) ZAWSZE istniały — nie zmieniam mechaniki, tylko emituję snapshot po każdym z tych zdarzeń, więc panel jest spójny z stanem DOM.
+- **Klawiatura**: Delete/Backspace usuwa zaznaczony obraz (istniejące), Escape deselect (istniejące). Strzałkowe przesuwanie do roadmapy.
+
 ## 2026-05-29 — Reguła `userDownload`: kontrola pobierania edytowanego pliku
 ### Changed
 - **Reguła domenowa**: nowe opcjonalne pole `userDownload` w metadanych dokumentu (`documents.metadata` JSON). Default `false`; brak / null / non-true ⇒ blokada. Niezależne od `returnUrl`.

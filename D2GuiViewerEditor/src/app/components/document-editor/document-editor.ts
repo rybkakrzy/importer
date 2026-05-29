@@ -39,6 +39,7 @@ import { DocumentStorageService, DeliveryStatus } from '../../services/document-
 import { DocumentClassificationBadgeComponent } from '../document-classification-badge/document-classification-badge';
 import { TablePropertiesPanelComponent } from '../table-properties-panel/table-properties-panel';
 import { HeaderFooterPanelComponent } from '../header-footer-panel/header-footer-panel';
+import { ImagePropertiesPanelComponent, ImageSelectionState } from '../image-properties-panel/image-properties-panel';
 import {
   TableBorderLineStyle,
   TableBorderScope,
@@ -68,7 +69,8 @@ import { isValidReturnUrl } from '../../core/utils/return-url.util';
     RulerComponent,
     DocumentClassificationBadgeComponent,
     TablePropertiesPanelComponent,
-    HeaderFooterPanelComponent
+    HeaderFooterPanelComponent,
+    ImagePropertiesPanelComponent
   ],
   templateUrl: './document-editor.html',
   styleUrl: './document-editor.scss'
@@ -336,7 +338,30 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.editingSection() !== 'body'
     && !this.showFindReplace()
     && !this.showTablePanel()
+    && !this.showImagePanel()
   );
+
+  /**
+   * Snapshot of the currently selected image (or null). Owned by the editor template
+   * because the panel that consumes it lives in this component's view.
+   */
+  selectedImage = signal<ImageSelectionState | null>(null);
+  imageLockAspect = signal<boolean>(true);
+
+  /**
+   * Image properties panel — single-mode dock. Shown when an image is selected and no
+   * higher-priority panel is open. The header/footer panel yields to it so the user can
+   * resize a logo while still in header-edit mode.
+   */
+  showImagePanel = computed(() =>
+    this.selectedImage() !== null
+    && !this.showFindReplace()
+    && !this.showTablePanel()
+  );
+
+  onImageSelectionChange(state: ImageSelectionState | null): void {
+    this.selectedImage.set(state);
+  }
 
   /**
    * ZMIERZONA geometria edytowanego pasma nagłówka/stopki (cm od górnej krawędzi strony),

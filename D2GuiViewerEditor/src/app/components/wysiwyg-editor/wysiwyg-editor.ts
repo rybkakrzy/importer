@@ -147,6 +147,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   /** Emituje aktualnie edytowaną sekcję (treść / nagłówek / stopka) — używane przez pionową linijkę. */
   @Output() editingSectionChange = new EventEmitter<'header' | 'footer' | 'body'>();
   /**
+   * Emits a snapshot of the currently selected image (or null when nothing is selected).
+   * Drives d2-image-properties-panel — the parent owns the signal and the visibility logic.
+   */
+  @Output() imageSelectionChange = new EventEmitter<{
+    widthPx: number;
+    heightPx: number;
+    aspectRatio: number;
+    alignment: 'left' | 'center' | 'right' | null;
+  } | null>();
+  /**
    * Emituje ZMIERZONĄ geometrię edytowanego pasma nagłówka/stopki (cm od górnej krawędzi
    * strony 1). Pasmo ma `min-height` i rośnie z treścią (np. obraz), więc pionowa linijka
    * musi odzwierciedlać faktyczne położenie, a nie wyliczone z marginesów cm.
@@ -641,6 +651,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         document.removeEventListener('mousemove', onMouseMove);
         document.removeEventListener('mouseup', onMouseUp);
         this.onContentChange();
+        // Snapshot the new dimensions so the side panel reflects the post-resize state.
+        this.emitImageSelectionState();
       };
 
       document.addEventListener('mousemove', onMouseMove);
@@ -707,6 +719,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
             dropRange.insertNode(wrapper);
             this.selectImageWrapper(wrapper);
             this.onContentChange();
+            // Snapshot in case alignment changed because the drop landed in a paragraph
+            // with different text-align.
+            this.emitImageSelectionState();
           }
         }
       }
@@ -1043,13 +1058,126 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     this.selectedImageWrapper = wrapper;
     this.selectedImageWrapper.classList.add('selected');
+    this.emitImageSelectionState();
   }
 
   private clearSelectedImage(): void {
     if (this.selectedImageWrapper) {
       this.selectedImageWrapper.classList.remove('selected');
       this.selectedImageWrapper = null;
+      this.imageSelectionChange.emit(null);
     }
+  }
+
+  /**
+   * Snapshots the currently selected image wrapper into the wire shape consumed by
+   * d2-image-properties-panel. Reads dimensions from the rendered &lt;img&gt;'s bounding
+   * rect (covers both inline width/height and zoom). Alignment is detected by inspecting
+   * the parent paragraph's text-align (Word-like alignment lives on the paragraph, not
+   * the image element).
+   */
+  private emitImageSelectionState(): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) {
+      this.imageSelectionChange.emit(null);
+      return;
+    }
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img) {
+      this.imageSelectionChange.emit(null);
+      return;
+    }
+    const rect = img.getBoundingClientRect();
+    const widthPx = Math.max(1, Math.round(rect.width));
+    const heightPx = Math.max(1, Math.round(rect.height));
+    const aspectRatio = heightPx > 0 ? widthPx / heightPx : 1;
+    const para = wrapper.closest('p, div, h1, h2, h3, h4, h5, h6') as HTMLElement | null;
+    const align = para?.style.textAlign as 'left' | 'center' | 'right' | '' | undefined;
+    this.imageSelectionChange.emit({
+      widthPx,
+      heightPx,
+      aspectRatio,
+      alignment: align === 'left' || align === 'center' || align === 'right' ? align : null,
+    });
+  }
+
+  /** Apply a new width (px) to the selected image; height follows aspect when locked. */
+  setSelectedImageWidth(widthPx: number, lockAspect = true): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img) return;
+    const safeWidth = Math.max(16, Math.round(widthPx));
+    const aspect = img.naturalWidth > 0 && img.naturalHeight > 0
+      ? img.naturalWidth / img.naturalHeight
+      : (img.clientWidth > 0 && img.clientHeight > 0 ? img.clientWidth / img.clientHeight : 1);
+    const newHeight = lockAspect ? Math.max(16, Math.round(safeWidth / aspect)) : img.clientHeight;
+    this.applyImageSize(img, wrapper, safeWidth, newHeight);
+  }
+
+  /** Apply a new height (px); width follows aspect when locked. */
+  setSelectedImageHeight(heightPx: number, lockAspect = true): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img) return;
+    const safeHeight = Math.max(16, Math.round(heightPx));
+    const aspect = img.naturalWidth > 0 && img.naturalHeight > 0
+      ? img.naturalWidth / img.naturalHeight
+      : (img.clientWidth > 0 && img.clientHeight > 0 ? img.clientWidth / img.clientHeight : 1);
+    const newWidth = lockAspect ? Math.max(16, Math.round(safeHeight * aspect)) : img.clientWidth;
+    this.applyImageSize(img, wrapper, newWidth, safeHeight);
+  }
+
+  /** Re-stretches the image to its intrinsic aspect ratio at the current width. */
+  resetSelectedImageAspect(): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img || img.naturalWidth <= 0 || img.naturalHeight <= 0) return;
+    const aspect = img.naturalWidth / img.naturalHeight;
+    const widthPx = Math.max(16, Math.round(img.clientWidth));
+    const heightPx = Math.max(16, Math.round(widthPx / aspect));
+    this.applyImageSize(img, wrapper, widthPx, heightPx);
+  }
+
+  /** Align the paragraph containing the selected image (null = clear text-align). */
+  setSelectedImageAlignment(value: 'left' | 'center' | 'right' | null): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const para = wrapper.closest('p, div, h1, h2, h3, h4, h5, h6') as HTMLElement | null;
+    if (!para) return;
+    if (value === null) {
+      para.style.removeProperty('text-align');
+    } else {
+      para.style.textAlign = value;
+    }
+    this.onContentChange();
+    this.emitImageSelectionState();
+  }
+
+  /** Removes the currently selected image from the DOM and notifies the editor. */
+  removeSelectedImage(): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    wrapper.remove();
+    this.selectedImageWrapper = null;
+    this.imageSelectionChange.emit(null);
+    this.onContentChange();
+  }
+
+  private applyImageSize(
+    img: HTMLImageElement, wrapper: HTMLElement, widthPx: number, heightPx: number,
+  ): void {
+    img.style.width = `${widthPx}px`;
+    img.style.height = `${heightPx}px`;
+    // Keep the EMU data-attributes in sync so the DOCX exporter re-emits the new size.
+    const EMU_PER_PX = 9525;
+    img.setAttribute('data-width-emu', String(widthPx * EMU_PER_PX));
+    img.setAttribute('data-height-emu', String(heightPx * EMU_PER_PX));
+    wrapper.style.width = `${widthPx}px`;
+    this.onContentChange();
+    this.emitImageSelectionState();
   }
 
   private getRangeFromPoint(x: number, y: number): Range | null {

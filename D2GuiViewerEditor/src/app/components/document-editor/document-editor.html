@@ -566,7 +566,7 @@
     @if (showRuler()) {
       <div class="ruler-h-bar">
         <!-- Rozpórka równa panelowi bocznemu (wyszukiwanie / tabela), by linijka pozioma była zrównana z dokumentem -->
-        @if (showFindReplace() || showTablePanel() || showHeaderFooterPanel()) {
+        @if (showFindReplace() || showTablePanel() || showHeaderFooterPanel() || showImagePanel()) {
           <div class="ruler-h-search-spacer"></div>
         }
         <div class="ruler-h-gutter"></div>
@@ -678,6 +678,21 @@
       }
 
       <!-- Panel nagłówka i stopki — zastępuje dawny pływający pasek nad dokumentem -->
+      <!-- Panel właściwości obrazu — Word-like, single-mode dock. Close = deselect (panel znika); remove = usuwa obraz. -->
+      @if (showImagePanel()) {
+        <d2-image-properties-panel
+          [state]="selectedImage()"
+          [lockAspect]="imageLockAspect()"
+          (close)="selectedImage.set(null)"
+          (widthChange)="editor.setSelectedImageWidth($event, imageLockAspect())"
+          (heightChange)="editor.setSelectedImageHeight($event, imageLockAspect())"
+          (lockAspectChange)="imageLockAspect.set($event)"
+          (alignmentChange)="editor.setSelectedImageAlignment($event)"
+          (removeImage)="editor.removeSelectedImage(); selectedImage.set(null)"
+          (resetAspect)="editor.resetSelectedImageAspect()"
+        />
+      }
+
       @if (showHeaderFooterPanel()) {
         <!-- editor is a non-null @ViewChild; the panel only renders after editingSection
              becomes header/footer, which is emitted by the editor itself. -->
@@ -745,6 +760,7 @@
               (openHeaderFooterSettings)="onOpenHeaderFooterSettings($event)"
               (editingSectionChange)="onEditingSectionChange($event)"
               (sectionGeometryChange)="onSectionGeometryChange($event)"
+              (imageSelectionChange)="onImageSelectionChange($event)"
             />
           </div>
         </div>

@@ -1,0 +1,95 @@
+<aside class="img-panel" role="region" aria-label="Właściwości obrazu">
+  <div class="img-panel__header">
+    <h3>Obraz</h3>
+    <button type="button"
+            class="img-panel__close"
+            (click)="close.emit()"
+            title="Zamknij">×</button>
+  </div>
+
+  @if (current(); as s) {
+    <section class="img-panel__group">
+      <h4>Rozmiar</h4>
+      <label class="img-panel__row">
+        <span>Szerokość</span>
+        <input type="number"
+               min="16"
+               max="4000"
+               step="1"
+               [ngModel]="_widthInput()"
+               (ngModelChange)="_widthInput.set($event)"
+               (blur)="applyWidth()"
+               (keyup.enter)="applyWidth()">
+        <span class="img-panel__unit">px</span>
+      </label>
+      <label class="img-panel__row">
+        <span>Wysokość</span>
+        <input type="number"
+               min="16"
+               max="4000"
+               step="1"
+               [ngModel]="_heightInput()"
+               (ngModelChange)="_heightInput.set($event)"
+               (blur)="applyHeight()"
+               (keyup.enter)="applyHeight()">
+        <span class="img-panel__unit">px</span>
+      </label>
+      <label class="img-panel__row img-panel__row--checkbox">
+        <input type="checkbox"
+               [checked]="lockAspect"
+               (change)="toggleLock($any($event.target).checked)">
+        <span>Zachowaj proporcje</span>
+      </label>
+      <button type="button"
+              class="img-panel__action"
+              (click)="resetAspect.emit()"
+              title="Wymuś szerokość zgodną z oryginalnym aspektem">
+        Przywróć proporcje
+      </button>
+    </section>
+
+    <section class="img-panel__group">
+      <h4>Wyrównanie</h4>
+      <div class="img-panel__align-row">
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.alignment === 'left'"
+                (click)="align('left')"
+                title="Do lewej">L</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.alignment === 'center'"
+                (click)="align('center')"
+                title="Do środka">C</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.alignment === 'right'"
+                (click)="align('right')"
+                title="Do prawej">R</button>
+        <button type="button"
+                class="img-panel__icon-btn img-panel__icon-btn--ghost"
+                [class.is-active]="s.alignment === null"
+                (click)="clearAlign()"
+                title="Bez wyrównania">—</button>
+      </div>
+    </section>
+
+    <section class="img-panel__group">
+      <h4>Opływanie tekstu</h4>
+      <p class="img-panel__hint">
+        Tryb <strong>W tekście</strong> (inline). Floating
+        (square/tight/behind/in&nbsp;front) w przygotowaniu.
+      </p>
+    </section>
+
+    <section class="img-panel__group">
+      <button type="button"
+              class="img-panel__action img-panel__action--danger"
+              (click)="removeImage.emit()">
+        Usuń obraz
+      </button>
+    </section>
+  } @else {
+    <p class="img-panel__empty">Zaznacz obraz, aby zobaczyć ustawienia.</p>
+  }
+</aside>

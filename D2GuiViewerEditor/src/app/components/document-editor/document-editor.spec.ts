@@ -330,6 +330,13 @@ describe('DocumentEditorComponent — koordynacja panelu Nagłówek/Stopka z Fin
 
     expect(component.showHeaderFooterPanel()).toBe(false);
   });
+
+  it('panel obrazu ma pierwszeństwo nad panelem nagłówka/stopki', () => {
+    component.editingSection.set('header');
+    component.selectedImage.set({ widthPx: 100, heightPx: 50, aspectRatio: 2, alignment: null });
+    expect(component.showImagePanel()).toBe(true);
+    expect(component.showHeaderFooterPanel()).toBe(false);
+  });
 });
 
 describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () => {
