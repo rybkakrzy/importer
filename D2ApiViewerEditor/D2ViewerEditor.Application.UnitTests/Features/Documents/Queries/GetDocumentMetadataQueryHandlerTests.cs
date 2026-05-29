@@ -96,5 +96,29 @@ public class GetDocumentMetadataQueryHandlerTests
         var dto = await HandleWithMetadataAsync("{ this is not valid json ");
         dto.Classification.Should().BeNull();
         dto.ReturnUrl.Should().BeNull();
+        dto.UserDownload.Should().BeFalse("malformed metadata never grants download");
+    }
+
+    [Test]
+    public async Task Handle_NoUserDownloadField_ReturnsFalse()
+    {
+        (await HandleWithMetadataAsync(null)).UserDownload.Should().BeFalse();
+        (await HandleWithMetadataAsync("{}")).UserDownload.Should().BeFalse();
+        (await HandleWithMetadataAsync("{\"classification\":\"C2\"}")).UserDownload.Should().BeFalse();
+    }
+
+    [TestCase("{\"userDownload\":false}")]
+    [TestCase("{\"userDownload\":null}")]
+    public async Task Handle_UserDownloadNotTrue_ReturnsFalse(string metadata)
+    {
+        (await HandleWithMetadataAsync(metadata)).UserDownload.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task Handle_UserDownloadTrue_ReturnsTrue()
+    {
+        var dto = await HandleWithMetadataAsync("{\"userDownload\":true,\"classification\":\"C2\"}");
+        dto.UserDownload.Should().BeTrue();
+        dto.Classification.Should().Be("C2");
     }
 }

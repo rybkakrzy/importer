@@ -1,0 +1,126 @@
+using D2ViewerEditor.Application.Features.Documents.Commands.DownloadEditedDocument;
+using D2ViewerEditor.Domain.Entities;
+using D2ViewerEditor.Domain.Interfaces;
+using D2ViewerEditor.Domain.Models;
+using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using NUnit.Framework;
+
+namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
+
+[TestFixture]
+public class DownloadEditedDocumentCommandHandlerTests
+{
+    private const string DocxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+    private Mock<IDocumentRepository> _documentRepo = null!;
+    private Mock<IHtmlToDocxConverter> _converter = null!;
+    private DownloadEditedDocumentCommandHandler _handler = null!;
+
+    [SetUp]
+    public void SetUp()
+    {
+        _documentRepo = new Mock<IDocumentRepository>();
+        _converter = new Mock<IHtmlToDocxConverter>();
+        _handler = new DownloadEditedDocumentCommandHandler(
+            _documentRepo.Object,
+            _converter.Object,
+            NullLogger<DownloadEditedDocumentCommandHandler>.Instance);
+    }
+
+    private static Document NewDoc(string? metadata) =>
+        new(Guid.NewGuid(), "doc.docx", DocxMime, "User", metadata);
+
+    private DownloadEditedDocumentCommand BuildCmd(Guid masterId, string html = "<p>x</p>") =>
+        new(masterId, html, "out.docx", null, null, null, null);
+
+    [Test]
+    public async Task Handle_DocumentMissing_ReturnsNotFound()
+    {
+        _documentRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Document?)null);
+
+        var result = await _handler.Handle(BuildCmd(Guid.NewGuid()), CancellationToken.None);
+
+        result.IsNotFound.Should().BeTrue();
+        _converter.Verify(c => c.Convert(
+            It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
+            It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+            It.IsAny<PageMargins?>()), Times.Never);
+    }
+
+    [TestCase(null, TestName = "metadata missing entirely")]
+    [TestCase("", TestName = "metadata empty")]
+    [TestCase("{}", TestName = "metadata without userDownload")]
+    [TestCase("{\"userDownload\":false}", TestName = "userDownload=false")]
+    [TestCase("{\"userDownload\":null}", TestName = "userDownload=null")]
+    [TestCase("{\"userDownload\":\"true\"}", TestName = "userDownload as string")]
+    [TestCase("not-json", TestName = "metadata malformed")]
+    public async Task Handle_UserDownloadNotTrue_ReturnsForbidden_WithoutInvokingConverter(string? metadata)
+    {
+        var doc = NewDoc(metadata);
+        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+
+        var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.IsNotFound.Should().BeFalse();
+        result.Error.Should().StartWith(DownloadEditedDocumentCommandHandler.ForbiddenErrorPrefix);
+        _converter.Verify(c => c.Convert(
+            It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
+            It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+            It.IsAny<PageMargins?>()), Times.Never);
+    }
+
+    [Test]
+    public async Task Handle_UserDownloadTrue_ConvertsAndReturnsBytes()
+    {
+        var doc = NewDoc("{\"userDownload\":true,\"classification\":\"C2\"}");
+        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+
+        var expected = new byte[] { 1, 2, 3, 4 };
+        _converter.Setup(c => c.Convert(
+                It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
+                It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+                It.IsAny<PageMargins?>()))
+            .Returns(expected);
+
+        var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.DocxBytes.Should().Equal(expected);
+        result.Value.FileName.Should().Be("out.docx");
+    }
+
+    [Test]
+    public async Task Handle_AllowedButEmptyHtml_ReturnsFailure()
+    {
+        var doc = NewDoc("{\"userDownload\":true}");
+        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+
+        var result = await _handler.Handle(BuildCmd(doc.Id, html: "   "), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().NotStartWith(DownloadEditedDocumentCommandHandler.ForbiddenErrorPrefix);
+    }
+
+    [Test]
+    public async Task Handle_NoOriginalFileName_FallsBackToDocumentNameWithDocxSuffix()
+    {
+        var doc = NewDoc("{\"userDownload\":true}");
+        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _converter.Setup(c => c.Convert(
+                It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
+                It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+                It.IsAny<PageMargins?>()))
+            .Returns(new byte[] { 9 });
+
+        var cmd = new DownloadEditedDocumentCommand(doc.Id, "<p>x</p>", null, null, null, null, null);
+
+        var result = await _handler.Handle(cmd, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.FileName.Should().Contain("doc.docx");
+    }
+}

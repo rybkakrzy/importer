@@ -1,4 +1,4 @@
-using System.Text.Json;
+using D2ViewerEditor.Application.Features.Documents.Common;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -9,8 +9,6 @@ namespace D2ViewerEditor.Application.Features.Documents.Commands.UpdateCallbackU
 public class UpdateCallbackUrlCommandHandler
     : IRequestHandler<UpdateCallbackUrlCommand, Result>
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     /// <summary>
     /// Belt-and-suspenders cap (real-world callback URLs sit well below this; longer values
     /// usually mean an embedded token we should not be storing).
@@ -33,8 +31,6 @@ public class UpdateCallbackUrlCommandHandler
         if (url.Length > MaxUrlLength)
             return Result.Failure($"Callback URL nie może być dłuższy niż {MaxUrlLength} znaków.");
 
-        // Reuse the same validator the delivery worker uses to call the URL — keeps the contract
-        // consistent ("if it passes here, it can be delivered").
         if (!DocumentDelivery.IsValidRecipientUrl(url))
             return Result.Failure("Callback URL musi być absolutnym adresem http(s).");
 
@@ -42,33 +38,17 @@ public class UpdateCallbackUrlCommandHandler
         if (document == null)
             return Result.NotFound();
 
-        // After "Zakończ" the delivery has already snapshotted its own RecipientUrl — changing
-        // the master metadata at this point would be misleading (worker keeps the old URL).
         if (document.Status is DocumentStatus.Sending or DocumentStatus.Sent or DocumentStatus.DeliveryFailed)
             return Result.Failure(
                 $"Nie można zaktualizować callback URL dla dokumentu w stanie {document.Status}: wysyłka już została zlecona.");
 
-        var classification = TryReadClassification(document.Metadata);
-        var newMetadata = JsonSerializer.Serialize(new ExternalMetadata(url, classification), JsonOptions);
+        // Preserve every other field on the metadata blob — we only own ReturnUrl here.
+        var existing = ExternalDocumentMetadata.Parse(document.Metadata);
+        var newMetadata = (existing with { ReturnUrl = url }).Serialize();
 
         document.UpdateMetadata(newMetadata);
         await _documentRepository.SaveChangesAsync(cancellationToken);
 
         return Result.Success();
     }
-
-    private static string? TryReadClassification(string? metadata)
-    {
-        if (string.IsNullOrWhiteSpace(metadata)) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<ExternalMetadata>(metadata, JsonOptions)?.Classification;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private sealed record ExternalMetadata(string? ReturnUrl, string? Classification);
 }

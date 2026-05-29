@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Features.Documents.Common;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -34,12 +35,21 @@ public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentComman
             var storagePath = await _storageService.UploadAsync(
                 versionId, request.Content, request.MimeType, cancellationToken);
 
-            // Utwórz dokument (aggregate root)
+            // Local-upload flow (user-chosen file from disk): there is no external app and no
+            // return URL, so the only way for the user to retrieve the edited file is to download
+            // it. The system itself sets userDownload=true here — NOT the client request, so a
+            // tampered upload cannot suppress it (rule 12).
+            var localUploadMetadata = new ExternalDocumentMetadata(
+                ReturnUrl: null,
+                Classification: null,
+                UserDownload: true).Serialize();
+
             var document = new Document(
                 id: masterId,
                 name: request.FileName,
                 mimeType: request.MimeType,
-                createdBy: request.CreatedBy
+                createdBy: request.CreatedBy,
+                metadata: localUploadMetadata
             );
 
             // Dodaj pierwszą wersję z referencją do GCS (version.Id == klucz obiektu w GCS)

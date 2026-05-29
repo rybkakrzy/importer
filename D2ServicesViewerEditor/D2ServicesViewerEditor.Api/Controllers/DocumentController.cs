@@ -63,7 +63,10 @@ public class DocumentController : ControllerBase
         var metadataJson = JsonSerializer.Serialize(new
         {
             returnUrl = string.IsNullOrWhiteSpace(request.ReturnUrl) ? null : request.ReturnUrl,
-            classification = classification.ToString()
+            classification = classification.ToString(),
+            // Domain rule: missing field / non-true ⇒ false. Persisted only when explicitly true
+            // so a stored false vs. missing is indistinguishable to the parser (both ⇒ blocked).
+            userDownload = request.UserDownload == true ? (bool?)true : null
         });
 
         var createdBy = Request.Headers.TryGetValue("X-Created-By", out var headerValue)
@@ -229,6 +232,15 @@ public class CreateDocumentRequest
 
     /// <summary>Klasyfikacja dokumentu: C1, C2, C3 lub C4 (obligatoryjna)</summary>
     public string Classification { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Opcjonalna flaga zezwalająca użytkownikowi na pobranie edytowanego pliku na komputer.
+    /// Domyślnie <c>false</c> — brak pola / <c>null</c> / <c>false</c> blokuje pobieranie.
+    /// Tylko <c>true</c> aktywuje menu „Pobierz dokument" w edytorze.
+    /// <para>Niezależne od <c>ReturnUrl</c>: zwrotka do systemu źródłowego i pobranie przez
+    /// użytkownika to dwa odrębne mechanizmy.</para>
+    /// </summary>
+    public bool? UserDownload { get; set; }
 }
 
 /// <summary>

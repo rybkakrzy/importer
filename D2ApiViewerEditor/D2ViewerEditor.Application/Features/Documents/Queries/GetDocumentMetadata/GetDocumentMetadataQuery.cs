@@ -16,5 +16,9 @@ public record DocumentMetadataDto(
     Guid MasterId,
     string MimeType,
     string? ReturnUrl,
-    string? Classification
+    string? Classification,
+    // Per domain rule: only an explicit `true` allows the user-facing download action.
+    // Missing field / non-true value ⇒ false. Surfaced to the GUI so the menu item can
+    // be hidden; backend enforcement lives in the dedicated download command.
+    bool UserDownload
 );

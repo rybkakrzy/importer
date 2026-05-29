@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
+import { SaveDocumentRequest } from '../models/document.model';
 
 export interface UploadDocumentRequest {
   name: string;
@@ -50,6 +51,9 @@ export interface DocumentMetadataDto {
   mimeType: string;
   returnUrl: string | null;
   classification: string | null;
+  // Domain rule: missing field / non-true ⇒ false. Drives visibility of the
+  // "Pobierz dokument" menu item — backend additionally enforces on /user-download.
+  userDownload: boolean;
 }
 
 export interface DocumentVersionDto {
@@ -317,6 +321,19 @@ export class DocumentStorageService {
     link.download = doc.name;
     link.click();
     window.URL.revokeObjectURL(url);
+  }
+
+  /**
+   * User-facing "Pobierz dokument" — converts current editor state to DOCX bytes
+   * via the gated endpoint. Backend rejects with 403 when
+   * `documents.metadata.userDownload !== true`, so the response error message is
+   * surfaced verbatim to the caller (`error.error.error` when the body is JSON,
+   * or the parsed blob otherwise).
+   */
+  downloadEditedDocument(masterId: string, request: SaveDocumentRequest): Observable<Blob> {
+    return this.http.post(`${this.apiUrl}/${masterId}/user-download`, request, {
+      responseType: 'blob'
+    });
   }
 
   /**

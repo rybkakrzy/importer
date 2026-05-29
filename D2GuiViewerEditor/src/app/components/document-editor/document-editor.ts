@@ -126,6 +126,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   returnUrl = signal<string | null>(null);
   /** „Zakończ" ma sens tylko, gdy istnieje poprawny link do zwrócenia pliku po edycji. */
   readonly canFinish = computed(() => isValidReturnUrl(this.returnUrl()));
+
+  /**
+   * Mirror of documents.metadata.userDownload (default false). Drives the visibility
+   * of the "Pobierz dokument" menu item — backend additionally enforces on the
+   * /user-download endpoint, so flipping the signal in DevTools doesn't bypass the rule.
+   */
+  userDownload = signal<boolean>(false);
+  readonly canUserDownload = computed(() => this.userDownload());
   private deliveryPollSub?: Subscription;
   private static readonly DELIVERY_POLL_MS = 4000;
   documentMetadata = signal<DocumentMetadata>({
@@ -611,6 +619,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.errorMessage.set(null);
     this.documentMasterId.set(masterId);
     this.returnUrl.set(null);
+    this.userDownload.set(false);
 
     this.documentStorageService.getDocumentMetadata(masterId).pipe(
       switchMap(meta => {
@@ -620,6 +629,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.documentClassification.set(meta.classification ?? null);
         // Source of truth for the "Zakończ" button visibility (Krok 4 return link).
         this.returnUrl.set(meta.returnUrl ?? null);
+        // Drives "Pobierz dokument" menu visibility — backend also enforces.
+        this.userDownload.set(meta.userDownload === true);
 
         // PDF: edytor DOCX nie renderuje PDF — kieruj do PDFViewer (tryb podglądu).
         if (mime === DocumentEditorComponent.PDF_MIME) {
@@ -936,6 +947,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Nie utrwala w bazie — to lokalna kopia dla użytkownika.
    */
   downloadDocument(): void {
+    const masterId = this.documentMasterId();
+    if (!masterId || !this.canUserDownload()) {
+      // Defensive: the menu item is hidden when canUserDownload() is false, but
+      // anyone calling the method directly still hits the same gate the backend uses.
+      this.showError('Pobieranie pliku na komputer nie jest dostępne dla tego dokumentu.');
+      return;
+    }
+
     const request = this.buildSaveRequest();
     const fileName = request.originalFileName;
 
@@ -977,10 +996,32 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
 
     this.isLoading.set(true);
-    this.documentService.downloadDocument(request, fileName);
-    this.showSuccess('Pobrano dokument');
-    this.isLoading.set(false);
     this.showMenu.set(false);
+    this.documentStorageService.downloadEditedDocument(masterId, request).subscribe({
+      next: (blob) => {
+        const objectUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = fileName.endsWith('.docx') ? fileName : `${fileName}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(objectUrl);
+        this.showSuccess('Pobrano dokument');
+        this.isLoading.set(false);
+      },
+      error: (err) => {
+        this.isLoading.set(false);
+        // 403 from the gate → keep the document-level signal in sync with the backend
+        // verdict (covers the race where metadata changed since load).
+        if (err?.status === 403) {
+          this.userDownload.set(false);
+          this.showError('Pobieranie pliku na komputer nie jest dostępne dla tego dokumentu.');
+          return;
+        }
+        this.showError('Nie udało się pobrać dokumentu.');
+      }
+    });
   }
 
   /**

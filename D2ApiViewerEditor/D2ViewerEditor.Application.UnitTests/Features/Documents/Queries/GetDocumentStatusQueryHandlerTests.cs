@@ -113,6 +113,23 @@ public class GetDocumentStatusQueryHandlerTests
         result.Value!.HasCallbackUrl.Should().BeFalse();
     }
 
+    [TestCase(null, false, TestName = "metadata missing ⇒ userDownload false")]
+    [TestCase("{}", false, TestName = "metadata empty ⇒ userDownload false")]
+    [TestCase("{\"userDownload\":false}", false, TestName = "explicit false ⇒ false")]
+    [TestCase("{\"userDownload\":true}", true, TestName = "explicit true ⇒ true")]
+    public async Task Handle_UserDownload_IsMirroredFromMetadata(string? metadata, bool expected)
+    {
+        var doc = BuildDocWithVersion(metadata, out _);
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _deliveryRepo.Setup(r => r.GetActiveByDocumentIdAsync(doc.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDelivery?)null);
+
+        var result = await _handler.Handle(new GetDocumentStatusQuery(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.UserDownload.Should().Be(expected);
+    }
+
     [Test]
     public async Task Handle_WithActiveDelivery_IncludesDeliveryProjection()
     {

@@ -1,4 +1,5 @@
 using D2ViewerEditor.Api.Controllers;
+using D2ViewerEditor.Application.Features.Documents.Commands.DownloadEditedDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.FinishAndSendDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.RequeueDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVersion;
@@ -211,6 +212,54 @@ public class DocumentStorageController : BaseApiController
 
         var dto = result.Value!;
         return File(dto.Content, dto.MimeType, dto.FileName);
+    }
+
+    /// <summary>
+    /// Pobranie edytowanego pliku na komputer użytkownika ("Pobierz dokument"). Działa tylko,
+    /// gdy metadane dokumentu mają <c>userDownload == true</c> (lokalny upload ustawia tę flagę
+    /// automatycznie; dokumenty z aplikacji zewnętrznej muszą mieć ją jawnie). Pełne egzekwowanie
+    /// po stronie backendu — frontend dodatkowo ukrywa pozycję menu.
+    /// </summary>
+    [HttpPost("{masterId:guid}/user-download")]
+    [Consumes("application/json")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadEditedDocument(
+        [FromRoute] Guid masterId,
+        [FromBody] Domain.Models.SaveDocumentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var command = new DownloadEditedDocumentCommand(
+            MasterId: masterId,
+            Html: request?.Html ?? string.Empty,
+            OriginalFileName: request?.OriginalFileName,
+            Metadata: request?.Metadata,
+            Header: request?.Header,
+            Footer: request?.Footer,
+            Margins: request?.Margins);
+
+        var result = await Mediator.Send(command, cancellationToken);
+
+        if (result.IsSuccess)
+            return File(result.Value!.DocxBytes,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                result.Value.FileName);
+
+        if (result.IsNotFound)
+            return NotFound(new { error = result.Error });
+
+        if (result.Error != null
+            && result.Error.StartsWith(DownloadEditedDocumentCommandHandler.ForbiddenErrorPrefix, StringComparison.Ordinal))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = result.Error[(DownloadEditedDocumentCommandHandler.ForbiddenErrorPrefix.Length)..].Trim()
+            });
+        }
+
+        return BadRequest(new { error = result.Error });
     }
 
     /// <summary>

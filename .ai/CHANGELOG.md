@@ -35,6 +35,22 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — Reguła `userDownload`: kontrola pobierania edytowanego pliku
+### Changed
+- **Reguła domenowa**: nowe opcjonalne pole `userDownload` w metadanych dokumentu (`documents.metadata` JSON). Default `false`; brak / null / non-true ⇒ blokada. Niezależne od `returnUrl`.
+- **Application: wspólny parser metadanych** `Features/Documents/Common/ExternalDocumentMetadata` (record + tolerant `Parse(string?)` + `Serialize()` + `IsUserDownloadAllowed`). Zastąpił 4 lokalne kopie `sealed record ExternalMetadata` w handlerach (`GetDocumentMetadata`, `GetDocumentStatus`, `UpdateCallbackUrl`, `FinishAndSendDocument`-touchpoints) — single source of truth dla shape JSON.
+- **External API** (`POST /api/v1/document`): `CreateDocumentRequest` dostaje opcjonalne pole `UserDownload: bool?`. Mapowane do `metadata.userDownload`. Przesłanie `null`/`false`/braku → pole w JSON `null` (parser interpretuje jako blokadę).
+- **Local upload** (`UploadDocumentCommandHandler`): backend **sam** ustawia `userDownload=true` w nowo tworzonym `Document.Metadata` (rule 12 — anti-tamper; klient nie może wymusić ani zablokować). Bo lokalny upload nie ma `returnUrl` — pobranie jest jedynym sposobem odzyskania edytowanego pliku.
+- **Nowy gated endpoint**: `POST /api/documentstorage/{masterId}/user-download` (`DocumentStorageController.DownloadEditedDocument`) — konwertuje aktualny stan edytora HTML → DOCX **tylko** gdy `userDownload == true`. Sentinel error `USER_DOWNLOAD_FORBIDDEN:` mapowany w controllerze na **HTTP 403**. Dawny stateless `POST /api/document/save` pozostaje bez zmian (używany przez inne flow); GUI nie korzysta już z niego dla „Pobierz dokument".
+- **DTO statusu/metadanych eksponują flagę** (`DocumentMetadataDto.UserDownload`, `DocumentStatusDto.UserDownload`) — system zewnętrzny widzi, czy użytkownik ma prawo do pobrania.
+- **Frontend**: `DocumentMetadataDto.userDownload: boolean` + sygnał `userDownload` + `canUserDownload` computed w `document-editor`. Pozycja menu „Pobierz dokument" gated `@if (canUserDownload())`. `document.service.downloadDocument` zastąpiony przez `documentStorageService.downloadEditedDocument(masterId, request)` → POST na nowy gated endpoint; obsługa 403 z czytelnym komunikatem + synchronizacja lokalnego sygnału.
+### Verified
+- `dotnet build` obu solucji OK (0 błędów); pełna solucja backendu: **325/325 pass** (Application 192 +20 nowych, Domain 57, Api 33, Infrastructure 43; Integration 6 skipped — DB-bound). 
+- `tsc --noEmit` OK; `npm test`: **150/150 pass** (+4 nowych w `document-editor.spec.ts`).
+### Notes / ograniczenia
+- **Raw download endpoints** (`GET .../{masterId}/download`, `GET .../versions/{vid}/download`) NIE są gated — używane przez edytor do *ładowania* bajtów (nie do user-downloadu). Ten threat-vector (zalogowany użytkownik z bezpośrednim wywołaniem URL) jest poza zakresem tego zadania, do udokumentowania jako follow-up R-NEW. W praktyce: te endpointy nie zwracają „edytowanego" pliku — tylko ostatnio zapisany; do faktycznego pobrania edycji niezbędne jest `POST .../user-download`.
+- Stary `documentService.downloadDocument` pozostaje w bazie kodu (martwy dla user-download, używany w innych miejscach jak sign flow) — refactor poza zakresem.
+
 ## 2026-05-29 — External API: 3 nowe endpointy (callback URL / unlock / status)
 ### Changed
 - **Domena.** `Document` dostaje dwie nowe metody (mirror `MarkEditing/Sending/...`):

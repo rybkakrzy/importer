@@ -57,6 +57,27 @@ public class UploadDocumentCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_LocalUpload_ShouldAutomaticallySetUserDownloadTrue()
+    {
+        // Local upload: no external app and no return URL, so the only way to retrieve the
+        // edited file is the in-browser download. The flag is set by the SYSTEM (not the
+        // request) so a tampered upload cannot suppress it.
+        var command = new UploadDocumentCommand(
+            Content: new byte[] { 1, 2, 3 },
+            FileName: "local.docx",
+            MimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            CreatedBy: "TestUser"
+        );
+
+        await _handler.Handle(command, CancellationToken.None);
+
+        await _documentRepository.Received(1).AddAsync(
+            Arg.Is<Document>(d => d.Metadata != null && d.Metadata.Contains("\"userDownload\":true")),
+            Arg.Any<CancellationToken>()
+        );
+    }
+
+    [Test]
     public async Task Handle_ValidCommand_ShouldCreateDocumentWithVersionNumber1()
     {
         // Arrange

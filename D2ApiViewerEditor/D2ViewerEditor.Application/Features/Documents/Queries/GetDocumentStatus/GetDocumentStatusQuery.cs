@@ -19,6 +19,9 @@ public record DocumentStatusDto(
     string Status,
     bool IsLocked,
     bool HasCallbackUrl,
+    // Mirrors documents.metadata.userDownload (default false). Tells the source app
+    // whether the editor user is allowed to download the edited file to disk.
+    bool UserDownload,
     Guid? ActiveVersionId,
     int? ActiveVersionNumber,
     DateTime? ActiveVersionModifiedAt,

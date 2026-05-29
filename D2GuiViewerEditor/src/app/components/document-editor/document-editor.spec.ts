@@ -395,3 +395,51 @@ describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () =>
     }
   });
 });
+
+describe('DocumentEditorComponent — userDownload (widoczność „Pobierz dokument")', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: { buildNumber: () => '1', environment: () => 'TEST' } },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('default ⇒ canUserDownload=false (brak metadanych)', () => {
+    expect(component.canUserDownload()).toBe(false);
+  });
+
+  it('userDownload=true ⇒ canUserDownload=true', () => {
+    component.userDownload.set(true);
+    expect(component.canUserDownload()).toBe(true);
+  });
+
+  it('userDownload=false ⇒ canUserDownload=false', () => {
+    component.userDownload.set(false);
+    expect(component.canUserDownload()).toBe(false);
+  });
+
+  it('downloadDocument() bez canUserDownload pokazuje błąd i nie wywołuje API', () => {
+    let downloadCalls = 0;
+    (component as any).documentStorageService = {
+      downloadEditedDocument: () => { downloadCalls++; return { subscribe: () => {} }; }
+    };
+    component.documentMasterId.set('master-1');
+    component.userDownload.set(false);
+
+    component.downloadDocument();
+
+    expect(downloadCalls).toBe(0);
+    expect(component.errorMessage()).not.toBeNull();
+  });
+});

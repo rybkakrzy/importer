@@ -42,6 +42,7 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 | GET | `/{masterId}/versions/{versionId}/download` | Bajty konkretnej wersji | plik |
 | POST | `/{masterId}/restore/{versionId}` | Przywróć wersję jako aktywną | `{ message, versionId }` |
 | **POST** | `/{masterId}/versions/{versionId}/finish` | **„Zakończ i wyślij"**: utrwala stan edytora, zamraża snapshot, tworzy zadanie wysyłki. Idempotentne (zwraca istniejące aktywne zadanie). Brak/zły returnUrl → 400 | **202 Accepted** `{ deliveryId, status, statusUrl }` |
+| **POST** | `/{masterId}/user-download` | **„Pobierz dokument"** — konwertuje aktualny stan edytora (HTML+header/footer/margins) na DOCX dla użytkownika. Egzekwuje regułę domenową: tylko gdy `documents.metadata.userDownload == true`. Body: `SaveDocumentRequest`. → 200 plik DOCX / 403 (gate) / 404 / 400 |
 | GET | `/deliveries/{deliveryId}` | Status zadania wysyłki (polling z GUI) | `DeliveryStatusDto { deliveryId, documentId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, lastError?, updatedAt }` |
 | GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`; widok GUI `/admin/deliveries`) | `DeliveryListItemDto[] { deliveryId, documentId, status, attemptCount, createdAt, lastAttemptAt?, nextAttemptAt?, deadlineAt, lastError?, lockedUntil?, lockedBy }` |
 | POST | `/deliveries/{deliveryId}/retry` | Ręczne ponowienie nieudanego zadania (`DeadLettered`/`FailedPermanently`) | `RequeueDeliveryResult { deliveryId, status }` |
@@ -80,7 +81,7 @@ Standardowe health checki.
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, obligatoryjna). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
+| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, obligatoryjna), **opcjonalnie `UserDownload: bool?`** (domyślnie `false`; tylko jawne `true` zezwala użytkownikowi na pobranie edytowanego pliku — patrz reguła `userDownload` poniżej). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
 | GET | `/api/v1/document/{documentId}` | Placeholder (read flow niezaimplementowany) |
 | **PUT** | `/api/v1/document/{masterId}/callback-url` | **Aktualizacja URL do wysyłki po „Zakończ"**. Body: `{ "url": "https://..." }`. Walidacja przez `DocumentDelivery.IsValidRecipientUrl` (absolutny http/https, ≤ 2048 znaków). Zapisuje w `documents.metadata.returnUrl` (zachowuje `classification`). Idempotentny. Blokowany w stanach `Sending`/`Sent`/`DeliveryFailed`. → 204 / 400 / 404 / 409 |
 | **POST** | `/api/v1/document/{masterId}/unlock` | **Odblokowanie dokumentu**. Body opcjonalne: `{ "reason": "..." }` (logowane). W tej domenie `DocumentStatus.Editing` = „trzymany przez edytora", więc unlock = `Editing → Saved` (dodano `Document.MarkSaved()`). Idempotentny: `Saved` → 200 z `Changed=false`. Blokowany dla stanów wysyłki (409). → 200 `UnlockDocumentResult { masterId, changed }` / 404 / 409 |
@@ -96,7 +97,31 @@ Wszystkie trzy używają **wyłącznie `masterGuid`** — uzasadnienie:
 | `POST .../unlock` | `masterGuid` | Brak osobnego user-locka w domenie. „Lock" = `Document.Status == Editing` (frontend pokazuje to jako `lockedByOther`). Status na poziomie master → `versionGuid` nic nie wnosi. Worker-lease `LockedUntil`/`LockedBy` na `DocumentDelivery` to inny mechanizm i nie powinien być odblokowywany z zewnątrz. |
 | `GET .../status` | `masterGuid` | Status jest atrybutem master; wersje nie mają własnego statusu. Odpowiedź niesie `activeVersionId` + `latestDelivery` dla pełnego obrazu cyklu życia. |
 
-Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2" }`.
+Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2", "userDownload": true | null }`.
+
+### Reguła domenowa: `userDownload` (kontrola pobierania pliku)
+
+`userDownload` jest opcjonalnym polem w metadanych dokumentu kontrolującym, czy użytkownik może pobrać edytowany plik na komputer.
+
+| Stan w metadanych | Interpretacja | Pozycja menu „Pobierz dokument" |
+|---|---|---|
+| brak pola | `false` | ukryta |
+| `null` | `false` | ukryta |
+| `false` | `false` | ukryta |
+| `"true"` (string) / liczba / inne | `false` (bool deserializacja restrykcyjna) | ukryta |
+| `true` | `true` | widoczna |
+
+**Lokalny upload** (`POST /api/documentstorage/upload`) — backend (`UploadDocumentCommandHandler`) **automatycznie** zapisuje `{"userDownload":true}` w metadanych. Klient nie może tego ustawić ani nadpisać — system jest jedynym źródłem prawdy dla tego flow (rule 12 — anti-tamper).
+
+**External ingest** (`POST /api/v1/document`) — aplikacja źródłowa przekazuje `UserDownload: bool?` w form-data. Domyślnie `false`. Tylko jawne `true` aktywuje pobieranie.
+
+**Egzekwowanie** — `POST /api/documentstorage/{masterId}/user-download` jest jedyną ścieżką dla użytkownika do pobrania edytowanego pliku z aktualnego stanu edytora. Endpoint sprawdza flagę przez `ExternalDocumentMetadata.IsUserDownloadAllowed` i zwraca **403** gdy nie spełniona. Frontend dodatkowo ukrywa pozycję menu, ale nie jest źródłem zabezpieczenia.
+
+**Niezależność od `returnUrl`** — `userDownload` i `returnUrl` to dwa odrębne mechanizmy:
+- `returnUrl` → automatyczny zwrot do systemu źródłowego po „Zakończ"
+- `userDownload` → ręczne pobranie edytowanego pliku przez użytkownika
+
+Dokument może mieć: tylko `returnUrl` (zewnętrzny, bez pobrania), tylko `userDownload=true` (lokalny upload), albo oba.
 
 ## Checklist przed zmianą API
 
