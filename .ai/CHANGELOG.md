@@ -35,6 +35,18 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — Menu „Pomoc" + status autozapisu w stopce
+### Changed
+- **Nowa zakładka menu „Pomoc"** w `document-editor.html` (ostatnia po „Widok"), z jedną pozycją dropdown **„Zgłoś"** → wywołuje istniejące `openReportEmail()` (bez duplikacji logiki — ta sama metoda co dawny przycisk). Sygnał `showHelpMenu = signal(false)` + `toggleHelpMenu()` zgodne z konwencją innych menu (zamyka pozostałe przez `closeAllMenus()`, którego rozszerzono o nowy sygnał). `openReportEmail()` woła teraz `closeAllMenus()` na początku — pozycja w dropdownie zamyka go po kliknięciu, spójnie z resztą menu.
+- **Stary przycisk „Zgłoś" usunięty** z `.header-right`. Toolbar w prawym górnym rogu jest teraz czystszy: badge klasyfikacji, switch „Autozapis", opcjonalny „Zapisz"/„Zakończ".
+- **Data/czas ostatniego autozapisu przeniesione do stopki.** Dawniej `.autosave-status` (`min-width:70px`) obok switcha pokazywał „Zapisywanie…" / „Zapisano o HH:MM:SS" / „Błąd auto-zapisu" — usunięte z toolbara (przy switchu zostaje tylko switch + label „Autozapis", zgodne z task #2). Nowy `.status-autosave` w `.editor-footer > .status-right`: „Autozapis: HH:MM:SS" / „Autozapis: zapisywanie…" / „Autozapis: błąd zapisu" / fallback „Autozapis: włączony"; ukryty gdy autozapis off lub brak `versionId`. Bez nowych źródeł danych — te same sygnały (`autoSaveEnabled`/`autoSaveStatus`/`lastAutoSaveAt`).
+- SCSS: nowy `.status-autosave` (`#555`, `is-saving #1a73e8`, `is-error #cc0000 bold`) — subtelny, dopasowany do reszty status-baru.
+- `document-editor.spec.ts` +4 testy: `toggleHelpMenu` otwiera/zamyka i koliduje z `showViewMenu`, `closeAllMenus` zamyka `showHelpMenu`, `openReportEmail()` zamyka dropdown.
+### Verified
+- `tsc --noEmit` OK; `npm test` → **146/146 pass**.
+### Notes
+- Logika autozapisu i akcji `openReportEmail` bez zmian (rule 6/7) — przeniesienie czysto prezentacyjne.
+
 ## 2026-05-29 — Panel nagłówka/stopki: porządek wizualny + NG8107
 ### Changed
 - **Usunięty primary CTA „Zamknij nagłówek i stopkę"** z `d2-header-footer-panel`. Był wizualnie redundantny z X w nagłówku panelu i z ESC (oba wciąż delegują do `editor.stopEditingHeaderFooter()`). Dock jest spójny z `Wyszukiwanie` i panelem tabeli — X jako jedyne zamknięcie z panelu. Spec testu zaktualizowany: zamiast Primary asercja na X.

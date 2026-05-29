@@ -434,6 +434,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   // Menu Widok
   showViewMenu = signal(false);
+  showHelpMenu = signal(false);
   pageSettings = signal<PageSettings>({
     margins: { top: 2.5, bottom: 2.5, left: 2.5, right: 2.5 },
     orientation: 'portrait',
@@ -1665,6 +1666,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.showInsertMenu.set(false);
     this.showToolsMenu.set(false);
     this.showViewMenu.set(false);
+    this.showHelpMenu.set(false);
     this.activeSubmenu.set(null);
     this.showTemplates.set(false);
     this.showContextMenu.set(false);
@@ -1746,6 +1748,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   openReportEmail(): void {
+    // Triggered from the Pomoc dropdown — close it like the other menu actions do.
+    this.closeAllMenus();
     const masterId = this.documentMasterId() ?? '—';
     const version = this.documentMetadata()?.version ?? '—';
     const date = new Date().toLocaleString('pl-PL');
@@ -2902,6 +2906,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const wasOpen = this.showViewMenu();
     this.closeAllMenus();
     this.showViewMenu.set(!wasOpen);
+  }
+
+  toggleHelpMenu(): void {
+    const wasOpen = this.showHelpMenu();
+    this.closeAllMenus();
+    this.showHelpMenu.set(!wasOpen);
   }
 
   toggleRuler(): void {

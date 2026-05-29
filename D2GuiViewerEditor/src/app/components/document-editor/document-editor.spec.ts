@@ -331,3 +331,67 @@ describe('DocumentEditorComponent — koordynacja panelu Nagłówek/Stopka z Fin
     expect(component.showHeaderFooterPanel()).toBe(false);
   });
 });
+
+describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        // openReportEmail reads buildNumber() / environment() from BuildInfoService.
+        { provide: BuildInfoService, useValue: {
+            buildNumber: () => '1.0.0',
+            environment: () => 'TEST',
+        } },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('toggleHelpMenu otwiera dropdown „Pomoc" i zamyka inne menu', () => {
+    component.showViewMenu.set(true);
+
+    component.toggleHelpMenu();
+
+    expect(component.showHelpMenu()).toBe(true);
+    expect(component.showViewMenu()).toBe(false);
+  });
+
+  it('drugi toggleHelpMenu zamyka dropdown', () => {
+    component.toggleHelpMenu();
+    expect(component.showHelpMenu()).toBe(true);
+
+    component.toggleHelpMenu();
+
+    expect(component.showHelpMenu()).toBe(false);
+  });
+
+  it('closeAllMenus zamyka również „Pomoc"', () => {
+    component.showHelpMenu.set(true);
+
+    component.closeAllMenus();
+
+    expect(component.showHelpMenu()).toBe(false);
+  });
+
+  it('openReportEmail() zamyka otwarte menu „Pomoc" (akcja zamyka dropdown jak inne menu)', () => {
+    component.showHelpMenu.set(true);
+    // window.open is invoked by openReportEmail — stub it so the test doesn't open a tab.
+    const origOpen = window.open;
+    (window as any).open = () => null;
+
+    try {
+      component.openReportEmail();
+      expect(component.showHelpMenu()).toBe(false);
+    } finally {
+      (window as any).open = origOpen;
+    }
+  });
+});

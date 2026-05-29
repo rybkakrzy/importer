@@ -482,36 +482,35 @@
             </div>
           }
         </div>
+
+        <!-- POMOC -->
+        <div class="menu-item-wrapper">
+          <button class="menu-item" (click)="toggleHelpMenu(); $event.stopPropagation()">Pomoc</button>
+
+          @if (showHelpMenu()) {
+            <div class="dropdown-menu" (click)="$event.stopPropagation()">
+              <button class="dropdown-item" (click)="openReportEmail()" title="Zgłoś problem">
+                <span class="dropdown-item-spacer"></span>
+                Zgłoś
+              </button>
+            </div>
+          }
+        </div>
       </nav>
     </div>
     
     <div class="header-right">
       <d2-document-classification-badge [classification]="documentClassification()" />
 
-      <!-- Przełącznik AutoSave — widoczny tylko w trybie edycji (gdy jest wersja edytowalna).
-           Status renderowany zawsze (gdy włączony) by uniknąć reflow toolbara przy toggle. -->
+      <!-- Przełącznik Autozapis — tylko switch + etykieta. Status zapisu wędruje do stopki. -->
       @if (documentVersionId()) {
         <label class="autosave-switch" [title]="autoSaveEnabled() ? 'Autozapis włączony' : 'Autozapis wyłączony'">
           <input type="checkbox" [checked]="autoSaveEnabled()" (change)="toggleAutoSave()">
           <span class="autosave-slider"></span>
           <span class="autosave-label">Autozapis</span>
         </label>
-        <span class="autosave-status"
-              [class.is-error]="autoSaveStatus() === 'error'"
-              [class.is-empty]="!autoSaveEnabled() || autoSaveStatus() === 'idle'">
-          @if (autoSaveEnabled()) {
-            @switch (autoSaveStatus()) {
-              @case ('saving') { Zapisywanie… }
-              @case ('saved') { Zapisano @if (lastAutoSaveAt()) { o {{ lastAutoSaveAt() | date:'HH:mm:ss' }} } }
-              @case ('error') { Błąd auto-zapisu }
-            }
-          }
-        </span>
       }
 
-      <button class="header-btn" (click)="openReportEmail()" title="Zgłoś problem">
-        <span>Zgłoś</span>
-      </button>
       @if (editingDisabled()) {
         @if (lockedByOther()) {
           <span class="readonly-badge" title="Dokument jest obecnie edytowany przez kogoś innego">Tylko do odczytu — ktoś inny edytuje</span>
@@ -782,6 +781,31 @@
       <span class="status-item">{{ buildInfo.buildDate() }}</span>
     </div>
     <div class="status-right">
+      @if (documentVersionId() && autoSaveEnabled()) {
+        <span class="status-item status-autosave"
+              [class.is-error]="autoSaveStatus() === 'error'"
+              [class.is-saving]="autoSaveStatus() === 'saving'">
+          @switch (autoSaveStatus()) {
+            @case ('saving') { Autozapis: zapisywanie… }
+            @case ('saved') {
+              @if (lastAutoSaveAt()) {
+                Autozapis: {{ lastAutoSaveAt() | date:'HH:mm:ss' }}
+              } @else {
+                Autozapis: włączony
+              }
+            }
+            @case ('error') { Autozapis: błąd zapisu }
+            @default {
+              @if (lastAutoSaveAt()) {
+                Autozapis: {{ lastAutoSaveAt() | date:'HH:mm:ss' }}
+              } @else {
+                Autozapis: włączony
+              }
+            }
+          }
+        </span>
+        <span class="status-separator">|</span>
+      }
       @if (documentMetadata().modified) {
         <span class="status-item status-modified">
           Ostatnia modyfikacja: {{ documentMetadata().modified | date:'HH:mm:ss' }}

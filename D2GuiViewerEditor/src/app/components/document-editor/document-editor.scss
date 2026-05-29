@@ -1003,6 +1003,16 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   opacity: 0.7;
 }
 
+// Autosave status moved from the top toolbar to the footer (less visual noise
+// near the switch; the status bar is the natural home for ambient state).
+.status-autosave {
+  color: #555;
+  transition: color 0.15s;
+
+  &.is-saving { color: #1a73e8; }
+  &.is-error  { color: #cc0000; font-weight: 600; }
+}
+
 .status-separator {
   color: #ccc;
 }
