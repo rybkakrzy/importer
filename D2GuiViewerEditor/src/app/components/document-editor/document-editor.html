@@ -688,6 +688,7 @@
           (heightChange)="editor.setSelectedImageHeight($event, imageLockAspect())"
           (lockAspectChange)="imageLockAspect.set($event)"
           (alignmentChange)="editor.setSelectedImageAlignment($event)"
+          (positionModeChange)="editor.setSelectedImagePositionMode($event)"
           (removeImage)="editor.removeSelectedImage(); selectedImage.set(null)"
           (resetAspect)="editor.resetSelectedImageAspect()"
         />

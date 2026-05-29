@@ -100,6 +100,10 @@
   gap: 6px;
 }
 
+.img-panel__align-row--three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .img-panel__icon-btn {
   padding: 6px 0;
   background: #fff;

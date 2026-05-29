@@ -155,6 +155,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     heightPx: number;
     aspectRatio: number;
     alignment: 'left' | 'center' | 'right' | null;
+    positionMode: 'inline' | 'front' | 'behind';
   } | null>();
   /**
    * Emituje ZMIERZONĄ geometrię edytowanego pasma nagłówka/stopki (cm od górnej krawędzi
@@ -666,7 +667,51 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     const startX = event.clientX;
     const startY = event.clientY;
+    const isFloating = wrapper.dataset['posMode'] === 'front' || wrapper.dataset['posMode'] === 'behind';
     this.imageMoveState = { wrapper, startX, startY, isDragging: false };
+
+    // Floating drag — image stays absolutely positioned, drag updates left/top.
+    if (isFloating) {
+      const startLeft = parseInt(wrapper.style.left || '0', 10);
+      const startTop = parseInt(wrapper.style.top || '0', 10);
+      const onFloatingMove = (moveEvent: MouseEvent) => {
+        const dx = moveEvent.clientX - startX;
+        const dy = moveEvent.clientY - startY;
+        if (!this.imageMoveState!.isDragging && Math.hypot(dx, dy) > 3) {
+          this.imageMoveState!.isDragging = true;
+          wrapper.classList.add('image-dragging');
+        }
+        if (this.imageMoveState!.isDragging) {
+          const newLeft = Math.max(0, startLeft + dx);
+          const newTop = Math.max(0, startTop + dy);
+          wrapper.style.left = `${newLeft}px`;
+          wrapper.style.top = `${newTop}px`;
+        }
+      };
+      const onFloatingUp = () => {
+        if (this.imageMoveState?.isDragging) {
+          const xPx = parseInt(wrapper.style.left || '0', 10);
+          const yPx = parseInt(wrapper.style.top || '0', 10);
+          wrapper.dataset['xPx'] = String(xPx);
+          wrapper.dataset['yPx'] = String(yPx);
+          const img = wrapper.querySelector('img') as HTMLImageElement | null;
+          if (img) {
+            const EMU_PER_PX = 9525;
+            img.setAttribute('data-x-emu', String(xPx * EMU_PER_PX));
+            img.setAttribute('data-y-emu', String(yPx * EMU_PER_PX));
+          }
+          wrapper.classList.remove('image-dragging');
+          this.onContentChange();
+          this.emitImageSelectionState();
+        }
+        this.imageMoveState = null;
+        document.removeEventListener('mousemove', onFloatingMove);
+        document.removeEventListener('mouseup', onFloatingUp);
+      };
+      document.addEventListener('mousemove', onFloatingMove);
+      document.addEventListener('mouseup', onFloatingUp);
+      return;
+    }
 
     const onImageMouseMove = (moveEvent: MouseEvent) => {
       if (!this.imageMoveState) return;
@@ -1093,12 +1138,77 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const aspectRatio = heightPx > 0 ? widthPx / heightPx : 1;
     const para = wrapper.closest('p, div, h1, h2, h3, h4, h5, h6') as HTMLElement | null;
     const align = para?.style.textAlign as 'left' | 'center' | 'right' | '' | undefined;
+    const mode = (wrapper.dataset['posMode'] as 'inline' | 'front' | 'behind' | undefined) ?? 'inline';
     this.imageSelectionChange.emit({
       widthPx,
       heightPx,
       aspectRatio,
       alignment: align === 'left' || align === 'center' || align === 'right' ? align : null,
+      positionMode: mode === 'front' || mode === 'behind' ? mode : 'inline',
     });
+  }
+
+  /**
+   * Switches the selected image between in-text (inline) and floating (front/behind).
+   * Word-like semantics — floating uses position: absolute within the closest .page
+   * container, with z-index controlling the front/behind layering. The mode is mirrored
+   * to both the wrapper (CSS hook) and the inner &lt;img&gt; (so the DOCX exporter sees it
+   * on the round-trippable element) so import / export can reproduce it.
+   */
+  setSelectedImagePositionMode(mode: 'inline' | 'front' | 'behind'): void {
+    const wrapper = this.selectedImageWrapper;
+    if (!wrapper) return;
+    const img = wrapper.querySelector('img') as HTMLImageElement | null;
+    if (!img) return;
+
+    if (mode === 'inline') {
+      delete wrapper.dataset['posMode'];
+      delete img.dataset['posMode'];
+      delete wrapper.dataset['xPx'];
+      delete wrapper.dataset['yPx'];
+      img.removeAttribute('data-x-emu');
+      img.removeAttribute('data-y-emu');
+      wrapper.style.removeProperty('position');
+      wrapper.style.removeProperty('left');
+      wrapper.style.removeProperty('top');
+      wrapper.style.removeProperty('z-index');
+      wrapper.style.removeProperty('pointer-events');
+    } else {
+      // Anchor the wrapper at its current rendered position so the switch is visually
+      // stable — no jump to (0,0). Coords are relative to the nearest paginated page.
+      const page = wrapper.closest('.page, .editor-content, .header-editor-content, .footer-editor-content') as HTMLElement | null;
+      const pageRect = page?.getBoundingClientRect();
+      const rect = wrapper.getBoundingClientRect();
+      const xPx = Math.max(0, Math.round(rect.left - (pageRect?.left ?? 0)));
+      const yPx = Math.max(0, Math.round(rect.top - (pageRect?.top ?? 0)));
+      this.applyFloatingPosition(wrapper, img, mode, xPx, yPx);
+    }
+    this.onContentChange();
+    this.emitImageSelectionState();
+  }
+
+  private applyFloatingPosition(
+    wrapper: HTMLElement, img: HTMLImageElement,
+    mode: 'front' | 'behind', xPx: number, yPx: number,
+  ): void {
+    wrapper.dataset['posMode'] = mode;
+    img.dataset['posMode'] = mode;
+    wrapper.dataset['xPx'] = String(xPx);
+    wrapper.dataset['yPx'] = String(yPx);
+    const EMU_PER_PX = 9525;
+    img.setAttribute('data-x-emu', String(xPx * EMU_PER_PX));
+    img.setAttribute('data-y-emu', String(yPx * EMU_PER_PX));
+    wrapper.style.position = 'absolute';
+    wrapper.style.left = `${xPx}px`;
+    wrapper.style.top = `${yPx}px`;
+    if (mode === 'behind') {
+      wrapper.style.zIndex = '-1';
+      // Allow text clicks to land through the wrapper when it sits visually behind.
+      wrapper.style.pointerEvents = 'auto';
+    } else {
+      wrapper.style.zIndex = '10';
+      wrapper.style.pointerEvents = 'auto';
+    }
   }
 
   /** Apply a new width (px) to the selected image; height follows aspect when locked. */
@@ -3166,6 +3276,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
       img.parentNode?.insertBefore(wrapper, img);
       wrapper.appendChild(img);
+
+      // Restore floating positioning from the img's data attributes (set by the DOCX
+      // importer when the source had wp:anchor, or persisted from a previous editing
+      // session). Inline images are the default and need no further setup.
+      const posMode = img.dataset['posMode'];
+      if (posMode === 'front' || posMode === 'behind') {
+        const xPx = Math.round((Number(img.getAttribute('data-x-emu') ?? 0)) / 9525);
+        const yPx = Math.round((Number(img.getAttribute('data-y-emu') ?? 0)) / 9525);
+        this.applyFloatingPosition(wrapper, img, posMode, xPx, yPx);
+      }
 
       ['right', 'bottom', 'corner'].forEach(type => {
         const h = document.createElement('span');

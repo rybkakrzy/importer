@@ -2435,10 +2435,33 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         if (base64Data == null || contentType == null) return string.Empty;
 
+        // Word-like floating positioning: wp:anchor → emit data-pos-mode + offsets so
+        // the editor restores "front"/"behind" mode and the wrapper is anchored.
+        var anchor = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
+        var posAttrs = string.Empty;
+        if (anchor != null)
+        {
+            var behind = anchor.BehindDoc?.Value == true;
+            var posH = anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition>();
+            var posV = anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition>();
+            long xEmu = 0, yEmu = 0;
+            if (posH?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text is string xText
+                && long.TryParse(xText, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var xParsed))
+                xEmu = xParsed;
+            if (posV?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text is string yText
+                && long.TryParse(yText, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var yParsed))
+                yEmu = yParsed;
+            posAttrs = $" data-pos-mode=\"{(behind ? "behind" : "front")}\""
+                + $" data-x-emu=\"{xEmu}\" data-y-emu=\"{yEmu}\"";
+        }
+
         return $"<img src=\"data:{contentType};base64,{base64Data}\" " +
                $"style=\"max-width:100%;width:{width}px;height:{height}px;\" " +
                $"data-image-id=\"{relationshipId}\" " +
-               $"data-width-emu=\"{widthEmu}\" data-height-emu=\"{heightEmu}\" />";
+               $"data-width-emu=\"{widthEmu}\" data-height-emu=\"{heightEmu}\"" +
+               $"{posAttrs} />";
     }
 
     /// <summary>

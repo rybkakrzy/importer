@@ -75,10 +75,27 @@
     </section>
 
     <section class="img-panel__group">
-      <h4>Opływanie tekstu</h4>
+      <h4>Pozycja względem tekstu</h4>
+      <div class="img-panel__align-row img-panel__align-row--three">
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.positionMode === 'inline'"
+                (click)="setMode('inline')"
+                title="W tekście (płynie z akapitem)">W&nbsp;tekście</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.positionMode === 'front'"
+                (click)="setMode('front')"
+                title="Przed tekstem (warstwa nad tekstem)">Przed</button>
+        <button type="button"
+                class="img-panel__icon-btn"
+                [class.is-active]="s.positionMode === 'behind'"
+                (click)="setMode('behind')"
+                title="Za tekstem (warstwa pod tekstem)">Za</button>
+      </div>
       <p class="img-panel__hint">
-        Tryb <strong>W tekście</strong> (inline). Floating
-        (square/tight/behind/in&nbsp;front) w przygotowaniu.
+        Tryby <strong>Przed</strong> i <strong>Za</strong> pozwalają przeciągać
+        obraz swobodnie po stronie. Square/tight wrap — w przygotowaniu.
       </p>
     </section>
 

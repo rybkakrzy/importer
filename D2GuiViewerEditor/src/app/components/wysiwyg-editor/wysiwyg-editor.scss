@@ -374,6 +374,31 @@ body.table-resizing * {
   pointer-events: none;
 }
 
+// Word-like floating modes — wrapper is absolute-positioned inside .page
+// (which already has `position: relative`). z-index governs layering:
+// "front" sits above text, "behind" sits under it. Inline mode is the default
+// (no data attribute) and follows the text flow.
+.editor-image-wrapper[data-pos-mode="front"] {
+  position: absolute;
+  z-index: 10;
+}
+
+.editor-image-wrapper[data-pos-mode="behind"] {
+  position: absolute;
+  z-index: -1;
+}
+
+// Establish a stacking context on the editor content so the "behind" layer
+// renders under the text and the page background, not under the page itself.
+.editor-content,
+.header-editor-content,
+.footer-editor-content,
+.header-display,
+.footer-display {
+  position: relative;
+  z-index: 0;
+}
+
 :is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper:hover {
   outline: 2px solid #0066cc;
 }

@@ -35,6 +35,27 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - **Round-trip save** nadal zapisuje tylko default — first/even na zapisie nie są serializowane (R-10 partial, R-11). Import je odczytuje.
 
+## 2026-05-29 — Word-like floating: „Przed tekstem" / „Za tekstem" + drag w obrębie strony + round-trip wp:anchor
+### Changed
+- **Tryby pozycji obrazu** (panel boczny): zastąpiono info-only sekcję 3 prawdziwymi przyciskami: **„W tekście"** (inline), **„Przed"** (float over text), **„Za"** (float behind text). Aktywny tryb podświetlony. `ImageSelectionState` rozszerzony o `positionMode: 'inline' | 'front' | 'behind'`. Nowy `@Output() positionModeChange` w panelu.
+- **`wysiwyg-editor` — floating end-to-end**:
+  - Public `setSelectedImagePositionMode(mode)`: dla `inline` usuwa wszystkie ślady floating (data-*, position, z-index); dla `front`/`behind` przycina wrapper przy bieżącej pozycji (bounding rect względem `.page`/edytora), ustawia `position: absolute` + `left/top` + `z-index` (10 vs −1) + zapisuje `data-x-px/y-px` na wrapperze i `data-x-emu/y-emu` na `<img>` (do round-tripu).
+  - **Drag-aware mousedown**: gdy wrapper jest w trybie floating, kliknięcie + przesunięcie aktualizuje `left/top` (oddzielna ścieżka od inline-drop-into-DOM); na mouse-up zapisuje pozycję w atrybutach + `onContentChange()` (undo/autozapis).
+  - `wrapExistingImages` przywraca floating po imporcie: czyta `data-pos-mode` z `<img>` i woła `applyFloatingPosition` na wrapperze (dzięki czemu obraz wczytany z DOCX z `wp:anchor` natychmiast renderuje się jako absolutny w odpowiedniej warstwie).
+- **CSS** (`wysiwyg-editor.scss`):
+  - `.editor-image-wrapper[data-pos-mode="front"]` → `position: absolute; z-index: 10;`
+  - `.editor-image-wrapper[data-pos-mode="behind"]` → `position: absolute; z-index: -1;`
+  - Edytory (`.editor-content`/`.header-editor-content`/`.footer-editor-content`/displaye) dostają `position: relative; z-index: 0` → kontekst stacking dla warstwy „za". `.page` już miało `position: relative`.
+- **Backend `HtmlToDocxConverter.BuildImageDrawing`**: gdy `<img>` ma `data-pos-mode="front"|"behind"`, emituje `wp:anchor` z `wp:positionH`/`wp:positionV` (relativeFrom=page, offsety z `data-x-emu/y-emu`), `wp:wrapNone`, `behindDoc` zgodnie z trybem, `simplePos=false`, `allowOverlap=true`. Inline pozostaje domyślną ścieżką (`wp:inline`) — brak regresji dla istniejących dokumentów.
+- **Backend `DocxToHtmlConverter.ConvertDrawingToHtml`**: wykrywa `wp:anchor`, czyta `BehindDoc` + `PositionOffset` z H/V, emituje na `<img>` `data-pos-mode="front"|"behind"` + `data-x-emu`/`data-y-emu`. Plus istniejące `data-width-emu`/`data-height-emu` (rozmiar dalej round-tripuje).
+### Verified
+- `dotnet build` (Infrastructure) OK; **4 nowe testy `ImageFloatingRoundTripTests` pass** (front + behind round-trip pozycji i trybu, inline-no-floating-attrs guard, size obok pozycji).
+- `tsc --noEmit` OK; `npm test`: **162/162 pass** (+2 nowe testy panelu: active state aktualnego trybu + emisja `positionModeChange` dla 3 przycisków).
+### Notes / pozostałe ograniczenia
+- **Wrap modes wciąż out of scope**: `square`/`tight`/`through`/`topAndBottom` (z reflow tekstu) odłożone — wymagają nietrywialnego mechanizmu HTML/CSS (text-wrap niedostępny w przeglądarce). Panel jasno mówi: „Square/tight wrap — w przygotowaniu". Front/behind nie wymagają wrap'u (Word też używa `wrapNone`).
+- **Drag floating** działa w obrębie kontenera (najbliższy `.page` / `editor-content`). Przeniesienie obrazu między stronami / sekcjami z anchor-rekalkulacją — roadmap.
+- **Backend test image bytes**: round-trip używa 1×1 PNG. Realne dokumenty z floating image z Worda — manual verify.
+
 ## 2026-05-29 — Word-like pozycjonowanie obrazów (MVP) — selection-driven side panel
 ### Changed
 - **Nowy komponent `d2-image-properties-panel`** (`components/image-properties-panel/`: TS+HTML+SCSS+spec) — czwarty docked panel w istniejącym slocie (Wyszukiwanie / Tabele / Nagłówek+Stopka / **Obraz**). Stateless: każda zmiana w polu emituje output do parenta, parent woła publiczne metody na `wysiwyg-editor`. Sekcje: Rozmiar (szer./wys. + zachowaj proporcje + „Przywróć proporcje"), Wyrównanie (L/C/R/—; aplikowane do akapitu nadrzędnego), Opływanie (info-only — floating w przygotowaniu), Usuń obraz.

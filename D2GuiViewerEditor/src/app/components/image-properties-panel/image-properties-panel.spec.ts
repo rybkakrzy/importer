@@ -21,7 +21,9 @@ describe('ImagePropertiesPanelComponent', () => {
   function text(): string { return fixture.nativeElement.textContent ?? ''; }
   function btn(label: RegExp): HTMLButtonElement | null {
     const all = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
-    return all.find(b => label.test((b.textContent ?? '').trim())) ?? null;
+    // Normalise &nbsp; (U+00A0) → regular space so tests can use natural patterns
+    // without leaking the encoded form.
+    return all.find(b => label.test((b.textContent ?? '').replace(/ /g, ' ').trim())) ?? null;
   }
   function input(selector: string): HTMLInputElement {
     return fixture.nativeElement.querySelector(selector);
@@ -32,6 +34,7 @@ describe('ImagePropertiesPanelComponent', () => {
     heightPx: 160,
     aspectRatio: 240 / 160,
     alignment: 'center',
+    positionMode: 'inline',
   };
 
   it('shows the empty hint when no image is selected', () => {
@@ -127,10 +130,32 @@ describe('ImagePropertiesPanelComponent', () => {
     expect(closed).toBe(1);
   });
 
-  it('documents the floating-wrap limitation in the panel UI', () => {
+  it('shows position-mode buttons + active state for the current mode', () => {
+    component.state = { ...sample, positionMode: 'behind' };
+    render();
+    const behindBtn = btn(/^Za$/)!;
+    expect(behindBtn.classList.contains('is-active')).toBe(true);
+    const inlineBtn = btn(/W tekście/)!;
+    expect(inlineBtn.classList.contains('is-active')).toBe(false);
+  });
+
+  it('emits positionModeChange when one of the three buttons is clicked', () => {
     component.state = sample;
     render();
-    expect(text()).toContain('W tekście');
+    const seen: string[] = [];
+    component.positionModeChange.subscribe(v => seen.push(v));
+
+    btn(/^Przed$/)!.click();
+    btn(/^Za$/)!.click();
+    btn(/W tekście/)!.click();
+
+    expect(seen).toEqual(['front', 'behind', 'inline']);
+  });
+
+  it('points out the square/tight roadmap explicitly in the panel UI', () => {
+    component.state = sample;
+    render();
+    expect(text()).toContain('Square/tight wrap');
     expect(text()).toContain('w przygotowaniu');
   });
 });

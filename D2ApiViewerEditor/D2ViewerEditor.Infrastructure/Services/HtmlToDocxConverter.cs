@@ -1719,33 +1719,81 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         _imageCounter++;
 
-        return new Drawing(
-            new DocumentFormat.OpenXml.Drawing.Wordprocessing.Inline(
-                new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
-                new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
-                new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
-                new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
-                    new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
-                new DocumentFormat.OpenXml.Drawing.Graphic(
-                    new DocumentFormat.OpenXml.Drawing.GraphicData(
-                        new DocumentFormat.OpenXml.Drawing.Pictures.Picture(
-                            new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureProperties(
-                                new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualDrawingProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
-                                new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureDrawingProperties()),
-                            new DocumentFormat.OpenXml.Drawing.Pictures.BlipFill(
-                                new DocumentFormat.OpenXml.Drawing.Blip { Embed = relationshipId },
-                                new DocumentFormat.OpenXml.Drawing.Stretch(new DocumentFormat.OpenXml.Drawing.FillRectangle())),
-                            new DocumentFormat.OpenXml.Drawing.Pictures.ShapeProperties(
-                                new DocumentFormat.OpenXml.Drawing.Transform2D(
-                                    new DocumentFormat.OpenXml.Drawing.Offset { X = 0, Y = 0 },
-                                    new DocumentFormat.OpenXml.Drawing.Extents { Cx = widthEmu, Cy = heightEmu }),
-                                new DocumentFormat.OpenXml.Drawing.PresetGeometry(
-                                    new DocumentFormat.OpenXml.Drawing.AdjustValueList())
-                                { Preset = DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle }))
-                    )
-                    { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" })
+        // Word-like positioning: when the editor marks the image as floating
+        // (data-pos-mode="front"|"behind") we emit wp:anchor with position offsets;
+        // otherwise it stays an inline image (default OOXML behaviour). Offsets are
+        // read from data-x-emu / data-y-emu set by the editor on drag-end.
+        var posMode = node.GetAttributeValue("data-pos-mode", "");
+        var isFloating = posMode == "front" || posMode == "behind";
+
+        var graphic = new DocumentFormat.OpenXml.Drawing.Graphic(
+            new DocumentFormat.OpenXml.Drawing.GraphicData(
+                new DocumentFormat.OpenXml.Drawing.Pictures.Picture(
+                    new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureProperties(
+                        new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualDrawingProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
+                        new DocumentFormat.OpenXml.Drawing.Pictures.NonVisualPictureDrawingProperties()),
+                    new DocumentFormat.OpenXml.Drawing.Pictures.BlipFill(
+                        new DocumentFormat.OpenXml.Drawing.Blip { Embed = relationshipId },
+                        new DocumentFormat.OpenXml.Drawing.Stretch(new DocumentFormat.OpenXml.Drawing.FillRectangle())),
+                    new DocumentFormat.OpenXml.Drawing.Pictures.ShapeProperties(
+                        new DocumentFormat.OpenXml.Drawing.Transform2D(
+                            new DocumentFormat.OpenXml.Drawing.Offset { X = 0, Y = 0 },
+                            new DocumentFormat.OpenXml.Drawing.Extents { Cx = widthEmu, Cy = heightEmu }),
+                        new DocumentFormat.OpenXml.Drawing.PresetGeometry(
+                            new DocumentFormat.OpenXml.Drawing.AdjustValueList())
+                        { Preset = DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle }))
             )
-        );
+            { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" });
+
+        if (!isFloating)
+        {
+            return new Drawing(
+                new DocumentFormat.OpenXml.Drawing.Wordprocessing.Inline(
+                    new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
+                    new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
+                    new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
+                    new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
+                        new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
+                    graphic
+                )
+            );
+        }
+
+        // Floating mode: wp:anchor with position offsets and the "no wrap" mode that
+        // matches Word's "Behind text" / "In front of text" options (no text reflow).
+        long.TryParse(node.GetAttributeValue("data-x-emu", "0"), out var xEmu);
+        long.TryParse(node.GetAttributeValue("data-y-emu", "0"), out var yEmu);
+        var behind = posMode == "behind";
+
+        var anchor = new DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor(
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.SimplePosition { X = 0L, Y = 0L },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition(
+                new DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset(xEmu.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            { RelativeFrom = DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalRelativePositionValues.Page },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition(
+                new DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset(yEmu.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            { RelativeFrom = DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalRelativePositionValues.Page },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapNone(),
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
+            new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
+                new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
+            graphic)
+        {
+            DistanceFromTop = 0U,
+            DistanceFromBottom = 0U,
+            DistanceFromLeft = 0U,
+            DistanceFromRight = 0U,
+            SimplePos = false,
+            RelativeHeight = (uint)(251_660_288 + _imageCounter),
+            BehindDoc = behind,
+            Locked = false,
+            LayoutInCell = true,
+            AllowOverlap = true
+        };
+
+        return new Drawing(anchor);
     }
 
     /// <summary>

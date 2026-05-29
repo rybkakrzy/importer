@@ -11,11 +11,14 @@ import { FormsModule } from '@angular/forms';
  * remove for inline images. Floating (wp:anchor) wrap modes are deferred to the
  * next iteration — see .ai/FEATURES.md for the limitation note.
  */
+export type ImagePositionMode = 'inline' | 'front' | 'behind';
+
 export interface ImageSelectionState {
   widthPx: number;
   heightPx: number;
   aspectRatio: number;
   alignment: 'left' | 'center' | 'right' | null;
+  positionMode: ImagePositionMode;
 }
 
 @Component({
@@ -44,6 +47,7 @@ export class ImagePropertiesPanelComponent {
   @Output() alignmentChange = new EventEmitter<'left' | 'center' | 'right' | null>();
   @Output() removeImage = new EventEmitter<void>();
   @Output() resetAspect = new EventEmitter<void>();
+  @Output() positionModeChange = new EventEmitter<ImagePositionMode>();
 
   private readonly _state = signal<ImageSelectionState | null>(null);
   // Mirror the state into editable inputs so typing doesn't fight the snapshot.
@@ -74,6 +78,10 @@ export class ImagePropertiesPanelComponent {
 
   protected clearAlign(): void {
     this.alignmentChange.emit(null);
+  }
+
+  protected setMode(mode: ImagePositionMode): void {
+    this.positionModeChange.emit(mode);
   }
 
   /** Min 16 px — matches the hard floor in wysiwyg-editor's resize-end logic. */
