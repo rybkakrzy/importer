@@ -160,4 +160,56 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
 
     expect(html).toContain('class="page-break"');
   });
+
+  it('scala fragmenty tej samej logicznej tabeli (R-17) zachowując kolumny', () => {
+    mockPages(
+      '<table data-split-table-id="st-1"><colgroup><col style="width:100px;"/></colgroup><tbody><tr><td>A1</td></tr></tbody></table>',
+      '<table data-split-table-id="st-1"><colgroup><col style="width:100px;"/></colgroup><tbody><tr><td>A2</td></tr></tbody></table>'
+    );
+
+    const html = component.getContent();
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+
+    expect(tmp.querySelectorAll('table').length).toBe(1);     // jedna logiczna tabela
+    expect(tmp.querySelectorAll('tr').length).toBe(2);        // wszystkie wiersze zachowane
+    expect(html).toContain('colgroup');                        // szerokości kolumn zachowane
+    expect(html).not.toContain('data-split-table-id');         // marker sprzątnięty
+  });
+
+  it('NIE scala niezależnych sąsiednich tabel (bez wspólnego id)', () => {
+    mockPages('<table><tbody><tr><td>X</td></tr></tbody></table><table><tbody><tr><td>Y</td></tr></tbody></table>');
+
+    const html = component.getContent();
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+
+    expect(tmp.querySelectorAll('table').length).toBe(2);
+  });
+
+  it('_splitHtmlIntoPages zachowuje marker page-break (repaginate honoruje podział, zapis go nie gubi)', () => {
+    const pages = (component as any)._splitHtmlIntoPages('<p>Przed</p><div class="page-break"></div><p>Po</p>');
+
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('class="page-break"'); // marker survives na pierwszej stronie
+    expect(pages[1]).toContain('Po');
+
+    // i przeżywa serializację do zapisu (getContent → writer → w:br type=page)
+    mockPages(...pages);
+    expect(component.getContent()).toContain('class="page-break"');
+  });
+
+  it('_isPageBreakBlock wykrywa manualny page break (top-level i zagnieżdżony), nie zwykły akapit', () => {
+    const top = document.createElement('div');
+    top.className = 'page-break';
+    expect((component as any)._isPageBreakBlock(top)).toBe(true);
+
+    const nested = document.createElement('p');
+    nested.innerHTML = '<span><div class="page-break"></div></span>';
+    expect((component as any)._isPageBreakBlock(nested)).toBe(true);
+
+    const plain = document.createElement('p');
+    plain.textContent = 'zwykły tekst';
+    expect((component as any)._isPageBreakBlock(plain)).toBe(false);
+  });
 });

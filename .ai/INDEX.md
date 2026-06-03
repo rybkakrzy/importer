@@ -55,6 +55,7 @@ Preferowane zasady:
 | `GLOSSARY.md` | Przy terminologii technicznej i domenowej |
 | `PROMPTS.md` | Gotowe prompty do pracy z agentami |
 | `DOCX_CONVERSION.md` | Reference techniczny konwersji DOCX↔HTML: pipeline, model `DocumentContent`, macierz statusów, roadmapa (R-10, computed-style, domknięcia), diagramy |
+| `BENCHMARKS.md` | Benchmarki wydajności/pamięci (BenchmarkDotNet) + fidelity-checks DOCX (R-15..R-21), perf harness frontu, jak uruchomić, progi, CI |
 | `FIDELITY_REPORT.md` | Zgodność odwzorowania DOCX→HTML z Wordem (macierz wierności, testy, kolejne kroki) |
 
 ## Reguła aktualizacji

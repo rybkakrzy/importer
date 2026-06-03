@@ -101,6 +101,82 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         return memoryStream.ToArray();
     }
 
+    public byte[] ConvertPreservingPackage(string html, Stream? originalPackage,
+        DocumentMetadata? metadata = null, HeaderFooterContent? header = null,
+        HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null)
+    {
+        var generated = Convert(html, metadata, header, footer, margins, pageSize);
+
+        if (originalPackage == null || !originalPackage.CanRead)
+            return generated;
+
+        try
+        {
+            return PreserveOriginalParts(generated, originalPackage);
+        }
+        catch
+        {
+            // Pass-through is best-effort: a malformed / unexpected original must never break the
+            // save — fall back to the fully self-contained generated document.
+            return generated;
+        }
+    }
+
+    /// <summary>
+    /// Replaces the generated package's styles.xml, theme and fontTable with the originals so the
+    /// full style set (incl. table styles) and the document/theme fonts survive the round-trip.
+    /// Body, sectPr, headers/footers, images and numbering remain as generated (they carry the
+    /// editor's actual changes and standard style IDs that exist in the original styles.xml).
+    /// </summary>
+    private static byte[] PreserveOriginalParts(byte[] generated, Stream originalPackage)
+    {
+        var ms = new MemoryStream();
+        ms.Write(generated, 0, generated.Length);
+        ms.Position = 0;
+
+        if (originalPackage.CanSeek) originalPackage.Position = 0;
+
+        using (var original = WordprocessingDocument.Open(originalPackage, false))
+        using (var target = WordprocessingDocument.Open(ms, true))
+        {
+            var origMain = original.MainDocumentPart;
+            var targetMain = target.MainDocumentPart;
+            if (origMain == null || targetMain == null)
+                return generated;
+
+            // styles.xml — pełny zestaw stylów (w tym ~100 stylów tabel) + docDefaults (font/theme).
+            // FeedData do ISTNIEJĄCEGO partu zachowuje kanoniczną nazwę (styles.xml) i relację;
+            // nie odwołujemy się do .Styles, więc Save nie nadpisze strumienia zserializowanym DOM.
+            if (origMain.StyleDefinitionsPart != null)
+            {
+                var styles = targetMain.StyleDefinitionsPart ?? targetMain.AddNewPart<StyleDefinitionsPart>();
+                using var s = origMain.StyleDefinitionsPart.GetStream(FileMode.Open, FileAccess.Read);
+                styles.FeedData(s);
+            }
+
+            // theme — definicje theme fonts/colors (np. minor=Cambria), do których odwołują się
+            // docDefaults (asciiTheme=minorHAnsi). Musi być spójny ze stylami.
+            if (origMain.ThemePart != null)
+            {
+                var theme = targetMain.ThemePart ?? targetMain.AddNewPart<ThemePart>();
+                using var s = origMain.ThemePart.GetStream(FileMode.Open, FileAccess.Read);
+                theme.FeedData(s);
+            }
+
+            // fontTable — tabela fontów używanych w dokumencie.
+            if (origMain.FontTablePart != null)
+            {
+                var fonts = targetMain.FontTablePart ?? targetMain.AddNewPart<FontTablePart>();
+                using var s = origMain.FontTablePart.GetStream(FileMode.Open, FileAccess.Read);
+                fonts.FeedData(s);
+            }
+
+            target.Save();
+        }
+
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// Writes the document's headers and footers. The default variant is always emitted;
     /// first-page (DifferentFirstPage + FirstPageHtml) and even (DifferentOddEven + EvenHtml)
@@ -733,7 +809,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 break;
 
             case "div":
-                if (node.HasClass("page-break"))
+                if (IsPageBreakNode(node))
                 {
                     elements.Add(CreatePageBreak());
                 }
@@ -1993,8 +2069,19 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
             case HtmlNodeType.Element:
                 var tagName = node.Name.ToLower();
+
+                // Manualny page break: reader emituje <div class="page-break"> WEWNĄTRZ akapitu
+                // (Break siedzi w runie), więc trafia tu, a nie do bloku. Bez tego znak rozpoczęcia
+                // nowej strony ginął po round-tripie (R-15). Jeden węzeł page-break → jeden Break,
+                // bez duplikacji; dokument bez page-breaków nie dostaje żadnego.
+                if (IsPageBreakNode(node))
+                {
+                    runs.Add(new Run(new Break { Type = BreakValues.Page }));
+                    break;
+                }
+
                 var newProps = (inheritedProps?.CloneNode(true) as RunProperties) ?? new RunProperties();
-                
+
                 switch (tagName)
                 {
                     case "strong": case "b":
@@ -2375,6 +2462,23 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private Paragraph CreatePageBreak()
     {
         return new Paragraph(new Run(new Break { Type = BreakValues.Page }));
+    }
+
+    /// <summary>
+    /// Recognises a manual page break in any of the representations the pipeline may produce:
+    /// the project marker <c>class="page-break"</c> (reader output + insertPageBreak), an explicit
+    /// <c>data-docx-break="page"</c>, or a CSS <c>page-break-before</c>/<c>break-before: page</c>.
+    /// Used so the break survives DOCX → HTML → DOCX (R-15). Natural Word pagination is NOT a
+    /// page break and never matches here.
+    /// </summary>
+    private static bool IsPageBreakNode(HtmlNode node)
+    {
+        if (node.NodeType != HtmlNodeType.Element) return false;
+        if (node.HasClass("page-break")) return true;
+        if (string.Equals(node.GetAttributeValue("data-docx-break", ""), "page", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var style = node.GetAttributeValue("style", "");
+        return Regex.IsMatch(style, @"(page-break-before|break-before)\s*:\s*(always|page)", RegexOptions.IgnoreCase);
     }
 
     private void SetDocumentMetadata(WordprocessingDocument document, DocumentMetadata metadata)

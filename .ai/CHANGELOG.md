@@ -13,6 +13,71 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-03 — Font treści (Times New Roman→Calibri) + page break „od nowej strony" (display)
+### Diagnoza — font
+- Oryginał `orginał_GOOD`: domyślny styl akapitu **`Normalny` (`w:default="1"`)** ma `<w:rFonts w:ascii="Times New Roman"/>` (sz=21 → 10.5pt). To **nadpisuje** docDefaults (`asciiTheme=minorHAnsi` → theme minor = Cambria). Runy body mają tylko `w:cs="Times New Roman"` (complex-script), bez `ascii`.
+- Bug: reader `LoadDocDefaults` czytał **wyłącznie docDefaults** (→ Cambria), ignorował font domyślnego stylu akapitu → kontener `.document-content` dostawał Cambria, a edytor i tak spadał na własny default (Calibri). Stąd Calibri na ekranie.
+### Diagnoza — page break
+- To manualny `<w:br w:type="page"/>` we własnym akapicie (po tabeli z podpisami, przed „PROTOKÓŁ…"). Round-trip był już naprawiony (R-15: writer → `w:br`; reader → top-level `<div class="page-break">`). **Pozostał problem DISPLAY**: edytor `_splitHtmlIntoPages` **konsumował** marker przy podziale, więc `_repaginateNow` (re-paginacja wg wysokości) go nie widziała i scalała treść → „PROTOKÓŁ" pod podpisami.
+### Changed — backend (reader)
+- `DocxToHtmlConverter.ApplyDefaultParagraphStyleFont`: po wczytaniu stylów czyta font domyślnego stylu akapitu (`w:default="1"`, typ paragraph) i ustawia go jako `_defaultFontFamily`/rozmiar kontenera (override docDefaults). Z dokumentu, nie hardcode. **Weryfikacja na realnym pliku**: kontener `font-family:'Times New Roman',sans-serif;font-size:10.5pt`.
+### Changed — frontend (display)
+- `wysiwyg-editor._splitHtmlIntoPages`: **zachowuje** marker `<div class="page-break">` (doklejony na końcu każdej strony poza ostatnią) → `_repaginateNow` honoruje podział (`_isPageBreakBlock` wymusza nową stronę), marker przeżywa zapis (getContent → writer → `w:br`). `setContent` join plain (bez dublowania); usunięty martwy `_joinPagesWithBreaks`.
+### Verified / tests
+- Backend **386 pass** (+4 `DefaultStyleFontTests`: default-style override, docDefaults fallback, direct docDefaults, pass-through zachowuje font). GUI **176** (+1 `_splitHtmlIntoPages` zachowuje marker + round-trip). Golden snapshoty bez zmian (syntetyki nie mają default-style fontu). Solucja zielona.
+### Ograniczenia
+- Font: jeśli `Times New Roman` niedostępny w przeglądarce → fallback `,sans-serif` (nazwa zachowana w CSS; rendering zależny od systemu). Toolbar edytora może pokazywać własny default fontu (kosmetyka) — renderowany tekst używa fontu kontenera.
+- Save font: pełna wierność na zapisie zależy od pass-through (R-16); ścieżka autosave bezstanowa (R-20) wciąż regeneruje style.
+- Page break: honorowane są **manualne** breaki; naturalna paginacja Worda nadal liczona wg wysokości (nie 1:1).
+
+## 2026-06-03 — Benchmarki + fidelity-checks (perf/pamięć/regresja wierności DOCX)
+### Added — backend (`D2ViewerEditor.Benchmarks`, BenchmarkDotNet 0.14)
+- `BenchmarkAssets` — syntetyczne DOCX in-memory (simple/tables/large-table/images/header-footer/page-breaks/multi-style) + opcjonalny realny plik regresyjny przez env `D2_BENCH_ASSETS` (domyślnie repo; używany tylko gdy istnieje). Brak commitowania wrażliwych plików.
+- `DocxImportBenchmarks`/`DocxExportBenchmarks`/`DocxRoundTripBenchmarks`/`TableBenchmarks` — `[MemoryDiagnoser]`, baseline per grupa, params Rows=100/400 (`[ShortRunJob]` na large-table). Mierzą reader/writer/`ConvertPreservingPackage`/round-trip.
+- `DocxPackageReport` (analizator pakietu ZIP/regex) + `FidelityComparison` (PASS/WARN/FAIL, pass-through-aware) + `FidelityReportRunner` (markdown, report-only; `--fidelity [--fail-on-regression]` w `Program.cs`).
+### Added — fidelity gate (NUnit, CI)
+- `DocxFidelityRegressionTests` (4): R-16 styles/theme zachowane (pass-through), R-15 page breaki, R-17 tabele niemnożone, R-18 brak sztucznych `trHeight`. Parser-niezależny (ZIP/regex).
+### Added — frontend perf harness (Vitest, report-only)
+- `wysiwyg-editor.perf.spec.ts` (4): timing `getContent`/merge split-table/`setContent` (Performance API, lenient ceiling 4000 ms). Ograniczenie: jsdom nie mierzy layoutu/paginacji (potrzebny Playwright).
+### Verified
+- Backend **382 pass** (+4 fidelity gate). GUI **175** (+4 perf). Benchmarki uruchamiają się (dry-job: import ~85 ms cold). Fidelity report: syntetyki **PASS**, realny `orginał_GOOD` (pass-through) **WARN** (164 style + Cambria + 6 tabel + 1 page break zachowane; tylko `numbering.xml` nieprzeniesiony — R-19).
+### Docs
+- Nowy `.ai/BENCHMARKS.md` (jak uruchomić perf/fidelity/frontend, progi, baseline, CI report-only→fail-on-regression, ograniczenia) + `INDEX`.
+
+## 2026-06-03 — Page break „od nowej strony": edytor nie honorował manualnego podziału (display)
+### Problem
+Manualny page break z DOCX (np. przed „PROTOKÓŁ WYDANIA POJAZDU") nie zaczynał nowej strony w edytorze — treść lądowała tuż pod poprzednią. Round-trip zapisu działał (R-15), ale **paginacja widoku** ignorowała break.
+### Root cause
+Reader emitował break-only akapit (`<w:p><w:r><w:br type=page/></w:r></w:p>`) jako **zagnieżdżony** `<p><span><div class="page-break"></div></span></p>`. To: (1) psuło `_splitHtmlIntoPages` (regex dzielił string w środku `<p>`), (2) `_repaginateNow` paginował tylko wg wysokości — ignorował break.
+### Changed
+- **Reader** `DocxToHtmlConverter`: nowy `IsPageBreakOnlyParagraph` — akapit zawierający wyłącznie `w:br type=page` (bez tekstu/grafiki) emitowany jako **top-level** `<div class="page-break"></div>` (zamiast zagnieżdżony). Writer nadal mapuje go na `w:br type=page` (R-15).
+- **Frontend** `wysiwyg-editor.ts`: `_repaginateNow` wymusza **nową stronę** na bloku page-break (`_isPageBreakBlock` — top-level lub zagnieżdżony bez tekstu); marker zostaje w treści → przeżywa zapis.
+### Verified / tests
+- Backend **378 pass** (+1 reader: break-only akapit → top-level block + round-trip=1). GUI **171** (+1 `_isPageBreakBlock`). Golden snapshoty bez zmian (brak page-breaków). Solucja zielona.
+### Uwaga
+- Wymaga **ponownego wczytania dokumentu** w edytorze, by zobaczyć efekt (paginacja liczona przy load/edycji).
+
+## 2026-06-03 — R-15/R-16/R-17: page break round-trip, pass-through pakietu DOCX, scalanie split-table
+### R-15 — manualny page break round-trip (writer)
+- `HtmlToDocxConverter`: nowy `IsPageBreakNode` (class `page-break` / `data-docx-break="page"` / CSS `page-break-before`/`break-before:page`). `CreateRunsFromNode` konwertuje **zagnieżdżony** `<div class="page-break">` (reader emituje go wewnątrz akapitu) na `w:br type=page`; blok-level używa tej samej detekcji. Wcześniej break ginął (AFTER=0). Bez duplikacji; dokument bez breaków nie dostaje żadnego. Testy: `PageBreakRoundTripTests` (5).
+### R-16 — pass-through oryginalnego pakietu (writer + handler)
+- `IHtmlToDocxConverter.ConvertPreservingPackage(html, Stream? original, ...)`: generuje DOCX jak `Convert`, po czym **zachowuje z oryginału** `styles.xml` (pełny zestaw, w tym style tabel), `theme` i `fontTable` (FeedData do istniejących partów). Body/sekcja/nagłówki-stopki/obrazy/numbering pochodzą z konwersji HTML. `null`/pusty oryginał → zachowuje się jak `Convert` (fallback). Best-effort: błąd oryginału → fallback (nie psuje zapisu).
+- Wiring: `DownloadEditedDocumentCommandHandler` ładuje **bazową wersję (v1)** przez `IDocumentStorageService.DownloadAsync` i używa pass-through dla DOCX; fallback gdy brak wersji/nie-DOCX. Testy: `PassThroughPackageTests` (5) + handler test pass-through (1).
+### R-17 — scalanie fragmentów split-table (frontend)
+- `wysiwyg-editor.ts`: `_splitTableForPagination` taguje fragmenty jednej logicznej tabeli `data-split-table-id` + klonuje `colgroup`; `getContent()` woła `_mergeSplitTables` (scala sąsiednie fragmenty o tym samym id, zachowuje wiersze/kolumny, sprząta marker). Niezależne sąsiednie tabele NIE są scalane. Testy: Vitest (2).
+### Verified (realny plik: reader → ConvertPreservingPackage(html, oryginał GOOD) → AFTER)
+| metryka | GOOD | BAD | AFTER |
+|---|---|---|---|
+| styles.xml liczba stylów | 164 | 16 | **164** (part `styles2.xml`, relacja+content-type OK — Word czyta po relacji) |
+| theme minor font | Cambria | Calibri | **Cambria** |
+| twarde page-breaki | 1 | 3 | **1** |
+| marginesy / tabele | wzorzec | rozjechane | ≈ GOOD (z poprz. fixów) |
+### Tests
+- Backend **377 pass / 0 fail / 6 skip** (Infrastructure +10: 5 page-break + 5 pass-through; Application +1). GUI **170** (+2 split-table). Pełna solucja zielona.
+### Ograniczenia (R-19..R-21)
+- **R-16 niepełny pass-through:** zachowane tylko `styles.xml`/`theme`/`fontTable`; `numbering.xml` NIE jest przenoszony (uniknięcie konfliktu numId z generowanym body) — dla dokumentów z listami custom-bullety mogą się różnić. Part stylów zapisywany jako `styles2.xml` (artefakt SDK; relacja poprawna, Word czyta). **Wiring tylko w DownloadEditedDocument** — ścieżka autosave (`/api/document/save`, bezstanowa) nadal generuje od zera; pełne wpięcie wymaga master-aware endpointu konwersji (next).
+- **R-16 model body:** body nadal z konwersji HTML (inline style), nie referencje oryginalnych nazwanych stylów; font dziedziczy z zachowanego docDefaults (Cambria), ale akapity nie wracają do oryginalnych `w:pStyle`.
+
 ## 2026-06-03 — Round-trip fidelity: naprawa rozjazdu 4→7 stron i powiększonych tabel (orginał_GOOD vs zapisany_BAD)
 ### Root causes (z analizy XML dwóch plików)
 - **Marginesy napompowane**: writer `AddPageSettings` `Math.Max(topTwips, headerHeightTwips+720)` + hardkod `Header/Footer=720` → top 567→1281, bottom 851→1231 (mniej treści/stronę).

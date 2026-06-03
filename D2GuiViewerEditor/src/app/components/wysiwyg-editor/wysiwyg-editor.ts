@@ -3021,17 +3021,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }, 500);
   }
 
-  /** Dzieli HTML wejściowy na strony po znacznikach <div class="page-break"></div>. */
+  /**
+   * Dzieli HTML wejściowy na strony po znacznikach page-break, ale ZACHOWUJE marker na końcu
+   * każdej strony (poza ostatnią). Bez tego `_repaginateNow` (re-paginacja wg wysokości) nie
+   * widziała już bloku page-break i scalała treść z powrotem — manualny podział ginął wizualnie
+   * (np. „PROTOKÓŁ…" lądował pod podpisami). Marker przeżywa też zapis (getContent → writer → w:br).
+   */
   private _splitHtmlIntoPages(html: string): string[] {
     if (!html) return ['<p></p>'];
+    const marker = '<div class="page-break"></div>';
     const parts = html.split(/<div[^>]*class=["'][^"']*\bpage-break\b[^"']*["'][^>]*>\s*<\/div>/gi);
-    const cleaned = parts.map(p => p.trim()).filter(p => p.length > 0);
-    return cleaned.length ? cleaned : ['<p></p>'];
-  }
-
-  /** Łączy strony w jeden HTML, oddzielając je <div class="page-break"></div>. */
-  private _joinPagesWithBreaks(pages: string[]): string {
-    return pages.filter(p => p && p.trim().length > 0).join('<div class="page-break"></div>');
+    const pages = parts
+      .map((p, i) => (i < parts.length - 1 ? p + marker : p))
+      .map(p => p.trim())
+      .filter(p => p.length > 0);
+    return pages.length ? pages : ['<p></p>'];
   }
 
   /** Schedule paginacji z debouncingiem 300 ms. */
@@ -3121,6 +3125,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       };
 
       for (const block of allBlocks) {
+        if (this._isPageBreakBlock(block)) {
+          // Manualny page break: wymuś nową stronę. Marker zostaje na końcu bieżącej strony,
+          // żeby przeżył zapis (getContent → writer → w:br type=page).
+          pages[pages.length - 1].push(block);
+          pages.push([]);
+          currentHeight = 0;
+          continue;
+        }
         if (block.tagName === 'TABLE') {
           const split = this._splitTableForPagination(
             block as HTMLTableElement,
@@ -3198,13 +3210,64 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     if (bucket.length > 0) chunks.push(bucket);
 
+    // Tag every fragment of THIS split with a shared logical id so serialization can merge them
+    // back into one table (R-17). The colgroup (column widths) is cloned into each fragment so a
+    // fragment renders with correct columns and the merged result keeps them.
+    const splitId = chunks.length > 1 ? `st-${++this._splitTableSeq}` : null;
+    const colgroup = table.querySelector('colgroup');
+
     return chunks.map(subset => {
       const t = table.cloneNode(false) as HTMLTableElement;
+      if (colgroup) t.appendChild(colgroup.cloneNode(true));
       const tbody = document.createElement('tbody');
       subset.forEach(r => tbody.appendChild(r.cloneNode(true)));
       t.appendChild(tbody);
+      if (splitId) t.setAttribute('data-split-table-id', splitId);
       return t;
     });
+  }
+
+  /** Sekwencja id dla fragmentów jednej logicznie podzielonej tabeli (R-17). */
+  private _splitTableSeq = 0;
+
+  /** Czy blok to manualny page break (div.page-break albo akapit zawierający tylko page-break). */
+  private _isPageBreakBlock(el: HTMLElement): boolean {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.classList?.contains('page-break')) return true;
+    const nested = el.querySelector?.('.page-break');
+    return !!nested && (el.textContent ?? '').trim().length === 0;
+  }
+
+  /**
+   * Scala sąsiednie fragmenty tej samej logicznej tabeli (te same data-split-table-id) w jedną
+   * tabelę — paginacja widoku dzieli tabelę między strony, ale zapis ma zawierać jedną tabelę.
+   * Niezależne sąsiednie tabele (bez wspólnego id) NIE są scalane (R-17 / reguła 11).
+   */
+  private _mergeSplitTables(html: string): string {
+    if (!html.includes('data-split-table-id')) return html;
+
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+
+    const handled = new Set<Element>();
+    tmp.querySelectorAll('table[data-split-table-id]').forEach(el => {
+      const first = el as HTMLTableElement;
+      if (handled.has(first)) return;
+      const id = first.getAttribute('data-split-table-id');
+      const targetBody = first.querySelector('tbody') ?? first;
+
+      let next = first.nextElementSibling;
+      while (next && next.tagName === 'TABLE' && next.getAttribute('data-split-table-id') === id) {
+        handled.add(next);
+        next.querySelectorAll('tr').forEach(tr => targetBody.appendChild(tr));
+        const toRemove = next;
+        next = next.nextElementSibling;
+        toRemove.remove();
+      }
+      first.removeAttribute('data-split-table-id');
+    });
+
+    return tmp.innerHTML;
   }
 
   /** Zapamiętuje pozycję kursora jako globalny offset tekstowy (po wszystkich stronach). */
@@ -3281,7 +3344,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     const parts = refs.map(r => this._serializeSingleEditor(r.nativeElement));
-    return parts.filter(p => p && p.trim().length > 0).join('');
+    const merged = parts.filter(p => p && p.trim().length > 0).join('');
+    // Scal fragmenty tej samej logicznej tabeli rozdzielonej przez paginację (R-17).
+    return this._mergeSplitTables(merged);
   }
 
   /** Serializuje pojedynczy edytor strony do HTML (z zachowaniem wysokości tabel i odwijaniem image-wrapperów). */
@@ -3345,7 +3410,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   setContent(html: string): void {
     const pages = this._splitHtmlIntoPages(html || '<p></p>');
     this.pageContents.set(pages);
-    this._content.set(this._joinPagesWithBreaks(pages));
+    // Pages already carry their own page-break markers (see _splitHtmlIntoPages); plain join
+    // avoids doubling them.
+    this._content.set(pages.join(''));
     this._isDirty = false;
     // Po Angular re-render: opakuj obrazki, zapisz snapshot, repaginuj
     setTimeout(() => {

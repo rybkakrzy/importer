@@ -816,12 +816,35 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        // The default paragraph style (w:default="1") overrides docDefaults for body text — e.g.
+        // "Normalny" with rFonts ascii="Times New Roman" beats docDefaults asciiTheme=minorHAnsi
+        // (Cambria). Body paragraphs without an explicit font use it, so the document container must
+        // carry it; otherwise the editor falls back to its own default (Calibri) and the document
+        // font is lost on screen.
+        ApplyDefaultParagraphStyleFont();
+
         // Konwertuj na CSS z rozwiązywaniem dziedziczenia (BasedOn)
         foreach (var kvp in _rawStyles)
         {
             var css = ConvertStyleToCssWithInheritance(kvp.Value);
             _styles[kvp.Key] = css;
         }
+    }
+
+    private void ApplyDefaultParagraphStyleFont()
+    {
+        var defaultStyle = _rawStyles.Values.FirstOrDefault(s =>
+            s.Type?.Value == StyleValues.Paragraph && s.Default?.Value == true);
+        if (defaultStyle?.StyleRunProperties == null) return;
+
+        var name = GetFontName(defaultStyle.StyleRunProperties.GetFirstChild<RunFonts>());
+        if (!string.IsNullOrEmpty(name))
+            _defaultFontFamily = name;
+
+        var size = defaultStyle.StyleRunProperties.GetFirstChild<FontSize>();
+        if (size?.Val?.Value != null &&
+            double.TryParse(size.Val.Value, System.Globalization.CultureInfo.InvariantCulture, out var sz))
+            _defaultFontSizePt = OoxmlUnits.HalfPointsToPoints(sz);
     }
 
     /// <summary>
@@ -1399,9 +1422,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string ConvertParagraphToHtml(Paragraph paragraph, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
+        // A standalone page-break paragraph (only <w:br w:type="page"/>, no text/image) is emitted
+        // as a TOP-LEVEL <div class="page-break"> block. Nesting it inside <p><span> broke the
+        // editor's page splitter (regex split cut the <p> in half) and height-pagination ignored it,
+        // so e.g. "PROTOKÓŁ…" did not start on a new page. The writer maps it back to w:br type=page.
+        if (IsPageBreakOnlyParagraph(paragraph))
+            return "<div class=\"page-break\"></div>";
+
         var html = new StringBuilder();
         var paraProps = paragraph.ParagraphProperties;
-        
+
         var styleId = paraProps?.ParagraphStyleId?.Val?.Value;
         var headingLevel = GetHeadingLevel(styleId);
         
@@ -1493,6 +1523,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         html.Append(isListItem ? "</li>" : $"</{tag}>");
         return html.ToString();
+    }
+
+    /// <summary>
+    /// True when the paragraph's only meaningful content is a manual page break
+    /// (<c>w:br type=page</c>) — i.e. a dedicated page-break paragraph, not text that merely
+    /// happens to break. Such paragraphs render as a standalone page-break block.
+    /// </summary>
+    private static bool IsPageBreakOnlyParagraph(Paragraph paragraph)
+    {
+        var hasPageBreak = paragraph.Descendants<Break>().Any(b => b.Type?.Value == BreakValues.Page);
+        if (!hasPageBreak) return false;
+
+        var hasText = paragraph.Descendants<Text>().Any(t => !string.IsNullOrEmpty(t.Text));
+        var hasGraphics = paragraph.Descendants<Drawing>().Any() || paragraph.Descendants<Picture>().Any();
+        return !hasText && !hasGraphics;
     }
 
     /// <summary>

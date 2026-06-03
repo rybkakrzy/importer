@@ -279,6 +279,40 @@ Pozostałe ograniczenia round-tripu: R-15 (1 oryginalny break nieodtworzony), R-
 stratny: `styles.xml`/`numbering.xml`/theme/font Cambria→Calibri), R-17 (split-table → 2
 tabele), R-18 (zapiekane `trHeight`).
 
+## 6b. Pass-through pakietu + ręczna weryfikacja (R-15/R-16/R-17)
+
+**Pass-through (R-16, częściowy):** `HtmlToDocxConverter.ConvertPreservingPackage(html, Stream? original, …)`
+generuje DOCX jak `Convert`, a następnie zachowuje z oryginalnego pakietu `styles.xml` (pełny
+zestaw, w tym style tabel), `theme` i `fontTable` (FeedData). Body/sekcja/nagłówki-stopki/
+obrazy/numbering pochodzą z konwersji HTML. Wpięte w `DownloadEditedDocumentCommandHandler`
+(ładuje bazową wersję v1 przez `IDocumentStorageService.DownloadAsync`; fallback do `Convert`
+gdy brak wersji / nie-DOCX). Status szczegółowy: R-19/R-20/R-21 w `RISKS_ASSUMPTIONS.md`.
+
+| Temat | Status | Plik |
+|---|---|---|
+| Page break round-trip | `Implemented` | `HtmlToDocxConverter.IsPageBreakNode`/`CreateRunsFromNode` |
+| Pass-through styles/theme/fontTable | `Partially implemented` | `HtmlToDocxConverter.ConvertPreservingPackage` (Download path) |
+| Pass-through numbering.xml | `Planned / not implemented yet` | — (R-19, konflikt numId) |
+| Pass-through w autosave | `Planned / not implemented yet` | — (R-20, ścieżka bezstanowa) |
+| Scalanie split-table na zapisie | `Implemented` | `wysiwyg-editor._mergeSplitTables` |
+
+**Generacja `zapisany_AFTER.docx`:** lokalnie, reader → `ConvertPreservingPackage(html, oryginał)`
+(test był tymczasowy, niecommitowany). Wynik (reader→writer): styles **164** (=GOOD), theme
+**Cambria**, page-breaki **1** (=GOOD).
+
+**Checklista ręcznej weryfikacji w MS Word:**
+1. Otwórz `orginał_GOOD.docx` — potwierdź ~4 strony (wzorzec).
+2. Otwórz `zapisany_AFTER.docx` — sprawdź:
+   - liczba stron ≈ 4 (nie 7),
+   - tabele nie są rozciągnięte na 100% / nie urosły w pionie,
+   - szerokości kolumn ≈ oryginał,
+   - marginesy strony ≈ oryginał (góra wąska, nie 2,3 cm),
+   - **font treści szeryfowy (Cambria)**, nie Calibri,
+   - manualny page break w tym samym miejscu co w oryginale,
+   - nagłówek/stopka na miejscu, nie wypchnięte.
+3. (Kontrast) `zapisany_BAD.docx` — 7 stron, Calibri, napompowane tabele.
+4. Zapisz odchylenia w raporcie (co nadal różni się od oryginału).
+
 ## 7. Ograniczenia trwałe (HTML/CSS)
 
 Nieosiągalne 1:1 w przeglądarce (udokumentowane w `FIDELITY_REPORT.md` §3):

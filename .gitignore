@@ -9,6 +9,10 @@ backend/.vscode/
 # Secrets — NIGDY nie commituj!
 **/*.secrets.json
 
+# Benchmark / fidelity artifacts (generowane)
+**/BenchmarkDotNet.Artifacts/
+**/fidelity-reports/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

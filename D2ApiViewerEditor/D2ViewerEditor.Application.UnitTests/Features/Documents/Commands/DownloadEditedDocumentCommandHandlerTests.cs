@@ -16,6 +16,7 @@ public class DownloadEditedDocumentCommandHandlerTests
 
     private Mock<IDocumentRepository> _documentRepo = null!;
     private Mock<IHtmlToDocxConverter> _converter = null!;
+    private Mock<IDocumentStorageService> _storage = null!;
     private DownloadEditedDocumentCommandHandler _handler = null!;
 
     [SetUp]
@@ -23,9 +24,11 @@ public class DownloadEditedDocumentCommandHandlerTests
     {
         _documentRepo = new Mock<IDocumentRepository>();
         _converter = new Mock<IHtmlToDocxConverter>();
+        _storage = new Mock<IDocumentStorageService>();
         _handler = new DownloadEditedDocumentCommandHandler(
             _documentRepo.Object,
             _converter.Object,
+            _storage.Object,
             NullLogger<DownloadEditedDocumentCommandHandler>.Instance);
     }
 
@@ -38,7 +41,7 @@ public class DownloadEditedDocumentCommandHandlerTests
     [Test]
     public async Task Handle_DocumentMissing_ReturnsNotFound()
     {
-        _documentRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Document?)null);
 
         var result = await _handler.Handle(BuildCmd(Guid.NewGuid()), CancellationToken.None);
@@ -60,7 +63,7 @@ public class DownloadEditedDocumentCommandHandlerTests
     public async Task Handle_UserDownloadNotTrue_ReturnsForbidden_WithoutInvokingConverter(string? metadata)
     {
         var doc = NewDoc(metadata);
-        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
 
         var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
 
@@ -77,7 +80,7 @@ public class DownloadEditedDocumentCommandHandlerTests
     public async Task Handle_UserDownloadTrue_ConvertsAndReturnsBytes()
     {
         var doc = NewDoc("{\"userDownload\":true,\"classification\":\"C2\"}");
-        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
 
         var expected = new byte[] { 1, 2, 3, 4 };
         _converter.Setup(c => c.Convert(
@@ -97,7 +100,7 @@ public class DownloadEditedDocumentCommandHandlerTests
     public async Task Handle_AllowedButEmptyHtml_ReturnsFailure()
     {
         var doc = NewDoc("{\"userDownload\":true}");
-        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
 
         var result = await _handler.Handle(BuildCmd(doc.Id, html: "   "), CancellationToken.None);
 
@@ -106,10 +109,37 @@ public class DownloadEditedDocumentCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_WithOriginalDocxVersion_UsesPassThrough_NotFromScratch()
+    {
+        var doc = NewDoc("{\"userDownload\":true}");
+        doc.AddVersion(Guid.NewGuid(), "documents/v1", 123, "User"); // base/original package
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+
+        var originalBytes = new byte[] { 10, 20, 30 };
+        _storage.Setup(s => s.DownloadAsync("documents/v1", It.IsAny<CancellationToken>())).ReturnsAsync(originalBytes);
+
+        var expected = new byte[] { 7, 7, 7 };
+        _converter.Setup(c => c.ConvertPreservingPackage(
+                It.IsAny<string>(), It.IsAny<Stream?>(), It.IsAny<DocumentMetadata?>(),
+                It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()))
+            .Returns(expected);
+
+        var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.DocxBytes.Should().Equal(expected);
+        _storage.Verify(s => s.DownloadAsync("documents/v1", It.IsAny<CancellationToken>()), Times.Once);
+        _converter.Verify(c => c.Convert(
+            It.IsAny<string>(), It.IsAny<DocumentMetadata?>(), It.IsAny<HeaderFooterContent?>(),
+            It.IsAny<HeaderFooterContent?>(), It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()), Times.Never);
+    }
+
+    [Test]
     public async Task Handle_NoOriginalFileName_FallsBackToDocumentNameWithDocxSuffix()
     {
         var doc = NewDoc("{\"userDownload\":true}");
-        _documentRepo.Setup(r => r.GetByIdAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
         _converter.Setup(c => c.Convert(
                 It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
                 It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
