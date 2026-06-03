@@ -54,6 +54,8 @@ Preferowane zasady:
 | `CHANGELOG.md` | Po każdej istotnej zmianie |
 | `GLOSSARY.md` | Przy terminologii technicznej i domenowej |
 | `PROMPTS.md` | Gotowe prompty do pracy z agentami |
+| `DOCX_CONVERSION.md` | Reference techniczny konwersji DOCX↔HTML: pipeline, model `DocumentContent`, macierz statusów, roadmapa (R-10, computed-style, domknięcia), diagramy |
+| `FIDELITY_REPORT.md` | Zgodność odwzorowania DOCX→HTML z Wordem (macierz wierności, testy, kolejne kroki) |
 
 ## Reguła aktualizacji
 

@@ -5,7 +5,9 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
+using D2ViewerEditor.Infrastructure.Conversion;
 using HtmlAgilityPack;
+using OoxmlPageSize = DocumentFormat.OpenXml.Wordprocessing.PageSize;
 using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Infrastructure.Services;
@@ -61,7 +63,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -91,7 +93,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             AddHeaderAndFooter(document, header, footer);
 
             // Dodaj ustawienia strony
-            AddPageSettings(body, header, footer, margins);
+            AddPageSettings(body, header, footer, margins, pageSize);
 
             document.Save();
         }
@@ -1200,7 +1202,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
         else
         {
-            tableProps.Append(new TableWidth { Width = "5000", Type = TableWidthUnitValues.Pct });
+            // No explicit width (e.g. CSS width:auto) → AUTO, sizing to content/grid like Word.
+            // Previously this forced 100% (pct 5000), which stretched content-sized tables to
+            // full text width. Patrz analiza orginał_GOOD (tblW auto) vs zapisany_BAD (pct 5000).
+            tableProps.Append(new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto });
         }
         
         // Wyrównanie tabeli
@@ -1234,12 +1239,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         tableProps.Append(defaultBorders);
         tableProps.Append(new TableLayout { Type = TableLayoutValues.Autofit });
         
-        // Domyślny padding komórek
+        // Domyślne marginesy komórek = domyślne Worda (TableNormal): top/bottom=0, left/right=108
+        // twips. Wcześniej hardkodowane 40/80 dodawało pionowy margines do każdej komórki (tabele
+        // rosły w pionie). Per-komórkowe tcMar z CSS i tak nadpisują tę wartość.
         tableProps.Append(new TableCellMarginDefault(
-            new TopMargin { Width = "40", Type = TableWidthUnitValues.Dxa },
-            new TableCellLeftMargin { Width = 80, Type = TableWidthValues.Dxa },
-            new BottomMargin { Width = "40", Type = TableWidthUnitValues.Dxa },
-            new TableCellRightMargin { Width = 80, Type = TableWidthValues.Dxa }
+            new TopMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
+            new TableCellLeftMargin { Width = 108, Type = TableWidthValues.Dxa },
+            new BottomMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
+            new TableCellRightMargin { Width = 108, Type = TableWidthValues.Dxa }
         ));
         
         table.Append(tableProps);
@@ -1663,6 +1670,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         var relationshipId = container.GetIdOfPart(imagePart);
 
+        // Alt text → round-tripped into wp:docPr/@descr. DeEntitize so the stored text is
+        // the real string (the reader re-encodes once); otherwise entities double-escape.
+        var altText = HtmlEntity.DeEntitize(node.GetAttributeValue("alt", "")) ?? string.Empty;
+
         // Próbuj najpierw użyć oryginalnych wymiarów EMU (zachowanych z DOCX)
         long widthEmu, heightEmu;
 
@@ -1700,8 +1711,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     height = hp;
             }
 
-            widthEmu = (long)(width * 9525);
-            heightEmu = (long)(height * 9525);
+            widthEmu = OoxmlUnits.PixelsToEmu(width);
+            heightEmu = OoxmlUnits.PixelsToEmu(height);
         }
 
         // Limit szerokości:
@@ -1714,8 +1725,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             widthEmu = maxWidthEmu;
             heightEmu = (long)(heightEmu * scale);
         }
-        if (widthEmu < 9525) widthEmu = 9525;   // min 1 px
-        if (heightEmu < 9525) heightEmu = 9525;
+        if (widthEmu < OoxmlUnits.EmuPerPixel) widthEmu = OoxmlUnits.EmuPerPixel;   // min 1 px
+        if (heightEmu < OoxmlUnits.EmuPerPixel) heightEmu = OoxmlUnits.EmuPerPixel;
 
         _imageCounter++;
 
@@ -1773,7 +1784,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 new DocumentFormat.OpenXml.Drawing.SolidFill(
                     new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = borderColor.ToUpperInvariant() }),
                 new DocumentFormat.OpenXml.Drawing.PresetDash { Val = dashStyle })
-            { Width = borderWidthPx * 9525 });
+            { Width = borderWidthPx * OoxmlUnits.EmuPerPixel });
         }
 
         var graphic = new DocumentFormat.OpenXml.Drawing.Graphic(
@@ -1793,7 +1804,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.Inline(
                     new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
                     new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
-                    new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
+                    BuildImageDocProperties((uint)_imageCounter, $"Image{_imageCounter}", altText),
                     new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
                         new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
                     graphic
@@ -1818,7 +1829,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapNone(),
-            new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = (uint)_imageCounter, Name = $"Image{_imageCounter}" },
+            BuildImageDocProperties((uint)_imageCounter, $"Image{_imageCounter}", altText),
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
                 new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
             graphic)
@@ -2130,21 +2141,21 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             var val = double.Parse(marginTopMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = marginTopMatch.Groups[2].Value;
-            if (unit == "px") val = val * 0.75; // px to pt approx
-            spacing.Before = ((int)Math.Round(val * 20)).ToString(); // pt to twips
+            if (unit == "px") val = OoxmlUnits.PixelsToPoints(val);
+            spacing.Before = ((int)Math.Round(OoxmlUnits.PointsToTwips(val))).ToString();
             hasSpacing = true;
         }
-        
+
         var marginBottomMatch = Regex.Match(style, @"margin-bottom:\s*([\d.,]+)(px|pt)");
         if (marginBottomMatch.Success)
         {
             var val = double.Parse(marginBottomMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = marginBottomMatch.Groups[2].Value;
-            if (unit == "px") val = val * 0.75;
-            spacing.After = ((int)Math.Round(val * 20)).ToString();
+            if (unit == "px") val = OoxmlUnits.PixelsToPoints(val);
+            spacing.After = ((int)Math.Round(OoxmlUnits.PointsToTwips(val))).ToString();
             hasSpacing = true;
         }
-        
+
         var lineHeightMatch = Regex.Match(style, @"line-height:\s*([\d.,]+)(pt)?");
         if (lineHeightMatch.Success)
         {
@@ -2153,7 +2164,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             if (unit == "pt")
             {
                 // Dokładna wartość w pt
-                spacing.Line = ((int)Math.Round(val * 20)).ToString();
+                spacing.Line = ((int)Math.Round(OoxmlUnits.PointsToTwips(val))).ToString();
                 spacing.LineRule = LineSpacingRuleValues.Exact;
             }
             else
@@ -2284,13 +2295,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             
             double ptSize = unit switch
             {
-                "px" => size * 0.75,
+                "px" => OoxmlUnits.PixelsToPoints(size),
                 "em" => size * 11, // Assume base 11pt
                 "rem" => size * 11,
                 _ => size // pt
             };
-            
-            var halfPoints = ((int)(ptSize * 2)).ToString();
+
+            var halfPoints = ((int)OoxmlUnits.PointsToHalfPoints(ptSize)).ToString();
             if (!props.Elements<FontSize>().Any())
                 props.Append(new FontSize { Val = halfPoints });
         }
@@ -2337,8 +2348,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var ls = double.Parse(letterSpacingMatch.Groups[1].Value.Replace(',', '.'),
                 System.Globalization.CultureInfo.InvariantCulture);
             var lsUnit = letterSpacingMatch.Groups[2].Value;
-            if (lsUnit == "px") ls = ls * 0.75;
-            props.Append(new Spacing { Val = (int)(ls * 20) });
+            if (lsUnit == "px") ls = OoxmlUnits.PixelsToPoints(ls);
+            props.Append(new Spacing { Val = (int)OoxmlUnits.PointsToTwips(ls) });
         }
 
         // Text-transform
@@ -2411,7 +2422,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Dodaje ustawienia strony z dokładnymi marginesami
     /// </summary>
-    private void AddPageSettings(Body body, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null)
+    private void AddPageSettings(Body body, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null)
     {
         var sectionProps = body.Elements<SectionProperties>().FirstOrDefault();
         if (sectionProps == null)
@@ -2419,47 +2430,78 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             sectionProps = new SectionProperties();
             body.Append(sectionProps);
         }
-        
-        // A4
-        if (!sectionProps.Elements<PageSize>().Any())
+
+        // Round-trip the authored page size/orientation; fall back to A4 portrait when unknown.
+        if (!sectionProps.Elements<OoxmlPageSize>().Any())
         {
-            sectionProps.Append(new PageSize 
-            { 
-                Width = 11906,
-                Height = 16838
-            });
+            sectionProps.Append(BuildPageSize(pageSize));
         }
         
-        // Przelicz marginesy na twipsy (1 cm = 567 twips)
-        const double cmToTwips = 567.0;
-        int leftTwips  = margins != null ? (int)Math.Round(margins.Left  * cmToTwips) : 1440;
-        int rightTwips = margins != null ? (int)Math.Round(margins.Right * cmToTwips) : 1440;
+        // Margins (cm) → twips via the central converter (supersedes the old 567 approximation;
+        // the exact factor is 1440/2.54). Defaults are 1 inch sides, 0.5 inch header/footer bands.
+        int defaultMarginTwips = OoxmlUnits.TwipsPerInch;
+        int defaultBandTwips = OoxmlUnits.TwipsPerInch / 2;
+        int leftTwips  = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Left))  : defaultMarginTwips;
+        int rightTwips = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Right)) : defaultMarginTwips;
 
-        var headerHeightTwips = header != null ? (int)(header.Height * 1440 / 2.54) : 720;
-        var footerHeightTwips = footer != null ? (int)(footer.Height * 1440 / 2.54) : 720;
+        var headerHeightTwips = header != null ? (int)OoxmlUnits.CmToTwips(header.Height) : defaultBandTwips;
+        var footerHeightTwips = footer != null ? (int)OoxmlUnits.CmToTwips(footer.Height) : defaultBandTwips;
 
-        int topTwips    = margins != null ? (int)Math.Round(margins.Top    * cmToTwips) : 1440;
-        int bottomTwips = margins != null ? (int)Math.Round(margins.Bottom * cmToTwips) : 1440;
+        int topTwips    = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Top))    : defaultMarginTwips;
+        int bottomTwips = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Bottom)) : defaultMarginTwips;
 
-        // Marginesy góra/dół muszą pomieścić nagłówek/stopkę
-        var topMargin    = Math.Max(topTwips,    headerHeightTwips + 720);
-        var bottomMargin = Math.Max(bottomTwips, footerHeightTwips + 720);
-        
+        // Body margins are written AS AUTHORED — they must not be inflated. The reader derives
+        // the header/footer band height as (margin − distance); here we invert that to recover
+        // the original w:header / w:footer distance = (margin − band), clamped to [0, 720].
+        // The previous Math.Max(top, headerHeight + 720) + hardcoded Header/Footer=720 pushed a
+        // small-margin / small-header document (top=567, header=6) to top=1281, adding pages.
+        // Patrz analiza orginał_GOOD vs zapisany_BAD.
+        const int maxBandDistanceTwips = 720; // 0.5"
+        uint headerDistance = (uint)Math.Clamp(topTwips - headerHeightTwips, 0, maxBandDistanceTwips);
+        uint footerDistance = (uint)Math.Clamp(bottomTwips - footerHeightTwips, 0, maxBandDistanceTwips);
+
         if (!sectionProps.Elements<PageMargin>().Any())
         {
             sectionProps.Append(new PageMargin
             {
-                Top    = topMargin,
+                Top    = topTwips,
                 Right  = (uint)rightTwips,
-                Bottom = bottomMargin,
+                Bottom = bottomTwips,
                 Left   = (uint)leftTwips,
-                Header = 720,
-                Footer = 720
+                Header = headerDistance,
+                Footer = footerDistance
             });
         }
     }
 
-    private int PxToTwips(int px) => (int)(px / 96.0 * 1440);
+    private static OoxmlPageSize BuildPageSize(Domain.Models.PageSize? pageSize)
+    {
+        // A4 portrait default (twips) matches Word's default new-document section.
+        const int a4WidthTwips = 11906;
+        const int a4HeightTwips = 16838;
+
+        if (pageSize == null || pageSize.WidthCm <= 0 || pageSize.HeightCm <= 0)
+            return new OoxmlPageSize { Width = a4WidthTwips, Height = a4HeightTwips };
+
+        var result = new OoxmlPageSize
+        {
+            Width = (uint)Math.Round(OoxmlUnits.CmToTwips(pageSize.WidthCm)),
+            Height = (uint)Math.Round(OoxmlUnits.CmToTwips(pageSize.HeightCm))
+        };
+        if (string.Equals(pageSize.Orientation, "landscape", StringComparison.OrdinalIgnoreCase))
+            result.Orient = PageOrientationValues.Landscape;
+        return result;
+    }
+
+    private static DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties BuildImageDocProperties(uint id, string name, string? altText)
+    {
+        var props = new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties { Id = id, Name = name };
+        if (!string.IsNullOrWhiteSpace(altText))
+            props.Description = altText;
+        return props;
+    }
+
+    private int PxToTwips(int px) => (int)OoxmlUnits.PixelsToTwips(px);
 
     /// <summary>
     /// Buduje SdtProperties (Tag/Alias) na podstawie atrybutów data-sdt-* z elementu HTML.

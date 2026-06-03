@@ -13,7 +13,8 @@ public record SaveDocumentCommand(
     DocumentMetadata? Metadata,
     HeaderFooterContent? Header,
     HeaderFooterContent? Footer,
-    PageMargins? Margins = null
+    PageMargins? Margins = null,
+    PageSize? PageSize = null
 ) : IRequest<Result<SaveDocumentResult>>;
 
 public record SaveDocumentResult(byte[] DocxBytes, string FileName);

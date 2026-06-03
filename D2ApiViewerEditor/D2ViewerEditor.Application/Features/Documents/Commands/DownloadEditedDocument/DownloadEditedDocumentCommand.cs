@@ -19,7 +19,8 @@ public record DownloadEditedDocumentCommand(
     DocumentMetadata? Metadata,
     HeaderFooterContent? Header,
     HeaderFooterContent? Footer,
-    PageMargins? Margins
+    PageMargins? Margins,
+    PageSize? PageSize = null
 ) : IRequest<Result<DownloadEditedDocumentResult>>;
 
 public record DownloadEditedDocumentResult(byte[] DocxBytes, string FileName);

@@ -48,7 +48,8 @@ public class DocumentController : BaseApiController
             request.Metadata,
             request.Header,
             request.Footer,
-            request.Margins
+            request.Margins,
+            request.PageSize
         );
 
         var result = await Mediator.Send(command);
@@ -140,7 +141,8 @@ public class DocumentController : BaseApiController
             request.SignerTitle,
             request.SignerEmail,
             request.SignatureReason,
-            request.Margins
+            request.Margins,
+            request.PageSize
         );
 
         var result = await Mediator.Send(command);

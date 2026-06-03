@@ -6,6 +6,8 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
+using D2ViewerEditor.Infrastructure.Conversion;
+using D2ViewerEditor.Infrastructure.DocxModel;
 using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Infrastructure.Services;
@@ -35,6 +37,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? _themeMinorEastAsia;
     private string? _themeMajorComplexScript;
     private string? _themeMinorComplexScript;
+    // When rendering a paragraph that uses center/right tab stops (the classic
+    // left/center/right header-footer layout), tabs become flex-grow spacers.
+    private bool _flexTabs;
 
     // Firmowa czcionka — używana, gdy dokument nie definiuje własnej w docDefaults.
     private readonly DocumentDefaultsOptions _defaults;
@@ -88,10 +93,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             Styles = stylesLoaded.Count > 0 ? stylesLoaded : DefaultWordStyles.GetDefaultStyles(),
             Header = ExtractHeader(document),
             Footer = ExtractFooter(document),
-            Margins = ExtractPageMargins(document)
+            Margins = ExtractPageMargins(document),
+            PageSize = ExtractPageSize(document)
         };
 
         return content;
+    }
+
+    /// <summary>
+    /// Page size + orientation (cm) from the first section. Null when the section
+    /// declares no w:pgSz (caller falls back to its own default).
+    /// </summary>
+    private static Domain.Models.PageSize? ExtractPageSize(WordprocessingDocument document)
+    {
+        var sectionProps = document.MainDocumentPart?.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        if (page.PageWidthTwips is not { } width || page.PageHeightTwips is not { } height)
+            return null;
+
+        return new Domain.Models.PageSize
+        {
+            WidthCm = Math.Round(OoxmlUnits.TwipsToCm(width), 2),
+            HeightCm = Math.Round(OoxmlUnits.TwipsToCm(height), 2),
+            Orientation = page.Orientation == PageOrientation.Landscape ? "landscape" : "portrait"
+        };
     }
 
     /// <summary>
@@ -100,17 +125,31 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private static PageMargins? ExtractPageMargins(WordprocessingDocument document)
     {
         var sectionProps = document.MainDocumentPart?.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
-        var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
-        if (pgMar == null) return null;
+        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        if (!page.HasPageMargin) return null;
 
-        const double twipsToCm = 1.0 / 567.0;
+        // Top/Bottom may be negative (mirror/overlap margins) — take the magnitude as Word
+        // does for the printable band; Left/Right are kept as authored. Per-side default 2.5 cm.
         return new PageMargins
         {
-            Top    = pgMar.Top    != null ? Math.Round(Math.Abs((int)pgMar.Top.Value)    * twipsToCm, 2) : 2.5,
-            Bottom = pgMar.Bottom != null ? Math.Round(Math.Abs((int)pgMar.Bottom.Value) * twipsToCm, 2) : 2.5,
-            Left   = pgMar.Left   != null ? Math.Round((int)pgMar.Left.Value             * twipsToCm, 2) : 2.5,
-            Right  = pgMar.Right  != null ? Math.Round((int)pgMar.Right.Value            * twipsToCm, 2) : 2.5,
+            Top    = page.TopMarginTwips    is { } t ? Math.Round(OoxmlUnits.TwipsToCm(Math.Abs(t)), 2) : 2.5,
+            Bottom = page.BottomMarginTwips is { } b ? Math.Round(OoxmlUnits.TwipsToCm(Math.Abs(b)), 2) : 2.5,
+            Left   = page.LeftMarginTwips   is { } l ? Math.Round(OoxmlUnits.TwipsToCm(l),            2) : 2.5,
+            Right  = page.RightMarginTwips  is { } r ? Math.Round(OoxmlUnits.TwipsToCm(r),            2) : 2.5,
         };
+    }
+
+    /// <summary>
+    /// Height (cm) of the header/footer band = printable margin minus the header/footer
+    /// distance, mirroring Word's geometry. Defaults: margin 0, distance 720 twips (0.5").
+    /// Callers apply their own fallback when the section declares no page margin.
+    /// </summary>
+    private static double ComputeBandHeightCm(int? marginTwips, int? distanceTwips)
+    {
+        var margin = marginTwips is { } m ? Math.Abs(m) : 0;
+        var distance = distanceTwips ?? 720;
+        var band = margin > distance ? margin - distance : margin;
+        return OoxmlUnits.TwipsToCm(band);
     }
 
     /// <summary>
@@ -168,32 +207,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
-        double headerHeight = 1.5;
-        
-        var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
-        if (pgMar != null)
-        {
-            int topMargin = 0;
-            int headerMargin = 720;
-            
-            if (pgMar.Top?.Value != null)
-            {
-                topMargin = Math.Abs(pgMar.Top.Value);
-            }
-            if (pgMar.Header?.Value != null)
-            {
-                headerMargin = (int)pgMar.Header.Value;
-            }
-            
-            if (topMargin > headerMargin)
-            {
-                headerHeight = (topMargin - headerMargin) / 1440.0 * 2.54;
-            }
-            else
-            {
-                headerHeight = topMargin / 1440.0 * 2.54;
-            }
-        }
+        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        double headerHeight = page.HasPageMargin
+            ? ComputeBandHeightCm(page.TopMarginTwips, page.HeaderDistanceTwips)
+            : 1.5;
 
         return new HeaderFooterContent
         {
@@ -257,32 +274,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
-        double footerHeight = 1.5;
-        
-        var pgMar = sectionProps?.Elements<PageMargin>().FirstOrDefault();
-        if (pgMar != null)
-        {
-            int bottomMargin = 0;
-            int footerMargin = 720;
-            
-            if (pgMar.Bottom?.Value != null)
-            {
-                bottomMargin = Math.Abs(pgMar.Bottom.Value);
-            }
-            if (pgMar.Footer?.Value != null)
-            {
-                footerMargin = (int)pgMar.Footer.Value;
-            }
-            
-            if (bottomMargin > footerMargin)
-            {
-                footerHeight = (bottomMargin - footerMargin) / 1440.0 * 2.54;
-            }
-            else
-            {
-                footerHeight = bottomMargin / 1440.0 * 2.54;
-            }
-        }
+        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        double footerHeight = page.HasPageMargin
+            ? ComputeBandHeightCm(page.BottomMarginTwips, page.FooterDistanceTwips)
+            : 1.5;
 
         return new HeaderFooterContent
         {
@@ -849,7 +844,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (size?.Val?.Value != null &&
             double.TryParse(size.Val.Value, System.Globalization.CultureInfo.InvariantCulture, out var sz))
         {
-            _defaultFontSizePt = sz / 2.0;
+            _defaultFontSizePt = OoxmlUnits.HalfPointsToPoints(sz);
         }
     }
 
@@ -960,7 +955,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 if (runProps.FontSize?.Val?.Value != null &&
                     double.TryParse(runProps.FontSize.Val.Value, out var fontSize))
                 {
-                    docStyle.FontSize = fontSize / 2;
+                    docStyle.FontSize = OoxmlUnits.HalfPointsToPoints(fontSize);
                 }
 
                 var color = runProps.Color?.Val?.Value;
@@ -1002,12 +997,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     if (spacing.Before?.Value != null &&
                         int.TryParse(spacing.Before.Value, out var before))
                     {
-                        docStyle.SpaceBefore = before / 20.0;
+                        docStyle.SpaceBefore = OoxmlUnits.TwipsToPoints(before);
                     }
                     if (spacing.After?.Value != null &&
                         int.TryParse(spacing.After.Value, out var after))
                     {
-                        docStyle.SpaceAfter = after / 20.0;
+                        docStyle.SpaceAfter = OoxmlUnits.TwipsToPoints(after);
                     }
                     if (spacing.Line?.Value != null &&
                         int.TryParse(spacing.Line.Value, out var lineVal))
@@ -1073,7 +1068,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         };
     }
 
-    private double TwipsToCm(int twips) => Math.Round(twips / 567.0, 2);
+    private double TwipsToCm(int twips) => Math.Round(OoxmlUnits.TwipsToCm(twips), 2);
 
     /// <summary>
     /// Ładuje obrazy z dokumentu
@@ -1434,6 +1429,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             cssBuilder.Append(borderCss);
         }
         
+        // Left/center/right one-line layout: a paragraph with center or right/end tab stops
+        // becomes a flex row so its tab-separated segments spread across the width instead of
+        // collapsing into fixed gaps. Tab characters are preserved (round-trip stays intact).
+        var useFlexTabs = ParagraphHasAlignmentTab(paraProps);
+        if (useFlexTabs)
+            cssBuilder.Append("display:flex;align-items:baseline;width:100%;");
+
         var cssStyle = cssBuilder.ToString();
         var classAttr = docClass != null ? $" class=\"{docClass}\"" : string.Empty;
         // data-style-id pozwala eksporterowi HTML→DOCX odtworzyć oryginalny styleId (np. Title, Subtitle),
@@ -1450,6 +1452,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             html.Append($"<{tag}{classAttr}{dataStyleAttr} style=\"{cssStyle}\">");
         }
+
+        var prevFlexTabs = _flexTabs;
+        _flexTabs = useFlexTabs;
 
         // Obsługa złożonych pól (FieldChar Begin/Separate/End)
         var hasComplexField = paragraph.Descendants<FieldChar>().Any();
@@ -1479,6 +1484,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        _flexTabs = prevFlexTabs;
+
         if (!paragraph.Elements<Run>().Any() && !paragraph.Elements<Hyperlink>().Any() && !paragraph.Elements<SimpleField>().Any())
         {
             html.Append("&nbsp;");
@@ -1486,6 +1493,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         html.Append(isListItem ? "</li>" : $"</{tag}>");
         return html.ToString();
+    }
+
+    /// <summary>
+    /// True when the paragraph declares a center or right/end tab stop — the signature of a
+    /// left/center/right one-line layout (typical Word header/footer).
+    /// </summary>
+    private static bool ParagraphHasAlignmentTab(OpenXmlElement? paraProps)
+    {
+        var tabs = paraProps?.GetFirstChild<Tabs>();
+        if (tabs == null) return false;
+
+        return tabs.Elements<TabStop>().Any(t =>
+            t.Val?.Value == TabStopValues.Center ||
+            t.Val?.Value == TabStopValues.Right ||
+            t.Val?.Value == TabStopValues.End);
     }
 
     /// <summary>
@@ -1919,7 +1941,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             if (!beforeAuto)
             {
                 if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
-                    css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", beforeVal / 20.0));
+                    css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeVal)));
                 else if (spacing.BeforeLines?.Value != null)
                 {
                     // BeforeLines jest w 1/100 linii — przybliżamy do wielokrotności domyślnego rozmiaru.
@@ -1931,7 +1953,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             if (!afterAuto)
             {
                 if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
-                    css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", afterVal / 20.0));
+                    css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
                 else if (spacing.AfterLines?.Value != null)
                 {
                     var pt = spacing.AfterLines.Value / 100.0 * (_defaultFontSizePt ?? 11);
@@ -1944,7 +1966,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 var lineRule = spacing.LineRule?.Value;
                 if (lineRule == LineSpacingRuleValues.Exact || lineRule == LineSpacingRuleValues.AtLeast)
                 {
-                    css.Append(string.Format(inv, "line-height:{0:0.##}pt;", lineVal / 20.0));
+                    css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
                 }
                 else
                 {
@@ -1981,6 +2003,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = new StringBuilder();
         var runProps = run.RunProperties;
 
+        // Inside a flex tab-stop paragraph, a tab-only run becomes a growing spacer that is a
+        // direct flex child (so it actually distributes the L/C/R segments). The tab character
+        // is kept for round-trip. Mixed runs fall through to normal rendering.
+        if (_flexTabs && run.Elements<TabChar>().Any()
+            && !run.Elements<Text>().Any() && !run.Elements<Drawing>().Any()
+            && !run.Elements<Picture>().Any() && !run.Elements<Break>().Any())
+        {
+            return "<span style=\"flex:1 1 0;\">\t</span>";
+        }
+
         // Pobierz CSS bez formatowania obsługiwanego przez tagi HTML
         bool needsBold = false, needsItalic = false, needsUnderline = false, needsStrike = false, needsSup = false, needsSub = false;
         if (runProps != null)
@@ -2000,7 +2032,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var cleanCss = GetRunStyleClean(runProps);
 
-        html.Append($"<span style=\"{cleanCss}\">");
+        // Resolve a named character style (w:rStyle) and lay its inherited CSS *underneath*
+        // the run's direct formatting (direct wins on conflicts, which come later in the
+        // declaration). Without this, runs formatted only via a character style — Hyperlink,
+        // Strong, Emphasis, custom — rendered with no formatting at all.
+        var rStyleId = runProps?.RunStyle?.Val?.Value;
+        var rStyleCss = rStyleId != null && _styles.TryGetValue(rStyleId, out var rsCss)
+            ? rsCss
+            : string.Empty;
+
+        html.Append($"<span style=\"{rStyleCss}{cleanCss}\">");
         if (needsBold) html.Append("<strong>");
         if (needsItalic) html.Append("<em>");
         if (needsUnderline) html.Append("<u>");
@@ -2069,7 +2110,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (fontSize?.Val != null &&
             double.TryParse(fontSize.Val.Value, System.Globalization.NumberStyles.Float, inv, out var sz))
         {
-            css.Append(string.Format(inv, "font-size:{0:0.##}pt;", sz / 2));
+            css.Append(string.Format(inv, "font-size:{0:0.##}pt;", OoxmlUnits.HalfPointsToPoints(sz)));
         }
 
         // Rodzina czcionki (z obsługą theme fonts: asciiTheme/hAnsiTheme/...)
@@ -2104,7 +2145,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var spacing = props.Descendants<Spacing>().FirstOrDefault();
         if (spacing?.Val != null)
             css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "letter-spacing:{0:0.#}pt;", spacing.Val.Value / 20.0));
+                "letter-spacing:{0:0.#}pt;", OoxmlUnits.TwipsToPoints(spacing.Val.Value)));
 
         // Caps / SmallCaps
         var caps = props.Descendants<Caps>().FirstOrDefault();
@@ -2152,7 +2193,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 System.Globalization.CultureInfo.InvariantCulture, out var size))
         {
             css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "font-size:{0:0.##}pt;", size / 2));
+                "font-size:{0:0.##}pt;", OoxmlUnits.HalfPointsToPoints(size)));
         }
 
         var fontFamily = props.Descendants<RunFonts>().FirstOrDefault();
@@ -2189,7 +2230,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var spacing = props.Descendants<Spacing>().FirstOrDefault();
         if (spacing?.Val != null)
             css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "letter-spacing:{0:0.#}pt;", spacing.Val.Value / 20.0));
+                "letter-spacing:{0:0.#}pt;", OoxmlUnits.TwipsToPoints(spacing.Val.Value)));
 
         var capsProp = props.Descendants<Caps>().FirstOrDefault();
         if (capsProp != null && (capsProp.Val == null || capsProp.Val.Value))
@@ -2397,8 +2438,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var extent = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
         var width = extent?.Cx != null ? EmuToPx(extent.Cx.Value) : 200;
         var height = extent?.Cy != null ? EmuToPx(extent.Cy.Value) : 200;
-        var widthEmu = extent?.Cx?.Value ?? (long)(width * 9525);
-        var heightEmu = extent?.Cy?.Value ?? (long)(height * 9525);
+        var widthEmu = extent?.Cx?.Value ?? OoxmlUnits.PixelsToEmu(width);
+        var heightEmu = extent?.Cy?.Value ?? OoxmlUnits.PixelsToEmu(height);
 
         string? base64Data = null;
         string? contentType = null;
@@ -2462,7 +2503,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var outline = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Outline>().FirstOrDefault();
         if (outline != null && outline.Width != null && outline.Width.Value > 0)
         {
-            var borderWidthPx = Math.Max(1, (int)Math.Round(outline.Width.Value / 9525.0));
+            var borderWidthPx = Math.Max(1, (int)Math.Round(OoxmlUnits.EmuToPixels(outline.Width.Value)));
             var srgb = outline.Descendants<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>().FirstOrDefault();
             var color = srgb?.Val?.Value;
             if (!string.IsNullOrEmpty(color) && System.Text.RegularExpressions.Regex.IsMatch(color, "^[0-9A-Fa-f]{6}$"))
@@ -2490,11 +2531,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        // Alt text from wp:docPr (@descr preferred, else @title) — preserved as <img alt>.
+        var docPr = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties>().FirstOrDefault();
+        var alt = docPr?.Description?.Value ?? docPr?.Title?.Value;
+        var altAttr = !string.IsNullOrEmpty(alt) ? $" alt=\"{EscapeHtml(alt)}\"" : string.Empty;
+
         return $"<img src=\"data:{contentType};base64,{base64Data}\" " +
                $"style=\"max-width:100%;width:{width}px;height:{height}px;\" " +
                $"data-image-id=\"{relationshipId}\" " +
                $"data-width-emu=\"{widthEmu}\" data-height-emu=\"{heightEmu}\"" +
-               $"{posAttrs}{borderAttrs}{cropAttrs} />";
+               $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs} />";
     }
 
     /// <summary>
@@ -2563,15 +2609,37 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         
         // Szerokość tabeli
         var tableWidth = "auto";
+        var hasExplicitWidth = false;
         if (tableProps?.TableWidth?.Width?.Value != null)
         {
             var w = tableProps.TableWidth;
             if (w.Type?.Value == TableWidthUnitValues.Pct)
+            {
                 tableWidth = $"{int.Parse(w.Width.Value) / 50}%";
+                hasExplicitWidth = true;
+            }
             else if (w.Type?.Value == TableWidthUnitValues.Dxa)
+            {
                 tableWidth = $"{TwipsToPx(int.Parse(w.Width.Value))}px";
+                hasExplicitWidth = true;
+            }
         }
-        
+
+        // Authoritative column widths come from tblGrid. Emitting a <colgroup> plus a
+        // fixed table layout makes the browser honour Word's column geometry instead of
+        // sizing columns to content (the usual cause of "table looks nothing like Word").
+        var gridColumnsPx = ReadTableGridColumnsPx(table);
+        var isFixedLayout = tableProps?.TableLayout?.Type?.Value == TableLayoutValues.Fixed;
+        var useFixedLayout = isFixedLayout || hasExplicitWidth;
+
+        // When a fixed-layout table declares no explicit width, fall back to the grid sum
+        // so the fixed layout has a width to distribute across the columns.
+        if (useFixedLayout && tableWidth == "auto" && gridColumnsPx.Count > 0)
+            tableWidth = $"{gridColumnsPx.Sum()}px";
+
+        var layoutCss = useFixedLayout ? "table-layout:fixed;" : string.Empty;
+        var colgroupHtml = BuildColgroupHtml(gridColumnsPx);
+
         // Wyrównanie tabeli
         var tableAlign = "";
         if (tableProps?.TableJustification?.Val != null)
@@ -2597,19 +2665,24 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var tblBordersAreEmpty = IsTableBordersEmpty(defaultBorders);
         var tblBordersMarker = tblBordersAreEmpty ? " data-no-borders=\"1\"" : "";
         
-        // Domyślny padding komórek
-        var defaultPadding = "4px 8px";
+        // Domyślny padding komórek = domyślne marginesy komórki Worda (TableNormal):
+        // top/bottom = 0, left/right = 108 twips. Wcześniejszy "4px 8px" dodawał 4px góra/dół
+        // do KAŻDEJ komórki, przez co tabele rosły w pionie po round-tripie (każdy wiersz +~120
+        // twips). Word domyślnie ma 0 góra/dół. Patrz analiza orginał_GOOD vs zapisany_BAD.
+        const int wordDefaultCellMarginTwips = 108; // 0.19 cm — domyślny lewy/prawy margines komórki
+        var defaultPadding = $"0px {TwipsToPx(wordDefaultCellMarginTwips)}px";
         var tblCellMar = tableProps?.TableCellMarginDefault;
         if (tblCellMar != null)
         {
-            var topPad = GetTwipsValue(tblCellMar.TopMargin) ?? 4;
-            var bottomPad = GetTwipsValue(tblCellMar.BottomMargin) ?? 4;
-            var leftPad = GetDxaValue(tblCellMar.TableCellLeftMargin) ?? 8;
-            var rightPad = GetDxaValue(tblCellMar.TableCellRightMargin) ?? 8;
+            var topPad = GetTwipsValue(tblCellMar.TopMargin) ?? 0;
+            var bottomPad = GetTwipsValue(tblCellMar.BottomMargin) ?? 0;
+            var leftPad = GetDxaValue(tblCellMar.TableCellLeftMargin) ?? wordDefaultCellMarginTwips;
+            var rightPad = GetDxaValue(tblCellMar.TableCellRightMargin) ?? wordDefaultCellMarginTwips;
             defaultPadding = $"{TwipsToPx(topPad)}px {TwipsToPx(rightPad)}px {TwipsToPx(bottomPad)}px {TwipsToPx(leftPad)}px";
         }
         
-        html.Append($"<table{tblBordersMarker} style=\"border-collapse:collapse;width:{tableWidth};margin:4px 0;{tableAlign}{tableIndent}\">");
+        html.Append($"<table{tblBordersMarker} style=\"border-collapse:collapse;width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
+        html.Append(colgroupHtml);
 
         foreach (var row in table.Elements<TableRow>())
         {
@@ -2652,6 +2725,37 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// Reads tblGrid column widths (twips) and converts them to CSS pixels.
+    /// Columns without an explicit width contribute 0 (browser distributes remainder).
+    /// </summary>
+    private List<int> ReadTableGridColumnsPx(Table table)
+    {
+        var result = new List<int>();
+        var grid = table.GetFirstChild<TableGrid>();
+        if (grid == null) return result;
+
+        foreach (var col in grid.Elements<GridColumn>())
+        {
+            if (col.Width?.Value != null && int.TryParse(col.Width.Value, out var twips))
+                result.Add(TwipsToPx(twips));
+            else
+                result.Add(0);
+        }
+        return result;
+    }
+
+    private static string BuildColgroupHtml(List<int> columnsPx)
+    {
+        if (columnsPx.Count == 0) return string.Empty;
+
+        var sb = new StringBuilder("<colgroup>");
+        foreach (var px in columnsPx)
+            sb.Append(px > 0 ? $"<col style=\"width:{px}px;\" />" : "<col />");
+        sb.Append("</colgroup>");
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Pomocnicza: pobiera wartość twips z elementu TableWidthType
     /// </summary>
     private int? GetTwipsValue(TableWidthType? element)
@@ -2673,22 +2777,51 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var rows = table.Elements<TableRow>().ToList();
         var startRowIndex = rows.IndexOf(startRow);
-        var cellIndex = startRow.Elements<TableCell>().ToList().IndexOf(startCell);
-        
+
+        // Match continuation cells by their grid-column position, not by element index:
+        // a preceding gridSpan shifts the column, so index-based matching breaks merges.
+        var startColumn = GetCellStartColumn(startRow, startCell);
+
         var rowSpan = 1;
         for (int i = startRowIndex + 1; i < rows.Count; i++)
         {
-            var cells = rows[i].Elements<TableCell>().ToList();
-            if (cellIndex >= cells.Count) break;
-            
-            var vMerge = cells[cellIndex].TableCellProperties?.VerticalMerge;
+            var cell = FindCellAtColumn(rows[i], startColumn);
+            var vMerge = cell?.TableCellProperties?.VerticalMerge;
             if (vMerge != null && (vMerge.Val == null || vMerge.Val.Value == MergedCellValues.Continue))
                 rowSpan++;
             else
                 break;
         }
-        
+
         return rowSpan;
+    }
+
+    private static int GetGridSpan(TableCell cell)
+    {
+        var gs = cell.TableCellProperties?.GridSpan?.Val?.Value;
+        return gs is > 0 ? gs.Value : 1;
+    }
+
+    private static int GetCellStartColumn(TableRow row, TableCell target)
+    {
+        var column = 0;
+        foreach (var cell in row.Elements<TableCell>())
+        {
+            if (ReferenceEquals(cell, target)) return column;
+            column += GetGridSpan(cell);
+        }
+        return column;
+    }
+
+    private static TableCell? FindCellAtColumn(TableRow row, int targetColumn)
+    {
+        var column = 0;
+        foreach (var cell in row.Elements<TableCell>())
+        {
+            if (column == targetColumn) return cell;
+            column += GetGridSpan(cell);
+        }
+        return null;
     }
 
     /// <summary>
@@ -2900,8 +3033,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var rsc = CountRowSpan(table, row, cell);
             if (rsc > 1) rowspan = $" rowspan=\"{rsc}\"";
         }
-        else if (vMerge != null && vMerge.Val == null)
+        else if (vMerge != null && (vMerge.Val == null || vMerge.Val.Value == MergedCellValues.Continue))
         {
+            // An omitted vMerge val defaults to "continue" (ECMA-376) — drop the merged cell.
             return;
         }
 
@@ -2927,8 +3061,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         html.Append("</td>");
     }
 
-    private int TwipsToPx(int twips) => (int)(twips / 1440.0 * 96);
-    private int EmuToPx(long emu) => (int)(emu / 914400.0 * 96);
+    private int TwipsToPx(int twips) => (int)OoxmlUnits.TwipsToPixels(twips);
+    private int EmuToPx(long emu) => (int)OoxmlUnits.EmuToPixels(emu);
     private string EscapeHtml(string text) => System.Net.WebUtility.HtmlEncode(text);
 
     private static string GetJustificationAlignment(JustificationValues value)

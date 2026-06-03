@@ -52,7 +52,7 @@ public class DownloadEditedDocumentCommandHandler
             return Result<DownloadEditedDocumentResult>.Failure("HTML edytora nie może być pusty.");
 
         var docxBytes = _converter.Convert(
-            request.Html, request.Metadata, request.Header, request.Footer, request.Margins);
+            request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize);
 
         var fileName = string.IsNullOrWhiteSpace(request.OriginalFileName)
             ? $"{(string.IsNullOrWhiteSpace(document.Name) ? "dokument" : document.Name)}.docx"

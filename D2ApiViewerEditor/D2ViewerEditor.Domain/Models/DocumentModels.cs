@@ -12,6 +12,17 @@ public class PageMargins
 }
 
 /// <summary>
+/// Rozmiar i orientacja strony (w cm). Odwzorowuje w:pgSz z sekcji DOCX.
+/// </summary>
+public class PageSize
+{
+    public double WidthCm { get; set; }
+    public double HeightCm { get; set; }
+    /// <summary>"portrait" | "landscape".</summary>
+    public string Orientation { get; set; } = "portrait";
+}
+
+/// <summary>
 /// Nagłówek lub stopka dokumentu
 /// </summary>
 public class HeaderFooterContent
@@ -38,6 +49,7 @@ public class DocumentContent
     public HeaderFooterContent? Header { get; set; }
     public HeaderFooterContent? Footer { get; set; }
     public PageMargins? Margins { get; set; }
+    public PageSize? PageSize { get; set; }
 }
 
 /// <summary>
@@ -105,6 +117,7 @@ public class SignDocumentRequest
     public string? SignerEmail { get; set; }
     public string? SignatureReason { get; set; }
     public PageMargins? Margins { get; set; }
+    public PageSize? PageSize { get; set; }
 }
 
 /// <summary>
@@ -128,6 +141,7 @@ public class SaveDocumentRequest
     public HeaderFooterContent? Header { get; set; }
     public HeaderFooterContent? Footer { get; set; }
     public PageMargins? Margins { get; set; }
+    public PageSize? PageSize { get; set; }
 }
 
 /// <summary>

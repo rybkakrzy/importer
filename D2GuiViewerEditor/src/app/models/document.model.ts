@@ -13,6 +13,13 @@ export interface HeaderFooterContent {
   evenHtml?: string;
 }
 
+/** Rozmiar i orientacja strony (w cm) */
+export interface PageSize {
+  widthCm: number;
+  heightCm: number;
+  orientation: 'portrait' | 'landscape';
+}
+
 /** Zawartość dokumentu z konwersji DOCX */
 export interface DocumentContent {
   html: string;
@@ -22,6 +29,7 @@ export interface DocumentContent {
   header?: HeaderFooterContent;
   footer?: HeaderFooterContent;
   margins?: PageMargins;
+  pageSize?: PageSize;
 }
 
 /** Metadane dokumentu */
@@ -144,6 +152,7 @@ export interface SaveDocumentRequest {
   header?: HeaderFooterContent;
   footer?: HeaderFooterContent;
   margins?: PageMargins;
+  pageSize?: PageSize;
 }
 
 /** Szablon dokumentu */

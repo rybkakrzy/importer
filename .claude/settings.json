@@ -12,7 +12,10 @@
       "PowerShell(podman exec d2viewereditor_postgres psql -U postgres -d d2viewereditor -t -c \"SELECT string_agg\\(tablename, ', '\\) FROM pg_tables WHERE schemaname='public';\")",
       "PowerShell(podman exec d2viewereditor_postgres psql -U postgres -d d2viewereditor -c \"\\\\dt\")",
       "PowerShell(podman exec d2viewereditor_postgres psql -U postgres -d d2viewereditor -c \"\\\\d document_deliveries\")",
-      "PowerShell(dotnet build D2ApiViewerEditor\\\\D2ViewerEditor.sln -v q --nologo 2>&1)"
+      "PowerShell(dotnet build D2ApiViewerEditor\\\\D2ViewerEditor.sln -v q --nologo 2>&1)",
+      "Bash(python -)",
+      "Bash(which soffice *)",
+      "Bash(ls \"/c/Program Files/LibreOffice/program/soffice.exe\")"
     ]
   }
 }

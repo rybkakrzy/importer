@@ -47,7 +47,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Verify(c => c.Convert(
             It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
             It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-            It.IsAny<PageMargins?>()), Times.Never);
+            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()), Times.Never);
     }
 
     [TestCase(null, TestName = "metadata missing entirely")]
@@ -70,7 +70,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Verify(c => c.Convert(
             It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
             It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-            It.IsAny<PageMargins?>()), Times.Never);
+            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()), Times.Never);
     }
 
     [Test]
@@ -83,7 +83,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Setup(c => c.Convert(
                 It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
                 It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-                It.IsAny<PageMargins?>()))
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()))
             .Returns(expected);
 
         var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
@@ -113,7 +113,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Setup(c => c.Convert(
                 It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
                 It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-                It.IsAny<PageMargins?>()))
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()))
             .Returns(new byte[] { 9 });
 
         var cmd = new DownloadEditedDocumentCommand(doc.Id, "<p>x</p>", null, null, null, null, null);

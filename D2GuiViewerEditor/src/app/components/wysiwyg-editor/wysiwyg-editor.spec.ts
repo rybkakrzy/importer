@@ -116,3 +116,48 @@ describe('WysiwygEditorComponent — variant editing routing', () => {
     expect(component.editingSection()).toBe('body');
   });
 });
+
+/**
+ * Regression: getContent() (the SAVE path) must not materialise the editor's
+ * height-based auto-pagination as hard page breaks — that turned 4-page documents
+ * into 7-page ones (orginał_GOOD vs zapisany_BAD). Page boundaries are joined plainly;
+ * explicit user page-breaks live inside page content and survive.
+ */
+describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji', () => {
+  let fixture: ComponentFixture<WysiwygEditorComponent>;
+  let component: WysiwygEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [WysiwygEditorComponent] }).compileComponents();
+    fixture = TestBed.createComponent(WysiwygEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  function mockPages(...htmls: string[]) {
+    const refs = htmls.map(h => {
+      const el = document.createElement('div');
+      el.innerHTML = h;
+      return { nativeElement: el };
+    });
+    (component as any).pageEditorRefs = { toArray: () => refs };
+  }
+
+  it('łączy wiele stron BEZ wstawiania div.page-break', () => {
+    mockPages('<p>Strona jeden</p>', '<p>Strona dwa</p>', '<p>Strona trzy</p>');
+
+    const html = component.getContent();
+
+    expect(html).toContain('Strona jeden');
+    expect(html).toContain('Strona dwa');
+    expect(html).toContain('Strona trzy');
+    expect(html).not.toContain('page-break');
+  });
+
+  it('zachowuje jawny page-break użytkownika obecny w treści strony', () => {
+    mockPages('<p>A</p><div class="page-break"></div><p>B</p>');
+
+    const html = component.getContent();
+
+    expect(html).toContain('class="page-break"');
+  });
+});

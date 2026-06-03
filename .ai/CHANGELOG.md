@@ -13,6 +13,134 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-03 — Round-trip fidelity: naprawa rozjazdu 4→7 stron i powiększonych tabel (orginał_GOOD vs zapisany_BAD)
+### Root causes (z analizy XML dwóch plików)
+- **Marginesy napompowane**: writer `AddPageSettings` `Math.Max(topTwips, headerHeightTwips+720)` + hardkod `Header/Footer=720` → top 567→1281, bottom 851→1231 (mniej treści/stronę).
+- **Tabele wyższe**: reader `ConvertTableToHtml` domyślny `padding:4px 8px` (4px=60 tw góra/dół) do każdej komórki → BAD +8160 tw (14.4 cm) `tcMar`. Word default = 0 góra/dół.
+- **Tabele szersze**: writer domyślnie `tblW pct 5000` (100%) gdy brak/auto width → rozciągnięcie tabel content-sized do pełnej szerokości. + hardkod `tblCellMar 40/80`.
+- **+2 twarde page-breaki (4→7)**: edytor `getContent()` materializował auto-paginację wg wysokości (`_repaginateNow`) jako `<div class="page-break">` między każdą stroną → twarde `<w:br type=page>` w DOCX.
+### Changed — backend (`HtmlToDocxConverter`/`DocxToHtmlConverter`)
+- Reader: domyślny padding komórek = Word default (top/bottom **0**, left/right **108 tw**) zamiast `4px 8px`; fallbacki `tcMar` → 0/108.
+- Writer: `tblW` domyślnie **auto** (`{Width="0",Type=Auto}`) zamiast `pct 5000`; tabelowy `tblCellMar` → **0/108/0/108** (Word default) zamiast 40/80.
+- Writer `AddPageSettings`: marginesy zapisywane **jak autorskie** (bez `Math.Max(...+720)`); `Header/Footer` distance **rekonstruowane** = `clamp(margin − bandHeight, 0, 720)` (odwrotność wyliczenia pasma przez reader).
+### Changed — frontend (`wysiwyg-editor.ts`)
+- `getContent()` (ścieżka ZAPISU) scala strony **czystą konkatenacją** (bez `<div class="page-break">`). Akapity są block-atomic → konkatenacja odtwarza treść; jawne page-breaki użytkownika przeżywają jako div w treści.
+### Verified (realny plik orginał_GOOD.docx → reader→writer → AFTER)
+| metryka | GOOD | BAD | AFTER |
+|---|---|---|---|
+| pgMar top / bottom | 567 / 851 | 1281 / 1231 | **567 / 850** |
+| pgMar header / footer | 6 / 340 | 720 / 720 | **6 / 339** |
+| tblW (6 tabel) | auto | pct 5000 | **auto** |
+| suma tcMar góra+dół | 0 | 8160 tw | **0** |
+| twarde page-breaki | 1 | 3 | **0** |
+### Tests
+- Backend **366 pass / 0 fail / 6 skip** (+`RoundTripLayoutFidelityTests` 4: marginesy nie-inflowane, header/footer distance, tcMar=0, tblW auto; +regeneracja 2 golden table snapshotów na `padding:0px 7px`). GUI **168** (+2 `getContent` bez page-break).
+- Weryfikacja na realnym pliku przez tymczasowy test lokalny (usunięty, niecommitowany) → `zapisany_AFTER.docx` (artefakt do ręcznego porównania w Word).
+### Notes / ograniczenia (patrz R-15..R-18)
+- AFTER ma 0 twardych breaków (vs GOOD 1) — reader→writer nie przywraca pojedynczego oryginalnego page-breaka (osobny gap writera). Po naprawie marginesów/tabel Word i tak paginuje ~4 strony naturalnie.
+- Tabela dzielona przez edytor między strony (`_splitTableForPagination`) zapisuje się jako 2 sąsiednie `<table>` (pre-existing) — do domknięcia (scalanie przy zapisie).
+- Font treści Cambria→Calibri, minimalny `styles.xml`, brak `numbering.xml` — model `DocumentContent` stratny (R-16); nie wpływa na liczbę stron tego dokumentu (`numPr`=0), ale na fidelity.
+
+## 2026-06-03 — Dokumentacja: nowy `DOCX_CONVERSION.md` (reference techniczny konwersji) + cross-linki
+### Changed
+- Nowy `.ai/DOCX_CONVERSION.md` — zweryfikowany w kodzie reference konwersji DOCX↔HTML: pipeline (2 diagramy Mermaid), model `DocumentContent` (diagram klas + ograniczenie R-10), `OoxmlUnits`, **macierz statusów** wszystkich obszarów (Implemented/Partially/Planned z kierunkiem R/W i ścieżkami w kodzie), roadmapa (R-10 multi-section, Etap 3 computed-style, domknięcia 5/6/7), harness testów, ograniczenia trwałe.
+- `INDEX.md` + wiersz dla `DOCX_CONVERSION.md`. Cross-linki z `FIDELITY_REPORT.md` i `FEATURES.md`.
+### Verified (przeciw kodowi, bez zmian kodu)
+- Multi-section: reader/writer `Body.Elements<SectionProperties>().FirstOrDefault()` → tylko pierwsza sekcja (R-10 = Partially).
+- Computed-style: `basedOn`+`rStyle`+theme+docDefaults(font/size) działają; brak centralnego resolvera/numbering/linked folding (Partially; pełny = Planned).
+- Rotacja obrazów `a:xfrm/@rot`: brak w obu konwerterach (Planned). VML: `ConvertPictureToHtml` tylko obraz+rozmiar (Partially).
+- `tcMar`: czytane → CSS padding (Implemented). `tblCellSpacing`: nieczytane (Planned).
+- `w:tabs` na zapisie: emitowane **tylko w stylach Header/Footer** (`AddDocumentStyles`, pozycje 4536/9072 tw); per-akapit/custom nieprzenoszone (Partially).
+### Notes
+- Zadanie dokumentacyjne — zero zmian kodu; testy bez zmian (backend 358, GUI 166).
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 8: audyt izolacji CSS dokumentu (bez zmian kodu)
+### Changed
+- Brak zmian kodu — audyt. Ustalono, że treść dokumentu jest już izolowana: style inline wygrywają z regułami klasowymi przez specyficzność CSS. Faktyczna liczba `!important` w `wysiwyg-editor.scss` to **6** (nie 65 — wcześniejsza liczba była artefaktem zbiorczego grepu wielu wzorców), z czego tylko 1 dotyczy treści (świadoma zamiana Calibri Light→Calibri w nagłówkach). `!important` w `styles.scss`/`document-editor.scss` dotyczą podświetleń UI i paddingów dialogów — nie nadpisują font/koloru/marginesów treści.
+### Verified
+- `FIDELITY_REPORT.md` skorygowany (§3 wysoka wierność: izolacja CSS; §5: Etap 8 = zweryfikowane bez zmian). Backend **358 pass**, GUI **166 pass** bez zmian (audyt nie ruszał kodu).
+### Notes
+- Premisa planu „65 !important nadpisuje treść" była błędna (miscount). Ryzykowna chirurgia SCSS niepotrzebna. Ewentualny dalszy krok: defensywny scoped reset + test computed-style (ograniczony w jsdom).
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 7: tab-stopy nagłówka/stopki (układ lewo⇥środek⇥prawo)
+### Changed
+- `DocxToHtmlConverter`: akapit z tab-stopem Center lub Right/End (`ParagraphHasAlignmentTab`) renderowany jako `display:flex` (`align-items:baseline;width:100%`). Run zawierający wyłącznie `<w:tab/>` (przy aktywnym `_flexTabs`) → `<span style="flex:1 1 0;">\t</span>` (rosnący spacer, **bezpośrednie dziecko flexa**), więc segmenty rozkładają się na szerokości zamiast zlewać w stałe odstępy. Znak taba zachowany (round-trip nienaruszony). Mieszane runy bez zmian.
+### Verified
+- `Infrastructure.UnitTests` **80/80 pass** (+1 golden `TabStopLeftCenterRight`: flex + 2 spacery + L/C/R tekst). Pozostałe golden niezmienione. Build OK.
+### Notes
+- Środek nie zawsze idealnie wycentrowany (zależy od szerokości boków) — udokumentowane jako częściowa wierność (FIDELITY_REPORT §3). Writer nie emituje `w:tabs` → po zapisie tab-stopy znikają i układ wraca do tabów (bez regresji vs. stan sprzed). Pozostaje Etap 7: wiele sekcji (R-10).
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 6: tekst alternatywny obrazów (alt ↔ wp:docPr/@descr)
+### Changed
+- Reader `DocxToHtmlConverter.ConvertDrawingToHtml`: odczyt `wp:docPr/@descr` (fallback `@title`) → `<img alt="...">` (tylko gdy niepuste → istniejące obrazy bez alt bez zmian). Escape przez `EscapeHtml`.
+- Writer `HtmlToDocxConverter`: `<img alt>` → `wp:docPr/@descr` w obu ścieżkach (inline + anchor) przez helper `BuildImageDocProperties`; `HtmlEntity.DeEntitize` na alt (inaczej encje podwójnie się escape'ują przy ponownym odczycie).
+### Verified
+- `Infrastructure.UnitTests` **79/79 pass** (+3 `ImageAltTextRoundTripTests`: round-trip, znaki specjalne/escape, brak alt → brak atrybutu). Golden-snapshoty niezmienione. Build OK.
+### Notes
+- Obrazy już wcześniej round-tripowały floating/border/crop/rozmiar (EMU). Pozostaje w Etapie 6: rotacja (`a:xfrm/@rot`), skalowanie przy crop (clip-path nie skaluje), VML (legacy) border/crop/alt.
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 4 (full-stack): rozmiar strony + orientacja — pełny round-trip
+### Changed
+- Backend wiring: `PageSize` przewleczony przez `SaveDocumentCommand`/`SignDocumentCommand`/`DownloadEditedDocumentCommand` (+ handlery → `_converter.Convert(... request.PageSize)`) i 3 kontrolery (`DocumentController.save/sign`, `DocumentStorageController.user-download`). DTO (`SaveDocumentRequest`/`SignDocumentRequest`) już niosły pole z Etapu 4 backend.
+- Frontend: `document.model.ts` — interfejs `PageSize` + pole na `DocumentContent`/`SaveDocumentRequest`. `document-editor.ts` — sygnał `documentPageSize` ustawiany przy wczytaniu (`content.pageSize` → sygnał + `pageSettings.orientation`) i dołączany w `buildSaveRequest`. Round-trip pełny: DOCX → reader → `pageSize` → front → zapis → writer `w:pgSz`.
+### Verified
+- Backend **358 pass / 0 fail** (Domain 57, Application 192, Api 33, Infrastructure 76). GUI **166 pass** (+2 testy `PageSize round-trip` w `document-editor.spec`). Build OK.
+### Notes
+- R-14 **zamknięte** (pełny full-stack). Brak `pageSize` z frontu → backend fallback A4 (bez regresji).
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 4 (backend): rozmiar strony + orientacja (round-trip)
+### Changed
+- Domena: nowy model `PageSize { WidthCm, HeightCm, Orientation }`; dodany do `DocumentContent`, `SaveDocumentRequest`, `SignDocumentRequest` (additive, backward-compatible).
+- Reader `DocxToHtmlConverter`: `ExtractPageSize` z modelu `PageSettings` (Etap 2) → `DocumentContent.PageSize` (cm + portrait/landscape).
+- Writer `HtmlToDocxConverter`: `IHtmlToDocxConverter.Convert` + `Convert` przyjmują opcjonalny `PageSize? pageSize`; `BuildPageSize` emituje `w:pgSz` (+`Orient` dla landscape) zamiast zahardkodowanego A4. Brak `pageSize` → fallback A4 portrait (bez regresji). Alias `OoxmlPageSize` rozwiązuje kolizję nazw `PageSize` (Domain vs OpenXml).
+### Verified
+- Cała solucja **358 pass / 0 fail / 6 skip** (Domain 57, Application 192, Api 33, Infrastructure 76 [+3 `PageSizeRoundTripTests`: landscape A4, A5 portrait, null→A4]; Integration 6 skip = wymaga Postgresa). Build OK.
+- Zmiana interfejsu (opcjonalny param) wymusiła aktualizację mocków Moq w `DownloadEditedDocumentCommandHandlerTests` (CS0854: expression tree + optional arg) — dodany `It.IsAny<PageSize?>()`.
+### Notes
+- **Pozostaje (Etap 4 full-stack):** przewlec `PageSize` przez komendy/DTO (Save/Sign/Download) i front (`document.model.ts` + editor/ruler/scss + Vitest), żeby zapis faktycznie round-tripował rozmiar (teraz handlery nie przekazują `pageSize` → writer defaultuje A4; reader już zwraca `PageSize` w `DocumentContent` — front może konsumować). Patrz R-14.
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 3: rozwiązywanie nazwanych stylów znakowych (w:rStyle)
+### Changed
+- `DocxToHtmlConverter.ConvertRunToHtml`: run z referencją do stylu znakowego (`w:rStyle`) dostaje teraz CSS tego stylu (z dziedziczeniem `basedOn`, z `_styles[rStyleId]`) **pod** formatowaniem bezpośrednim (direct wygrywa na konflikcie). Wcześniej runy formatowane wyłącznie przez styl znakowy (Hyperlink/Strong/Emphasis/własny) renderowały się **bez formatowania** — realna luka wierności.
+### Verified
+- `Infrastructure.UnitTests` **73/73 pass** (+1 golden `CharacterStyleRun`: bold+kolor+rozmiar ze stylu „Akcent" przez `rStyle`). Istniejące snapshoty **niezmienione** (brak `rStyle` w nich → zero dryfu). Build solucji OK.
+### Notes
+- Zakres celowy (slice): pełny computed-style (folding docDefaults do każdego elementu, style numerowania, linked styles, pełny theme) — kolejne kroki Etapu 3. Edge: jawne `bold=false` na runie nie wyłącza pogrubienia ze stylu znakowego (brak `font-weight:normal` z direct) — rzadkie, do domknięcia z computed-style.
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 2: jawny model pośredni (read-side, strangler) — sekcja/strona
+### Changed
+- Nowy namespace `Infrastructure/DocxModel/`: `PageSettings` (geometria strony/sekcji jako surowe twipsy + page size + orientacja) i `SectionPropertiesReader.ReadPageSettings(sectPr)` (czysty parser, bez defaultów/konwersji).
+- `DocxToHtmlConverter`: `ExtractPageMargins` + wysokość pasma nagłówka/stopki liczone teraz z modelu (`SectionPropertiesReader` + nowy helper `ComputeBandHeightCm`), zamiast bezpośredniego grzebania w `PageMargin`. Zachowanie **1:1** (te same wzory/zaokrąglenia). Page size/orientacja parsowane, ale jeszcze nieujawniane w HTML (fundament Etap 4).
+### Verified
+- `Infrastructure.UnitTests` **72/72 pass** (+5 `SectionPropertiesReaderTests` na modelu: size/margins/distances, landscape, brak pgMar, null sectPr, ujemny top margin). Golden-snapshoty **niezmienione** → potwierdzenie braku zmiany zachowania. Build solucji OK.
+### Notes
+- Strangler: stara (string) i nowa (model) ścieżka współistnieją; kolejne obszary migrują w Etap 3–7. ADR-0009.
+- Kontrakt `DocumentContent`/API bez zmian.
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 5: tabele (colgroup + fixed layout + fix vMerge/gridSpan)
+### Changed
+- `DocxToHtmlConverter.ConvertTableToHtml`: emisja `<colgroup><col style="width:..">` z `tblGrid` (autorytatywne szerokości kolumn) + `table-layout:fixed` gdy `tblLayout=fixed` lub tabela ma jawną szerokość (Dxa/Pct). Gdy fixed+brak szerokości tabeli → szerokość = suma kolumn z grid. Naprawia „tabela nie wygląda jak w Wordzie" (przeglądarka ignorowała geometrię kolumn). Nowe helpery `ReadTableGridColumnsPx`/`BuildColgroupHtml`.
+- `DocxToHtmlConverter` (merge): naprawiony `rowspan` przy pionowym scaleniu sąsiadującym z `gridSpan` — `CountRowSpan` dopasowuje komórki wg **pozycji kolumny w gridzie** (z uwzględnieniem `gridSpan`), nie wg indeksu komórki (stary bug gubił rowspan). Skip komórki kontynuacji obsługuje teraz też jawny `vMerge val="continue"` (wcześniej tylko pominięty val). Nowe helpery `GetGridSpan`/`GetCellStartColumn`/`FindCellAtColumn`.
+### Verified
+- `Infrastructure.UnitTests` **67/67 pass** (+1 nowy `MergedCellsTable` golden; `simple-table` baseline zregenerowany — dodane colgroup/fixed). Snapshoty stabilne.
+- Round-trip bezpieczny: writer (`HtmlToDocxConverter`) czyta wiersze przez `.//tr` i odtwarza własny `TableGrid` z liczby komórek → ignoruje `<colgroup>`/`<col>` (brak regresji zapisu).
+### Notes
+- Strona zapisu wciąż wymusza `TableLayout Autofit` — fidelity zapisu (fixed) odłożone (round-trip risk), do Etapu 4/5 cd.
+- Pozostaje w Etap 5: `tcMar`/`tblCellMar` pełne, shading dziedziczony z `tblPr`, cellSpacing, border conflict resolution.
+
+## 2026-06-03 — Refaktor DOCX→HTML Etap 0+1: centralne jednostki `OoxmlUnits` + harness regresji
+### Changed
+- Nowy `D2ViewerEditor.Infrastructure/Conversion/OoxmlUnits.cs` — jedno źródło prawdy dla konwersji OOXML (twips/EMU/half-points/cm/px) z nazwanymi stałymi (`TwipsPerInch`, `EmuPerInch`, `EmuPerPixel=9525`, `TwipsPerPoint=20`, `HalfPointsPerPoint=2`, `DefaultDpi=96`, `CmPerInch=2.54`).
+- `DocxToHtmlConverter` i `HtmlToDocxConverter`: wszystkie rozproszone stałe konwersji (`567`, `1440`, `914400`, `9525`, `/20`, `*0.75`, `/2`, `*2.54`) zastąpione wywołaniami `OoxmlUnits`; usunięte zduplikowane prywatne helpery (`TwipsToPx`/`EmuToPx`/`PxToTwips`/`TwipsToCm`/`cmToTwips`). Lokalny rounding/truncation zachowany → zachowanie liczbowe niezmienione. cm liczone dokładnym `1440/2.54` (zastępuje przybliżenie `567`).
+- Nowy harness regresji `Infrastructure.UnitTests/Golden/`: `GoldenDocuments` (deterministyczne DOCX w pamięci), `HtmlSnapshot` (normalizacja base64/`data-image-id`/daty + approve-on-missing), `GoldenSnapshotTests` (5 dokumentów: tekst, runy, spacing/indent, tabela, nagłówek+stopka z logo). Baseline w `Golden/__snapshots__/*.approved.html`.
+### Verified
+- `dotnet build D2ViewerEditor.sln` OK. `Infrastructure.UnitTests` **66/66 pass** (54 baseline + 7 `OoxmlUnitsTests` + 5 Golden). Snapshoty stabilne przy 2× uruchomieniu.
+- Asercje punktowe potwierdzają wzory: sz=32→16pt, 240tw→12pt, 720tw→48px, 480tw→32px, 3000tw→200px, 2000tw→133px, EMU 1270000/317500 round-trip.
+### Notes
+- Kontrakt `DocumentContent`/`IDocxToHtmlConverter`/API bez zmian — front nietknięty. Round-trip (Header/Footer, ImageFloating/BorderCrop) zielony.
+- Plan pełny: `~/.claude/plans/fancy-spinning-wirth.md` (Etap 0–9, strangler). Następny: Etap 2 (jawny model pośredni read-side) — duża zmiana, wymaga decyzji.
+- Snapshoty lokują *obecne* zachowanie (regression-guard), nie poprawność wobec Worda; wierność podnoszona w Etap 3–8.
+
 ## 2026-05-28 — Import nagłówka/stopki: wybór wg referencji sekcji (default + first-page)
 ### Changed
 - Backend `DocxToHtmlConverter`: `ExtractHeader`/`ExtractFooter` rozwiązują part przez `sectPr`/`HeaderReference`/`FooterReference` typu **Default** zamiast `HeaderParts.FirstOrDefault()` (kolejność partów była niezdefiniowana → mógł trafić pusty even/first). Dodano helpery `ResolveHeaderPart`/`ResolveFooterPart`/`HasTitlePage` oraz `ConvertHeaderPartToHtml`/`ConvertFooterPartToHtml`. Pierwsza strona (`titlePg`) → `DifferentFirstPage`+`FirstPageHtml` (model domeny już miał te pola). Fallback do `FirstOrDefault` gdy sekcja nie ma referencji.

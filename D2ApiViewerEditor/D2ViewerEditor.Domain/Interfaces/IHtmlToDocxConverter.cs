@@ -12,5 +12,5 @@ public interface IHtmlToDocxConverter
     /// </summary>
     byte[] Convert(string html, DocumentMetadata? metadata = null,
                    HeaderFooterContent? header = null, HeaderFooterContent? footer = null,
-                   PageMargins? margins = null);
+                   PageMargins? margins = null, PageSize? pageSize = null);
 }

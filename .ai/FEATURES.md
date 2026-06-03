@@ -91,6 +91,8 @@ Endpointy istnieją (`/download` zwraca v1), ale GUI w trybie `?masterId=` ładu
 ### Cel
 Wierne odwzorowanie nagłówka/stopki z DOCX oraz edycja w trybie zbliżonym do Worda (wejście klikiem/dwuklikiem, kontekstowy toolbar „Nagłówek"/„Stopka", „Zamknij nagłówek i stopkę", wariant pierwszej strony / parzysty-nieparzysty, numery stron).
 
+> Pełny reference konwersji DOCX↔HTML (pipeline, model `DocumentContent`, macierz statusów wszystkich obszarów, roadmapa, diagramy): `DOCX_CONVERSION.md`.
+
 ### Import (DOCX → HTML) — `DocxToHtmlConverter`
 - **Wybór wariantu wg sekcji, nie kolejności partów.** `ExtractHeader`/`ExtractFooter` rozwiązują part przez `sectPr` → `HeaderReference`/`FooterReference` typu **Default** (helpery `ResolveHeaderPart`/`ResolveFooterPart`). Fallback do `HeaderParts.FirstOrDefault()` tylko gdy sekcja nie deklaruje referencji. **Nie używać `FirstOrDefault()` jako głównej ścieżki** — kolejność partów jest niezdefiniowana i może trafić pusty even/first (gubi logo/tekst).
 - **Pierwsza strona:** czytana tylko gdy `sectPr/titlePg` (helper `HasTitlePage`) → `DifferentFirstPage` + `FirstPageHtml`.

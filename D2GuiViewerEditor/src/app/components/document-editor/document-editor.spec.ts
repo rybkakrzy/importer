@@ -454,3 +454,42 @@ describe('DocumentEditorComponent — userDownload (widoczność „Pobierz doku
     expect(component.errorMessage()).not.toBeNull();
   });
 });
+
+/**
+ * Etap 4 (front): rozmiar/orientacja strony round-tripują — wczytany `pageSize`
+ * trafia z powrotem do requestu zapisu, więc landscape/niestandardowy rozmiar nie
+ * jest gubiony (backend zapisuje go jako w:pgSz; brak → fallback A4 po stronie API).
+ */
+describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('buildSaveRequest niesie wczytany pageSize', () => {
+    component.documentPageSize.set({ widthCm: 29.7, heightCm: 21, orientation: 'landscape' });
+
+    const req = (component as any).buildSaveRequest();
+
+    expect(req.pageSize).toEqual({ widthCm: 29.7, heightCm: 21, orientation: 'landscape' });
+  });
+
+  it('bez wczytanego pageSize request ma undefined (backend → fallback A4)', () => {
+    const req = (component as any).buildSaveRequest();
+
+    expect(req.pageSize).toBeUndefined();
+  });
+});

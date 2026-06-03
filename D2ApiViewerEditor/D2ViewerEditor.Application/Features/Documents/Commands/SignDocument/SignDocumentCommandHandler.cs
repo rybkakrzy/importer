@@ -20,7 +20,7 @@ public class SignDocumentCommandHandler : IRequestHandler<SignDocumentCommand, R
         try
         {
             // Konwertuj HTML na DOCX
-            var docxBytes = _converter.Convert(request.Html, request.Metadata, request.Header, request.Footer, request.Margins);
+            var docxBytes = _converter.Convert(request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize);
 
             // Zdekoduj certyfikat
             var certificateBytes = Convert.FromBase64String(request.CertificateBase64);

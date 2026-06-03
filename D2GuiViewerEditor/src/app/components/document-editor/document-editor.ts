@@ -28,6 +28,7 @@ import {
   DocumentTemplate,
   PageMargins,
   PageSettings,
+  PageSize,
   MARGIN_PRESETS,
   DocumentStyle,
   HeaderFooterContent,
@@ -473,6 +474,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     orientation: 'portrait',
     paperSize: 'a4'
   });
+  /** Page size/orientation (cm) from the imported DOCX; round-tripped verbatim on save. */
+  documentPageSize = signal<PageSize | undefined>(undefined);
   marginPresets = MARGIN_PRESETS;
 
   // Dialog nagłówka i stopki
@@ -588,7 +591,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       metadata: this.documentMetadata(),
       header: this.headerContent(),
       footer: this.footerContent(),
-      margins: this.pageSettings().margins
+      margins: this.pageSettings().margins,
+      pageSize: this.documentPageSize()
     };
   }
 
@@ -700,6 +704,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         });
         if (content.margins) {
           this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
+        }
+        if (content.pageSize) {
+          this.documentPageSize.set(content.pageSize);
+          this.pageSettings.update(s => ({ ...s, orientation: content.pageSize!.orientation }));
         }
         if (this.editor) {
           this.editor.setContent(content.html);
@@ -906,6 +914,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         // Wczytaj marginesy strony
         if (content.margins) {
           this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
+        }
+        if (content.pageSize) {
+          this.documentPageSize.set(content.pageSize);
+          this.pageSettings.update(s => ({ ...s, orientation: content.pageSize!.orientation }));
         }
 
         if (this.editor) {

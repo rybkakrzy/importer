@@ -3263,7 +3263,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Pobiera zawartość HTML — scalone wszystkie strony z markerami <div class="page-break">.
+   * Pobiera zawartość HTML do ZAPISU — scala strony BEZ wstawiania znaczników
+   * <div class="page-break"> na granicach stron.
+   *
+   * Granice stron w edytorze pochodzą z auto-paginacji wg wysokości (_repaginateNow),
+   * a nie z intencji użytkownika. Wstawianie tu page-breaków materializowało paginację
+   * widoku jako twarde <w:br type=page> w DOCX — dokument rósł (np. 4 → 7 stron), a Word
+   * i tak paginuje sam. Akapity są block-atomic (nie dzielone), więc czysta konkatenacja
+   * odtwarza treść; jawne page-breaki użytkownika (insertPageBreak) przeżywają jako
+   * <div class="page-break"> wewnątrz treści strony. Patrz analiza orginał_GOOD vs zapisany_BAD.
    */
   getContent(): string {
     const refs = this.pageEditorRefs?.toArray() ?? [];
@@ -3273,7 +3281,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     const parts = refs.map(r => this._serializeSingleEditor(r.nativeElement));
-    return this._joinPagesWithBreaks(parts);
+    return parts.filter(p => p && p.trim().length > 0).join('');
   }
 
   /** Serializuje pojedynczy edytor strony do HTML (z zachowaniem wysokości tabel i odwijaniem image-wrapperów). */

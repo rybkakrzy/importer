@@ -19,7 +19,8 @@ public record SignDocumentCommand(
     string? SignerTitle,
     string? SignerEmail,
     string? SignatureReason,
-    PageMargins? Margins = null
+    PageMargins? Margins = null,
+    PageSize? PageSize = null
 ) : IRequest<Result<SignDocumentResult>>;
 
 public record SignDocumentResult(byte[] DocxBytes, string FileName);
