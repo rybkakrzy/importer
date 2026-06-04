@@ -56,6 +56,7 @@ Preferowane zasady:
 | `PROMPTS.md` | Gotowe prompty do pracy z agentami |
 | `DOCX_CONVERSION.md` | Reference techniczny konwersji DOCX↔HTML: pipeline, model `DocumentContent`, macierz statusów, roadmapa (R-10, computed-style, domknięcia), diagramy |
 | `EDITOR_KEYBOARD.md` | Edytor: obsługa klawiatury (ENTER/Backspace/strzałki, granice stron), formatowanie (font-size/family), paste (zwykły/bez formatowania), interlinia (Word→CSS + ograniczenia), linki, obsługa plików (DOCX/PDF/.doc), testy regresji |
+| `GRAPHICS_CONVERSION.md` | Konwerter grafik legacy (VML/EMF/WMF → SVG/PNG/placeholder): architektura `IGraphicConversionService`, strategia pass-through, bezpieczeństwo (XXE/SVG sanitizer), dlaczego bez LibreOffice/GDI, testy, benchmarki, roadmapa |
 | `BENCHMARKS.md` | Benchmarki wydajności/pamięci (BenchmarkDotNet) + fidelity-checks DOCX (R-15..R-21), perf harness frontu, jak uruchomić, progi, CI |
 | `FIDELITY_REPORT.md` | Zgodność odwzorowania DOCX→HTML z Wordem (macierz wierności, testy, kolejne kroki) |
 

@@ -13,6 +13,27 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-04 — Konwerter grafik VML/EMF/WMF → web (pure-managed, bez LibreOffice)
+Pełna referencja: `.ai/GRAPHICS_CONVERSION.md`.
+### Problem
+- Reader emitował EMF/WMF media parts jako `data:image/x-emf|x-wmf` → przeglądarka nie renderuje → złamany obraz. VML kształty wektorowe nieobsługiwane.
+### Architektura (DDD)
+- `IGraphicConversionService` (Domain/Interfaces) + modele `GraphicSource`/`WebGraphicRepresentation`/`GraphicConversionResult`/`GraphicConversionDiagnostics` + enumy (Domain/Models).
+- `GraphicConversionService` (Infrastructure) — **pure-managed**, bez LibreOffice/GDI/System.Drawing → Linux/GCP-safe. Detekcja (magic bytes + content-type), wymiary z nagłówków (PNG/JPEG/GIF/BMP/EMF rclFrame/WMF placeable), ekstrakcja osadzonego rastra z EMF/EMF+, placeholder SVG, sanitizer SVG, VML rect/oval/line/roundrect→SVG.
+- Hook w `DocxToHtmlConverter.WebGraphicForLegacy` — EMF/WMF (a:blip i v:imagedata) → renderowalny `data:URL` (osadzony raster albo placeholder), web-native bez zmian. Atrybut `data-legacy-graphic="placeholder"`.
+### Strategia
+- EMF/WMF **nie rasteryzowane** (brak bezpiecznej pure-managed ścieżki na Linux) → placeholder + **pass-through oryginalnego partu** (`ConvertPreservingPackage`) — Word renderuje prawdziwą grafikę, dokument nietknięty. Honest fallback, nie udawanie.
+- Bezpieczeństwo: `DtdProcessing.Prohibit`/`XmlResolver=null` (XXE blok), SVG sanitizer (script/on*/external/javascript), limity rozmiaru/czasu/wymiarów + cancellation; wyjątki → Fallback (nie wywraca importu).
+### Decyzja: zero nowych zależności graficznych
+- LibreOffice zakazane; System.Drawing Windows-only; brak permisywnego pure-managed renderera EMF. Rasteryzacja przez out-of-process sidecar = roadmapa.
+### USUNIĘTO poprzednią ścieżkę EMF opartą o soffice + System.Drawing (krytyczne dla GCP)
+- Reader miał `TryConvertMetafileToPng` → **LibreOffice `soffice`** (zakazane) + fallback **`System.Drawing`** (Windows-only, `PlatformNotSupported` na Linux) → działało tylko na Windows, **nie na GCP**. Usunięto wszystkie te metody + **pakiet `System.Drawing.Common` z .csproj**; oba wywołania (`LoadImageFromPart`, picture-bullet) przepięto na pure-managed `GraphicConversionService`. `SkiaSharp`(+NativeAssets.Linux) zostaje (GCP-safe, tylko barcody). Weryfikacja: `grep System.Drawing|soffice` w .cs = pusto; build OK; Infrastructure 137/137.
+### Verified / tests
+- Infrastructure **137** (+21: `GraphicConversionServiceTests` 13, `GraphicConversionSecurityTests` 7, `GraphicConversionIntegrationTests` 1 — DOCX z EMF a:blip → reader emituje svg+xml, **nigdy** image/x-emf). Brak regresji istniejących testów obrazów.
+- Benchmark `GraphicConversionBenchmarks` (BenchmarkDotNet `[MemoryDiagnoser]`, param GraphicCount 1/10/100) — `dotnet run -c Release -- --filter *GraphicConversion*`.
+### Ograniczenia
+- EMF/WMF bez podglądu wektorowego w przeglądarce (placeholder; pełny render w Word). VML: tylko bezpieczny podzbiór kształtów; hook kształtów wektorowych do readera + SVG→DOCX PNG-fallback + cache = roadmapa.
+
 ## 2026-06-04 — Edytor: 8 błędów (ENTER, font-size, font-family, paste plain, interlinia, link, .doc, Backspace/strzałki)
 Pełna referencja: `.ai/EDITOR_KEYBOARD.md`.
 ### Issue 1 — ENTER cofał kursor do poprzedniej linii (FIX)

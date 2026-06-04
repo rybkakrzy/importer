@@ -43,15 +43,40 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     // Firmowa czcionka — używana, gdy dokument nie definiuje własnej w docDefaults.
     private readonly DocumentDefaultsOptions _defaults;
+    private readonly IGraphicConversionService _graphics;
 
     public DocxToHtmlConverter()
     {
         _defaults = new DocumentDefaultsOptions();
+        _graphics = new GraphicConversionService();
     }
 
-    public DocxToHtmlConverter(IOptions<DocumentDefaultsOptions> defaults)
+    public DocxToHtmlConverter(IOptions<DocumentDefaultsOptions> defaults, IGraphicConversionService? graphics = null)
     {
         _defaults = defaults?.Value ?? new DocumentDefaultsOptions();
+        _graphics = graphics ?? new GraphicConversionService();
+    }
+
+    /// <summary>
+    /// Gdy media part jest legacy metafile (EMF/WMF), zwraca data:URL renderowalny w przeglądarce
+    /// (osadzony raster albo placeholder SVG) zamiast nierenderowalnego data:image/x-emf. Dla
+    /// formatów web-native zwraca null (zostaje dotychczasowa ścieżka). Oryginalny part nie jest
+    /// usuwany — pass-through zapewnia wierność w Word przy zapisie.
+    /// </summary>
+    private (string dataUrl, bool isPlaceholder)? WebGraphicForLegacy(byte[] bytes, string? contentType, long widthEmu, long heightEmu)
+    {
+        var kind = _graphics.Detect(bytes, contentType);
+        if (kind != GraphicKind.Emf && kind != GraphicKind.Wmf)
+            return null; // web-native → zostaje dotychczasowa ścieżka
+        var result = _graphics.ConvertForEditor(new GraphicSource
+        {
+            Data = bytes,
+            ContentType = contentType,
+            Origin = GraphicOrigin.LegacyDocxPart,
+            TargetWidthEmu = widthEmu > 0 ? widthEmu : null,
+            TargetHeightEmu = heightEmu > 0 ? heightEmu : null
+        });
+        return result.Web != null ? (result.Web.ToDataUrl(), result.Web.IsPlaceholder) : null;
     }
 
 
@@ -1125,15 +1150,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var rawBytes = memoryStream.ToArray();
         var contentType = imagePart.ContentType;
 
-        // EMF/WMF to wektorowe formaty Windows — żadna przeglądarka ich nie renderuje.
-        // Próbujemy przekonwertować do PNG (działa na Windows; na innych OS zostaje fallback).
+        // EMF/WMF: konwersja pure-managed (bez LibreOffice/System.Drawing → identyczne zachowanie
+        // na Windows i Linux/GCP). Gdy metafile zawiera osadzony raster — wyciągamy go; w innym
+        // wypadku zostaje oryginał, a renderer (WebGraphicForLegacy) pokaże placeholder. Oryginalny
+        // part i tak jedzie do DOCX przez pass-through, więc Word renderuje prawdziwą grafikę.
         if (IsMetafileContentType(contentType))
         {
-            var png = TryConvertMetafileToPng(rawBytes);
-            if (png != null)
+            var converted = _graphics.ConvertForEditor(new GraphicSource
             {
-                rawBytes = png;
-                contentType = "image/png";
+                Data = rawBytes,
+                ContentType = contentType,
+                Origin = GraphicOrigin.LegacyDocxPart
+            });
+            if (converted.Web is { IsPlaceholder: false } w && w.MimeType != "image/svg+xml")
+            {
+                rawBytes = w.Data;       // osadzony raster (PNG/JPEG)
+                contentType = w.MimeType;
             }
         }
 
@@ -1150,193 +1182,6 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (string.IsNullOrEmpty(contentType)) return false;
         var ct = contentType.ToLowerInvariant();
         return ct.Contains("emf") || ct.Contains("wmf") || ct.Contains("metafile");
-    }
-
-    /// <summary>
-    /// Konwertuje EMF/WMF do PNG. Najpierw próbuje LibreOffice headless (cross-platform —
-    /// wystarczy zainstalowany w obrazie kontenera), potem System.Drawing na Windows.
-    /// Zwraca null gdy żadna metoda nie jest dostępna albo zawiedzie.
-    /// </summary>
-    private static byte[]? TryConvertMetafileToPng(byte[] metafileBytes)
-    {
-        // 1) LibreOffice działa wszędzie (Linux/Windows/macOS) — preferowany.
-        var viaSoffice = TryConvertWithLibreOffice(metafileBytes);
-        if (viaSoffice != null) return viaSoffice;
-
-        // 2) Fallback Windows-only.
-        if (OperatingSystem.IsWindows())
-        {
-            try { return ConvertMetafileToPngWindows(metafileBytes); }
-            catch { /* swallow */ }
-        }
-
-        return null;
-    }
-
-    private static readonly object _sofficeProbeLock = new();
-    private static string? _sofficeBinaryCache;
-    private static bool _sofficeProbed;
-
-    private static string? ResolveSofficeBinary()
-    {
-        // Pamiętaj wynik wyszukiwania w obrębie procesu, żeby nie startować procesu
-        // sprawdzającego dla każdego obrazka.
-        if (_sofficeProbed) return _sofficeBinaryCache;
-        lock (_sofficeProbeLock)
-        {
-            if (_sofficeProbed) return _sofficeBinaryCache;
-            _sofficeProbed = true;
-
-            // Pozwól wskazać binarkę przez zmienną środowiskową.
-            var fromEnv = Environment.GetEnvironmentVariable("SOFFICE_BIN");
-            if (!string.IsNullOrWhiteSpace(fromEnv) && ProbeBinary(fromEnv))
-            {
-                _sofficeBinaryCache = fromEnv;
-                return _sofficeBinaryCache;
-            }
-
-            string[] candidates = OperatingSystem.IsWindows()
-                ? new[]
-                {
-                    @"C:\Program Files\LibreOffice\program\soffice.exe",
-                    @"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-                    "soffice.exe",
-                    "soffice"
-                }
-                : new[]
-                {
-                    "/usr/bin/soffice",
-                    "/usr/bin/libreoffice",
-                    "soffice",
-                    "libreoffice"
-                };
-
-            foreach (var c in candidates)
-            {
-                if (ProbeBinary(c))
-                {
-                    _sofficeBinaryCache = c;
-                    return _sofficeBinaryCache;
-                }
-            }
-            return null;
-        }
-    }
-
-    private static bool ProbeBinary(string path)
-    {
-        try
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = path,
-                Arguments = "--version",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var p = System.Diagnostics.Process.Start(psi);
-            if (p == null) return false;
-            if (!p.WaitForExit(3000)) { try { p.Kill(); } catch { } return false; }
-            return p.ExitCode == 0;
-        }
-        catch { return false; }
-    }
-
-    private static byte[]? TryConvertWithLibreOffice(byte[] metafileBytes)
-    {
-        var soffice = ResolveSofficeBinary();
-        if (soffice == null) return null;
-
-        // Wybór rozszerzenia źródła ma znaczenie — LibreOffice wnioskuje filtr z rozszerzenia.
-        var ext = LooksLikeWmf(metafileBytes) ? "wmf" : "emf";
-        var tempDir = Path.Combine(Path.GetTempPath(), "metaconv_" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(tempDir);
-            var inputPath = Path.Combine(tempDir, $"in.{ext}");
-            File.WriteAllBytes(inputPath, metafileBytes);
-
-            var psi = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = soffice,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                // Osobny katalog user-profile, żeby równoległe wywołania nie biły się o lock.
-                Arguments = $"--headless -env:UserInstallation=file://{tempDir.Replace('\\', '/')}/profile " +
-                            $"--convert-to png --outdir \"{tempDir}\" \"{inputPath}\""
-            };
-            using var proc = System.Diagnostics.Process.Start(psi);
-            if (proc == null) return null;
-            if (!proc.WaitForExit(30_000))
-            {
-                try { proc.Kill(true); } catch { }
-                return null;
-            }
-            if (proc.ExitCode != 0) return null;
-
-            var outputPath = Path.Combine(tempDir, "in.png");
-            if (!File.Exists(outputPath)) return null;
-            return File.ReadAllBytes(outputPath);
-        }
-        catch
-        {
-            return null;
-        }
-        finally
-        {
-            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
-        }
-    }
-
-    private static bool LooksLikeWmf(byte[] bytes)
-    {
-        // EMF zaczyna się od 0x01 0x00 0x00 0x00 (EMR_HEADER record type).
-        // WMF placeable header: 0xD7 0xCD 0xC6 0x9A; standardowy WMF: 0x01 0x00 0x09 0x00 lub 0x02 0x00 0x09 0x00.
-        if (bytes.Length < 4) return false;
-        if (bytes[0] == 0xD7 && bytes[1] == 0xCD && bytes[2] == 0xC6 && bytes[3] == 0x9A) return true;
-        if (bytes[0] == 0x01 && bytes[1] == 0x00 && bytes[2] == 0x09 && bytes[3] == 0x00) return true;
-        if (bytes[0] == 0x02 && bytes[1] == 0x00 && bytes[2] == 0x09 && bytes[3] == 0x00) return true;
-        return false;
-    }
-
-    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-    private static byte[] ConvertMetafileToPngWindows(byte[] metafileBytes)
-    {
-        using var src = new MemoryStream(metafileBytes);
-        using var img = System.Drawing.Image.FromStream(src);
-
-        // EMF jest wektorowy — wybieramy sensowny DPI, by zachować ostrość.
-        const float targetDpi = 144f;
-        var widthPx = Math.Max(1, (int)Math.Ceiling(img.Width * targetDpi / Math.Max(1f, img.HorizontalResolution)));
-        var heightPx = Math.Max(1, (int)Math.Ceiling(img.Height * targetDpi / Math.Max(1f, img.VerticalResolution)));
-
-        // Bezpieczne ograniczenie, by nie wyprodukować ogromnego bitmapa.
-        const int maxPx = 4096;
-        if (widthPx > maxPx || heightPx > maxPx)
-        {
-            var scale = Math.Min(maxPx / (double)widthPx, maxPx / (double)heightPx);
-            widthPx = Math.Max(1, (int)(widthPx * scale));
-            heightPx = Math.Max(1, (int)(heightPx * scale));
-        }
-
-        using var bmp = new System.Drawing.Bitmap(widthPx, heightPx, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        bmp.SetResolution(targetDpi, targetDpi);
-        using (var g = System.Drawing.Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-            g.Clear(System.Drawing.Color.Transparent);
-            g.DrawImage(img, 0, 0, widthPx, heightPx);
-        }
-
-        using var outMs = new MemoryStream();
-        bmp.Save(outMs, System.Drawing.Imaging.ImageFormat.Png);
-        return outMs.ToArray();
     }
 
     /// <summary>
@@ -1389,8 +1234,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     var contentType = imagePart.ContentType;
                     if (IsMetafileContentType(contentType))
                     {
-                        var png = TryConvertMetafileToPng(bytes);
-                        if (png != null) { bytes = png; contentType = "image/png"; }
+                        // Pure-managed (bez LibreOffice/System.Drawing). Osadzony raster → użyj go;
+                        // inaczej placeholder SVG jako punktator (bez crasha na Linux/GCP).
+                        var conv = _graphics.ConvertForEditor(new GraphicSource
+                        {
+                            Data = bytes, ContentType = contentType, Origin = GraphicOrigin.LegacyDocxPart
+                        });
+                        if (conv.Web != null)
+                        {
+                            _picBulletDataUris[id] = conv.Web.ToDataUrl();
+                            continue;
+                        }
                     }
                     var b64 = System.Convert.ToBase64String(bytes);
                     _picBulletDataUris[id] = $"data:{contentType};base64,{b64}";
@@ -2554,6 +2408,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         if (base64Data == null || contentType == null) return string.Empty;
 
+        // Legacy metafile (EMF/WMF) → renderowalny data:URL (osadzony raster / placeholder SVG);
+        // dla web-native zostaje oryginalny data:URL. Oryginalny part nietknięty (pass-through).
+        var legacySrc = WebGraphicForLegacy(System.Convert.FromBase64String(base64Data), contentType, widthEmu, heightEmu);
+        var drawingSrc = legacySrc?.dataUrl ?? $"data:{contentType};base64,{base64Data}";
+
         // Word-like floating positioning: wp:anchor → emit data-pos-mode + offsets so
         // the editor restores "front"/"behind" mode and the wrapper is anchored.
         var anchor = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
@@ -2614,11 +2473,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var alt = docPr?.Description?.Value ?? docPr?.Title?.Value;
         var altAttr = !string.IsNullOrEmpty(alt) ? $" alt=\"{EscapeHtml(alt)}\"" : string.Empty;
 
-        return $"<img src=\"data:{contentType};base64,{base64Data}\" " +
+        var legacyAttr = legacySrc?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
+        return $"<img src=\"{drawingSrc}\" " +
                $"style=\"max-width:100%;width:{width}px;height:{height}px;\" " +
                $"data-image-id=\"{relationshipId}\" " +
                $"data-width-emu=\"{widthEmu}\" data-height-emu=\"{heightEmu}\"" +
-               $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs} />";
+               $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs}{legacyAttr} />";
     }
 
     /// <summary>
@@ -2672,9 +2532,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         if (base64Data == null || contentType == null) return string.Empty;
 
-        return $"<img src=\"data:{contentType};base64,{base64Data}\" " +
+        // VML v:imagedata często wskazuje na EMF/WMF → renderowalny data:URL zamiast x-emf.
+        var legacyVml = WebGraphicForLegacy(
+            System.Convert.FromBase64String(base64Data), contentType,
+            (long)(vmlWidth * 9525.0), (long)(vmlHeight * 9525.0));
+        var vmlSrc = legacyVml?.dataUrl ?? $"data:{contentType};base64,{base64Data}";
+        var vmlLegacyAttr = legacyVml?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
+
+        return $"<img src=\"{vmlSrc}\" " +
                $"style=\"max-width:100%;width:{vmlWidth}px;height:{vmlHeight}px;\" " +
-               $"data-image-id=\"{relationshipId}\" />";
+               $"data-image-id=\"{relationshipId}\"{vmlLegacyAttr} />";
     }
 
     /// <summary>

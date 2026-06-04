@@ -1,0 +1,210 @@
+using System.Buffers.Binary;
+using System.Text;
+using D2ViewerEditor.Domain.Models;
+using D2ViewerEditor.Infrastructure.Services;
+using FluentAssertions;
+using NUnit.Framework;
+
+namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
+
+/// <summary>
+/// Konwerter grafik (pure-managed, bez LibreOffice/GDI). Detekcja, EMF/WMF header → wymiary,
+/// ekstrakcja osadzonego rastra, placeholder, VML shape → SVG, limity. Patrz .ai/GRAPHICS_CONVERSION.md.
+/// </summary>
+[TestFixture]
+public class GraphicConversionServiceTests
+{
+    private GraphicConversionService _svc = null!;
+
+    [SetUp]
+    public void Setup() => _svc = new GraphicConversionService();
+
+    // ---- detection ----------------------------------------------------------
+
+    [Test]
+    public void Detect_Png_Jpeg_Gif_Bmp_FromMagicBytes()
+    {
+        _svc.Detect(MinimalPng(10, 20)).Should().Be(GraphicKind.Png);
+        _svc.Detect(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }).Should().Be(GraphicKind.Jpeg);
+        _svc.Detect(Encoding.ASCII.GetBytes("GIF89a")).Should().Be(GraphicKind.Gif);
+        _svc.Detect(new byte[] { (byte)'B', (byte)'M', 0, 0 }).Should().Be(GraphicKind.Bmp);
+    }
+
+    [Test]
+    public void Detect_Emf_Wmf_Svg()
+    {
+        _svc.Detect(BuildEmf(10000, 5000)).Should().Be(GraphicKind.Emf);
+        _svc.Detect(BuildPlaceableWmf(0, 0, 1440, 720, 1440)).Should().Be(GraphicKind.Wmf);
+        _svc.Detect(Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'></svg>")).Should().Be(GraphicKind.Svg);
+    }
+
+    [Test]
+    public void Detect_FallsBackToContentTypeHint_WhenMagicUnknown()
+    {
+        _svc.Detect(new byte[] { 1, 2, 3 }, "image/x-emf").Should().Be(GraphicKind.Emf);
+        _svc.Detect(new byte[] { 1, 2, 3 }, "image/x-wmf").Should().Be(GraphicKind.Wmf);
+        _svc.Detect(new byte[] { 1, 2, 3 }, "application/octet-stream").Should().Be(GraphicKind.Unknown);
+    }
+
+    // ---- raster passthrough -------------------------------------------------
+
+    [Test]
+    public void Png_IsPassedThrough_Lossless_WithDimensions()
+    {
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = MinimalPng(64, 48) });
+
+        result.Diagnostics.Status.Should().Be(GraphicConversionStatus.PassThrough);
+        result.Diagnostics.Fidelity.Should().Be(GraphicFidelity.Lossless);
+        result.Web!.MimeType.Should().Be("image/png");
+        result.Web.WidthPx.Should().Be(64);
+        result.Web.HeightPx.Should().Be(48);
+        result.Web.IsPlaceholder.Should().BeFalse();
+    }
+
+    // ---- EMF/WMF ------------------------------------------------------------
+
+    [Test]
+    public void Emf_WithoutEmbeddedRaster_GivesPlaceholderSvg_AndPreservesOriginal()
+    {
+        // rclFrame 10000 x 5000 (0.01mm) = 100mm x 50mm ≈ 378 x 189 px @96dpi.
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = BuildEmf(10000, 5000), ContentType = "image/x-emf" });
+
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Emf);
+        result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Fallback);
+        result.Diagnostics.Fidelity.Should().Be(GraphicFidelity.Fallback);
+        result.Web!.MimeType.Should().Be("image/svg+xml");
+        result.Web.IsPlaceholder.Should().BeTrue();
+        result.Web.WidthPx.Should().Be(378);
+        result.Web.HeightPx.Should().Be(189);
+        result.PreserveOriginalPart.Should().BeTrue(); // legacy part rides along to DOCX
+        result.Diagnostics.Warnings.Should().NotBeEmpty();
+    }
+
+    [Test]
+    public void Emf_WithEmbeddedPng_ExtractsRaster()
+    {
+        var emf = BuildEmf(10000, 5000);
+        var png = MinimalPng(30, 40);
+        var combined = emf.Concat(png).ToArray(); // EMF+ commonly wraps a PNG
+
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = combined, ContentType = "image/x-emf" });
+
+        result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Converted);
+        result.Diagnostics.Fidelity.Should().Be(GraphicFidelity.Lossy);
+        result.Web!.MimeType.Should().Be("image/png");
+        result.Web.WidthPx.Should().Be(30);
+        result.Web.HeightPx.Should().Be(40);
+    }
+
+    [Test]
+    public void Wmf_Placeable_GivesPlaceholderWithDimensions()
+    {
+        // bbox 0,0,1440,720 with 1440 units/inch = 1in x 0.5in = 96 x 48 px.
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = BuildPlaceableWmf(0, 0, 1440, 720, 1440) });
+
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Wmf);
+        result.Web!.IsPlaceholder.Should().BeTrue();
+        result.Web.WidthPx.Should().Be(96);
+        result.Web.HeightPx.Should().Be(48);
+        result.PreserveOriginalPart.Should().BeTrue();
+    }
+
+    // ---- VML shapes ---------------------------------------------------------
+
+    [Test]
+    public void Vml_Rect_RendersSvg()
+    {
+        var xml = "<v:rect xmlns:v='urn:schemas-microsoft-com:vml' style='width:100pt;height:50pt' fillcolor='#ff0000' strokecolor='#000000'/>";
+        var result = _svc.ConvertVmlShapeForEditor(xml);
+
+        result.Should().NotBeNull();
+        var svg = Encoding.UTF8.GetString(result!.Web!.Data);
+        svg.Should().Contain("<rect");
+        svg.Should().Contain("#ff0000");
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Vml);
+    }
+
+    [Test]
+    public void Vml_Oval_And_Line_AreSupported()
+    {
+        var oval = _svc.ConvertVmlShapeForEditor("<v:oval xmlns:v='urn:schemas-microsoft-com:vml' style='width:40pt;height:40pt'/>");
+        var line = _svc.ConvertVmlShapeForEditor("<v:line xmlns:v='urn:schemas-microsoft-com:vml' style='width:80pt;height:0pt'/>");
+        Encoding.UTF8.GetString(oval!.Web!.Data).Should().Contain("<ellipse");
+        Encoding.UTF8.GetString(line!.Web!.Data).Should().Contain("<line");
+    }
+
+    [Test]
+    public void Vml_WithImageData_ReturnsNull_DeferringToPartConversion()
+    {
+        var xml = "<v:shape xmlns:v='urn:schemas-microsoft-com:vml' style='width:50pt;height:50pt'>" +
+                  "<v:imagedata r:id='rId5' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'/></v:shape>";
+        _svc.ConvertVmlShapeForEditor(xml).Should().BeNull();
+    }
+
+    [Test]
+    public void Vml_UnsupportedShape_ReturnsNull()
+        => _svc.ConvertVmlShapeForEditor("<v:curve xmlns:v='urn:schemas-microsoft-com:vml' style='width:10pt;height:10pt'/>")
+            .Should().BeNull();
+
+    // ---- limits -------------------------------------------------------------
+
+    [Test]
+    public void EmptyInput_IsRejected()
+    {
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = Array.Empty<byte>() });
+        result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Rejected);
+        result.Web.Should().BeNull();
+    }
+
+    [Test]
+    public void OversizeInput_IsRejected()
+    {
+        var opts = new GraphicConversionOptions { MaxInputBytes = 10 };
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = new byte[100] }, opts);
+        result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Rejected);
+    }
+
+    // ---- synthetic graphic builders ----------------------------------------
+
+    private static byte[] MinimalPng(int w, int h)
+    {
+        var bytes = new List<byte> { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }; // signature
+        var ihdr = new byte[25]; // len(4)+"IHDR"(4)+data(13)+crc(4)
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr, 13);
+        Encoding.ASCII.GetBytes("IHDR").CopyTo(ihdr, 4);
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(8), (uint)w);   // offset 16 in file
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(12), (uint)h);  // offset 20 in file
+        ihdr[16] = 8; ihdr[17] = 2; // bit depth / colour type
+        bytes.AddRange(ihdr);
+        var iend = new byte[12];
+        Encoding.ASCII.GetBytes("IEND").CopyTo(iend, 4);
+        bytes.AddRange(iend);
+        return bytes.ToArray();
+    }
+
+    private static byte[] BuildEmf(int frameRight, int frameBottom)
+    {
+        var d = new byte[88];
+        BinaryPrimitives.WriteUInt32LittleEndian(d, 1);                       // iType = EMR_HEADER
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(4), 88);            // nSize
+        // rclFrame (offset 24): 0,0,right,bottom in 0.01 mm
+        BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(24), 0);
+        BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(28), 0);
+        BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(32), frameRight);
+        BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(36), frameBottom);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(40), 0x464D4520);   // " EMF"
+        return d;
+    }
+
+    private static byte[] BuildPlaceableWmf(short left, short top, short right, short bottom, ushort inch)
+    {
+        var d = new byte[40];
+        BinaryPrimitives.WriteUInt32LittleEndian(d, 0x9AC6CDD7);              // Aldus placeable magic
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(6), left);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(8), top);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(10), right);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(12), bottom);
+        BinaryPrimitives.WriteUInt16LittleEndian(d.AsSpan(14), inch);
+        return d;
+    }
+}
