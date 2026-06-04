@@ -105,6 +105,53 @@ describe('WysiwygEditorComponent — cross-page caret + page-number font', () =>
     expect((component as any)._tryMoveCaretAcrossPages('down')).toBe(false);
   });
 
+  // --- Backspace deletes a manual page break (Issue 8) ----------------------
+
+  function setupBreakPages(page1Text = 'B'): { page0: HTMLDivElement; page1: HTMLDivElement } {
+    const page0 = document.createElement('div');
+    page0.innerHTML = '<p>A</p><div class="page-break"></div>';
+    const page1 = document.createElement('div');
+    page1.innerHTML = `<p>${page1Text}</p>`;
+    document.body.appendChild(page0);
+    document.body.appendChild(page1);
+    (component as any).pageEditorRefs = { toArray: () => [{ nativeElement: page0 }, { nativeElement: page1 }] };
+    // Isolate from the debounced repaginate/persist side-effects.
+    (component as any)._schedulePaginate = () => {};
+    (component as any)._schedulePersist = () => {};
+    (component as any).updateState = () => {};
+    return { page0, page1 };
+  }
+
+  it('Backspace at page start removes the previous page trailing page-break', () => {
+    const { page0, page1 } = setupBreakPages();
+    collapseCaretIn(page1.querySelector('p')!.firstChild!, 0); // very start of page 2
+
+    const removed = (component as any)._tryDeletePageBreakBackwards();
+
+    expect(removed).toBe(true);
+    expect(page0.querySelector('.page-break')).toBeNull();
+  });
+
+  it('Backspace mid-line does not remove the page-break (normal char delete)', () => {
+    const { page0, page1 } = setupBreakPages('Bcd');
+    collapseCaretIn(page1.querySelector('p')!.firstChild!, 1); // after "B"
+
+    const removed = (component as any)._tryDeletePageBreakBackwards();
+
+    expect(removed).toBe(false);
+    expect(page0.querySelector('.page-break')).not.toBeNull();
+  });
+
+  it('does not delete a page break (or the page wrapper) on the first page', () => {
+    const page0 = document.createElement('div');
+    page0.innerHTML = '<p>Solo</p>';
+    document.body.appendChild(page0);
+    (component as any).pageEditorRefs = { toArray: () => [{ nativeElement: page0 }] };
+    collapseCaretIn(page0.querySelector('p')!.firstChild!, 0);
+
+    expect((component as any)._tryDeletePageBreakBackwards()).toBe(false);
+  });
+
   // --- page-number font-size ------------------------------------------------
 
   it('page number inherits an inline font-size from the footer content', () => {

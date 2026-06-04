@@ -28,8 +28,13 @@ public class DocumentController : BaseApiController
             return BadRequest(new { error = "Nie przesłano pliku" });
 
         var extension = Path.GetExtension(file.FileName).ToLower();
+        if (extension == ".doc")
+            // .doc is the legacy binary Word format (OLE/CFBF), not Office Open XML — the DOCX
+            // parser cannot read it and there is no DOC→DOCX converter in this pipeline. Reject
+            // explicitly with conversion guidance rather than failing deep in the parser.
+            return BadRequest(new { error = "Format .doc (starszy Word) nie jest obsługiwany. Zapisz dokument jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx) i wczytaj ponownie." });
         if (extension != ".docx")
-            return BadRequest(new { error = "Obsługiwane są tylko pliki DOCX" });
+            return BadRequest(new { error = "Obsługiwane są tylko pliki DOCX i PDF." });
 
         var query = new OpenDocumentQuery(file.OpenReadStream(), file.FileName);
         var result = await Mediator.Send(query);

@@ -1924,10 +1924,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Wklej bez formatowania
    */
   pasteWithoutFormatting(): void {
-    navigator.clipboard.readText().then(text => {
-      this.editor?.insertText(text);
-    });
     this.closeAllMenus();
+    // readText() yields text/plain only — formatting is dropped by construction. insertText
+    // restores the editor selection (lost on the menu click) before inserting. If clipboard
+    // permission is denied, fail quietly — the Ctrl+Shift+V shortcut remains available.
+    navigator.clipboard.readText()
+      .then(text => this.editor?.insertText(text))
+      .catch(() => { /* brak dostępu do schowka */ });
   }
 
   /**

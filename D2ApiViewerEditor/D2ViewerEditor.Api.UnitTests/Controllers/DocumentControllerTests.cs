@@ -182,6 +182,21 @@ public class DocumentControllerTests
     }
 
     [Test]
+    public async Task OpenDocument_WithLegacyDocFile_ShouldReturnBadRequest_WithConversionGuidance()
+    {
+        // .doc is the legacy binary Word format — must be rejected with an actionable message,
+        // not handed to the DOCX parser (which would fail deep with an opaque error).
+        var fileMock = Substitute.For<IFormFile>();
+        fileMock.FileName.Returns("stary.doc");
+        fileMock.Length.Returns(100);
+
+        var result = await _controller.OpenDocument(fileMock);
+
+        var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        bad.Value!.ToString().Should().Contain(".docx");
+    }
+
+    [Test]
     public async Task UploadImage_WithNullFile_ShouldReturnBadRequest()
     {
         // Act

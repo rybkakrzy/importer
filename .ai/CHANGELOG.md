@@ -13,6 +13,38 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-04 — Edytor: 8 błędów (ENTER, font-size, font-family, paste plain, interlinia, link, .doc, Backspace/strzałki)
+Pełna referencja: `.ai/EDITOR_KEYBOARD.md`.
+### Issue 1 — ENTER cofał kursor do poprzedniej linii (FIX)
+- Root cause: po wpisaniu znaku edytor repaginuje (~600 ms) i przebudowuje DOM stron; karetkę odtwarzał **globalny offset tekstowy**, niejednoznaczny na granicy bloków — nowy **pusty** akapit po ENTER ma 0 znaków → restore lądował na końcu poprzedniego akapitu.
+- Fix: kotwica karetki **`{ block, offset }`** (`_saveGlobalCaret`/`_restoreGlobalCaret` + współdzielony `_flattenTopBlocks`, `_placeCaretAtTextOffset`). Pusty blok → karetka na początku bloku. Indeks bloku stabilny między repaginacjami.
+### Issue 2 — font-size przez input ukrywał tekst (FIX)
+- Root cause: wartość `0`/NaN dawała `0pt`/`NaNpt` → tekst niewidoczny. Toolbar walidował, ale publiczne `setFontSize` nie.
+- Fix: `setFontSize` odrzuca `!finite`/`<1`/`>400` (defense-in-depth).
+### Issue 3 — font-family „nie działała"/wracała do domyślnej (FIX, root cause backend)
+- Root cause: `innerHTML` serializuje nazwy wielowyrazowe jako encję `&quot;`; writer (`ApplyRunStyle`) regex `[^,;]+` ucinał nazwę na `;` **wewnątrz `&quot;`** → `w:rFonts ascii="&quot"` → Word wracał do domyślnego fontu. (Single-word jak Arial działały.)
+- Fix: **HTML-decode stylu** przed regexem + odcięcie cudzysłowów i fallbacku generycznego. `'Font',serif` / `"Font"` / `Arial` → czysta nazwa.
+### Issue 4 — „Wklej bez formatowania" nie działało (FIX)
+- Root cause: klik w pozycję menu zabierał fokus edytorowi → `execCommand('insertText')` bez karetki nic nie wstawiał.
+- Fix: `insertText` odtwarza zapisaną selekcję + fokus przed wstawieniem; `pasteWithoutFormatting` dostał `.catch`. Ctrl+Shift+V działał wcześniej.
+### Issue 5 — interlinia względem Word (ANALIZA + regresja)
+- Ustalenie: mapowanie OOXML→CSS jest **poprawne** (`auto`→`line/240` bezjednostkowe; `exact`/`atLeast`→`pt`; before/after→margin pt; bez podwójnego liczenia). Pinned testami `LineSpacingMappingTests`.
+- Ograniczenia nieusuwalne mapowaniem (HTML/CSS): „single" ≠ `line-height:1` (Word dolicza line-gap fontu); kolaps sąsiednich marginesów vs sumowanie before+after w Word. Udokumentowane.
+### Issue 6 — wstawianie linku nie działało (FIX)
+- Root cause: pole URL dialogu zabierało fokus → selekcja kolabowała → `createLink` bez celu.
+- Fix: `insertLink` odtwarza zapisaną selekcję, **normalizuje URL** (`normalizeLinkUrl`), escapuje etykietę; zwinięta karetka → `<a … rel=noopener>`. Writer już emituje `w:hyperlink`+relację.
+### Issue 7 — brak obsługi `.doc` (DECYZJA: Wariant B — jawne odrzucenie)
+- `.doc` = stary binarny format (OLE/CFBF), nie OOXML; brak konwertera DOC→DOCX w pipeline. Odrzucenie z instrukcją konwersji zamiast udawania obsługi: backend `OpenDocument` (`.doc`→400) + frontend `dashboard.openFile`. Wariant A (LibreOffice headless) opisany jako przyszłość.
+### Issue 8 — Backspace nie usuwał stron; strzałki „skakały" (FIX częściowy)
+- Backspace na **początku strony** usuwa **manualny page-break** poprzedniej strony (`_tryDeletePageBreakBackwards` + `_isCaretAtEditorStart`/`_removeTrailingPageBreak`) i repaginuje; **nie** rusza wrappera strony.
+- Nawigacja ArrowDown/Up między stronami była dodana wcześniej (`_tryMoveCaretAcrossPages`); „skakanie" złagodzone przez block-aware karetkę (Issue 1). Detekcja skrajnej linii (`_isCaretOnEdgeLine`) jest layout-zależna — pozostaje obszar do dostrojenia (manualnie).
+### Verified / tests
+- Backend: Infrastructure **116** (+3 `FontFamilyWriteTests`, +6 `LineSpacingMappingTests`), Api **34** (+1 `.doc`), Application **193**, Domain **57** — zielone.
+- GUI: **197** (+3 `enter-caret`, +6 `toolbar-actions` font-size/link/paste, +3 Backspace page-break w `caret-field`).
+- jsdom nie pokrywa contenteditable/execCommand/layout → wstawianie linku/tekstu i repaginacja end-to-end mają **scenariusze manualne** (`EDITOR_KEYBOARD.md` §7). Import/eksport/autozapis/undo/tabele/obrazy nietknięte (te same testy zielone).
+### Ograniczenia
+- Block-index karetki: rzadki edge gdy tabela **przed** karetką zmienia podział w danym przebiegu. Interlinia: różnice metryk fontu i kolapsu marginesów (jw.). `.doc`: brak realnej konwersji (świadomie). Strzałki: edge-line detection layout-zależna.
+
 ## 2026-06-04 — Layout: banner środowiska spychał dashboard w dół (fix shell `100vh`→`100%`)
 ### Diagnoza
 - App shell (`d2-root`, global `styles.scss`) jest flex-column `height:100vh; overflow:hidden`; globalne bannery (`d2-global-banners` = environment + offline) mają `flex:0 0 auto` (intrinsic height), a obszar strony flexuje resztę: `d2-root > d2-dashboard/…-editor/…-pdf-viewer/…-pdf-maintenance/…-admin-shell { flex:1 1 0; min-height:0; overflow:hidden }`. **Banner jest w normalnym flow i to jest poprawne** — host strony dostaje `100vh − banner`.

@@ -1576,6 +1576,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // Backspace at the very start of a page deletes the PREVIOUS page's manual page-break
+    // (pages are separate contenteditable, so the browser cannot merge across them). We remove
+    // the trailing page-break marker and repaginate — content reflows up, the hard break is gone.
+    // It must NOT delete the page wrapper itself (a layout element). Any other Backspace is the
+    // browser's normal char/selection delete.
+    if (e.key === 'Backspace' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+        && this._tryDeletePageBreakBackwards()) {
+      e.preventDefault();
+      return;
+    }
+
     // Cross-page caret navigation: pages are separate contenteditable elements, so the browser
     // cannot move the caret to the next/previous page with Arrow keys. At a page boundary (last/
     // first line, collapsed caret, no modifiers) move it ourselves; otherwise let the browser
@@ -1805,6 +1816,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   setFontSize(size: number): void {
     const editor = this.getActiveEditor();
     if (!editor) return;
+
+    // Guard the public API: a non-finite or out-of-range size would emit `0pt`/`NaNpt`,
+    // which renders the text invisible (the reported "tekst znika"). Word's own range is
+    // 1–1638pt; we cap at a sane 400. Reject silently — the toolbar keeps its prior value.
+    if (!Number.isFinite(size) || size < 1 || size > 400) return;
 
     this.currentFontSize = size;
 
@@ -2461,6 +2477,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wstawia tekst
    */
   insertText(text: string): void {
+    // Restore the editor selection first: when invoked from a menu ("Wklej bez formatowania"),
+    // clicking the menu item moved focus off the contenteditable, so execCommand('insertText')
+    // would have no caret and silently do nothing (root cause of "wklej bez formatowania nie
+    // działa"). During a real paste event the selection is already live, so this is a no-op.
+    const editor = this.getActiveEditor();
+    if (editor) {
+      const live = window.getSelection();
+      const liveInEditor = !!live && live.rangeCount > 0 && this.isSelectionInEditor(live);
+      if (!liveInEditor && this.savedSelection) {
+        this.restoreSelection();
+      }
+      editor.focus();
+    }
     document.execCommand('insertText', false, text);
     this.onContentChange();
   }
@@ -2738,16 +2767,58 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wstawia link
    */
   insertLink(url: string, text?: string): void {
-    const selection = window.getSelection();
-    
-    if (selection && !selection.isCollapsed) {
-      document.execCommand('createLink', false, url);
-    } else if (text) {
-      const link = `<a href="${url}" target="_blank">${text}</a>`;
-      this.insertHtml(link);
+    const editor = this.getActiveEditor();
+    if (!editor) return;
+
+    const normalized = this.normalizeLinkUrl(url);
+    if (!normalized) return; // pusty/niepoprawny URL — nie rób nic
+
+    // The link dialog's URL input stole focus and collapsed the editor selection. Restore the
+    // selection saved on the last editor mouseup/keyup so createLink lands on the user's text
+    // instead of nothing (root cause of "wstawianie linku nie działa").
+    const live = window.getSelection();
+    const liveInEditor = !!live && live.rangeCount > 0 && this.isSelectionInEditor(live);
+    if (!liveInEditor && this.savedSelection) {
+      this.restoreSelection();
     }
-    
+    editor.focus();
+
+    const selection = window.getSelection();
+    const hasEditorSelection = !!selection && selection.rangeCount > 0
+      && !selection.isCollapsed && this.isSelectionInEditor(selection);
+
+    if (hasEditorSelection) {
+      // Apply to the selected text — keeps its existing run formatting.
+      document.execCommand('createLink', false, normalized);
+    } else {
+      // Collapsed caret: insert a new anchor using the provided label, or the URL itself.
+      const label = (text && text.trim().length > 0) ? text : normalized;
+      const safeUrl = normalized.replace(/"/g, '&quot;');
+      this.insertHtml(`<a href="${safeUrl}" target="_blank" rel="noopener">${this.escapeHtml(label)}</a>`);
+    }
+
     this.onContentChange();
+  }
+
+  /**
+   * Normalizuje URL linku. Zwraca null dla pustej wartości. Jawne schematy (http/https/mailto/
+   * tel), kotwice (#) i ścieżki (/) zostają; „goła" domena (np. www.x.pl) dostaje https://.
+   */
+  private normalizeLinkUrl(url: string): string | null {
+    const trimmed = (url ?? '').trim();
+    if (!trimmed) return null;
+    if (/^(https?:|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed;
+    if (/^[\w.-]+\.[a-z]{2,}([\/?#]|$)/i.test(trimmed)) return `https://${trimmed}`;
+    return trimmed;
+  }
+
+  /** Escapuje tekst etykiety linku, by user-input nie wstrzyknął HTML. */
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
 
   /**
@@ -3075,24 +3146,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const caret = this._saveGlobalCaret(refs);
 
       const allBlocks: HTMLElement[] = [];
-      // Flatten: jeśli DOCX import wsadził treść w jeden wrapper <div>/<section>/<article>,
-      // weź jego dzieci. Powtórz dla zagnieżdżonych wrapperów (max 3 poziomy).
-      const flattenChildren = (el: HTMLElement, depth = 0): HTMLElement[] => {
-        const kids = Array.from(el.children) as HTMLElement[];
-        if (depth >= 3) return kids;
-        // Jeśli mamy dokładnie jedno generyczne dziecko (DIV/SECTION/ARTICLE) bez
-        // znaczących stylów blokowych, schodzimy w głąb.
-        if (kids.length === 1) {
-          const c = kids[0];
-          if (c.tagName === 'DIV' || c.tagName === 'SECTION' || c.tagName === 'ARTICLE') {
-            return flattenChildren(c, depth + 1);
-          }
-        }
-        return kids;
-      };
       for (const ref of refs) {
-        const el = ref.nativeElement;
-        const kids = flattenChildren(el);
+        const kids = this._flattenTopBlocks(ref.nativeElement);
         kids.forEach(child => {
           allBlocks.push(child.cloneNode(true) as HTMLElement);
         });
@@ -3308,6 +3363,57 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return true;
   }
 
+  /**
+   * Backspace na samym początku strony: usuń manualny page-break kończący POPRZEDNIĄ stronę.
+   * Zwraca true, gdy coś usunięto (caller robi preventDefault). Nie rusza wrappera strony —
+   * tylko marker `<div class="page-break">`; resztę scala repaginacja.
+   */
+  private _tryDeletePageBreakBackwards(): boolean {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs.length < 2) return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed || !sel.anchorNode) return false;
+
+    const idx = refs.findIndex(r => r.nativeElement.contains(sel.anchorNode!) || r.nativeElement === sel.anchorNode);
+    if (idx <= 0) return false;
+    if (!this._isCaretAtEditorStart(refs[idx].nativeElement)) return false;
+
+    if (!this._removeTrailingPageBreak(refs[idx - 1].nativeElement)) return false;
+
+    this._isDirty = true;
+    this._schedulePaginate('backspace-pagebreak');
+    this._schedulePersist();
+    this.updateState();
+    return true;
+  }
+
+  /** Czy zwinięta karetka stoi na samym początku treści edytora (brak tekstu przed nią). */
+  private _isCaretAtEditorStart(editor: HTMLElement): boolean {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+    const r = sel.getRangeAt(0);
+    const probe = document.createRange();
+    probe.selectNodeContents(editor);
+    probe.setEnd(r.startContainer, r.startOffset);
+    return probe.toString().length === 0;
+  }
+
+  /** Usuwa końcowy marker page-break (i puste węzły po nim) z edytora. Zwraca true gdy usunięto. */
+  private _removeTrailingPageBreak(editor: HTMLElement): boolean {
+    let last = editor.lastChild;
+    // Pomiń końcowe puste/whitespace węzły tekstowe.
+    while (last && last.nodeType === Node.TEXT_NODE && (last.textContent ?? '').trim() === '') {
+      const prev = last.previousSibling;
+      last.parentNode?.removeChild(last);
+      last = prev;
+    }
+    if (last && last.nodeType === Node.ELEMENT_NODE && this._isPageBreakBlock(last as HTMLElement)) {
+      editor.removeChild(last);
+      return true;
+    }
+    return false;
+  }
+
   /** Czy zwinięta karetka leży na górnej/dolnej skrajnej linii danego edytora strony. */
   private _isCaretOnEdgeLine(editor: HTMLElement, edge: 'top' | 'bottom'): boolean {
     const sel = window.getSelection();
@@ -3340,59 +3446,110 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.activePageIndex.set(index);
   }
 
-  /** Zapamiętuje pozycję kursora jako globalny offset tekstowy (po wszystkich stronach). */
-  private _saveGlobalCaret(refs: ElementRef<HTMLDivElement>[]): { offset: number } | null {
+  /**
+   * Flatten: jeśli DOCX import wsadził treść w jeden wrapper &lt;div&gt;/&lt;section&gt;/&lt;article&gt;,
+   * weź jego dzieci (max 3 poziomy). Współdzielone przez paginację i kotwicę karetki, żeby
+   * indeksy bloków były identyczne po obu stronach (zapis/odtworzenie pozycji kursora).
+   */
+  private _flattenTopBlocks(el: HTMLElement, depth = 0): HTMLElement[] {
+    const kids = Array.from(el.children) as HTMLElement[];
+    if (depth >= 3) return kids;
+    if (kids.length === 1) {
+      const c = kids[0];
+      if (c.tagName === 'DIV' || c.tagName === 'SECTION' || c.tagName === 'ARTICLE') {
+        return this._flattenTopBlocks(c, depth + 1);
+      }
+    }
+    return kids;
+  }
+
+  /**
+   * Zapamiętuje pozycję kursora jako BLOK + offset tekstowy w bloku (nie globalny offset
+   * tekstowy). Czysty offset tekstowy jest niejednoznaczny na granicy bloków: nowy PUSTY akapit
+   * po ENTER ma 0 znaków, więc po repaginacji restore lądował na końcu poprzedniego akapitu
+   * (objaw: „kursor wraca do poprzedniej linii"). Indeks bloku rozróżnia pusty akapit od końca
+   * poprzedniego. Kolejność bloków jest stabilna między repaginacjami (zmienia się tylko ich
+   * rozkład na strony), więc indeks przeżywa przebudowę DOM.
+   */
+  private _saveGlobalCaret(refs: ElementRef<HTMLDivElement>[]): { block: number; offset: number } | null {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
     const range = sel.getRangeAt(0);
+    let blockBase = 0;
     for (let i = 0; i < refs.length; i++) {
       const editor = refs[i].nativeElement;
+      const blocks = this._flattenTopBlocks(editor);
       if (editor.contains(range.endContainer)) {
-        const pre = range.cloneRange();
-        pre.selectNodeContents(editor);
-        pre.setEnd(range.endContainer, range.endOffset);
-        let total = 0;
-        for (let j = 0; j < i; j++) total += refs[j].nativeElement.innerText.length;
-        return { offset: total + pre.toString().length };
+        for (let b = 0; b < blocks.length; b++) {
+          if (blocks[b] === range.endContainer || blocks[b].contains(range.endContainer)) {
+            const pre = range.cloneRange();
+            pre.selectNodeContents(blocks[b]);
+            pre.setEnd(range.endContainer, range.endOffset);
+            return { block: blockBase + b, offset: pre.toString().length };
+          }
+        }
+        return { block: blockBase, offset: 0 };
       }
+      blockBase += blocks.length;
     }
     return null;
   }
 
-  /** Przywraca kursor po globalnym offsetcie tekstowym. */
-  private _restoreGlobalCaret(caret: { offset: number } | null): void {
+  /** Przywraca kursor wg kotwicy { blok, offset }. */
+  private _restoreGlobalCaret(caret: { block: number; offset: number } | null): void {
     if (!caret) return;
     const refs = this.pageEditorRefs?.toArray() ?? [];
-    let remaining = caret.offset;
+    let blockBase = 0;
     for (let i = 0; i < refs.length; i++) {
       const editor = refs[i].nativeElement;
-      const len = editor.innerText.length;
-      if (remaining <= len) {
-        const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-        let node: Node | null;
-        let r = remaining;
-        while ((node = walker.nextNode())) {
-          const nl = node.textContent?.length ?? 0;
-          if (r <= nl) {
-            const range = document.createRange();
-            range.setStart(node, r);
-            range.collapse(true);
-            const sel = window.getSelection();
-            if (sel) {
-              sel.removeAllRanges();
-              sel.addRange(range);
-            }
-            editor.focus();
-            this.editorContent = refs[i];
-            this.activePageIndex.set(i);
-            return;
-          }
-          r -= nl;
-        }
+      const blocks = this._flattenTopBlocks(editor);
+      if (caret.block < blockBase + blocks.length) {
+        const target = blocks[caret.block - blockBase];
+        if (!target) return;
+        this._placeCaretAtTextOffset(target, caret.offset);
+        editor.focus();
+        this.editorContent = refs[i];
+        this.activePageIndex.set(i);
         return;
       }
-      remaining -= len;
+      blockBase += blocks.length;
     }
+  }
+
+  /**
+   * Ustawia zwiniętą karetkę na danym offsetcie tekstowym wewnątrz bloku. Pusty blok (np. nowy
+   * akapit po ENTER, bez węzłów tekstowych) → karetka na początku bloku. Dzięki temu kursor
+   * zostaje w nowej linii zamiast wracać do poprzedniej.
+   */
+  private _placeCaretAtTextOffset(block: HTMLElement, offset: number): void {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    let r = offset;
+    let lastNode: Node | null = null;
+    while ((node = walker.nextNode())) {
+      const nl = node.textContent?.length ?? 0;
+      if (r <= nl) {
+        range.setStart(node, r);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return;
+      }
+      r -= nl;
+      lastNode = node;
+    }
+    // Brak węzłów tekstowych (pusty akapit) lub offset poza zakresem — początek/koniec bloku.
+    if (lastNode) {
+      range.setStart(lastNode, lastNode.textContent?.length ?? 0);
+    } else {
+      range.setStart(block, 0);
+    }
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
 
   /**

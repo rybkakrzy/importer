@@ -2401,12 +2401,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 props.Append(new FontSize { Val = "18" }); // ~9pt
         }
 
-        // Font-family
-        var fontFamilyMatch = Regex.Match(style, @"font-family:\s*'?([^',;]+)'?");
+        // Font-family. The first family wins (the rest is the generic fallback list, e.g.
+        // 'Times New Roman',serif). Multi-word names arrive quoted, and crucially the browser
+        // serialises innerHTML with inner double quotes as the ENTITY &quot; — which HtmlAgilityPack
+        // does NOT decode. We must HTML-decode the style FIRST: otherwise the `;` inside `&quot;`
+        // is mistaken for a CSS declaration separator and the name is truncated (e.g. "&quot"),
+        // leaking into w:rFonts so Word silently reverts to its default font.
+        var decodedStyle = System.Net.WebUtility.HtmlDecode(style);
+        var fontFamilyMatch = Regex.Match(decodedStyle, @"font-family:\s*([^,;]+)");
         if (fontFamilyMatch.Success)
         {
-            var fontName = fontFamilyMatch.Groups[1].Value.Trim();
-            if (!props.Elements<RunFonts>().Any())
+            var fontName = fontFamilyMatch.Groups[1].Value.Trim().Trim('"', '\'').Trim();
+            if (fontName.Length > 0 && !props.Elements<RunFonts>().Any())
                 props.Append(new RunFonts { Ascii = fontName, HighAnsi = fontName });
         }
 

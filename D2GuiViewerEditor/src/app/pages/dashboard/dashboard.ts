@@ -76,7 +76,20 @@ export class DashboardComponent {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
-      if (file.name.toLowerCase().endsWith('.pdf')) {
+      const lowerName = file.name.toLowerCase();
+
+      // .doc to starszy binarny format Worda (nie OOXML) — parser DOCX go nie odczyta.
+      // Odrzuć z instrukcją konwersji zamiast wysyłać i kończyć błędem parsera.
+      if (lowerName.endsWith('.doc')) {
+        this.errorMessage.set('Format .doc (starszy Word) nie jest obsługiwany. Zapisz dokument jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx) i wczytaj ponownie.');
+        return;
+      }
+      if (!lowerName.endsWith('.docx') && !lowerName.endsWith('.pdf')) {
+        this.errorMessage.set('Obsługiwane są pliki DOCX i PDF.');
+        return;
+      }
+
+      if (lowerName.endsWith('.pdf')) {
         this.isLoading.set(true);
         this.errorMessage.set(null);
         try {
