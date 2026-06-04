@@ -9,7 +9,11 @@
 .dashboard-wrapper {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  /* Fill the area the app shell hands us (100vh minus the global banners),
+     NOT the whole viewport. Using 100vh here would add the banner height on
+     top of the page, pushing the dashboard down and clipping the footer.
+     The editor uses the same 100%-of-host idiom — see styles.scss shell rule. */
+  min-height: 100%;
   background: #ffffff;
   overflow-y: auto;
 }

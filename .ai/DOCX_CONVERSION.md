@@ -161,6 +161,7 @@ Kierunek: R = DOCX→HTML (read), W = HTML→DOCX (write).
 | Linked styles | Partially implemented | R | `_styles` per styl | brak jawnego łączenia paragraph↔character |
 | Numbering (listy) | Partially implemented | R | `LoadNumberingPictureBullets`, list rendering | listy renderowane; numbering **styles** nie foldowane w computed-style |
 | Theme fonts / colors | Implemented | R | `GetFontName`, `ResolveThemeColor` | asciiTheme/minor/major; auto color |
+| Font generic fallback (CSS) | Implemented | R | `FontFamilyCss`/`GenericFontFallback` | nazwa kroju + dobrany generyk: serif (times/cambria/georgia/garamond/palatino/…) / monospace (courier/consolas/mono) / sans-serif; brakujący krój renderuje się we właściwej rodzinie (nie zawsze sans) |
 | Computed-style (jeden obiekt) | Planned / not implemented yet | R | — | brak `ComputedParagraph/RunStyle`; kaskada CSS |
 | Typografia bezpośrednia | Implemented | R+W | `GetRunStyleClean`/`ConvertRunPropertiesToCss` | bold/italic/underline/strike/color/size/highlight/sub-sup/letter-spacing |
 | Akapit: align/indent/spacing/line | Implemented | R+W | `ConvertParagraphPropertiesToCss`; writer pPr | exact/atLeast/auto line spacing |
@@ -182,7 +183,7 @@ Kierunek: R = DOCX→HTML (read), W = HTML→DOCX (write).
 | Tab-stopy: zapis `w:tabs` | Partially implemented | W | `AddDocumentStyles` (style Header/Footer) | center/right tab-stopy emitowane **tylko w stylach Header/Footer**; per-akapit/własne pozycje nie zachowywane |
 | Hyperlinki | Implemented | R | `ConvertHyperlinkToHtml` | |
 | Pola: data | Partially implemented | R | `ConvertSimpleFieldToHtml`, complex fields | `DateTime.Now` (dynamiczne, nie wartość z DOCX) |
-| Pola: numery stron | Partially implemented | R+W | field handling; front „Numery stron" | placeholder/edycja; brak realnej paginacji |
+| Pola: numery stron | Partially implemented | R+W | `FieldSpan` (R); `BuildFieldRun` → `w:fldSimple`+inner run (W); front `_pageNumberHtml` | placeholder/edycja; brak realnej paginacji. **Font-size pola zachowany**: reader niesie rPr runu na `.field-page/.field-numpages`; writer odtwarza rPr w wewnętrznym runie `fldSimple`; wstawiany `.page-number` dziedziczy font-size stopki (CSS `font-size:inherit`) |
 
 ## 5. Roadmapa konwersji (wymagane obszary)
 
@@ -319,3 +320,14 @@ Nieosiągalne 1:1 w przeglądarce (udokumentowane w `FIDELITY_REPORT.md` §3):
 zawijanie tekstu wokół obrazu „przylegle/na wskroś" (tight/through), dokładna paginacja i
 podział stron Worda, kerning/metryki czcionek, dynamiczne pola zależne od layoutu
 (`PAGE`/`NUMPAGES`). Cel: maksymalna **mierzalna** wierność, nie 100%.
+
+### Font / nawigacja kursora (edytor)
+- **Brakujący krój:** reader dobiera *generyczną rodzinę* (serif/monospace/sans-serif) jako
+  fallback po nazwie kroju — gdy np. Times New Roman nie jest zainstalowany w przeglądarce,
+  tekst renderuje się fontem szeryfowym systemu (nie Calibri/sans). Nie podstawiamy ani nie
+  dosadzamy konkretnych plików czcionek (licencje); nazwa kroju pozostaje w CSS i round-tripie.
+- **Nawigacja między stronami:** strony to osobne elementy `contenteditable`, więc przeglądarka
+  nie przenosi kursora ArrowDown/ArrowUp przez granicę strony. `_tryMoveCaretAcrossPages`
+  przenosi go ręcznie, gdy karetka jest zwinięta na skrajnej linii i bez modyfikatorów
+  (Shift/zaznaczenia, Ctrl/Alt — nietknięte). Detekcja skrajnej linii (`_isCaretOnEdgeLine`)
+  jest layout-zależna (rect karetki) i nieodtwarzalna w jsdom (brak `Range.getClientRects`).

@@ -564,6 +564,19 @@ body.image-moving * {
   font-size: 9pt;
 }
 
+/* Pola (numer strony / liczba stron / data) — dziedziczą rozmiar i krój z otoczenia (stopka/
+   nagłówek/akapit), nie dostają domyślnego rozmiaru edytora. Bez tego numer strony bywał większy
+   niż reszta stopki. */
+.field-page,
+.field-numpages,
+.field-date,
+.page-number {
+  font-size: inherit;
+  font-family: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+}
+
 /* Selekcja */
 .editor-content ::selection {
   background: #b3d4fc;

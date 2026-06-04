@@ -342,7 +342,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             if (pendingTextParagraph != null)
             {
-                if (!pendingTextParagraph.Elements<Run>().Any() && !pendingTextParagraph.Elements<Hyperlink>().Any())
+                if (!pendingTextParagraph.Elements<Run>().Any()
+                    && !pendingTextParagraph.Elements<Hyperlink>().Any()
+                    && !pendingTextParagraph.Elements<SimpleField>().Any())
                 {
                     // pusty paragraf po flushy nie powinien być dodawany
                 }
@@ -384,13 +386,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     // Inline-level w header/footer — pakujemy do bieżącego (lub nowego) paragrafu.
                     // Specjalne klasy field-page / field-numpages = pole liczby strony.
                     pendingTextParagraph ??= new Paragraph();
-                    if (child.HasClass("field-page"))
+                    if (child.HasClass("field-page") || child.HasClass("page-number"))
                     {
-                        pendingTextParagraph.Append(new Run(new SimpleField { Instruction = " PAGE " }));
+                        pendingTextParagraph.Append(BuildFieldRun(" PAGE ", child));
                     }
                     else if (child.HasClass("field-numpages"))
                     {
-                        pendingTextParagraph.Append(new Run(new SimpleField { Instruction = " NUMPAGES " }));
+                        pendingTextParagraph.Append(BuildFieldRun(" NUMPAGES ", child));
                     }
                     else if (name == "a")
                     {
@@ -2603,6 +2605,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (!string.IsNullOrWhiteSpace(altText))
             props.Description = altText;
         return props;
+    }
+
+    /// <summary>
+    /// Builds a PAGE/NUMPAGES field run, carrying the field span's font (font-size etc.) so the
+    /// page number keeps the footer's size on round-trip instead of falling back to a default.
+    /// Falls back to the parent span's style for the wrapped {page} case.
+    /// </summary>
+    private SimpleField BuildFieldRun(string instruction, HtmlNode fieldNode)
+    {
+        // fldSimple is paragraph-level; the run properties (font-size etc.) live on an inner run
+        // so Word — and our reader on the next round-trip — keep the page number's footer font.
+        var run = new Run();
+        var style = fieldNode.GetAttributeValue("style", "");
+        if (string.IsNullOrEmpty(style))
+            style = fieldNode.ParentNode?.GetAttributeValue("style", "") ?? string.Empty;
+        if (!string.IsNullOrEmpty(style))
+        {
+            var rPr = new RunProperties();
+            ApplyRunStyle(rPr, style);
+            if (rPr.HasChildren) run.Append(rPr);
+        }
+        run.Append(new Text(fieldNode.InnerText?.Trim() is { Length: > 0 } t ? t : "1") { Space = SpaceProcessingModeValues.Preserve });
+        return new SimpleField(run) { Instruction = instruction };
     }
 
     private int PxToTwips(int px) => (int)OoxmlUnits.PixelsToTwips(px);

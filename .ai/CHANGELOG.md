@@ -13,6 +13,40 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-04 — Layout: banner środowiska spychał dashboard w dół (fix shell `100vh`→`100%`)
+### Diagnoza
+- App shell (`d2-root`, global `styles.scss`) jest flex-column `height:100vh; overflow:hidden`; globalne bannery (`d2-global-banners` = environment + offline) mają `flex:0 0 auto` (intrinsic height), a obszar strony flexuje resztę: `d2-root > d2-dashboard/…-editor/…-pdf-viewer/…-pdf-maintenance/…-admin-shell { flex:1 1 0; min-height:0; overflow:hidden }`. **Banner jest w normalnym flow i to jest poprawne** — host strony dostaje `100vh − banner`.
+- **Edytor (wzorzec OK):** `:host{height:100%}` → `.document-editor-container{height:100%}` — wypełnia obszar przydzielony przez shell, banner uwzględniony automatycznie.
+- **Bug:** `dashboard.scss .dashboard-wrapper{min-height:100vh}` oraz `pdf-maintenance .maintenance-wrapper{min-height:100vh}` wymuszały **pełną wysokość viewportu** wewnątrz hosta wysokiego na `100vh − banner` → wrapper wystawał o wysokość bannera, host (`overflow-y:auto`) scrollował, treść wizualnie zjeżdżała w dół, stopka ucinana. Klasyczny „dashboard obniżony o wysokość labela".
+### Changed (frontend)
+- `dashboard.scss`: `.dashboard-wrapper` `min-height:100vh` → **`min-height:100%`** (wypełnia host przydzielony przez shell, nie viewport). Komentarz wyjaśniający.
+- `pdf-maintenance.ts` (inline styles): `.maintenance-wrapper` `min-height:100vh` → **`min-height:100%` + `height:100%`** (centrowanie w obszarze hosta, nie viewportu).
+- **Bez** magicznych marginesów, bez zmiennej `--banner-height`, bez `!important`, bez globalnego CSS — fix to ujednolicenie do banner-agnostycznego idiomu `100%-of-host`, którego shell już używa dla edytora. `app.scss .app-container{min-height:100vh}` to martwy CSS (brak `styleUrl` w `app.ts`, inline template bez tej klasy) — pozostawiony bez zmian.
+### Verified / tests
+- Nowy `pages/layout-shell.spec.ts` (2): dashboard i pdf-maintenance — wstrzyknięty scoped CSS wrappera **nie zawiera `100vh`** i ma `min-height:100%` (kontrakt layoutu; jsdom nie robi layoutu, więc asercja na faktycznie zregresowanym CSS, nie na pikselach). GUI **185** (było 183, +2). Edytor nietknięty (te same testy zielone).
+### Scenariusze manualne
+- Dashboard z bannerem DEV: „Witaj w Doc2" wyśrodkowane, stopka `© 2026 ING` widoczna, brak scrolla/skoku. Bez bannera (PROD): identyczny układ. Edytor (screen A): toolbar/panele/stopka bez zmian. Środowiska Local/DEV/TST/PRE: różny kolor bannera, **ta sama wysokość** layoutu. Małe rozdzielczości: gdy treść > obszar, host scrolluje (nic nie ucięte).
+### Ograniczenia
+- `min-height:100%` wymaga definite-height hosta — zapewnia go shell (`flex:1 1 0` w `d2-root height:100vh`); ten sam mechanizm, na którym opiera się edytor.
+
+## 2026-06-04 — 3 poprawki: font fallback (serif), nawigacja kursora między stronami, rozmiar numeru strony w stopce
+### P1 — font fallback wg rodziny (serif/mono/sans) zamiast twardego `sans-serif`
+- Diagnoza: reader emitował każdy font jako `font-family:'X',sans-serif`. Gdy `Times New Roman` niedostępny w przeglądarce, przeglądarka spadała na **bezszeryfowy** default (wygląd jak Calibri), mimo że nazwa była zachowana.
+- Changed (reader `DocxToHtmlConverter`): `FontFamilyCss(name)` + `GenericFontFallback(name)` — szeryfowe (times/cambria/georgia/garamond/minion/palatino/book antiqua/„serif") → `serif`, courier/consolas/mono → `monospace`, reszta → `sans-serif`. Zastąpiono 3 miejsca emisji `,sans-serif`. **Bez** hardcode konkretnego fontu, bez dosadzania plików czcionek, bez zmiany fontu dokumentu.
+### P2 — ArrowDown/ArrowUp nie przechodził między stronami (osobne contenteditable per strona)
+- Changed (frontend `wysiwyg-editor`): w `handleKeyboard` (przed blokiem Ctrl) gdy ArrowDown/ArrowUp bez modyfikatorów i `_tryMoveCaretAcrossPages(dir)` zwróci true → `preventDefault`. Nowe: `_tryMoveCaretAcrossPages` (zwinięta karetka na skrajnej linii → przeniesienie do sąsiedniej strony), `_isCaretOnEdgeLine` (porównanie rectów karetki z górną/dolną linią edytora), `_placeCaretAtEditorEdge` (focus + range na start/end + aktywacja strony). Shift/Ctrl/Alt i zaznaczenia (range) nietknięte (guard `isCollapsed` + brak modyfikatorów).
+### P3 — numer strony w stopce ignorował rozmiar fontu stopki
+- Diagnoza: pole PAGE było emitowane „goło", numer dziedziczył rozmiar kontenera (np. 10.5pt) zamiast runów stopki (np. 8pt).
+- Changed (reader): `FieldSpan(cssClass, placeholder, run)` emituje `<span class=… style="{run rPr CSS}">` dla PAGE/NUMPAGES/DATE (simple + complex field) — numer niesie font-size własnego runu.
+- Changed (writer): `BuildFieldRun` buduje poprawny `w:fldSimple` z **wewnętrznym runem** niosącym `rPr` (font-size) — zamiast wcześniejszego (schema-niepoprawnego) `SimpleField` wewnątrz `Run`, który po round-tripie gubił właściwości. `FlushPending` w stopce/nagłówku uznaje też paragraf zawierający `SimpleField` (wcześniej wymagał `Run`/`Hyperlink` → pole było pomijane).
+- Changed (frontend): `_pageNumberHtml(editor)` + `_inlineFieldFontSize(editor)` — wstawiany `.page-number` dostaje font-size pierwszego inline-sized spanu stopki (fallback computed). CSS `.field-page/.field-numpages/.field-date/.page-number { font-size:inherit; … }`.
+### Verified / tests
+- Backend: Infrastructure **107** (+4: `DefaultStyleFontTests` serif/sans fallback; `PageFieldFontTests` reader emituje font-size pola + writer round-trip `w:fldSimple` z rPr=16). Application **193**, Domain **57** — zielone. (Api.UnitTests pominięte: lock DLL od działającej instancji API/debuggera — nie dotyczy zmienionego kodu Infrastructure.)
+- GUI: **183** (+7: `wysiwyg-editor.caret-field.spec` — ArrowDown/Up przechodzi między stronami, range/Shift nie rusza karetki, brak ruchu poza ostatnią/przy jednej stronie, `_pageNumberHtml`/`_inlineFieldFontSize` dziedziczą font-size).
+### Ograniczenia
+- `_isCaretOnEdgeLine` jest layout-zależne (rect karetki) — nieodtwarzalne w jsdom (brak `Range.getClientRects`); w testach stubowane, logika nawigacji/granic testowana realnie.
+- Font fallback poprawia rendering, ale nie podstawia brakującego kroju — przy braku Times New Roman tekst renderuje się szeryfowym fontem systemowym (świadomie, bez licencjonowania krojów).
+
 ## 2026-06-03 — Font treści (Times New Roman→Calibri) + page break „od nowej strony" (display)
 ### Diagnoza — font
 - Oryginał `orginał_GOOD`: domyślny styl akapitu **`Normalny` (`w:default="1"`)** ma `<w:rFonts w:ascii="Times New Roman"/>` (sz=21 → 10.5pt). To **nadpisuje** docDefaults (`asciiTheme=minorHAnsi` → theme minor = Cambria). Runy body mają tylko `w:cs="Times New Roman"` (complex-script), bez `ascii`.

@@ -46,6 +46,27 @@ public class DefaultStyleFontTests
     }
 
     [Test]
+    public void SerifFont_FallsBackToSerif_NotSansSerif()
+    {
+        // A missing Times New Roman must render as a serif, not sans-serif (Calibri-like).
+        var docx = Build(docDefaultsTheme: true, defaultStyleAscii: "Times New Roman", themeMinor: "Cambria");
+
+        var content = _reader.Convert(new MemoryStream(docx));
+
+        Container(content.Html).Should().Contain("'Times New Roman',serif");
+    }
+
+    [Test]
+    public void SansSerifFont_KeepsSansSerifFallback()
+    {
+        var docx = Build(docDefaultsTheme: false, docDefaultsAscii: "Calibri", defaultStyleAscii: null, themeMinor: "Calibri");
+
+        var content = _reader.Convert(new MemoryStream(docx));
+
+        Container(content.Html).Should().Contain("'Calibri',sans-serif");
+    }
+
+    [Test]
     public void DocDefaultsFont_UsedWhenDefaultStyleHasNoFont()
     {
         var docx = Build(docDefaultsTheme: true, defaultStyleAscii: null, themeMinor: "Cambria");

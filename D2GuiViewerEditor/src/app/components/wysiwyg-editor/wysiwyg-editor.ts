@@ -1576,6 +1576,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // Cross-page caret navigation: pages are separate contenteditable elements, so the browser
+    // cannot move the caret to the next/previous page with Arrow keys. At a page boundary (last/
+    // first line, collapsed caret, no modifiers) move it ourselves; otherwise let the browser
+    // handle normal in-page navigation and selections (Shift/Ctrl/Alt untouched).
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp')
+        && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+        && this._tryMoveCaretAcrossPages(e.key === 'ArrowDown' ? 'down' : 'up')) {
+      e.preventDefault();
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey) {
       // Ctrl/Cmd+Shift+V — oznacz najbliższe wklejenie jako „tylko tekst".
       // Nie wołamy preventDefault: pozwalamy przeglądarce wywołać zdarzenie `paste`,
@@ -3270,6 +3281,65 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return tmp.innerHTML;
   }
 
+  /**
+   * Przenosi kursor na sąsiednią stronę (osobny contenteditable) na granicy strony. Zwraca true
+   * (i obsłużono nawigację) tylko gdy: jest 2+ stron, karetka jest zwinięta, leży na skrajnej
+   * linii bieżącej strony i istnieje sąsiednia strona. Inaczej false → przeglądarka robi normalną
+   * nawigację wewnątrz strony. Nie ingeruje w zaznaczenia ani w nawigację wewnątrz strony.
+   */
+  private _tryMoveCaretAcrossPages(dir: 'down' | 'up'): boolean {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs.length < 2) return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed || !sel.anchorNode) return false;
+
+    const node = sel.anchorNode;
+    const curIdx = refs.findIndex(r => r.nativeElement === node || r.nativeElement.contains(node));
+    if (curIdx < 0) return false;
+    const cur = refs[curIdx].nativeElement;
+
+    if (dir === 'down') {
+      if (curIdx >= refs.length - 1 || !this._isCaretOnEdgeLine(cur, 'bottom')) return false;
+      this._placeCaretAtEditorEdge(refs[curIdx + 1].nativeElement, 'start', curIdx + 1);
+      return true;
+    }
+    if (curIdx <= 0 || !this._isCaretOnEdgeLine(cur, 'top')) return false;
+    this._placeCaretAtEditorEdge(refs[curIdx - 1].nativeElement, 'end', curIdx - 1);
+    return true;
+  }
+
+  /** Czy zwinięta karetka leży na górnej/dolnej skrajnej linii danego edytora strony. */
+  private _isCaretOnEdgeLine(editor: HTMLElement, edge: 'top' | 'bottom'): boolean {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return false;
+    const caret = sel.getRangeAt(0).cloneRange();
+    caret.collapse(true);
+    const cr = caret.getClientRects()[0] ?? caret.getBoundingClientRect();
+
+    const bound = document.createRange();
+    bound.selectNodeContents(editor);
+    bound.collapse(edge === 'top');
+    const rects = bound.getClientRects();
+    const br = rects.length ? rects[edge === 'top' ? 0 : rects.length - 1] : bound.getBoundingClientRect();
+
+    return edge === 'bottom' ? cr.bottom >= br.bottom - 2 : cr.top <= br.top + 2;
+  }
+
+  /** Ustawia karetkę na początku/końcu wskazanego edytora strony i aktywuje tę stronę. */
+  private _placeCaretAtEditorEdge(editor: HTMLElement, edge: 'start' | 'end', index: number): void {
+    editor.focus();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(edge === 'start');
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs[index]) this.editorContent = refs[index];
+    this.activePageIndex.set(index);
+  }
+
   /** Zapamiętuje pozycję kursora jako globalny offset tekstowy (po wszystkich stronach). */
   private _saveGlobalCaret(refs: ElementRef<HTMLDivElement>[]): { offset: number } | null {
     const sel = window.getSelection();
@@ -4037,13 +4107,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   insertPageNumbers(): void {
     this.showHeaderOptionsMenu.set(false);
-    
-    if (this.headerContentEl?.nativeElement) {
-      const pageNumber = '<span class="page-number">{page}</span>';
-      this.headerContentEl.nativeElement.focus();
-      document.execCommand('insertHTML', false, pageNumber);
-      this.onHeaderInput({ target: this.headerContentEl.nativeElement } as any);
-    }
+    const el = this.headerContentEl?.nativeElement;
+    if (!el) return;
+    el.focus();
+    document.execCommand('insertHTML', false, this._pageNumberHtml(el));
+    this.onHeaderInput({ target: el } as any);
   }
 
   /**
@@ -4051,13 +4119,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   insertPageNumbersFooter(): void {
     this.showFooterOptionsMenu.set(false);
-    
-    if (this.footerContentEl?.nativeElement) {
-      const pageNumber = '<span class="page-number">{page}</span>';
-      this.footerContentEl.nativeElement.focus();
-      document.execCommand('insertHTML', false, pageNumber);
-      this.onFooterInput({ target: this.footerContentEl.nativeElement } as any);
-    }
+    const el = this.footerContentEl?.nativeElement;
+    if (!el) return;
+    el.focus();
+    document.execCommand('insertHTML', false, this._pageNumberHtml(el));
+    this.onFooterInput({ target: el } as any);
+  }
+
+  /**
+   * Buduje znacznik numeru strony dziedziczący rozmiar czcionki z treści nagłówka/stopki, zamiast
+   * domyślnego rozmiaru edytora. Inaczej numer strony bywa większy niż reszta stopki (np. 10.5pt
+   * kontenera vs 8pt runów stopki). Bez własnego rozmiaru ".page-number" dziedziczy przez CSS.
+   */
+  private _pageNumberHtml(editor: HTMLElement): string {
+    const size = this._inlineFieldFontSize(editor);
+    const style = size ? ` style="font-size:${size};"` : '';
+    return `<span class="page-number"${style}>{page}</span>`;
+  }
+
+  private _inlineFieldFontSize(editor: HTMLElement): string | null {
+    const span = editor.querySelector('span[style*="font-size"]') as HTMLElement | null;
+    if (span?.style.fontSize) return span.style.fontSize;
+    const cs = getComputedStyle(span ?? editor).fontSize;
+    return cs && cs !== '0px' ? cs : null;
   }
 
   /**

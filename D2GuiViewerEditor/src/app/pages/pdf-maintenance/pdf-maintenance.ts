@@ -23,7 +23,11 @@ import { RouterLink } from '@angular/router';
       display: flex;
       align-items: center;
       justify-content: center;
-      min-height: 100vh;
+      /* Fill the shell-allotted area (100vh minus global banners), not the whole
+         viewport — otherwise the banner height is added on top and the centred
+         content is pushed down. Matches the dashboard/editor 100%-of-host idiom. */
+      min-height: 100%;
+      height: 100%;
       background: #f5f6fa;
       padding: 24px;
     }

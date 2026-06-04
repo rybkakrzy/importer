@@ -393,7 +393,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? _defaultFontFamily
             : (!string.IsNullOrWhiteSpace(_defaults.FontFamily) ? _defaults.FontFamily : null);
         if (!string.IsNullOrEmpty(effectiveFontFamily))
-            css.Append($"font-family:'{effectiveFontFamily}',sans-serif;");
+            css.Append(FontFamilyCss(effectiveFontFamily));
         var effectiveFontSizePt = _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : (double?)null);
         if (effectiveFontSizePt.HasValue)
             css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
@@ -1593,15 +1593,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     var instr = fieldInstruction.Trim().ToUpperInvariant();
                     if (instr.Contains("PAGE") && !instr.Contains("NUMPAGES") && !instr.Contains("SECTIONPAGES"))
                     {
-                        html.Append("<span class=\"field-page\">{page}</span>");
+                        html.Append(FieldSpan("field-page", "{page}", run));
                     }
                     else if (instr.Contains("NUMPAGES") || instr.Contains("SECTIONPAGES"))
                     {
-                        html.Append("<span class=\"field-numpages\">{pages}</span>");
+                        html.Append(FieldSpan("field-numpages", "{pages}", run));
                     }
                     else if (instr.Contains("DATE") || instr.Contains("TIME"))
                     {
-                        html.Append($"<span class=\"field-date\">{DateTime.Now:dd.MM.yyyy}</span>");
+                        html.Append(FieldSpan("field-date", DateTime.Now.ToString("dd.MM.yyyy"), run));
                     }
                 }
                 else if (fctVal == FieldCharValues.End)
@@ -1612,11 +1612,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                         var instrEnd = fieldInstruction.Trim().ToUpperInvariant();
                         if (instrEnd.Contains("PAGE") && !instrEnd.Contains("NUMPAGES"))
                         {
-                            html.Append("<span class=\"field-page\">{page}</span>");
+                            html.Append(FieldSpan("field-page", "{page}", run));
                         }
                         else if (instrEnd.Contains("NUMPAGES") || instrEnd.Contains("SECTIONPAGES"))
                         {
-                            html.Append("<span class=\"field-numpages\">{pages}</span>");
+                            html.Append(FieldSpan("field-numpages", "{pages}", run));
                         }
                     }
                     inField = false;
@@ -2162,7 +2162,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var fontFamily = props.Descendants<RunFonts>().FirstOrDefault();
         var fontName = GetFontName(fontFamily);
         if (fontName != null)
-            css.Append($"font-family:'{fontName}',sans-serif;");
+            css.Append(FontFamilyCss(fontName));
 
         // Kolor tekstu (z obsługą kolorów motywu)
         var color = props.Descendants<Color>().FirstOrDefault();
@@ -2244,7 +2244,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var fontFamily = props.Descendants<RunFonts>().FirstOrDefault();
         var fontName = GetFontName(fontFamily);
         if (fontName != null)
-            css.Append($"font-family:'{fontName}',sans-serif;");
+            css.Append(FontFamilyCss(fontName));
 
         var color = props.Descendants<Color>().FirstOrDefault();
         if (color?.Val != null && color.Val.Value != "auto")
@@ -2330,6 +2330,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Wyciąga nazwę czcionki z RunFonts uwzględniając zarówno jawne atrybuty,
     /// jak i referencje do motywu (AsciiTheme, HighAnsiTheme, itd.).
     /// </summary>
+    private static string FontFamilyCss(string fontName) =>
+        $"font-family:'{fontName}',{GenericFontFallback(fontName)};";
+
+    /// <summary>
+    /// Picks a generic CSS fallback matching the font's family class. Critical for environments
+    /// where the exact font is not installed: a missing serif (e.g. Times New Roman, Cambria) must
+    /// fall back to <c>serif</c>, not <c>sans-serif</c> — otherwise body text renders like Calibri.
+    /// The original font name is always kept first; this is only the after-comma fallback.
+    /// </summary>
+    private static string GenericFontFallback(string fontName)
+    {
+        var f = fontName.ToLowerInvariant();
+        if (f.Contains("times") || f.Contains("cambria") || f.Contains("georgia") || f.Contains("garamond")
+            || f.Contains("minion") || f.Contains("book antiqua") || f.Contains("palatino")
+            || (f.Contains("serif") && !f.Contains("sans")))
+            return "serif";
+        if (f.Contains("courier") || f.Contains("consolas") || f.Contains("mono"))
+            return "monospace";
+        return "sans-serif";
+    }
+
     private string? GetFontName(RunFonts? fonts)
     {
         if (fonts == null) return null;
@@ -2458,16 +2479,28 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string ConvertSimpleFieldToHtml(SimpleField simpleField)
     {
         var instruction = simpleField.Instruction?.Value?.Trim().ToUpperInvariant() ?? "";
-        
+        var fieldRun = simpleField.Descendants<Run>().FirstOrDefault();
+
         if (instruction.Contains("PAGE") && !instruction.Contains("NUMPAGES") && !instruction.Contains("SECTIONPAGES"))
-            return "<span class=\"field-page\">{page}</span>";
+            return FieldSpan("field-page", "{page}", fieldRun);
         if (instruction.Contains("NUMPAGES") || instruction.Contains("SECTIONPAGES"))
-            return "<span class=\"field-numpages\">{pages}</span>";
+            return FieldSpan("field-numpages", "{pages}", fieldRun);
         if (instruction.Contains("DATE") || instruction.Contains("TIME"))
-            return $"<span class=\"field-date\">{DateTime.Now:dd.MM.yyyy}</span>";
-        
+            return FieldSpan("field-date", DateTime.Now.ToString("dd.MM.yyyy"), fieldRun);
+
         var text = string.Join("", simpleField.Descendants<Text>().Select(t => t.Text));
         return !string.IsNullOrEmpty(text) ? EscapeHtml(text) : "";
+    }
+
+    /// <summary>
+    /// Emits a field placeholder span carrying the field run's clean CSS (font-size/family/colour)
+    /// so e.g. a PAGE number in the footer matches the surrounding footer text instead of falling
+    /// back to the container/editor default size. Empty style → inherits via CSS.
+    /// </summary>
+    private string FieldSpan(string cssClass, string placeholder, Run? run)
+    {
+        var style = run?.RunProperties != null ? GetRunStyleClean(run.RunProperties) : string.Empty;
+        return $"<span class=\"{cssClass}\" style=\"{style}\">{placeholder}</span>";
     }
 
     /// <summary>

@@ -31,7 +31,13 @@
       "PowerShell(Rename-Item \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ServicesViewerEditor\\\\D2ServicesViewerEditor.Api\\\\Controllers\\\\IntegrationController.cs\" \"DocumentController.cs\")",
       "Bash(dotnet build *)",
       "Read(//c/c/Projekty/Jit/ImportParametryzacji/importer/D2GuiViewerEditor/src/app/components/document-editor/**)",
-      "Bash(podman exec *)"
+      "Bash(podman exec *)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('scripts'\\),indent=2\\)\\)\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); import pprint; [print\\(k, v.get\\('architect',{}\\).get\\('test',{}\\).get\\('builder'\\)\\) for k,v in d['projects'].items\\(\\)]\")",
+      "PowerShell(npx ng test --watch=false 2>&1)",
+      "PowerShell(foreach \\($p in @\\(\"D2ViewerEditor.Application.UnitTests\",\"D2ViewerEditor.Api.UnitTests\",\"D2ViewerEditor.Domain.UnitTests\"\\)\\) { Write-Output \"=== $p ===\"; dotnet test $p --nologo 2>&1 | Select-String -Pattern \"Powodzenie!|Niepowodzenie!|error CS\" | Select-Object -Last 3 })",
+      "PowerShell(dotnet test D2ViewerEditor.Application.UnitTests --nologo 2>&1)",
+      "PowerShell(\"---\")"
     ]
   }
 }
