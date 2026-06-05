@@ -50,10 +50,14 @@ export class ConnectionStatusService implements OnDestroy {
 
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
 
+  /** Strażnik: pojedyncze żądanie health w locie — zapobiega duplikatom przy nakładających
+   *  się wyzwalaczach (start aplikacji + zdarzenie `online` + interwał). */
+  private _checkInFlight = false;
+
   private onOnline = () => {
     this._browserOffline.set(false);
     this._dismissed.set(false);
-    this.checkApi();
+    this.checkNow();
   };
 
   private onOffline = () => {
@@ -67,11 +71,13 @@ export class ConnectionStatusService implements OnDestroy {
 
     // Uruchom health-check poza strefą Angulara, żeby nie wywoływać CD
     this.ngZone.runOutsideAngular(() => {
-      this.healthCheckInterval = setInterval(() => this.checkApi(), 30_000);
+      this.healthCheckInterval = setInterval(() => this.checkNow(), 30_000);
     });
 
-    // Pierwszy check natychmiast
-    this.checkApi();
+    // Pierwszy check natychmiast (przy konstrukcji). Eager instancjacja w app.config
+    // (provideAppInitializer → checkNow) gwarantuje, że dzieje się to zaraz po starcie
+    // aplikacji, niezależnie od tego, który komponent pierwszy wstrzyknie serwis.
+    this.checkNow();
   }
 
   ngOnDestroy(): void {
@@ -101,14 +107,23 @@ export class ConnectionStatusService implements OnDestroy {
     this._dismissed.set(true);
   }
 
-  /** Sprawdź, czy API odpowiada i pobierz dane health */
-  private checkApi(): void {
+  /**
+   * Wykonaj health-check natychmiast (pierwszy strzał po starcie aplikacji oraz każdy kolejny).
+   * Idempotentne: jeśli żądanie już trwa, kolejne wywołanie jest pomijane (brak duplikatów).
+   * Publiczne — wołane przez `provideAppInitializer` zaraz po inicjalizacji aplikacji.
+   */
+  checkNow(): void {
+    if (this._checkInFlight) return;            // dedup: jedno żądanie w locie
+    if (!this.apiConfig.baseUrl) return;        // nie strzelaj zanim URL API jest znany (brak fałszywego offline)
+    this._checkInFlight = true;
+
     this.http
       .get<HealthResponse>(`${this.apiConfig.baseUrl}/health`)
       .pipe(timeout(5_000))
       .subscribe({
         next: (res) => {
           this.ngZone.run(() => {
+            this._checkInFlight = false;
             this._apiUnreachable.set(false);
             this.apiEnvironment.set(res.environment);
             this.apiBuildNumber.set(res.buildNumber);
@@ -117,6 +132,7 @@ export class ConnectionStatusService implements OnDestroy {
         },
         error: (err) => {
           this.ngZone.run(() => {
+            this._checkInFlight = false;
             if (err.status === 0 || err instanceof TimeoutError) {
               this._apiUnreachable.set(true);
               this._dismissed.set(false);

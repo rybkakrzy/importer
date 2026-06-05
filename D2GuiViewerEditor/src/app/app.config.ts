@@ -21,10 +21,12 @@ export const appConfig: ApplicationConfig = {
     { provide: ErrorHandler, useClass: GlobalErrorHandler },
     // Eagerly start the connection/health monitor at bootstrap so the first
     // environment health-check fires immediately, before any component renders
-    // (its constructor already polls every 30 s afterwards). Non-blocking: we
-    // don't await the response, just trigger instantiation.
+    // and without waiting for the 30 s poll. We call checkNow() explicitly (rather
+    // than relying on the constructor side-effect) so the intent is clear and
+    // regression-proof; the service's in-flight guard keeps it a single request.
+    // Non-blocking: we don't return/await the response.
     provideAppInitializer(() => {
-      inject(ConnectionStatusService);
+      inject(ConnectionStatusService).checkNow();
     }),
   ]
 };

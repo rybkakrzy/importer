@@ -79,6 +79,36 @@ describe('ConnectionStatusService — health bootstrap', () => {
     expect(service.isOffline()).toBe(true);
   });
 
+  it('flags API unreachable quickly on the first check when API is down', () => {
+    // Scenariusz: start aplikacji przy niedostępnym API — pierwszy strzał idzie od razu
+    // (na konstrukcji), a status 0 natychmiast ustawia offline (bez czekania na 30 s poll).
+    const service = create();
+    expect(service.isOffline()).toBe(false); // jeszcze przed odpowiedzią
+
+    httpMock.expectOne((r) => r.url.endsWith('/health'))
+      .error(new ProgressEvent('error'), { status: 0 });
+
+    expect(service.isOffline()).toBe(true);
+  });
+
+  it('checkNow() does not duplicate a request while one is already in flight', () => {
+    const service = create();
+
+    // Pierwsze żądanie (z konstrukcji) jest w locie i jeszcze nieobsłużone.
+    service.checkNow();
+    service.checkNow();
+
+    const reqs = httpMock.match((r) => r.url.endsWith('/health'));
+    expect(reqs.length).toBe(1); // strażnik in-flight blokuje duplikaty
+    reqs[0].flush(health);
+
+    // Po zakończeniu żądania kolejne checkNow() znów może wystrzelić.
+    service.checkNow();
+    const after = httpMock.match((r) => r.url.endsWith('/health'));
+    expect(after.length).toBe(1);
+    after[0].flush(health);
+  });
+
   it('clears the polling interval on destroy', () => {
     const service = create();
     httpMock.expectOne((r) => r.url.endsWith('/health')).flush(health);

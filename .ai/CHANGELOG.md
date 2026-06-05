@@ -13,6 +13,17 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-04 — Health-check API: pierwszy strzał natychmiast po starcie + dedup
+### Problem
+- Komunikat „brak komunikacji z API" pojawiał się zbyt późno. Pierwszy check zależał od **implicit constructor side-effect** `ConnectionStatusService` (lazy `providedIn:'root'`) — nieodporne na regresję; brak strażnika duplikatów (start + zdarzenie `online` + interwał mogły wystrzelić równoległe żądania).
+### Changed (frontend)
+- `connection-status.service.ts`: prywatne `checkApi()` → **publiczne `checkNow()`** z **strażnikiem in-flight** (`_checkInFlight`) — pojedyncze żądanie w locie, brak duplikatów. Guard `if (!apiConfig.baseUrl) return` (brak fałszywego offline zanim URL znany — tu URL statyczny z `environment`). Konstruktor, interwał (30 s) i handler `online` wołają `checkNow()`.
+- `app.config.ts`: `provideAppInitializer` woła **`inject(ConnectionStatusService).checkNow()`** (jawnie, nie polega na side-effekcie konstruktora) — pierwszy check zaraz po inicjalizacji aplikacji, przed renderem komponentów. Non-blocking (nie zwraca/await). Strażnik in-flight scala check z konstruktora i z initializera w **jedno** żądanie.
+- Subsequent polling bez zmian (30 s `setInterval`, retry/timeout 5 s). Banner/offline-status bez zmian.
+### Verified
+- GUI **199** (+2: „flags API unreachable quickly on first check"; „checkNow() nie duplikuje w locie"). Istniejące 5 testów `ConnectionStatusService` zielone (konstrukcja nadal = 1 natychmiastowe żądanie).
+- Scenariusz manualny: start przy API down → pierwszy `/health` od razu po starcie → status 0 → banner offline „szybko"; start przy API up → `/health` 200 → brak bannera.
+
 ## 2026-06-04 — Konwerter grafik VML/EMF/WMF → web (pure-managed, bez LibreOffice)
 Pełna referencja: `.ai/GRAPHICS_CONVERSION.md`.
 ### Problem
