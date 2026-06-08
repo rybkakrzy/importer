@@ -615,24 +615,27 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             headingStyle.Append(new NextParagraphStyle { Val = "Normal" });
             headingStyle.Append(new PrimaryStyle());
             
+            // Kolejność w <w:pPr> wg schematu (EG_PPrBase): keepNext → keepLines → spacing → outlineLvl.
             var paraProps = new StyleParagraphProperties(
-                new SpacingBetweenLines { Before = headingSpaceBefore[i - 1].ToString(), After = "0" },
                 new KeepNext(),
                 new KeepLines(),
+                new SpacingBetweenLines { Before = headingSpaceBefore[i - 1].ToString(), After = "0" },
                 new OutlineLevel { Val = i - 1 }
             );
             headingStyle.Append(paraProps);
             
+            // Kolejność dzieci w <w:rPr> jest narzucona schematem OOXML (EG_RPrBase):
+            // rFonts → b → i → … → color → … → sz. Zła kolejność (np. sz przed color, b po color)
+            // = błąd schematu → Word zgłasza „dokument uszkodzony". Emitujemy w poprawnej sekwencji.
             var runPropsElements = new List<OpenXmlElement>
             {
                 new RunFonts { Ascii = headingFont, HighAnsi = headingFont },
-                new FontSize { Val = headingSizes[i - 1] },
-                new Color { Val = headingColors[i - 1] }
             };
-            
             if (headingBold[i - 1]) runPropsElements.Add(new Bold());
             if (headingItalic[i - 1]) runPropsElements.Add(new Italic());
-            
+            runPropsElements.Add(new Color { Val = headingColors[i - 1] });
+            runPropsElements.Add(new FontSize { Val = headingSizes[i - 1] });
+
             headingStyle.Append(new StyleRunProperties(runPropsElements.ToArray()));
             styles.Append(headingStyle);
         }
@@ -1662,13 +1665,25 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje obraz na Paragraph z obrazem - z dokładnym odwzorowaniem wymiarów
     /// </summary>
+    /// <summary>
+    /// Zwraca efektywny data:URL obrazu do zapisu. Dla legacy EMF/WMF `src` to tylko placeholder
+    /// SVG (podgląd w przeglądarce) — prawdziwy metafile jest w `data-original-src`. Zapis placeholdera
+    /// SVG jako gołego `a:blip` daje NIEPOPRAWNY DOCX (Word: „dokument uszkodzony"), więc preferujemy oryginał.
+    /// </summary>
+    private static string ResolveImageSrc(HtmlNode node)
+    {
+        var original = node.GetAttributeValue("data-original-src", "");
+        if (!string.IsNullOrEmpty(original) && original.StartsWith("data:")) return original;
+        return node.GetAttributeValue("src", "");
+    }
+
     private Paragraph? ConvertImageElement(HtmlNode node)
     {
-        var src = node.GetAttributeValue("src", "");
+        var src = ResolveImageSrc(node);
         if (string.IsNullOrEmpty(src)) return null;
 
         if (!src.StartsWith("data:")) return null;
-        
+
         var match = Regex.Match(src, @"data:([^;]+);base64,(.+)");
         if (!match.Success) return null;
         
@@ -1700,7 +1715,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// </summary>
     private Run? CreateImageRun(HtmlNode node)
     {
-        var src = node.GetAttributeValue("src", "");
+        var src = ResolveImageSrc(node);
         if (string.IsNullOrEmpty(src) || !src.StartsWith("data:")) return null;
         var m = Regex.Match(src, @"data:([^;]+);base64,(.+)");
         if (!m.Success) return null;
@@ -1729,9 +1744,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             "image/png" => ImagePartType.Png,
             "image/gif" => ImagePartType.Gif,
             "image/bmp" => ImagePartType.Bmp,
+            "image/x-emf" or "image/emf" => ImagePartType.Emf,
+            "image/x-wmf" or "image/wmf" => ImagePartType.Wmf,
             "image/svg+xml" => ImagePartType.Svg,
             _ => ImagePartType.Jpeg
         };
+
+        // HARD GUARD: goły `a:blip` na SVG (bez rastrowego fallbacku) jest NIEPOPRAWNY w DOCX —
+        // Word zgłasza uszkodzony plik. Placeholdery legacy niosą prawdziwy metafile w
+        // `data-original-src` (obsłużone w ResolveImageSrc), więc tu SVG = brak fallbacku → pomiń
+        // (kontrolowana strata, NIGDY uszkodzony dokument).
+        if (imagePartType == ImagePartType.Svg)
+            return null;
 
         ImagePart imagePart = container switch
         {

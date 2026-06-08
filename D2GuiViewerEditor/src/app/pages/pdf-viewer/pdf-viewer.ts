@@ -123,8 +123,18 @@ export class PdfViewerComponent implements OnInit, OnDestroy {
 
       // Allow Angular to update the DOM (@if block) before accessing ViewChild
       setTimeout(() => this.renderAllPages(), 0);
-    } catch {
-      this.errorMessage.set('Błąd podczas parsowania pliku PDF.');
+    } catch (err) {
+      // NIE maskuj przyczyny — zaloguj konkretny błąd (cold-start/worker vs uszkodzony plik).
+      // Najczęstsza awaria „pierwszego uruchomienia" to nieosiągalny/źle zserwowany worker
+      // (`/pdf.worker.min.mjs`: 404 albo MIME ≠ text/javascript na nginx/GCP), nie zły PDF.
+      console.error('[PdfViewer] Nie udało się załadować podglądu PDF:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      const workerProblem = /worker|dynamically imported|failed to (fetch|load)|importScripts|mjs/i.test(msg);
+      this.errorMessage.set(
+        workerProblem
+          ? 'Nie udało się zainicjować podglądu PDF (moduł renderujący). Odśwież stronę; jeśli błąd wróci — zgłoś go.'
+          : 'Błąd podczas parsowania pliku PDF.'
+      );
       this.isLoading.set(false);
     }
   }

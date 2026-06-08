@@ -1328,6 +1328,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? $" data-style-id=\"{System.Net.WebUtility.HtmlEncode(styleId)}\""
             : string.Empty;
 
+        // Word „podział strony przed" (w:pageBreakBefore w pPr) — bardzo częsty sposób wymuszania
+        // nowej strony (checkbox w dialogu akapitu, style nagłówków). Reader wcześniej go IGNOROWAŁ,
+        // więc wielostronicowe dokumenty zwijały się do jednej strony (Issue: „3 strony → 1").
+        // Emitujemy marker page-break PRZED akapitem (ten sam mechanizm co manualny break; writer
+        // mapuje marker → w:br type=page). Pomijamy listy (marker między <li> = niepoprawny HTML).
+        if (!isListItem && HasPageBreakBefore(paraProps))
+            html.Append("<div class=\"page-break\"></div>");
+
         if (isListItem)
         {
             html.Append($"<li{classAttr}{dataStyleAttr} style=\"{cssStyle}\">");
@@ -1392,6 +1400,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var hasText = paragraph.Descendants<Text>().Any(t => !string.IsNullOrEmpty(t.Text));
         var hasGraphics = paragraph.Descendants<Drawing>().Any() || paragraph.Descendants<Picture>().Any();
         return !hasText && !hasGraphics;
+    }
+
+    /// <summary>
+    /// True, gdy akapit ma ustawione <c>w:pageBreakBefore</c> (brak val = true; val=false/0 = false).
+    /// Word używa tego do wymuszenia startu akapitu od nowej strony.
+    /// </summary>
+    private static bool HasPageBreakBefore(ParagraphProperties? paraProps)
+    {
+        var pbb = paraProps?.GetFirstChild<PageBreakBefore>();
+        if (pbb == null) return false;
+        return pbb.Val == null || pbb.Val.Value;
     }
 
     /// <summary>
@@ -2474,11 +2493,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var altAttr = !string.IsNullOrEmpty(alt) ? $" alt=\"{EscapeHtml(alt)}\"" : string.Empty;
 
         var legacyAttr = legacySrc?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
+        // Gdy w `src` jest tylko placeholder SVG (EMF/WMF nierenderowalny w przeglądarce),
+        // niesiemy ORYGINALNY metafile w `data-original-src`, żeby writer mógł zapisać prawdziwy
+        // EMF/WMF (Word renderuje natywnie) zamiast pisać niepoprawny goły blip SVG (= uszkodzony DOCX).
+        var originalAttr = legacySrc?.isPlaceholder == true
+            ? $" data-original-src=\"data:{contentType};base64,{base64Data}\""
+            : string.Empty;
         return $"<img src=\"{drawingSrc}\" " +
                $"style=\"max-width:100%;width:{width}px;height:{height}px;\" " +
                $"data-image-id=\"{relationshipId}\" " +
                $"data-width-emu=\"{widthEmu}\" data-height-emu=\"{heightEmu}\"" +
-               $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs}{legacyAttr} />";
+               $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs}{legacyAttr}{originalAttr} />";
     }
 
     /// <summary>
@@ -2538,10 +2563,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             (long)(vmlWidth * 9525.0), (long)(vmlHeight * 9525.0));
         var vmlSrc = legacyVml?.dataUrl ?? $"data:{contentType};base64,{base64Data}";
         var vmlLegacyAttr = legacyVml?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
+        var vmlOriginalAttr = legacyVml?.isPlaceholder == true
+            ? $" data-original-src=\"data:{contentType};base64,{base64Data}\""
+            : string.Empty;
 
         return $"<img src=\"{vmlSrc}\" " +
                $"style=\"max-width:100%;width:{vmlWidth}px;height:{vmlHeight}px;\" " +
-               $"data-image-id=\"{relationshipId}\"{vmlLegacyAttr} />";
+               $"data-image-id=\"{relationshipId}\"{vmlLegacyAttr}{vmlOriginalAttr} />";
     }
 
     /// <summary>

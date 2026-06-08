@@ -234,6 +234,31 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     pageBreakBefore: false
   };
 
+  /**
+   * Domyślne ustawienia akapitu zapisane przez „Ustaw jako domyślne".
+   * Model: default jest per-sesja edytora (resetuje się po odświeżeniu) — przechowuje
+   * snapshot ustawień, którym seedujemy dialog, gdy nie ma aktywnej selekcji.
+   * Inicjowane wartościami bazowymi (te same co startowe `paragraphData`).
+   */
+  private _paragraphDefaults: typeof DocumentEditorComponent.prototype.paragraphData = {
+    alignment: 'left',
+    outlineLevel: 'body',
+    indentLeft: 0,
+    indentRight: 0,
+    specialIndent: 'none',
+    specialIndentBy: 1.27,
+    mirrorIndents: false,
+    spaceBefore: 0,
+    spaceAfter: 8,
+    lineSpacingType: 'multiple',
+    lineSpacingValue: 1.08,
+    dontAddSpaceBetweenSameStyle: false,
+    widowOrphanControl: true,
+    keepWithNext: false,
+    keepLinesTogether: false,
+    pageBreakBefore: false
+  };
+
   // Dialog Wstawianie tabeli
   showInsertTableDialog = signal(false);
   tableDialogData = {
@@ -1716,17 +1741,17 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       const imgTarget = (target.tagName === 'IMG' ? target : target.closest('img')) as HTMLImageElement | null;
       this.contextMenuTargetImage.set(imgTarget);
 
-      // Oblicz pozycję — upewnij się, że menu nie wychodzi poza ekran
+      // Oblicz pozycję — menu zawsze w granicach viewportu (nie zasłania toolbara ani nie
+      // wychodzi poza prawą/dolną krawędź). `Math.max(8, …)` jest kluczowe: bez dolnego
+      // ograniczenia clamp dolnej krawędzi na niskim oknie dawał ujemne `y` i menu wjeżdżało
+      // NAD viewport, zasłaniając toolbar (Issue: menu kontekstowe zasłania UI).
+      const margin = 8;
       const menuWidth = 260;
       const menuHeight = 420;
-      let x = event.clientX;
-      let y = event.clientY;
-      if (x + menuWidth > window.innerWidth) {
-        x = window.innerWidth - menuWidth - 8;
-      }
-      if (y + menuHeight > window.innerHeight) {
-        y = window.innerHeight - menuHeight - 8;
-      }
+      const maxX = Math.max(margin, window.innerWidth - menuWidth - margin);
+      const maxY = Math.max(margin, window.innerHeight - menuHeight - margin);
+      const x = Math.min(Math.max(margin, event.clientX), maxX);
+      const y = Math.min(Math.max(margin, event.clientY), maxY);
 
       this.contextMenuX.set(x);
       this.contextMenuY.set(y);
@@ -3246,7 +3271,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   private readCurrentParagraphSettings(): void {
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
+    if (!selection || selection.rangeCount === 0) {
+      // Brak karetki w treści → seeduj formularz zapisanym defaultem, nie zostawiaj
+      // poprzednich (mylących) wartości w polach.
+      this.paragraphData = { ...this._paragraphDefaults };
+      return;
+    }
 
     const range = selection.getRangeAt(0);
     let block = range.startContainer as Node;
@@ -3384,25 +3414,22 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Resetuje do domyślnych
+   * „Ustaw jako domyślne" — zapisuje BIEŻĄCE ustawienia akapitu z dialogu jako domyślne
+   * (per-sesja edytora) i od razu stosuje je do aktywnego akapitu.
+   *
+   * Wcześniej ten przycisk wołał reset do wartości bazowych (DOC2-PAR-007: „ustaw jako
+   * domyślne resetuje zamiast zapisywać"). Teraz zachowuje się zgodnie z nazwą:
+   *  1. zapamiętuje snapshot ustawień jako default sesji (`_paragraphDefaults`),
+   *  2. stosuje ustawienia do bieżącego akapitu (jak OK) — nowe akapity tworzone Enterem
+   *     dziedziczą styl po bieżącym bloku (contenteditable klonuje blok), więc default
+   *     propaguje się naturalnie na kolejne akapity.
+   *
+   * Model trwałości: default jest per-sesja edytora (resetuje się po odświeżeniu strony).
+   * Nie wprowadzamy localStorage (brak takiego wzorca w aplikacji) ani zmiany kontraktu API.
    */
-  resetParagraphDefaults(): void {
-    this.paragraphData.alignment = 'left';
-    this.paragraphData.outlineLevel = 'body';
-    this.paragraphData.indentLeft = 0;
-    this.paragraphData.indentRight = 0;
-    this.paragraphData.specialIndent = 'none';
-    this.paragraphData.specialIndentBy = 1.27;
-    this.paragraphData.mirrorIndents = false;
-    this.paragraphData.spaceBefore = 0;
-    this.paragraphData.spaceAfter = 8;
-    this.paragraphData.lineSpacingType = 'multiple';
-    this.paragraphData.lineSpacingValue = 1.08;
-    this.paragraphData.dontAddSpaceBetweenSameStyle = false;
-    this.paragraphData.widowOrphanControl = true;
-    this.paragraphData.keepWithNext = false;
-    this.paragraphData.keepLinesTogether = false;
-    this.paragraphData.pageBreakBefore = false;
+  setParagraphAsDefault(): void {
+    this._paragraphDefaults = { ...this.paragraphData };
+    this.applyParagraphSettings();
   }
 
   /**

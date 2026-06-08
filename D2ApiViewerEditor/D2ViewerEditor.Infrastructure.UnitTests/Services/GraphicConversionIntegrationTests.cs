@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Linq;
 using D2ViewerEditor.Infrastructure.Services;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -28,10 +29,46 @@ public class GraphicConversionIntegrationTests
         var content = reader.Convert(new MemoryStream(docx));
 
         content.Html.Should().Contain("<img");
-        content.Html.Should().NotContain("data:image/x-emf"); // nierenderowalne — musi zniknąć
+        // Renderowany `src` NIE może być surowym EMF (przeglądarka go nie wyświetli). Oryginalny
+        // EMF wolno nieść w `data-original-src` (do round-tripu przez writer) — to nie jest `src`.
+        content.Html.Should().NotContain(" src=\"data:image/x-emf");
         // Placeholder SVG (brak osadzonego rastra w syntetyku) oznaczony atrybutem diagnostycznym.
         content.Html.Should().Contain("data:image/svg+xml;base64,");
         content.Html.Should().Contain("data-legacy-graphic=\"placeholder\"");
+    }
+
+    /// <summary>
+    /// Round-trip realnego buga „EMF psuje DOCX": DOCX z EMF → reader (placeholder + data-original-src)
+    /// → writer. Wynikowy DOCX MUSI być poprawny (OpenXmlValidator: zero błędów = brak ostrzeżenia
+    /// „dokument uszkodzony" w Word) i zawierać prawdziwy part EMF, NIE goły blip SVG.
+    /// </summary>
+    [Test]
+    public void EmfRoundTrip_ProducesValidDocx_WithEmfPart_NotCorruptSvgBlip()
+    {
+        var docx = BuildDocxWithEmf();
+        var reader = new DocxToHtmlConverter();
+        var content = reader.Convert(new MemoryStream(docx));
+
+        // Reader niesie oryginalny metafile, by writer mógł go odtworzyć.
+        content.Html.Should().Contain("data-original-src=\"data:image/x-emf;base64,");
+
+        var writer = new HtmlToDocxConverter();
+        var outBytes = writer.Convert(content.Html);
+
+        using var outMs = new MemoryStream(outBytes);
+        using var outDoc = WordprocessingDocument.Open(outMs, false);
+
+        // 1. Poprawność pakietu — to jest „nie uszkodzony w Word".
+        var validator = new DocumentFormat.OpenXml.Validation.OpenXmlValidator();
+        var descriptions = validator.Validate(outDoc)
+            .Select(e => $"{e.Id} @ {e.Path?.XPath}: {e.Description}")
+            .ToList();
+        descriptions.Should().BeEmpty(because: "eksportowany DOCX nie może mieć błędów schematu (Word zgłasza uszkodzenie)");
+
+        // 2. Zapisany obraz to prawdziwy EMF (Word renderuje natywnie), nie goły SVG blip.
+        var imageParts = outDoc.MainDocumentPart!.ImageParts.ToList();
+        imageParts.Should().Contain(p => p.ContentType == "image/x-emf");
+        imageParts.Should().NotContain(p => p.ContentType == "image/svg+xml");
     }
 
     private static byte[] BuildDocxWithEmf()

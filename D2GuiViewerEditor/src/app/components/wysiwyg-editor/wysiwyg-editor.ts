@@ -79,6 +79,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     
     this._content.set(value);
     if (!this._isInternalUpdate) {
+      this._captureDocumentDefaults(value);
       // Rozbij na strony po znacznikach <div class="page-break">
       const splitPages = this._splitHtmlIntoPages(value || '<p></p>');
       this.pageContents.set(splitPages.length ? splitPages : ['<p></p>']);
@@ -295,6 +296,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private _footerEvenHtml = signal<string>('');
   private _headerHeight = signal<number>(1.27); // domyślnie 1.27 cm (jak w Google Docs)
   private _footerHeight = signal<number>(1.27); // domyślnie 1.27 cm
+  /**
+   * Domyślny rozmiar/krój czcionki dokumentu odczytany z wrappera `.document-content` (reader
+   * umieszcza tam default z docDefaults/stylu Normal). Stosujemy je na contenteditable strony,
+   * bo paginacja (`_flattenTopBlocks`) ROZWIJA ten wrapper — bez tego default ginie i tekst
+   * wraca do rozmiaru domyślnego edytora (Issue: „14pt z Worda ładuje się jako ~10pt").
+   * Runy/akapity z własnym rozmiarem nadal wygrywają (kaskada CSS).
+   */
+  documentDefaultFontSize = signal<string | null>(null);
+  documentDefaultFontFamily = signal<string | null>(null);
   private _differentFirstPage = signal<boolean>(false);
   private _differentOddEven = signal<boolean>(false);
   editingSection = signal<'header' | 'footer' | 'body'>('body');
@@ -1472,8 +1482,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private onSelectionChange(): void {
     const selection = window.getSelection();
-    
+
     if (selection && this.isSelectionInEditor(selection)) {
+      // Zapisuj selekcję NA BIEŻĄCO, nie tylko na `blur`. Klik w pole toolbara (np. ręczny
+      // input rozmiaru czcionki) przenosi fokus poza edytor — zdarzenie `blur` bywa zbyt późne
+      // (selekcja contenteditable już znika), więc `saveSelection()` na blur nic nie zapisywał
+      // i `setFontSize` nie miał czego odtworzyć → „utrata zaznaczenia / tekst znika". Ciągły
+      // zapis gwarantuje świeżą `savedSelection` z ostatniej realnej pozycji w edytorze.
+      this.saveSelection();
       this.updateFormattingState();
       this.selectionChange.emit(selection);
     }
@@ -1582,7 +1598,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // It must NOT delete the page wrapper itself (a layout element). Any other Backspace is the
     // browser's normal char/selection delete.
     if (e.key === 'Backspace' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
-        && this._tryDeletePageBreakBackwards()) {
+        && (this._tryDeletePageBreakBackwards() || this._tryMergeAcrossPageBackwards())) {
       e.preventDefault();
       return;
     }
@@ -3109,6 +3125,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * widziała już bloku page-break i scalała treść z powrotem — manualny podział ginął wizualnie
    * (np. „PROTOKÓŁ…" lądował pod podpisami). Marker przeżywa też zapis (getContent → writer → w:br).
    */
+  /**
+   * Odczytuje domyślny rozmiar/krój czcionki z wrappera `.document-content` (jeśli reader go dodał)
+   * i zapamiętuje, by zastosować na contenteditable strony — wrapper jest rozwijany przy paginacji,
+   * więc inaczej default ginie. Brak wrappera/stylu → bez zmian (null = CSS edytora).
+   */
+  private _captureDocumentDefaults(html: string): void {
+    if (!html) return;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    const container = tmp.querySelector('.document-content') as HTMLElement | null;
+    if (!container) return;
+    if (container.style.fontSize) this.documentDefaultFontSize.set(container.style.fontSize);
+    if (container.style.fontFamily) this.documentDefaultFontFamily.set(container.style.fontFamily);
+  }
+
   private _splitHtmlIntoPages(html: string): string[] {
     if (!html) return ['<p></p>'];
     const marker = '<div class="page-break"></div>';
@@ -3120,13 +3151,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return pages.length ? pages : ['<p></p>'];
   }
 
-  /** Schedule paginacji z debouncingiem 300 ms. */
+  /**
+   * Schedule paginacji z krótkim debouncingiem. 250 ms to kompromis: wystarczająco długo,
+   * by nie repaginować na każdym wciśnięciu klawisza (IME/wydajność), ale na tyle krótko, że
+   * strona nie zdąży widocznie urosnąć poza format A4 zanim treść spłynie na kolejną stronę
+   * (Issue: „Enter wydłuża stronę do niestandardowych rozmiarów"). Wcześniej 600 ms — przy tym
+   * oknie strona z `min-height:1122px; overflow:visible` rozciągała się zauważalnie przed reflow.
+   */
   private _schedulePaginate(_reason: string): void {
     if (this._paginateTimer) clearTimeout(this._paginateTimer);
     this._paginateTimer = setTimeout(() => {
       this._paginateTimer = null;
       this._repaginateNow();
-    }, 600);
+    }, 250);
   }
 
   /**
@@ -3414,6 +3451,75 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return false;
   }
 
+  /**
+   * Backspace na początku strony powstałej z AUTO-paginacji (bez manualnego page-break).
+   * Strony to osobne `contenteditable`, więc przeglądarka nie scali bloków między nimi —
+   * domyślny Backspace na początku 2. strony nic nie robi (objaw: „nie usuwa 2. strony /
+   * nie przechodzi na 1."). Tu scalamy pierwszy blok bieżącej strony z ostatnim blokiem
+   * poprzedniej (jak Word) albo usuwamy pusty blok wiodący, a następnie repaginujemy — treść
+   * spływa w górę i nadmiarowa strona znika. Wołane TYLKO gdy `_tryDeletePageBreakBackwards`
+   * nie znalazł manualnego break'a. Zwraca true, gdy obsłużono.
+   */
+  private _tryMergeAcrossPageBackwards(): boolean {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs.length < 2) return false;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed || !sel.anchorNode) return false;
+
+    const idx = refs.findIndex(r => r.nativeElement.contains(sel.anchorNode!) || r.nativeElement === sel.anchorNode);
+    if (idx <= 0) return false;
+    const curEd = refs[idx].nativeElement;
+    const prevEd = refs[idx - 1].nativeElement;
+    if (!this._isCaretAtEditorStart(curEd)) return false;
+
+    const firstBlock = curEd.firstElementChild as HTMLElement | null;
+    const lastBlock = prevEd.lastElementChild as HTMLElement | null;
+    if (!firstBlock || !lastBlock) return false;
+
+    const MERGEABLE = ['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI'];
+    const isEmptyTextBlock = firstBlock.tagName !== 'TABLE'
+      && (firstBlock.textContent ?? '').trim() === ''
+      && !firstBlock.querySelector('img, table');
+    const canMerge = MERGEABLE.includes(firstBlock.tagName) && MERGEABLE.includes(lastBlock.tagName);
+
+    const range = document.createRange();
+    if (isEmptyTextBlock) {
+      // Pusty blok wiodący (typowa nadmiarowa pusta strona) — usuń, karetka na koniec poprzedniego bloku.
+      firstBlock.remove();
+      range.selectNodeContents(lastBlock);
+      range.collapse(false);
+    } else if (canMerge) {
+      // Scal treść pierwszego bloku z ostatnim blokiem poprzedniej strony; karetka na styku.
+      const joinNode = lastBlock.lastChild;
+      while (firstBlock.firstChild) lastBlock.appendChild(firstBlock.firstChild);
+      firstBlock.remove();
+      if (joinNode && joinNode.parentNode === lastBlock) {
+        range.setStartAfter(joinNode);
+        range.collapse(true);
+      } else {
+        range.selectNodeContents(lastBlock);
+        range.collapse(true);
+      }
+    } else {
+      // Niekompatybilne (np. tabela) — nie scalaj treści, tylko przenieś karetkę na koniec
+      // poprzedniej strony. Nawigacja działa, treść nietknięta (brak utraty/uszkodzenia).
+      this._placeCaretAtEditorEdge(prevEd, 'end', idx - 1);
+      return true;
+    }
+
+    prevEd.focus();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    if (refs[idx - 1]) this.editorContent = refs[idx - 1];
+    this.activePageIndex.set(idx - 1);
+
+    this._isDirty = true;
+    this._schedulePaginate('backspace-merge');
+    this._schedulePersist();
+    this.updateState();
+    return true;
+  }
+
   /** Czy zwinięta karetka leży na górnej/dolnej skrajnej linii danego edytora strony. */
   private _isCaretOnEdgeLine(editor: HTMLElement, edge: 'top' | 'bottom'): boolean {
     const sel = window.getSelection();
@@ -3635,6 +3741,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Ustawia zawartość HTML — rozbija na strony po znacznikach <div class="page-break">.
    */
   setContent(html: string): void {
+    this._captureDocumentDefaults(html);
     const pages = this._splitHtmlIntoPages(html || '<p></p>');
     this.pageContents.set(pages);
     // Pages already carry their own page-break markers (see _splitHtmlIntoPages); plain join

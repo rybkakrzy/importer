@@ -13,6 +13,39 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-08 — EMF/eksport + font-size import + page-break import + selekcja font-size
+### Changed
+- **DOC2-IMG-009 (EMF psuje DOCX) — root cause + fix:** writer pisał placeholder SVG jako goły `a:blip` (SVG bez rastra = NIEPOPRAWNY OOXML → Word „uszkodzony"). Reader (`DocxToHtmlConverter`) niesie teraz oryginalny metafile w `data-original-src`; writer (`ResolveImageSrc`) preferuje go i zapisuje prawdziwy **EMF part** (`ImagePartType.Emf`, Word renderuje natywnie); `BuildImageDrawing` ma **twardy guard**: nigdy nie emituje gołego SVG blip (return null). Mapowanie x-emf/x-wmf dodane.
+- **DWA pre-existing bugi schematu w `styles.xml`** (wykryte OpenXmlValidatorem, psuły KAŻDY zapis): heading `w:rPr` miał złą kolejność (`sz`/`color`/`b`/`i`) → poprawione na `rFonts→b→i→color→sz`; heading `w:pPr` miał `spacing` przed `keepNext` → `keepNext→keepLines→spacing→outlineLvl`.
+- **DOC2-IMP-005 (14pt → ~10pt) — root cause frontend:** reader poprawny (4 testy: direct/styl/docDefaults/Normal). Bug: `_flattenTopBlocks` ROZWIJA wrapper `.document-content`, na którym reader trzyma default → ginął. Fix: `_captureDocumentDefaults` czyta font-size/family z wrappera; nowe sygnały `documentDefaultFontSize/Family` zbindowane na `[style.font-size/font-family]` contenteditable strony.
+- **DOC2-IMP-008 (3 strony → 1):** reader IGNOROWAŁ `w:pageBreakBefore`. Fix: `HasPageBreakBefore` → emit `<div class="page-break">` przed akapitem (ten sam mechanizm co manualny break; writer round-tripuje).
+- **DOC2-FMT-004 (input font-size gubił selekcję) — root cause:** `savedSelection` zapisywany tylko na `blur` (zbyt późno — selekcja już znika przy klik w input). Fix: `onSelectionChange` zapisuje selekcję na bieżąco. Dodatkowo Enter w input nie aplikuje podwójnie (był apply + blur→apply → zagnieżdżone spany).
+### Verified
+- Backend `dotnet test Infrastructure.UnitTests` → **144 passed** (+EMF round-trip z OpenXmlValidator=0 błędów, +4 FontSizeImport, +2 pageBreakBefore). Frontend `ng test` → **211 passed** (+2 captureDocumentDefaults).
+### Notes
+- EMF: dla osadzonego rastra w EMF/WMF zapis idzie rastrem (PNG/JPEG) — też poprawny. Pełna rasteryzacja EMF w przeglądarce nadal roadmapa (placeholder), ale ZAPIS jest teraz wierny (oryginalny EMF) i niełamiący.
+
+## 2026-06-08 — Edytor: 4 realne naprawy (paginacja / Backspace / context-menu / PDF diag)
+### Changed
+- **DOC2-PAG-002 (Enter wydłuża stronę):** `_schedulePaginate` debounce **600 → 250 ms** (komentarz mówił 300 — kod zdryfował). Strona `min-height:1122px; overflow:visible` rosła widocznie przez całe okno debounce zanim treść spłynęła; 250 ms eliminuje rozciąganie poza A4.
+- **DOC2-PAG-001 (Backspace na 2. stronie):** nowy `_tryMergeAcrossPageBackwards()` wpięty w `handleKeyboard` (`_tryDeletePageBreakBackwards() || _tryMergeAcrossPageBackwards()`). Wcześniej obsługiwany był TYLKO manualny page-break; strony z AUTO-paginacji nie scalały się (osobne contenteditable → przeglądarka nie łączy). Teraz: pusty blok wiodący → usuń; bloki mergeable (P/DIV/H/LI) → scal treść jak Word; tabela/niekompatybilne → tylko nawigacja karetki (treść nietknięta). Po operacji repaginacja spływa treść w górę.
+- **DOC2-UI-006 (context-menu zasłania UI):** `onContextMenu` clamp z `Math.max(8, …)` na obu osiach — wcześniej dolny clamp dawał ujemne `y` na niskim oknie → menu nad viewportem zasłaniało toolbar.
+- **DOC2-PDF-010 (PDF „prace techniczne"):** `pdf-viewer.ts` `catch {}` → `catch (err)` z `console.error` + rozróżnieniem awarii workera (cold-start/404/MIME `.mjs`) od uszkodzonego pliku. Przestaje maskować przyczynę.
+### Verified
+- `npx tsc --noEmit` OK; `npx ng test --watch=false` → **209 passed** (+4 merge w `caret-field.spec.ts`, +3 context-menu w `document-editor.spec.ts`).
+### Notes
+- Diagnoza Problem 4 (font-size input): apply-path JEST poprawny (`applyFontSizeToSelection` re-selektuje wstawioną treść 1996–2006; `setFontSize` odtwarza `savedSelection`). Residualne ryzyko = stała `Range` po repaginacji — wymaga selekcji path-based (większa zmiana, nie ruszane).
+
+## 2026-06-08 — Akapit: „Ustaw jako domyślne" zapisuje zamiast resetować (DOC2-PAR-007)
+### Changed
+- `document-editor.html` — przycisk „Ustaw jako domyślne" wołał `resetParagraphDefaults()` (reset do wartości bazowych) → teraz `setParagraphAsDefault()`.
+- `document-editor.ts` — usunięto `resetParagraphDefaults()`; dodano `setParagraphAsDefault()` (snapshot bieżących ustawień → `_paragraphDefaults` + `applyParagraphSettings()` na bieżącym akapicie). Nowe pole `_paragraphDefaults` (default per-sesja). `readCurrentParagraphSettings()` przy braku selekcji seeduje formularz z `_paragraphDefaults` zamiast zostawiać stałe wartości.
+- Model trwałości: per-sesja edytora (reset po odświeżeniu); bez localStorage (brak wzorca w app) i bez zmian API. Nowe akapity dziedziczą styl po bieżącym bloku (contenteditable) → default propaguje się naturalnie.
+### Verified
+- `npx ng test --watch=false` → **202 passed** (+3 nowe w `document-editor.spec.ts`: brak resetu do bazowych / seed dialogu z defaultu / kopia niezależna). Reszta pakietu bez regresji.
+### Notes
+- Pełna diagnostyka 11 zgłoszeń edytora w raporcie sesji; pozostałe 10 były już wdrożone w sesjach 2026-06-03/04 (zweryfikowane w drzewie: metody klawiatury/paste/font-size/page-break/grafiki obecne). Ten wpis dotyczy jedynego niewdrożonego wcześniej zgłoszenia.
+
 ## 2026-06-04 — Health-check API: pierwszy strzał natychmiast po starcie + dedup
 ### Problem
 - Komunikat „brak komunikacji z API" pojawiał się zbyt późno. Pierwszy check zależał od **implicit constructor side-effect** `ConnectionStatusService` (lazy `providedIn:'root'`) — nieodporne na regresję; brak strażnika duplikatów (start + zdarzenie `online` + interwał mogły wystrzelić równoległe żądania).

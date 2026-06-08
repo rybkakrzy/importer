@@ -31,6 +31,51 @@ public class PageBreakRoundTripTests
     }
 
     [Test]
+    public void ParagraphWithPageBreakBefore_EmitsPageBreakMarker_OnImport()
+    {
+        // Word „podział strony przed" (w:pageBreakBefore) — wcześniej ignorowane na imporcie,
+        // przez co wielostronicowe dokumenty zwijały się do jednej strony (Issue „3 strony → 1").
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("Strona 1"))),
+                new Paragraph(
+                    new ParagraphProperties(new PageBreakBefore()),
+                    new Run(new Text("Strona 2"))),
+                new Paragraph(
+                    new ParagraphProperties(new PageBreakBefore()),
+                    new Run(new Text("Strona 3")))));
+            main.Document.Save();
+        }
+
+        var html = new DocxToHtmlConverter().Convert(new MemoryStream(ms.ToArray())).Html;
+
+        // Dwa markery → trzy strony po paginacji we froncie.
+        System.Text.RegularExpressions.Regex.Matches(html, "class=\"page-break\"").Count.Should().Be(2);
+    }
+
+    [Test]
+    public void ParagraphWithPageBreakBeforeFalse_DoesNotEmitMarker()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(
+                    new ParagraphProperties(new PageBreakBefore { Val = false }),
+                    new Run(new Text("Bez podziału")))));
+            main.Document.Save();
+        }
+
+        var html = new DocxToHtmlConverter().Convert(new MemoryStream(ms.ToArray())).Html;
+
+        html.Should().NotContain("page-break");
+    }
+
+    [Test]
     public void NestedPageBreakDiv_BecomesWBrTypePage()
     {
         // Exactly how the reader renders a Word page break (inside a paragraph's span).

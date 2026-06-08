@@ -493,3 +493,140 @@ describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () 
     expect(req.pageSize).toBeUndefined();
   });
 });
+
+/**
+ * DOC2-PAR-007: „Ustaw jako domyślne" w ustawieniach akapitu.
+ * Regresja: przycisk RESETOWAŁ formularz do wartości bazowych zamiast zapisać
+ * bieżące ustawienia jako domyślne. Teraz: zachowuje bieżące wartości jako default
+ * sesji i seeduje nimi dialog, gdy nie ma aktywnej selekcji.
+ *
+ * jsdom nie ma layoutu/contenteditable — `applyParagraphSettings()` przy braku selekcji
+ * robi no-op i zamyka dialog; testujemy stan modelu (paragraphData / default sesji).
+ */
+describe('DocumentEditorComponent — „Ustaw jako domyślne" akapitu (DOC2-PAR-007)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('NIE resetuje formularza do wartości bazowych (sedno regresji)', () => {
+    component.paragraphData.alignment = 'center';
+    component.paragraphData.spaceAfter = 24;
+    component.paragraphData.lineSpacingValue = 2;
+
+    component.setParagraphAsDefault();
+
+    // Wartości użytkownika zachowane, nie podmienione na bazowe (left / 8 / 1.08).
+    expect(component.paragraphData.alignment).toBe('center');
+    expect(component.paragraphData.spaceAfter).toBe(24);
+    expect(component.paragraphData.lineSpacingValue).toBe(2);
+  });
+
+  it('zapisany default seeduje dialog, gdy nie ma aktywnej selekcji', () => {
+    component.paragraphData.alignment = 'right';
+    component.paragraphData.spaceBefore = 12;
+    component.setParagraphAsDefault();
+
+    // Symuluj inny stan formularza, a następnie ponowne otwarcie dialogu bez selekcji.
+    component.paragraphData.alignment = 'left';
+    component.paragraphData.spaceBefore = 0;
+    (component as any).readCurrentParagraphSettings();
+
+    expect(component.paragraphData.alignment).toBe('right');
+    expect(component.paragraphData.spaceBefore).toBe(12);
+  });
+
+  it('default jest niezależną kopią — późniejsza edycja formularza go nie zmienia', () => {
+    component.paragraphData.indentLeft = 3;
+    component.setParagraphAsDefault();
+
+    component.paragraphData.indentLeft = 99;
+    (component as any).readCurrentParagraphSettings(); // brak selekcji → seed z defaultu
+
+    expect(component.paragraphData.indentLeft).toBe(3);
+  });
+});
+
+/**
+ * DOC2-UI-006: menu kontekstowe nie może zasłaniać UI (toolbar) ani wychodzić poza viewport.
+ * Regresja: clamp dolnej krawędzi bez `Math.max(8, …)` dawał ujemne `y` na niskim oknie →
+ * menu wjeżdżało nad viewport, zasłaniając toolbar.
+ */
+describe('DocumentEditorComponent — pozycja menu kontekstowego (DOC2-UI-006)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+  let origW: number;
+  let origH: number;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+    origW = window.innerWidth;
+    origH = window.innerHeight;
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { value: origW, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: origH, configurable: true });
+  });
+
+  function ctxEventAt(clientX: number, clientY: number): MouseEvent {
+    const target = document.createElement('div');
+    target.className = 'paper-container';
+    document.body.appendChild(target);
+    return { target, clientX, clientY, preventDefault: () => {} } as unknown as MouseEvent;
+  }
+
+  it('na niskim oknie clamp nie daje ujemnego y (menu nie zasłania toolbara)', () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1200, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 300, configurable: true });
+
+    component.onContextMenu(ctxEventAt(600, 280));
+
+    expect(component.contextMenuY()).toBeGreaterThanOrEqual(8);
+    expect(component.showContextMenu()).toBe(true);
+  });
+
+  it('przy prawej krawędzi przesuwa menu w lewo, by zmieściło się w viewport', () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 900, configurable: true });
+
+    component.onContextMenu(ctxEventAt(995, 100));
+
+    expect(component.contextMenuX()).toBeLessThanOrEqual(1000 - 260 - 8);
+    expect(component.contextMenuX()).toBeGreaterThanOrEqual(8);
+  });
+
+  it('w typowym miejscu otwiera się pod kursorem (bez zbędnego przesuwania)', () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: 1000, configurable: true });
+
+    component.onContextMenu(ctxEventAt(400, 200));
+
+    expect(component.contextMenuX()).toBe(400);
+    expect(component.contextMenuY()).toBe(200);
+  });
+});

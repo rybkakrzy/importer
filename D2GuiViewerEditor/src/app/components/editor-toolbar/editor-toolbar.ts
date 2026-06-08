@@ -539,9 +539,9 @@ export class EditorToolbarComponent {
    * Obsługa Enter w input rozmiaru czcionki
    */
   onFontSizeInputEnter(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    this.applyFontSizeFromInput(input);
-    input.blur();
+    // Tylko blur — `onFontSizeInputBlur` zaaplikuje raz. Wcześniej Enter aplikował tu ORAZ
+    // ponownie w blur (podwójne wstawienie → zagnieżdżone spany / rosnący line-height).
+    (event.target as HTMLInputElement).blur();
   }
 
   /**

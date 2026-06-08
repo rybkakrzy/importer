@@ -152,6 +152,62 @@ describe('WysiwygEditorComponent — cross-page caret + page-number font', () =>
     expect((component as any)._tryDeletePageBreakBackwards()).toBe(false);
   });
 
+  // --- Backspace merges across an AUTO-paginated page boundary (Issue 1) -----
+
+  function setupAutoPages(page0Html: string, page1Html: string): { page0: HTMLDivElement; page1: HTMLDivElement } {
+    const page0 = document.createElement('div');
+    page0.innerHTML = page0Html;
+    const page1 = document.createElement('div');
+    page1.innerHTML = page1Html;
+    document.body.appendChild(page0);
+    document.body.appendChild(page1);
+    (component as any).pageEditorRefs = { toArray: () => [{ nativeElement: page0 }, { nativeElement: page1 }] };
+    (component as any)._schedulePaginate = () => {};
+    (component as any)._schedulePersist = () => {};
+    (component as any).updateState = () => {};
+    return { page0, page1 };
+  }
+
+  it('Backspace removes an empty leading paragraph on the auto-paginated 2nd page', () => {
+    const { page0, page1 } = setupAutoPages('<p>Pierwsza</p>', '<p></p>');
+    collapseCaretIn(page1.querySelector('p')!, 0); // start of empty block on page 2
+
+    const handled = (component as any)._tryMergeAcrossPageBackwards();
+
+    expect(handled).toBe(true);
+    expect(page1.querySelector('p')).toBeNull(); // empty leading block removed
+  });
+
+  it('Backspace merges the first block of page 2 into the last block of page 1', () => {
+    const { page0, page1 } = setupAutoPages('<p>Linia A</p>', '<p>Linia B</p>');
+    collapseCaretIn(page1.querySelector('p')!.firstChild!, 0); // start of "Linia B"
+
+    const handled = (component as any)._tryMergeAcrossPageBackwards();
+
+    expect(handled).toBe(true);
+    expect(page0.lastElementChild!.textContent).toBe('Linia ALinia B'); // joined like Word
+    expect(page1.querySelector('p')).toBeNull();
+  });
+
+  it('does not merge mid-line (only at the very start of the page)', () => {
+    const { page1 } = setupAutoPages('<p>A</p>', '<p>Bcd</p>');
+    collapseCaretIn(page1.querySelector('p')!.firstChild!, 1); // after "B"
+
+    expect((component as any)._tryMergeAcrossPageBackwards()).toBe(false);
+  });
+
+  it('does not merge incompatible blocks (table) — navigates instead, content intact', () => {
+    const { page0, page1 } = setupAutoPages('<table><tr><td>x</td></tr></table>', '<p>Treść</p>');
+    collapseCaretIn(page1.querySelector('p')!.firstChild!, 0);
+
+    const handled = (component as any)._tryMergeAcrossPageBackwards();
+
+    expect(handled).toBe(true);
+    expect(page0.querySelector('table')).not.toBeNull(); // table untouched
+    expect(page1.querySelector('p')).not.toBeNull();     // paragraph not destroyed
+    expect(component.activePageIndex()).toBe(0);
+  });
+
   // --- page-number font-size ------------------------------------------------
 
   it('page number inherits an inline font-size from the footer content', () => {

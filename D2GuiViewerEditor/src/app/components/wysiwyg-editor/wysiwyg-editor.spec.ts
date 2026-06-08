@@ -212,4 +212,23 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
     plain.textContent = 'zwykły tekst';
     expect((component as any)._isPageBreakBlock(plain)).toBe(false);
   });
+
+  // DOC2-IMP-005: domyślny rozmiar/krój z `.document-content` musi przetrwać paginację
+  // (która rozwija ten wrapper) — przenosimy go na contenteditable strony.
+  it('_captureDocumentDefaults czyta font-size/family z wrappera .document-content', () => {
+    const html = '<div class="document-content" style="font-family:\'Times New Roman\';font-size:14pt;">'
+      + '<p>Treść 14pt</p></div>';
+
+    (component as any)._captureDocumentDefaults(html);
+
+    expect(component.documentDefaultFontSize()).toBe('14pt');
+    expect(component.documentDefaultFontFamily()).toContain('Times New Roman');
+  });
+
+  it('_captureDocumentDefaults bez wrappera nie ustawia defaultów (null = CSS edytora)', () => {
+    (component as any)._captureDocumentDefaults('<p>Goła treść</p>');
+
+    expect(component.documentDefaultFontSize()).toBeNull();
+    expect(component.documentDefaultFontFamily()).toBeNull();
+  });
 });
