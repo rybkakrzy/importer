@@ -1,5 +1,3 @@
-/* Global styles for Word Online Editor */
-
 @use 'assets/fonts/corporate-font';
 
 * {
@@ -13,8 +11,6 @@ html, body {
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Wyłącz automatyczne powiększanie małego tekstu przez przeglądarki (font boosting),
-     które na dużych monitorach potrafi nadmiernie zwiększać m.in. cyfry na linijce. */
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
@@ -23,13 +19,6 @@ body {
   overflow: hidden;
 }
 
-/* App shell layout — declared globally (not component-scoped) so it reliably
-   applies to the page components inserted by <router-outlet>, which do NOT
-   inherit d2-root's view-encapsulation attributes. Without this the routed page
-   keeps height:100% (resolving to the full 100vh) and the always-on global
-   banners (environment / offline) push its bottom bar — zoom, page count,
-   version — off-screen, where body `overflow:hidden` clips it.
-   The banners keep their intrinsic height; only the page area flexes. */
 d2-root {
   display: flex;
   flex-direction: column;
@@ -51,8 +40,13 @@ d2-root > d2-admin-shell {
   overflow: hidden;
 }
 
-/* PDF.js text layer — must be global because Angular scoped CSS doesn't apply
-   to elements created dynamically via document.createElement */
+d2-admin-shell input,
+d2-admin-shell select,
+d2-admin-shell button,
+d2-admin-shell textarea {
+  font-family: inherit;
+}
+
 .text-layer span {
   color: transparent;
   position: absolute;

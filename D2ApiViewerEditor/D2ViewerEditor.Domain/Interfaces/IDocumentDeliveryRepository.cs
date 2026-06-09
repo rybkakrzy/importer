@@ -30,5 +30,9 @@ public interface IDocumentDeliveryRepository
     Task<IReadOnlyList<DocumentDelivery>> GetByStatusAsync(
         DeliveryStatus status, int skip, int take, CancellationToken cancellationToken = default);
 
+    /// <summary>Lista WSZYSTKICH zadań niezależnie od statusu (panel admina — filtr „wszystkie").</summary>
+    Task<IReadOnlyList<DocumentDelivery>> GetAllAsync(
+        int skip, int take, CancellationToken cancellationToken = default);
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

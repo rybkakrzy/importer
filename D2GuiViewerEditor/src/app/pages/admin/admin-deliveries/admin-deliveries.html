@@ -51,6 +51,7 @@
             </th>
             <th class="col-status">
               <select class="col-filter-input" [ngModel]="selectedStatus()" (ngModelChange)="setStatus($event)">
+                <option [value]="'all'">Wszystkie</option>
                 @for (s of statuses; track s) {
                   <option [value]="s">{{ statusLabel(s) }}</option>
                 }
@@ -99,8 +100,13 @@
             </td></tr>
           } @else {
             @for (d of deliveries(); track d.deliveryId) {
-              <tr class="doc-row">
-                <td class="col-id"><span class="doc-id" [title]="d.deliveryId">{{ shortId(d.deliveryId) }}</span></td>
+              <tr class="doc-row" [class.expanded]="isExpanded(d.deliveryId)"
+                  (click)="toggleExpand(d.deliveryId)"
+                  [title]="isExpanded(d.deliveryId) ? 'Zwiń szczegóły' : 'Pokaż szczegóły wysyłki'">
+                <td class="col-id">
+                  <span class="expand-caret" [class.open]="isExpanded(d.deliveryId)" aria-hidden="true">▸</span>
+                  <span class="doc-id" [title]="d.deliveryId">{{ shortId(d.deliveryId) }}</span>
+                </td>
                 <td class="col-doc"><span class="mono" [title]="d.documentId">{{ shortId(d.documentId) }}</span></td>
                 <td class="col-status">
                   <span class="status-badge" [class]="statusClass(d.status)">{{ statusLabel(d.status) }}</span>
@@ -143,6 +149,42 @@
                   }
                 </td>
               </tr>
+              @if (isExpanded(d.deliveryId)) {
+                <tr class="detail-row">
+                  <td colspan="11">
+                    <div class="delivery-details">
+                      <div class="detail-item detail-wide">
+                        <span class="detail-label">Adres odbiorcy</span>
+                        <span class="detail-value mono">{{ d.recipientUrl || '—' }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Master ID</span>
+                        <span class="detail-value mono">{{ d.documentId }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Version ID</span>
+                        <span class="detail-value mono">{{ d.sourceVersionId }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Status</span>
+                        <span class="status-badge" [class]="statusClass(d.status)">{{ statusLabel(d.status) }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Utworzono</span>
+                        <span class="detail-value">{{ formatDate(d.createdAt) }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Ostatnia próba</span>
+                        <span class="detail-value">{{ formatDate(d.lastAttemptAt) }}</span>
+                      </div>
+                      <div class="detail-item detail-wide">
+                        <span class="detail-label">Komunikat błędu</span>
+                        <span class="detail-value detail-error">{{ d.lastError || '—' }}</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              }
             }
           }
         </tbody>

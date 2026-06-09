@@ -524,7 +524,7 @@
           <span>Zapisz</span>
         </button>
         @if (canFinish()) {
-          <button class="header-btn" (click)="finishDocument()" title="Zakończ">
+          <button class="header-btn" (click)="finishDocument()" [disabled]="isFinishing()" title="Zakończ">
             <span>Zakończ</span>
           </button>
         }
@@ -900,6 +900,29 @@
         <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
       </svg>
       {{ successMessage() }}
+    </div>
+  }
+
+  <!-- Dialog: trwa wysyłanie pliku po kliknięciu „Zakończ" -->
+  @if (showFinishModal()) {
+    <!-- Brak (click) na overlay — modal zamyka WYŁĄCZNIE przycisk „Zamknij", żeby nie dało się
+         go przypadkowo zamknąć ani ponownie wywołać flow zakończenia. -->
+    <div class="dialog-overlay finish-dialog-overlay">
+      <div class="dialog leave-dialog finish-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="finish-dialog-title">
+        <div class="leave-dialog-icon">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none">
+            <path d="M3 11l18-8-8 18-2-7-8-3z" stroke="#ff6200" stroke-width="2"
+                  stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <h3 class="leave-dialog-title" id="finish-dialog-title">Trwa wysyłanie pliku do Twojej aplikacji</h3>
+        <div class="leave-dialog-actions finish-dialog-actions">
+          <button class="leave-btn-confirm finish-close-btn" (click)="closeFinishModalAndExit()">
+            Zamknij ({{ finishCountdown() }})
+          </button>
+        </div>
+      </div>
     </div>
   }
 

@@ -17,13 +17,11 @@ import {
 export class AdminDeliveriesComponent implements OnInit {
   private storage = inject(DocumentStorageService);
 
-  /** Wszystkie statusy do filtra; DeadLettered najczęściej interesuje admina. */
   readonly statuses: DeliveryStatus[] = [
     'DeadLettered', 'FailedPermanently', 'RetryScheduled', 'Sending', 'Pending', 'Sent'
   ];
 
-  /** Status pobierany z backendu (serwer wymaga konkretnego statusu). */
-  selectedStatus = signal<DeliveryStatus>('DeadLettered');
+  selectedStatus = signal<DeliveryStatus | 'all'>('all');
 
   private allDeliveries = signal<DeliveryListItem[]>([]);
   filterId       = signal('');
@@ -42,6 +40,7 @@ export class AdminDeliveriesComponent implements OnInit {
   error = signal<string | null>(null);
   retryingId = signal<string | null>(null);
   notice = signal<string | null>(null);
+  expandedId = signal<string | null>(null);
 
   private filtered = computed(() => {
     const id       = this.filterId().toLowerCase().trim();
@@ -84,7 +83,8 @@ export class AdminDeliveriesComponent implements OnInit {
     this.error.set(null);
     this.notice.set(null);
     this.currentPage.set(0);
-    this.storage.getDeliveriesByStatus(this.selectedStatus()).subscribe({
+    const status = this.selectedStatus();
+    this.storage.getDeliveries(status === 'all' ? null : status).subscribe({
       next: (items) => {
         this.allDeliveries.set(items);
         this.isLoading.set(false);
@@ -97,7 +97,7 @@ export class AdminDeliveriesComponent implements OnInit {
   }
 
   setStatus(status: string): void {
-    this.selectedStatus.set(status as DeliveryStatus);
+    this.selectedStatus.set(status as DeliveryStatus | 'all');
     this.load();
   }
 
@@ -115,6 +115,14 @@ export class AdminDeliveriesComponent implements OnInit {
     if (field === 'lock')     this.filterLock.set(value);
     if (field === 'error')    this.filterError.set(value);
     this.currentPage.set(0);
+  }
+
+  toggleExpand(deliveryId: string): void {
+    this.expandedId.update(curr => (curr === deliveryId ? null : deliveryId));
+  }
+
+  isExpanded(deliveryId: string): boolean {
+    return this.expandedId() === deliveryId;
   }
 
   /** Retry ma sens tylko dla zadań w stanie terminalnie nieudanym. */
@@ -144,9 +152,9 @@ export class AdminDeliveriesComponent implements OnInit {
     const map: Record<DeliveryStatus, string> = {
       Pending: 'Oczekuje',
       Sending: 'Wysyłanie',
-      RetryScheduled: 'Zaplanowano ponowienie',
+      RetryScheduled: 'Zaplanowano',
       Sent: 'Wysłano',
-      FailedPermanently: 'Błąd trwały',
+      FailedPermanently: 'Błąd',
       DeadLettered: 'Porzucone'
     };
     return map[status] ?? status;

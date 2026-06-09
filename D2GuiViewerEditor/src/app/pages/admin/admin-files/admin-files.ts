@@ -55,14 +55,13 @@ export class AdminFilesComponent implements OnInit {
     this.currentPage.set(0);
   }
 
-  /** Maps the status enum value (from API) to a readable label. */
   statusLabel(status: string): string {
     const map: Record<string, string> = {
-      Saved: 'Saved',
-      Editing: 'Editing',
-      Sending: 'Sending to recipient',
-      DeliveryFailed: 'Recipient not responding',
-      Sent: 'Sent'
+      Saved: 'Zapisany',
+      Editing: 'W edycji',
+      Sending: 'Wysyłanie do odbiorcy',
+      DeliveryFailed: 'Odbiorca nie odpowiada',
+      Sent: 'Wysłany'
     };
     return map[status] ?? status ?? '—';
   }

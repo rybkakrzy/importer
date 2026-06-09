@@ -41,8 +41,6 @@ public class DocumentController : ControllerBase
         if (request.File is null || request.File.Length == 0)
             return BadRequest(new { error = "Plik jest wymagany" });
 
-        // Klasyfikacja jest OPCJONALNA. Brak/pusta → przyjmujemy bez klasyfikacji (null w metadanych).
-        // Podana wartość musi być poprawna (C1..C4) — łapiemy literówki, ale nie wymuszamy obecności.
         DocumentClassification? classification = null;
         if (!string.IsNullOrWhiteSpace(request.Classification))
         {
@@ -58,8 +56,6 @@ public class DocumentController : ControllerBase
         if (!isDocx && !isPdf)
             return BadRequest(new { error = "Wspierane są tylko pliki DOCX i PDF" });
 
-        // ReturnUrl wymagany dla DOCX — bez niego edytor nie będzie wiedział gdzie odesłać plik po „Zakończ".
-        // Dla PDF opcjonalny (dziś niewykorzystywany, zostawiony pod przyszłe scenariusze np. podpis cyfrowy).
         if (isDocx && string.IsNullOrWhiteSpace(request.ReturnUrl))
             return BadRequest(new { error = "ReturnUrl jest wymagany dla plików DOCX" });
 
@@ -71,8 +67,6 @@ public class DocumentController : ControllerBase
         {
             returnUrl = string.IsNullOrWhiteSpace(request.ReturnUrl) ? null : request.ReturnUrl,
             classification = classification?.ToString(),
-            // Domain rule: missing field / non-true ⇒ false. Persisted only when explicitly true
-            // so a stored false vs. missing is indistinguishable to the parser (both ⇒ blocked).
             userDownload = request.UserDownload == true ? (bool?)true : null
         });
 
@@ -107,20 +101,6 @@ public class DocumentController : ControllerBase
         return StatusCode(StatusCodes.Status201Created, response);
     }
 
-    // [HttpGet("{documentId}")]
-    // [ProducesResponseType(StatusCodes.Status200OK)]
-    // [ProducesResponseType(StatusCodes.Status404NotFound)]
-    // [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    // public Task<IActionResult> GetDocument(Guid documentId)
-    // {
-    //     _logger.LogInformation("External integration: GetDocument requested for {DocumentId}", documentId);
-    //     return Task.FromResult<IActionResult>(Ok(new
-    //     {
-    //         DocumentId = documentId,
-    //         Message = "Placeholder: implement read flow"
-    //     }));
-    // }
-
     /// <summary>
     /// Aktualizuje URL, na który system odeśle plik po zakończeniu edycji ("Zakończ i wyślij").
     /// URL przechowywany w metadanych dokumentu master (obok klasyfikacji). Operacja jest
@@ -145,15 +125,12 @@ public class DocumentController : ControllerBase
 
         if (result.IsSuccess)
         {
-            // The URL itself is intentionally NOT logged — it may carry an integration token.
             _logger.LogInformation("Callback URL updated for document {MasterId}.", masterId);
             return NoContent();
         }
         if (result.IsNotFound)
             return NotFound(new { error = result.Error });
 
-        // Domain-level rejection (terminal/in-flight state) → 409 keeps it distinct from a
-        // validation error (URL format mismatch → 400).
         var conflict = result.Error != null
             && result.Error.StartsWith("Nie można zaktualizować callback URL", StringComparison.OrdinalIgnoreCase);
         return conflict

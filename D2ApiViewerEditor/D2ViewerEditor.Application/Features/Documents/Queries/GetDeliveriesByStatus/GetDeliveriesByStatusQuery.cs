@@ -6,9 +6,10 @@ using MediatR;
 namespace D2ViewerEditor.Application.Features.Documents.Queries.GetDeliveriesByStatus;
 
 /// <summary>
-/// Lista zadań wysyłki w danym statusie (monitoring / panel admina).
+/// Lista zadań wysyłki (monitoring / panel admina). `Status` puste/null lub "all"
+/// (case-insensitive) = wszystkie statusy; w przeciwnym razie filtr po konkretnym statusie.
 /// </summary>
-public record GetDeliveriesByStatusQuery(string Status, int Skip = 0, int Take = 100)
+public record GetDeliveriesByStatusQuery(string? Status = null, int Skip = 0, int Take = 100)
     : IRequest<Result<IReadOnlyList<DeliveryListItemDto>>>;
 
 public record DeliveryListItemDto(
@@ -22,7 +23,9 @@ public record DeliveryListItemDto(
     DateTime DeadlineAt,
     string? LastError,
     DateTime? LockedUntil,
-    string? LockedBy);
+    string? LockedBy,
+    Guid SourceVersionId,
+    string RecipientUrl);
 
 public class GetDeliveriesByStatusQueryHandler
     : IRequestHandler<GetDeliveriesByStatusQuery, Result<IReadOnlyList<DeliveryListItemDto>>>
@@ -37,18 +40,32 @@ public class GetDeliveriesByStatusQueryHandler
     public async Task<Result<IReadOnlyList<DeliveryListItemDto>>> Handle(
         GetDeliveriesByStatusQuery request, CancellationToken cancellationToken)
     {
-        if (!Enum.TryParse<DeliveryStatus>(request.Status, ignoreCase: true, out var status))
+        var raw = request.Status?.Trim();
+        var allStatuses = string.IsNullOrEmpty(raw)
+            || raw.Equals("all", StringComparison.OrdinalIgnoreCase);
+
+        IReadOnlyList<DocumentDelivery> items;
+        if (allStatuses)
+        {
+            items = await _deliveryRepository.GetAllAsync(
+                request.Skip, request.Take, cancellationToken);
+        }
+        else if (Enum.TryParse<DeliveryStatus>(raw, ignoreCase: true, out var status))
+        {
+            items = await _deliveryRepository.GetByStatusAsync(
+                status, request.Skip, request.Take, cancellationToken);
+        }
+        else
+        {
             return Result<IReadOnlyList<DeliveryListItemDto>>.Failure(
                 $"Nieznany status: {request.Status}");
-
-        var items = await _deliveryRepository.GetByStatusAsync(
-            status, request.Skip, request.Take, cancellationToken);
+        }
 
         var dtos = items
             .Select(d => new DeliveryListItemDto(
                 d.Id, d.DocumentId, d.Status.ToString(), d.AttemptCount,
                 d.CreatedAt, d.LastAttemptAt, d.NextAttemptAt, d.DeadlineAt, d.LastError,
-                d.LockedUntil, d.LockedBy))
+                d.LockedUntil, d.LockedBy, d.SourceVersionId, d.RecipientUrl))
             .ToList();
 
         return Result<IReadOnlyList<DeliveryListItemDto>>.Success(dtos);

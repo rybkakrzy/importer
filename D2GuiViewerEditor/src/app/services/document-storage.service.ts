@@ -107,6 +107,8 @@ export interface DeliveryListItem {
   lastError: string | null;
   lockedUntil: string | null;
   lockedBy: string | null;
+  sourceVersionId: string;
+  recipientUrl: string;
 }
 
 export interface RequeueDeliveryResult {
@@ -253,16 +255,18 @@ export class DocumentStorageService {
   }
 
   /**
-   * Lista zadań wysyłki w danym statusie (panel admina / monitoring).
-   * @param status - Status: Pending | Sending | RetryScheduled | Sent | FailedPermanently | DeadLettered
+   * Lista zadań wysyłki (panel admina / monitoring).
+   * @param status - Konkretny status; pominięty/`null` = WSZYSTKIE statusy (backend domyślnie zwraca wszystkie).
    * @param skip - Offset paginacji
    * @param take - Rozmiar strony
    */
-  getDeliveriesByStatus(status: DeliveryStatus, skip = 0, take = 100): Observable<DeliveryListItem[]> {
-    const params = new HttpParams()
-      .set('status', status)
+  getDeliveries(status: DeliveryStatus | null = null, skip = 0, take = 100): Observable<DeliveryListItem[]> {
+    let params = new HttpParams()
       .set('skip', skip)
       .set('take', take);
+    if (status) {
+      params = params.set('status', status);
+    }
     return this.http.get<DeliveryListItem[]>(`${this.apiUrl}/deliveries`, { params });
   }
 

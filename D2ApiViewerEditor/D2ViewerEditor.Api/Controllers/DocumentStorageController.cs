@@ -340,14 +340,16 @@ public class DocumentStorageController : BaseApiController
     }
 
     /// <summary>
-    /// Lista zadań wysyłki w danym statusie (monitoring / panel admina).
+    /// Lista zadań wysyłki (monitoring / panel admina). Domyślnie zwraca WSZYSTKIE statusy.
     /// </summary>
-    /// <param name="status">Status: Pending | Sending | RetryScheduled | Sent | FailedPermanently | DeadLettered</param>
+    /// <param name="status">Pusty / "all" = wszystkie. Albo: Pending | Sending | RetryScheduled | Sent | FailedPermanently | DeadLettered</param>
+    /// <param name="skip">Offset paginacji</param>
+    /// <param name="take">Rozmiar strony</param>
     [HttpGet("deliveries")]
     [ProducesResponseType(typeof(IReadOnlyList<DeliveryListItemDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> GetDeliveries(
-        [FromQuery] string status = "DeadLettered", [FromQuery] int skip = 0, [FromQuery] int take = 100)
+        [FromQuery] string status = "", [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         var result = await Mediator.Send(new GetDeliveriesByStatusQuery(status, skip, take));
 

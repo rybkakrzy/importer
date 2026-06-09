@@ -1500,6 +1500,21 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   }
 }
 
+.finish-dialog-overlay {
+  z-index: 2000;
+  backdrop-filter: blur(3px);
+  animation: fadeInOverlay 0.15s ease;
+}
+
+.finish-dialog-actions {
+  justify-content: center;
+}
+
+.finish-close-btn {
+  flex: 0 0 auto;
+  min-width: 160px;
+}
+
 .dialog {
   background: white;
   border-radius: 12px;

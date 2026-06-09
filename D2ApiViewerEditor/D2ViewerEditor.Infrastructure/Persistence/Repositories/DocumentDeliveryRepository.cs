@@ -85,6 +85,17 @@ public class DocumentDeliveryRepository : IDocumentDeliveryRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<DocumentDelivery>> GetAllAsync(
+        int skip, int take, CancellationToken cancellationToken = default)
+    {
+        return await _context.DocumentDeliveries
+            .AsNoTracking()
+            .OrderByDescending(d => d.CreatedAt)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         return await _context.SaveChangesAsync(cancellationToken);

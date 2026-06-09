@@ -13,6 +13,64 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-09 — „Lista plików" (admin-files): statusy dokumentów po polsku
+### Changed
+- `admin-files.ts` `statusLabel` — etykiety EN→PL: `Saved`→„Zapisany", `Editing`→„W edycji", `Sending`→„Wysyłanie do odbiorcy", `DeliveryFailed`→„Odbiorca nie odpowiada", `Sent`→„Wysłany". Wartości enuma `DocumentStatus` z API (klucze) bez zmian; `statusClass` (kolory) bez zmian. Filtr statusu jest free-text i matchuje po `statusLabel`, więc działa na polskich etykietach.
+### Verified
+- `tsc --noEmit` OK. Brak testów odwołujących się do starych etykiet EN.
+
+## 2026-06-09 — Panel administracji (GUI): domyślnie firmowa czcionka
+### Changed
+- `admin-shell.scss` `:host` — `font-family: var(--corporate-font-family, 'Calibri', 'Segoe UI', Arial, sans-serif)`. Cała zawartość panelu admina (sidebar + strony routowane `admin-files`/`admin-deliveries`) dziedziczy firmowy krój. `--corporate-font-family` to istniejący punkt konfiguracji z `assets/fonts/_corporate-font.scss` (gdy firmowy font nieskonfigurowany → fallback Calibri/Segoe UI; gdy skonfigurowany — automatycznie się podstawi, jak w edytorze).
+- `styles.scss` — globalna reguła `d2-admin-shell input, select, button, textarea { font-family: inherit }`. Natywne kontrolki formularzy mają własny font systemowy i nie dziedziczą; reguła musi być globalna (nie component-scoped), bo dotyczy kontrolek w stronach routowanych przez `<router-outlet>`.
+### Verified
+- `ng build` (AOT) OK; `admin-shell.spec` 3/3. Bez zmian logiki/TS.
+
+## 2026-06-09 — Panel „Pliki do wysłania": rozwijane szczegóły wysyłki po kliknięciu wiersza
+### Changed
+- **Backend:** `DeliveryListItemDto` rozszerzony o `SourceVersionId` (Guid) i `RecipientUrl` (string) — mapowane w `GetDeliveriesByStatusQueryHandler` z `DocumentDelivery.SourceVersionId`/`RecipientUrl` (oba już istniały na encji; `recipientUrl` = returnUrl, nie jest sekretem — i tak wystawiany przez `…/metadata`).
+- **Frontend model:** `DeliveryListItem` +`sourceVersionId`, +`recipientUrl`.
+- **`admin-deliveries`:** sygnał `expandedId` + `toggleExpand(id)`/`isExpanded(id)` (jeden wiersz rozwinięty naraz). Klik w `.doc-row` rozwija/zwija; przycisk „Ponów" ma `event.stopPropagation()`, więc nie koliduje. Wiersz `.detail-row` (colspan=11) renderuje grid: **Adres odbiorcy**, **Master ID** (=documentId), **Version ID** (=sourceVersionId), **Status**, **Utworzono**, **Ostatnia próba**, **Komunikat błędu**. Caret ▸ obraca się 90° po rozwinięciu.
+### Verified
+- Backend `Application.UnitTests` **205** (`GetDeliveriesByStatusQueryHandlerTests` = 8; +1 test mapowania `RecipientUrl`/`SourceVersionId`/`DocumentId`). `dotnet build` OK.
+- Frontend `tsc` OK; `ng build` (AOT) OK — `admin-deliveries` kompiluje template z rozwijanym wierszem.
+
+## 2026-06-09 — Panel „Pliki do wysłania": domyślnie wszystkie statusy (zamiast tylko DeadLettered)
+### Changed
+- **Przyczyna pustego panelu:** domyślny filtr statusu = `DeadLettered`, a świeżo zakolejkowane wysyłki mają `Pending`/`Sending`/`RetryScheduled`/`Sent`. Endpoint `GET …/deliveries` wymagał konkretnego statusu, więc panel startował pusty.
+- **Backend:** `GET …/documentstorage/deliveries` — parametr `status` opcjonalny: pusty / `null` / `"all"` (case-insensitive) ⇒ wszystkie statusy. `IDocumentDeliveryRepository.GetAllAsync(skip, take)` (+impl w `DocumentDeliveryRepository`, `OrderByDescending(CreatedAt)` jak `GetByStatusAsync`). `GetDeliveriesByStatusQuery.Status` → `string?` (default `null`); handler rozgałęzia all / konkretny status / nieznany (Failure). Kontroler: domyślny `status` `"DeadLettered"` → `""`.
+- **Frontend:** `DocumentStorageService.getDeliveriesByStatus` → **`getDeliveries(status: DeliveryStatus | null = null, …)`** — pomija param `status` w żądaniu, gdy `null`. `admin-deliveries`: `selectedStatus` typu `DeliveryStatus | 'all'`, domyślnie **`'all'`**; w dropdownie nowa opcja **„Wszystkie"** (przekazuje `null` do serwisu).
+### Verified
+- Backend `D2ViewerEditor.Application.UnitTests` **204** (+7 nowy `GetDeliveriesByStatusQueryHandlerTests`: empty/whitespace/null/all/ALL → `GetAllAsync`; konkretny → `GetByStatusAsync`; nieznany → Failure bez zapytań). `dotnet build` solucji OK (0 błędów).
+- Frontend `tsc --noEmit` OK; `ng build` (AOT) OK — `admin-deliveries` kompiluje się z nową opcją.
+### Notes
+- To zmiana tylko domyślnego widoku + dodanie opcji „wszystkie". Jeśli `document_deliveries` jest pusta (nikt nie dokończył „Zakończ"), panel nadal pokaże „Brak wyników" — to poprawne.
+
+## 2026-06-09 — UX „Zakończ": modal „Trwa wysyłanie pliku" + odliczanie 30 s + best-effort zamknięcie karty
+### Changed
+- **Frontend `document-editor.ts`** (`finishDocument` przebudowany): po zapisie (`saveDocument`) i zleceniu wysyłki (`finishAndSend`) od razu otwiera modal „Trwa wysyłanie pliku do Twojej aplikacji" z przyciskiem **„Zamknij (NN)"** odliczającym 30→0. Nowe sygnały `showFinishModal`, `finishCountdown`; metody `openFinishModal`, `onFinishCountdownTick` (wydzielony tyk — deterministycznie testowalny bez fake-timerów), `closeFinishModalAndExit` (wspólna akcja dla końca odliczania i kliknięcia „Zamknij"), `tryCloseBrowserTab` (`window.close()` w try/catch — best-effort, bez crashu gdy przeglądarka odmówi). Odliczanie przez `timer(1000,1000)` w `finishCountdownSub`.
+- **Usunięto blokujący `pollDeliveryStatus`** (timer + `getDeliveryStatus` + toasty „Dokument został wysłany"/„nie powiodła się"): nie czekamy już na stan końcowy dostarczenia — robi to backendowy `DocumentDeliveryWorker` (retry/backoff do 24h). Usunięty też nieużywany import `takeWhile` oraz pola `deliveryPollSub`/`DELIVERY_POLL_MS`.
+- **Błąd natychmiastowego zakolejkowania** (`finishAndSend` rzuca): toast **„Nie udało się natychmiast wysłać pliku. Ponowimy próbę wysłania w tle."** — modal i odliczanie zostają (brak blokady użytkownika).
+- **Ochrona przed wielokrotnym „Zakończ"**: guard `if (isFinishing()) return;` + `[disabled]="isFinishing()"` na przycisku; backendowy `finish` jest dodatkowo **idempotentny** (re-klik = to samo zadanie).
+- **`template`**: nowy modal `@if (showFinishModal())` (overlay BEZ zamykania kliknięciem w tło — tylko przycisk „Zamknij", by nie dało się przypadkowo zamknąć/ponowić). **`scss`**: `.finish-dialog-overlay` (z-index/blur jak leave-dialog) + `.finish-close-btn` (stała `min-width`, by licznik nie skakał).
+- **Higiena**: subskrypcja `finishSendSub` anulowana w `ngOnDestroy` (brak zapisów do sygnałów po zniszczeniu komponentu → koniec „document is not defined" przy teardownie testów).
+### Verified
+- GUI pełny zestaw **229/229** (`document-editor.spec.ts` **57**, +8 nowych: modal się pokazuje, countdown 30→29→28, dojście do 0 zamyka+`window.close`, klik „Zamknij" robi to samo, błąd→toast retry-w-tle + modal otwarty, wielokrotny klik = 1 flow, wyjątek `window.close` nie crashuje, readOnly bez modala). `tsc --noEmit` OK.
+- **Backend bez zmian** — wykorzystany istniejący endpoint `finish` + worker/retry.
+### Notes
+- Eksperymentalny runner (Vitest unit-test builder) **nie wspiera `fakeAsync`** → odliczanie testowane przez bezpośrednie wołanie `onFinishCountdownTick(n)`; łańcuch async domykany `vi.waitFor`.
+- `window.close()` zadziała niezawodnie tylko dla kart otwartych skryptem — przy zwykłym wejściu użytkownika karta może nie zostać zamknięta; to świadomie zaakceptowany, nie-krytyczny stan (modal zamknięty, edytor zostaje).
+
+## 2026-06-09 — Podbicie podatnej zależności System.Security.Cryptography.Xml 8.0.2 → 10.0.6 (PRISMA)
+### Changed
+- `D2ViewerEditor.Infrastructure.csproj`: dodany **jawny** `PackageReference` na `System.Security.Cryptography.Xml` **10.0.6**. Pakiet nie był nigdzie referencjonowany bezpośrednio — wchodził **tranzytywnie** (przez NPOI/OpenXml) w wersji 8.0.2, flagowanej przez PRISMA. Jawny pin podbija rozwiązaną wersję (wyższa bezpośrednia wygrywa nad tranzytywną).
+- Pin wpisany **tylko w Infrastructure**: oba hosty (`D2ViewerEditor.Api`, `D2ServicesViewerEditor.Api`) konsumują Infrastructure przez `ProjectReference`, więc 10.0.6 propaguje się do wszystkich konsumentów.
+### Verified
+- `dotnet list package --include-transitive` we **wszystkich trzech** projektach: `System.Security.Cryptography.Xml` rozwiązany na **10.0.6** (zamiast 8.0.2).
+- `dotnet build -c Release` (Infrastructure + oba API): „Kompilacja powiodła się" — **0 błędów, brak ostrzeżeń NU1605** (downgrade). net8.0 konsumuje pakiet 10.0.x bez problemu (projekt już wcześniej mieszał `Microsoft.Extensions.Configuration.Abstractions 10.0.4` w net8.0).
+### Notes
+- Zmiana wyłącznie w build/restore — zero zmian kodu. Warto przepuścić pełny `dotnet test` (NUnit) dla potwierdzenia braku regresji w ścieżce podpisów (XML signing).
+
 ## 2026-06-09 — ENTER w polu rozmiaru czcionki kasował zaznaczony tekst
 ### Changed
 - **Root cause:** `onFontSizeInputEnter` wołał `input.blur()` synchronicznie w trakcie obsługi ENTER. `setFontSize` przywraca wtedy fokus+zaznaczenie do edytora JESZCZE w trakcie tego zdarzenia, więc domyślna akcja Enter (nowa linia) trafia w przywrócone zaznaczenie i je kasuje. Klik poza pole (blur myszką) nie miał problemu — brak zdarzenia Enter.

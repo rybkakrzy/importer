@@ -1,4 +1,5 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { vi } from 'vitest';
 import { of, throwError } from 'rxjs';
 import { ActivatedRoute, Router } from '@angular/router';
 import { DocumentEditorComponent } from './document-editor';
@@ -628,6 +629,170 @@ describe('DocumentEditorComponent — pozycja menu kontekstowego (DOC2-UI-006)',
 
     expect(component.contextMenuX()).toBe(400);
     expect(component.contextMenuY()).toBe(200);
+  });
+});
+
+/**
+ * Flow „Zakończ" → modal „Trwa wysyłanie pliku" + odliczanie 30 s + próba zamknięcia karty.
+ *
+ * Nie wołamy detectChanges()/ngOnInit (jak inne testy tego pliku), więc nie startuje auto-save
+ * ani route-load. Eksperymentalny runner (Vitest) nie wspiera `fakeAsync`, więc odliczanie
+ * testujemy deterministycznie wołając wydzielony `onFinishCountdownTick(n)` (zamiast czekać na
+ * realny timer), a łańcuch save→finish (microtask) domykamy `vi.waitFor`. blobToBase64
+ * (FileReader) jest stubowane na Promise.resolve. afterEach woła ngOnDestroy → sprząta timer.
+ */
+describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + zamknięcie karty)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+  let finishCalls: number;
+  let finishResult: { next?: unknown; error?: unknown };
+
+  beforeEach(async () => {
+    finishCalls = 0;
+    finishResult = { next: { deliveryId: 'd-1', status: 'Pending', statusUrl: '/x' } };
+
+    const storageMock = {
+      finishAndSend: () => {
+        finishCalls++;
+        return finishResult.error
+          ? throwError(() => finishResult.error)
+          : of(finishResult.next);
+      },
+    };
+
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: {
+            getTemplates: () => of([]),
+            saveDocument: () => of(new Blob(['<p></p>'], { type: 'text/html' })),
+        } },
+        { provide: DocumentStorageService, useValue: storageMock },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+
+    // Wymagane do przejścia guardów + deterministyczny base64 (bez realnego FileReadera).
+    component.documentMasterId.set('m-1');
+    component.documentVersionId.set('v-1');
+    component.returnUrl.set('https://app.example.com/return');
+    (component as any).blobToBase64 = () => Promise.resolve('PHA+PC9wPg==');
+  });
+
+  afterEach(() => {
+    // Sprzątnij realny timer odliczania uruchomiony przez finishDocument() (brak wycieku setInterval).
+    component.ngOnDestroy();
+  });
+
+  /** Zatrzymuje realny timer i steruje odliczaniem ręcznie (deterministycznie, bez fake-timerów). */
+  const stopRealCountdownTimer = () => (component as any).finishCountdownSub?.unsubscribe();
+  const tickCountdown = (n: number) => (component as any).onFinishCountdownTick(n);
+
+  it('kliknięcie „Zakończ" pokazuje modal z tekstem i odliczaniem od 30', () => {
+    component.finishDocument();
+
+    expect(component.showFinishModal()).toBe(true);
+    expect(component.finishCountdown()).toBe(30);
+    expect(component.isFinishing()).toBe(true);
+  });
+
+  it('odliczanie maleje co sekundę (30 → 29 → 28 ...)', () => {
+    component.finishDocument();
+    stopRealCountdownTimer();
+    expect(component.finishCountdown()).toBe(30);
+
+    tickCountdown(0);
+    expect(component.finishCountdown()).toBe(29);
+    tickCountdown(1);
+    expect(component.finishCountdown()).toBe(28);
+  });
+
+  it('po dojściu odliczania do 0 modal się zamyka i próbuje zamknąć kartę', () => {
+    const origClose = window.close;
+    let closeAttempts = 0;
+    (window as any).close = () => { closeAttempts++; };
+
+    try {
+      component.finishDocument();
+      stopRealCountdownTimer();
+
+      // 30. tyk (indeks 29) → remaining = 0 → ta sama akcja co przycisk „Zamknij".
+      tickCountdown(29);
+
+      expect(component.showFinishModal()).toBe(false);
+      expect(component.finishCountdown()).toBe(0);
+      expect(closeAttempts).toBe(1);
+    } finally {
+      (window as any).close = origClose;
+    }
+  });
+
+  it('kliknięcie „Zamknij" przed końcem odliczania robi to samo: zamyka modal + próbuje zamknąć kartę', () => {
+    const origClose = window.close;
+    let closeAttempts = 0;
+    (window as any).close = () => { closeAttempts++; };
+
+    try {
+      component.finishDocument();
+
+      component.closeFinishModalAndExit();
+
+      expect(component.showFinishModal()).toBe(false);
+      expect(closeAttempts).toBe(1);
+      expect(component.isFinishing()).toBe(false);
+      // Subskrypcja odliczania została zatrzymana (brak wycieku).
+      expect((component as any).finishCountdownSub).toBeUndefined();
+    } finally {
+      (window as any).close = origClose;
+    }
+  });
+
+  it('błąd natychmiastowej wysyłki pokazuje komunikat o ponowieniu w tle, a modal zostaje otwarty', async () => {
+    finishResult = { error: new Error('network') };
+    // mockImplementation, bo realny showError planuje setTimeout(5 s) na wyczyszczenie toasta —
+    // wyciekłby poza teardown testu. Asercja sprawdza dokładny komunikat.
+    const errSpy = vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+
+    component.finishDocument();
+
+    await vi.waitFor(() =>
+      expect(errSpy).toHaveBeenCalledWith('Nie udało się natychmiast wysłać pliku. Ponowimy próbę wysłania w tle.'),
+    );
+    expect(component.showFinishModal()).toBe(true); // nie blokujemy — użytkownik może zamknąć
+  });
+
+  it('wielokrotne kliknięcie „Zakończ" nie tworzy wielu równoległych flow', async () => {
+    component.finishDocument();
+    component.finishDocument(); // zablokowane guardem isFinishing
+    component.finishDocument();
+
+    await vi.waitFor(() => expect(finishCalls).toBe(1));
+  });
+
+  it('gdy window.close() rzuci wyjątek, aplikacja nie crashuje (best-effort)', () => {
+    const origClose = window.close;
+    (window as any).close = () => { throw new Error('blocked by browser'); };
+
+    try {
+      component.finishDocument();
+      expect(() => component.closeFinishModalAndExit()).not.toThrow();
+      expect(component.showFinishModal()).toBe(false);
+    } finally {
+      (window as any).close = origClose;
+    }
+  });
+
+  it('w trybie podglądu (readOnly) „Zakończ" nie otwiera modala', () => {
+    component.readOnly.set(true);
+
+    component.finishDocument();
+
+    expect(component.showFinishModal()).toBe(false);
+    expect(component.isFinishing()).toBe(false);
   });
 });
 

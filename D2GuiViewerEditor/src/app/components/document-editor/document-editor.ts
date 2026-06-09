@@ -12,7 +12,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { switchMap, map, filter, distinctUntilChanged, takeWhile } from 'rxjs/operators';
+import { switchMap, map, filter, distinctUntilChanged } from 'rxjs/operators';
 import { from, Observable, Subscription, timer } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
@@ -121,10 +121,18 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   // Klasyfikacja dokumentu z metadanych (prezentacyjna; C1..C4 lub wartość spoza słownika)
   documentClassification = signal<string | null>(null);
 
-  // Zakończ i wyślij (asynchroniczna wysyłka na returnUrl + polling statusu)
+  // Zakończ i wyślij (asynchroniczna wysyłka na returnUrl — backend ma worker z retry/backoff)
   isFinishing = signal<boolean>(false);
   deliveryStatus = signal<DeliveryStatus | null>(null);
   deliveryId = signal<string | null>(null);
+  /**
+   * Modal „Trwa wysyłanie pliku" pokazywany po kliknięciu „Zakończ". Przycisk „Zamknij"
+   * odlicza do 0 i próbuje zamknąć kartę; nie blokujemy użytkownika oczekiwaniem na
+   * pełne powodzenie wysyłki (dostarcza ją worker w tle).
+   */
+  showFinishModal = signal<boolean>(false);
+  /** Inicjalnie = FINISH_COUNTDOWN_SECONDS; ustawiane ponownie przy każdym otwarciu modala. */
+  finishCountdown = signal<number>(30);
   /** Link zwrotny z metadanych dokumentu (źródło prawdy dla widoczności „Zakończ"). */
   returnUrl = signal<string | null>(null);
   /** „Zakończ" ma sens tylko, gdy istnieje poprawny link do zwrócenia pliku po edycji. */
@@ -137,8 +145,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   userDownload = signal<boolean>(false);
   readonly canUserDownload = computed(() => this.userDownload());
-  private deliveryPollSub?: Subscription;
-  private static readonly DELIVERY_POLL_MS = 4000;
+  private finishCountdownSub?: Subscription;
+  /** Subskrypcja łańcucha save→finishAndSend — anulowana przy destroy, by nie pisać po zniszczeniu. */
+  private finishSendSub?: Subscription;
+  /** Czas (w sekundach) odliczania na przycisku „Zamknij" przed automatycznym zamknięciem karty. */
+  private static readonly FINISH_COUNTDOWN_SECONDS = 30;
   documentMetadata = signal<DocumentMetadata>({
     title: 'Nowy dokument',
     created: new Date().toISOString(),
@@ -569,7 +580,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopAutoSave();
-    this.deliveryPollSub?.unsubscribe();
+    this.finishCountdownSub?.unsubscribe();
+    this.finishSendSub?.unsubscribe();
     this.vRulerResizeObserver?.disconnect();
   }
 
@@ -1779,9 +1791,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * "Zakończ i wyślij": utrwala stan edytora, zleca asynchroniczną wysyłkę na returnUrl
-   * i odpytuje status do stanu końcowego. Wysyłka jest kontynuowana po stronie serwera
-   * nawet po zamknięciu strony (zadanie żyje w bazie, worker dokończy).
+   * "Zakończ i wyślij": utrwala stan edytora, zleca asynchroniczną wysyłkę na returnUrl i od razu
+   * pokazuje modal „Trwa wysyłanie pliku" z odliczaniem (po którym próbujemy zamknąć kartę).
+   * NIE czekamy na pełne powodzenie dostarczenia — zadanie żyje w bazie, a worker dokańcza wysyłkę
+   * z retry/backoff (do 24h) nawet po zamknięciu strony. Guard `isFinishing` + idempotentny backend
+   * chronią przed wieloma równoległymi flow.
    */
   finishDocument(): void {
     this.showMenu.set(false);
@@ -1798,6 +1812,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // Zabezpieczenie przed wielokrotnym kliknięciem — w danej chwili tylko jeden flow
+    // zakończenia (backendowy `finish` jest dodatkowo idempotentny: zwraca to samo zadanie).
     if (this.isFinishing()) {
       return;
     }
@@ -1805,50 +1821,80 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.isFinishing.set(true);
     this.deliveryStatus.set('Pending');
 
-    this.documentService.saveDocument(this.buildSaveRequest()).pipe(
+    // Pokaż modal i uruchom odliczanie OD RAZU — wysyłka biegnie w tle (worker z retry/backoff
+    // do 24h), więc nie blokujemy użytkownika oczekiwaniem na pełne powodzenie dostarczenia.
+    this.openFinishModal();
+
+    this.finishSendSub?.unsubscribe();
+    this.finishSendSub = this.documentService.saveDocument(this.buildSaveRequest()).pipe(
       switchMap(blob => from(this.blobToBase64(blob))),
       switchMap(base64 => this.documentStorageService.finishAndSend(masterId, versionId, { content: base64 }))
     ).subscribe({
       next: result => {
+        // Zadanie wysyłki utrwalone — od tej chwili worker dostarcza plik na returnUrl.
         this.deliveryId.set(result.deliveryId);
         this.deliveryStatus.set(result.status);
-        this.pollDeliveryStatus(result.deliveryId);
       },
       error: () => {
-        this.isFinishing.set(false);
-        this.deliveryStatus.set(null);
-        this.showError('Nie udało się rozpocząć wysyłki dokumentu.');
+        // Natychmiastowe zakolejkowanie nie powiodło się. Nie blokujemy użytkownika ani nie
+        // zamykamy modala — informujemy, że spróbujemy ponowić w tle (worker / ręczny retry
+        // admina). Odliczanie i przycisk „Zamknij" działają dalej.
+        this.deliveryStatus.set('RetryScheduled');
+        this.showError('Nie udało się natychmiast wysłać pliku. Ponowimy próbę wysłania w tle.');
       }
     });
   }
 
-  private pollDeliveryStatus(deliveryId: string): void {
-    this.deliveryPollSub?.unsubscribe();
+  /**
+   * Otwiera modal „Trwa wysyłanie pliku" i startuje odliczanie 30 → 0 na przycisku „Zamknij".
+   * Po dojściu do 0 wykonuje tę samą akcję co kliknięcie „Zamknij" (zamknięcie modala + próba
+   * zamknięcia karty).
+   */
+  private openFinishModal(): void {
+    this.finishCountdownSub?.unsubscribe();
+    this.finishCountdown.set(DocumentEditorComponent.FINISH_COUNTDOWN_SECONDS);
+    this.showFinishModal.set(true);
 
-    const isTerminal = (s: DeliveryStatus) =>
-      s === 'Sent' || s === 'FailedPermanently' || s === 'DeadLettered';
+    // timer(1000, 1000) emituje 0 po 1 s, 1 po 2 s, ... → odliczamy od 30 w dół.
+    this.finishCountdownSub = timer(1000, 1000).subscribe(tick => this.onFinishCountdownTick(tick));
+  }
 
-    this.deliveryPollSub = timer(0, DocumentEditorComponent.DELIVERY_POLL_MS).pipe(
-      switchMap(() => this.documentStorageService.getDeliveryStatus(deliveryId)),
-      map(dto => dto.status),
-      takeWhile(status => !isTerminal(status), true)
-    ).subscribe({
-      next: status => {
-        this.deliveryStatus.set(status);
-        if (isTerminal(status)) {
-          this.isFinishing.set(false);
-          if (status === 'Sent') {
-            this.showSuccess('Dokument został wysłany.');
-          } else {
-            this.showError('Wysyłka dokumentu nie powiodła się. Skontaktuj się z administratorem.');
-          }
-        }
-      },
-      error: () => {
-        this.isFinishing.set(false);
-        this.showError('Utracono podgląd statusu wysyłki. Wysyłka może być kontynuowana w tle.');
-      }
-    });
+  /**
+   * Pojedynczy „tyk" odliczania (wydzielony, by był deterministycznie testowalny bez fake-timerów).
+   * `tick` to indeks emisji timera (0 = po 1 s). Po dojściu do 0 sekund wykonuje akcję zamknięcia.
+   */
+  private onFinishCountdownTick(tick: number): void {
+    const remaining = DocumentEditorComponent.FINISH_COUNTDOWN_SECONDS - (tick + 1);
+    this.finishCountdown.set(Math.max(0, remaining));
+    if (remaining <= 0) {
+      this.closeFinishModalAndExit();
+    }
+  }
+
+  /**
+   * Wspólna akcja dla końca odliczania ORAZ kliknięcia „Zamknij": zatrzymuje odliczanie,
+   * zamyka modal i próbuje zamknąć kartę przeglądarki. Reset `isFinishing` pozwala ponowić
+   * „Zakończ", jeśli przeglądarka nie pozwoli zamknąć karty.
+   */
+  closeFinishModalAndExit(): void {
+    this.finishCountdownSub?.unsubscribe();
+    this.finishCountdownSub = undefined;
+    this.showFinishModal.set(false);
+    this.isFinishing.set(false);
+    this.tryCloseBrowserTab();
+  }
+
+  /**
+   * Best-effort zamknięcie karty. `window.close()` działa niezawodnie tylko dla okien
+   * otwartych skryptem — gdy przeglądarka odmówi, NIE jest to błąd krytyczny: modal jest już
+   * zamknięty, edytor zostaje w neutralnym stanie. Owijamy w try/catch, by nie wywrócić apki.
+   */
+  private tryCloseBrowserTab(): void {
+    try {
+      window.close();
+    } catch {
+      // Neutralny stan końcowy — brak dalszych akcji.
+    }
   }
 
   openReportEmail(): void {
