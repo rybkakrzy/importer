@@ -104,7 +104,7 @@ public class DocumentController : ControllerBase
             "Zewnętrzny ingest dokumentu OK: MasterId={MasterId}, VersionId={VersionId}, Mime={Mime}, Classification={Classification}",
             response.MasterId, response.VersionId, mimeType, classification);
 
-        return CreatedAtAction(nameof(GetDocument), new { documentId = response.MasterId }, response);
+        return StatusCode(StatusCodes.Status201Created, response);
     }
 
     // [HttpGet("{documentId}")]
