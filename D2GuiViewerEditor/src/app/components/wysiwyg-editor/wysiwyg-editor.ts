@@ -2034,6 +2034,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (!editor) return;
 
     this.currentFontFamily = fontFamily;
+
+    // Odtwórz selekcję ZANIM dotkniemy fokusu — otwarcie natywnego <select> czcionki
+    // w toolbarze zabiera fokus i czyści selekcję contenteditable. Bez tego `editor.focus()`
+    // przywracał karetkę na początek dokumentu (rangeCount > 0, więc strażnik niżej nie
+    // wyzwalał restore), a ZWS-span z czcionką lądował w złym miejscu — tekst wpisywany w
+    // realnej pozycji karetki dalej dziedziczył domyślną czcionkę (zgłoszony bug). To samo
+    // zabezpieczenie ma już `setFontSize`.
+    const live = window.getSelection();
+    const liveInEditor = !!live && live.rangeCount > 0 && this.isSelectionInEditor(live);
+    if (!liveInEditor && this.savedSelection) {
+      this.restoreSelection();
+    }
+
     editor.focus();
 
     // Jeśli selekcja zaginęła (np. klik w select toolbara) – przywróć zapisaną
@@ -2051,8 +2064,31 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const range = selection.getRangeAt(0);
     
     if (range.collapsed) {
-      // Kursor bez zaznaczenia - wstaw pusty span
+      // Kursor bez zaznaczenia - ustaw czcionkę dla następnie wpisywanego tekstu.
       this.pendingFontFamily = fontFamily;
+
+      // Jeśli kursor już siedzi w ZWS-spanie (z poprzedniego wyboru czcionki), zaktualizuj
+      // jego font-family zamiast zagnieżdżać kolejny pusty span (analogicznie do `setFontSize`).
+      const zwsChar = String.fromCharCode(0x200b);
+      const zwsContainer = range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement
+        : (range.startContainer as HTMLElement);
+      if (
+        zwsContainer instanceof HTMLSpanElement &&
+        zwsContainer.firstChild &&
+        zwsContainer.style.fontFamily !== '' &&
+        zwsContainer.textContent === zwsChar
+      ) {
+        zwsContainer.style.fontFamily = fontFamily;
+        const updRange = document.createRange();
+        updRange.setStart(zwsContainer.firstChild, 1);
+        updRange.setEnd(zwsContainer.firstChild, 1);
+        selection.removeAllRanges();
+        selection.addRange(updRange);
+        this.savedSelection = updRange.cloneRange();
+        this.updateFormattingState();
+        return;
+      }
       
       const span = document.createElement('span');
       span.style.fontFamily = fontFamily;
@@ -2072,6 +2108,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Użyj tej samej logiki co dla font-size
     this.applyFontFamilyToSelection(fontFamily, selection, range);
     this.onContentChange();
+
+    // Po zmianie selekcji w applyFontFamilyToSelection — zaktualizuj zapisaną selekcję,
+    // żeby kolejny wybór czcionki trafiał na ten sam, żywy zakres (jak w `setFontSize`).
+    const after = window.getSelection();
+    if (after && after.rangeCount > 0 && this.isSelectionInEditor(after)) {
+      this.savedSelection = after.getRangeAt(0).cloneRange();
+    }
+    this.updateFormattingState();
   }
 
   /**
@@ -2310,10 +2354,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
-      if (this.isSelectionInEditor(selection)) {
+      // Zapisuj TYLKO gdy edytor naprawdę ma fokus. Klik w pole toolbara (np. input rozmiaru
+      // czcionki) przenosi fokus i zwija selekcję contenteditable do karetki — `blur`/`selectionchange`
+      // odpalają się WTEDY z karetką wciąż „w edytorze", więc bez tego strażnika nadpisywaliśmy
+      // realne zaznaczenie pustą karetką → `setFontSize` nie miał czego sformatować (DOC2-FMT-004).
+      if (this.isSelectionInEditor(selection) && this.editorHasFocus()) {
         this.savedSelection = range.cloneRange();
       }
     }
+  }
+
+  /** True, gdy aktywny element to jeden z edytowalnych obszarów (strona/nagłówek/stopka). */
+  private editorHasFocus(): boolean {
+    const ae = document.activeElement;
+    if (!ae) return false;
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    if (refs.some(r => r.nativeElement === ae || r.nativeElement.contains(ae))) return true;
+    const body = this.editorContent?.nativeElement;
+    if (body && (body === ae || body.contains(ae))) return true;
+    const header = this.headerContentEl?.nativeElement;
+    if (header && (header === ae || header.contains(ae))) return true;
+    const footer = this.footerContentEl?.nativeElement;
+    if (footer && (footer === ae || footer.contains(ae))) return true;
+    return false;
   }
 
   /**

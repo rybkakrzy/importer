@@ -208,6 +208,34 @@ describe('WysiwygEditorComponent — cross-page caret + page-number font', () =>
     expect(component.activePageIndex()).toBe(0);
   });
 
+  // --- saveSelection nie gubi zaznaczenia przy przejściu do toolbara (DOC2-FMT-004) ---
+
+  it('saveSelection NIE nadpisuje realnego zaznaczenia pustą karetką, gdy edytor stracił fokus', () => {
+    const { page0 } = setupTwoPages();
+    page0.setAttribute('contenteditable', 'true');
+    page0.focus();
+
+    // Pełne zaznaczenie tekstu w edytorze (z fokusem) → zapisane.
+    const range = document.createRange();
+    range.selectNodeContents(page0.firstChild!);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    (component as any).saveSelection();
+    const saved = (component as any).savedSelection?.toString();
+    expect(saved).toContain('Tekst pierwszej strony');
+
+    // Klik w pole toolbara → fokus poza edytorem, selekcja zwija się do karetki w edytorze.
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    collapseCaretIn(page0.firstChild!, 0);
+    (component as any).saveSelection(); // strażnik editorHasFocus() → pomiń
+
+    // Zapisane zaznaczenie pozostaje pełne (nie zostało nadpisane pustą karetką) → setFontSize ma na czym działać.
+    expect((component as any).savedSelection?.toString()).toBe(saved);
+  });
+
   // --- page-number font-size ------------------------------------------------
 
   it('page number inherits an inline font-size from the footer content', () => {

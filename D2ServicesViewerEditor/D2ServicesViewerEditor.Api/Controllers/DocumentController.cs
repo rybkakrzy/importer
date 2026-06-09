@@ -41,8 +41,15 @@ public class DocumentController : ControllerBase
         if (request.File is null || request.File.Length == 0)
             return BadRequest(new { error = "Plik jest wymagany" });
 
-        if (!Enum.TryParse<DocumentClassification>(request.Classification, ignoreCase: true, out var classification))
-            return BadRequest(new { error = "Klasyfikacja musi być jedną z: C1, C2, C3, C4" });
+        // Klasyfikacja jest OPCJONALNA. Brak/pusta → przyjmujemy bez klasyfikacji (null w metadanych).
+        // Podana wartość musi być poprawna (C1..C4) — łapiemy literówki, ale nie wymuszamy obecności.
+        DocumentClassification? classification = null;
+        if (!string.IsNullOrWhiteSpace(request.Classification))
+        {
+            if (!Enum.TryParse<DocumentClassification>(request.Classification, ignoreCase: true, out var parsed))
+                return BadRequest(new { error = "Jeśli podana, klasyfikacja musi być jedną z: C1, C2, C3, C4" });
+            classification = parsed;
+        }
 
         var mimeType = ResolveMimeType(request.File);
         var isDocx = string.Equals(mimeType, IngestExternalDocumentCommandHandler.DocxMimeType, StringComparison.OrdinalIgnoreCase);
@@ -63,7 +70,7 @@ public class DocumentController : ControllerBase
         var metadataJson = JsonSerializer.Serialize(new
         {
             returnUrl = string.IsNullOrWhiteSpace(request.ReturnUrl) ? null : request.ReturnUrl,
-            classification = classification.ToString(),
+            classification = classification?.ToString(),
             // Domain rule: missing field / non-true ⇒ false. Persisted only when explicitly true
             // so a stored false vs. missing is indistinguishable to the parser (both ⇒ blocked).
             userDownload = request.UserDownload == true ? (bool?)true : null
@@ -100,20 +107,19 @@ public class DocumentController : ControllerBase
         return CreatedAtAction(nameof(GetDocument), new { documentId = response.MasterId }, response);
     }
 
-    [HttpGet("{documentId}")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public Task<IActionResult> GetDocument(Guid documentId)
-    {
-        _logger.LogInformation("External integration: GetDocument requested for {DocumentId}", documentId);
-
-        return Task.FromResult<IActionResult>(Ok(new
-        {
-            DocumentId = documentId,
-            Message = "Placeholder: implement read flow"
-        }));
-    }
+    // [HttpGet("{documentId}")]
+    // [ProducesResponseType(StatusCodes.Status200OK)]
+    // [ProducesResponseType(StatusCodes.Status404NotFound)]
+    // [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    // public Task<IActionResult> GetDocument(Guid documentId)
+    // {
+    //     _logger.LogInformation("External integration: GetDocument requested for {DocumentId}", documentId);
+    //     return Task.FromResult<IActionResult>(Ok(new
+    //     {
+    //         DocumentId = documentId,
+    //         Message = "Placeholder: implement read flow"
+    //     }));
+    // }
 
     /// <summary>
     /// Aktualizuje URL, na który system odeśle plik po zakończeniu edycji ("Zakończ i wyślij").
@@ -230,8 +236,8 @@ public class CreateDocumentRequest
     /// </summary>
     public string? ReturnUrl { get; set; }
 
-    /// <summary>Klasyfikacja dokumentu: C1, C2, C3 lub C4 (obligatoryjna)</summary>
-    public string Classification { get; set; } = string.Empty;
+    /// <summary>Klasyfikacja dokumentu: C1, C2, C3 lub C4. OPCJONALNA — brak/pusta = bez klasyfikacji.</summary>
+    public string? Classification { get; set; }
 
     /// <summary>
     /// Opcjonalna flaga zezwalająca użytkownikowi na pobranie edytowanego pliku na komputer.

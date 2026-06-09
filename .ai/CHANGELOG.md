@@ -13,6 +13,59 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-09 — ENTER w polu rozmiaru czcionki kasował zaznaczony tekst
+### Changed
+- **Root cause:** `onFontSizeInputEnter` wołał `input.blur()` synchronicznie w trakcie obsługi ENTER. `setFontSize` przywraca wtedy fokus+zaznaczenie do edytora JESZCZE w trakcie tego zdarzenia, więc domyślna akcja Enter (nowa linia) trafia w przywrócone zaznaczenie i je kasuje. Klik poza pole (blur myszką) nie miał problemu — brak zdarzenia Enter.
+- **Fix:** `onFontSizeInputEnter` robi `event.preventDefault()` (zabija domyślny Enter) + `setTimeout(() => input.blur(), 0)` — aplikacja przez blur dzieje się PO zakończeniu zdarzenia Enter, rozdzielona od niego. Ścieżka blur (klik) bez zmian.
+### Verified
+- GUI **221** (+2: ENTER preventDefault + odroczony blur; blur emituje fontSizeChange od razu).
+
+## 2026-06-09 — Dialog hasła wyzwalany TEŻ przy ładowaniu z bazy (nie tylko „Plik→Otwórz")
+### Changed
+- **Root cause zgłoszenia „nie widzę gdzie podać hasło":** dialog pojawiał się tylko w ścieżce dyskowej (`loadDocument`), a realny przepływ (dashboard upload → editor `loadFromStorage`, odświeżenie, link z aplikacji zewn.) pobierał bajty i wołał `/open`, ale jego error-handler robił tylko `showError` — kod `PASSWORD_REQUIRED`/`WRONG_PASSWORD` ignorowany.
+- Wspólny `_convertAndLoad(file, fileName, password?, announce?)` + `_applyLoadedContent` — używany przez OBIE ścieżki. `loadFromStorage` pobiera bajty → buduje `File` → `_convertAndLoad` (zamiast inline openDocument). Dialog hasła ma teraz callback ponawiający (`_passwordRetry`), więc działa niezależnie od źródła (dysk vs baza).
+### Verified
+- GUI `tsc` OK + **219** (+3: PASSWORD_REQUIRED z /open otwiera dialog; zatwierdzenie ponawia konwersję z hasłem; WRONG_PASSWORD pokazuje błąd).
+### Notes
+- Dashboard zapisuje zaszyfrowane bajty surowo (v1/v2), edytor odszyfrowuje przy otwarciu (prompt) — po edycji+autosave v2 staje się odszyfrowany. Read-only base (v1) zaprosi o hasło ponownie. Akceptowalne (v1 immutable = oryginał zaszyfrowany).
+
+## 2026-06-09 — Stylizowany dialog hasła (zamiast window.prompt)
+### Changed
+- `document-editor`: `window.prompt` zastąpiony modalem `.password-dialog` spójnym z `leave-dialog` (overlay z blur, ikona kłódki, pole `type=password` z focus-ringiem, komunikat błędu, Anuluj/Otwórz). Sygnały `showPasswordDialog`/`passwordDialogValue`/`passwordDialogError` + `openPasswordDialog`/`confirmPasswordDialog`/`cancelPasswordDialog`. Enter=Otwórz, Esc/klik-tło=Anuluj, autofokus pola; przy błędnym haśle dialog wraca z komunikatem i ponawia `loadDocument(file, pwd)`.
+### Verified
+- GUI `tsc` OK + **216** (+3: confirm bez hasła→błąd, cancel czyści, confirm zamyka).
+
+## 2026-06-09 — Dwa bugi: dekrypcja hasłem (NPOI nie działa→własna) + input font-size gubił selekcję
+### Changed
+- **Hasło — root cause i realna naprawa:** `NPOI 2.8.0` ma interfejs dekryptora, ale **NIE implementację Agile** (typ `AgileEncryptionInfoBuilder` nieobecny we wszystkich TFM-ach → `EncryptionInfo(fs)` rzuca `EncryptedDocumentException`), więc poprzedni kod mapował każdy plik (nawet z dobrym hasłem) na „WrongPassword". Nowy `OoxmlAgileDecryptor` — **własna, czysto zarządzana dekrypcja Agile** (MS-OFFCRYPTO §2.3.4.10+: SHA512 spinCount + AES-256-CBC, blockKeys, weryfikacja hasła, dekrypcja pakietu segmentami 4096B). NPOI używane już TYLKO do czytania kontenera CFB (`CreateDocumentInputStream`). `DocumentInputNormalizer` wymaga `EncryptionInfo` **i** `EncryptedPackage`; rozróżnia WrongPassword (niezgodność weryfikatora) od Invalid/Unsupported (Standard/CryptoAPI Office 2007 nieobsługiwany).
+- **Font-size input (DOC2-FMT-004, naprawa właściwa):** `saveSelection()` zapisywał też ZWINIĘTE selekcje, a leciał na `blur`/`selectionchange` — czyli dokładnie gdy klik w input toolbara zwija zaznaczenie do karetki „wciąż w edytorze" → realne zaznaczenie nadpisywane pustą karetką → „nie ma na czym". Fix: nowy strażnik `editorHasFocus()` (activeElement w obszarze edytowalnym) — `saveSelection` zapisuje TYLKO gdy edytor ma fokus; przy przejściu do toolbara zostaje zaznaczenie z `mouseup`/`keyup`.
+### Verified
+- Backend Infrastructure **150** (+2: realny round-trip Agile encrypt→decrypt — poprawne hasło → odszyfrowany ważny DOCX otwierany OpenXml SDK; złe hasło → WrongPassword; brak hasła → PasswordRequired; enkryptor testowy też spec-zgodny). `D2ViewerEditor.sln` build OK. GUI **213** (+1: saveSelection nie gubi zaznaczenia po utracie fokusu).
+### Notes
+- Aktualizacja ADR-0010: NPOI **nie** dekryptuje (vs wcześniejszy zapis) — dekrypcja jest własna; NPOI zostaje tylko jako czytnik CFB. Standard/CryptoAPI (Office 2007) → status Invalid (rzadkie; ewentualny follow-up).
+
+## 2026-06-09 — Otwieranie: DOCX z hasłem + .doc + opcjonalna klasyfikacja (Services)
+### Changed
+- **Hasło (Task 1):** nowy `IDocumentInputNormalizer` (Domain) + `DocumentInputNormalizer` (Infrastructure) — detekcja formatu po magic-bytes, dekrypcja DOCX zabezpieczonego hasłem przez **NPOI** (POIFS/Crypt, pure-managed, Linux/GCP-safe). Wpięty w `OpenDocumentQueryHandler` (przed `Convert`). `OpenDocumentQuery` + kontroler `/open` przyjmują `password`; sentinele `PASSWORD_REQUIRED`/`WRONG_PASSWORD` → 422 z `code`. GUI: `document.service.openDocument(file, password?)` + typed `OpenDocumentError`; edytor „Plik → Otwórz" przez `/open` z promptem hasła i retry.
+- **.doc (Task 2):** normalizer wykrywa CFB: mislabeled-DOCX (ZIP w .doc) → pass-through (działa); binarny .doc (stream WordDocument) → `UNSUPPORTED_LEGACY_DOC` → 400 z instrukcją konwersji. Pickery (`dashboard`, edytor) dopuszczają `.doc`. **Brak wbudowanej konwersji binarnego .doc** — żaden pure-managed NuGet nie konwertuje (NPOI bez HWPF; b2xtranslator NuGet bez DocFileFormat; LibreOffice zakazany) → kontrolowany komunikat, nie udawanie. Patrz DECISIONS ADR-0010.
+- **Klasyfikacja (Task 3):** `D2ServicesViewerEditor` `POST /api/v1/document` — pole `Classification` **opcjonalne** (brak/puste = bez klasyfikacji; podana musi być C1..C4). Metadata serializuje `classification` jako null gdy brak.
+- **SkiaSharp** 3.116.1 → **3.119.2** (wyrównanie do tranzytywnej zależności NPOI, NU1605).
+### Verified
+- Backend: Application **8** (OpenDocument, +4 sentinel/password), Infrastructure **148** (+4 normalizer: ZIP/garbage/encrypted-no-pwd/binary-doc, fixtury CFB przez NPOI), Api **OpenDocument 4** (binary-doc→400+code, password→422). `D2ViewerEditor.sln` build OK. Services API build OK. GUI `tsc` OK + **212** testów.
+### Notes
+- Ścieżka „utwórz nowy z dysku" w dashboardzie zapisuje surowo (bez normalizera) → .doc/hasło kierujemy do edytora „Otwórz" (ścieżka /open). Normalizacja przy ingest/storage = ewentualny follow-up.
+- Prompt hasła = `window.prompt` (funkcjonalne); stylizowany dialog = follow-up.
+
+## 2026-06-08 — Zmiana czcionki (font-family) nie wpływała na nowo wpisywany tekst (FMT-005)
+### Changed
+- **Root cause:** `WysiwygEditorComponent.setFontFamily` wołał `editor.focus()` **przed** odtworzeniem zapisanej selekcji. Wybór czcionki z natywnego `<select>` w toolbarze zabiera fokus i czyści selekcję contenteditable; `focus()` przywracał karetkę na **początek dokumentu** (`rangeCount > 0`, więc strażnik `rangeCount === 0` nie odpalał `restoreSelection`), więc ZWS-span z `font-family` lądował w złym miejscu. Tekst wpisywany w realnej pozycji karetki dalej dziedziczył domyślną/firmową czcionkę. `setFontSize` miał już to zabezpieczenie — `setFontFamily` nie.
+- **Fix:** `setFontFamily` odtwarza selekcję **ZANIM** dotknie fokusu (gdy live-selection nie jest w edytorze, a jest `savedSelection`) — lustrzane do `setFontSize`. Dodatkowo: gdy karetka siedzi już w ZWS-spanie z poprzedniego wyboru, aktualizuje jego `font-family` zamiast zagnieżdżać kolejny pusty span; zapisuje nową pozycję karetki + `updateFormattingState()`; po zmianie selekcji na zaznaczeniu odświeża `savedSelection`.
+### Verified
+- GUI `wysiwyg-editor.toolbar-actions.spec.ts` **7/7** (+1 nowy: `setFontFamily` odtwarza zapisaną selekcję, gdy fokus opuścił edytor). `tsc --noEmit` OK.
+- Manualnie do potwierdzenia w przeglądarce (jsdom nie odwzorowuje contenteditable/Selection/focus): wybór czcionki przy zwiniętej karetce → nowo wpisany tekst dostaje wybraną czcionkę i round-tripuje do `w:rFonts`.
+### Notes
+- `pendingFontFamily`/`pendingFontSize` nadal tylko zapisywane (nieczytane) — ścieżka „brak selekcji" polega na ZWS-spanie; nie ruszane w tej zmianie.
+
 ## 2026-06-08 — EMF/eksport + font-size import + page-break import + selekcja font-size
 ### Changed
 - **DOC2-IMG-009 (EMF psuje DOCX) — root cause + fix:** writer pisał placeholder SVG jako goły `a:blip` (SVG bez rastra = NIEPOPRAWNY OOXML → Word „uszkodzony"). Reader (`DocxToHtmlConverter`) niesie teraz oryginalny metafile w `data-original-src`; writer (`ResolveImageSrc`) preferuje go i zapisuje prawdziwy **EMF part** (`ImagePartType.Emf`, Word renderuje natywnie); `BuildImageDrawing` ma **twardy guard**: nigdy nie emituje gołego SVG blip (return null). Mapowanie x-emf/x-wmf dodane.

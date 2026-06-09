@@ -168,3 +168,40 @@ Parsowanie oddzielone od renderowania dla sekcji/strony; testy na modelu (`Secti
 
 ### Alternatives considered
 Big-bang rewrite parsera+renderera — odrzucone: zbyt ryzykowne dla round-tripu/autozapisu, niereview'owalne. Model w warstwie Domain — odrzucone: to szczegół infrastruktury konwersji (DPI/rendering), nie reguła domenowa; trzymamy w `Infrastructure`.
+
+## ADR-0010: Otwieranie DOCX z hasłem (NPOI) + brak in-process konwersji binarnego .doc
+
+### Status
+Przyjęte (2026-06-09).
+
+### Context
+Wymóg: (1) otwierać DOCX zabezpieczone hasłem, (2) przyjmować .doc i konwertować do DOCX dla edytora.
+Oba formaty to kontenery CFB (compound file). Reguły projektu: bez LibreOffice/soffice, bez
+System.Drawing, Linux/GCP-safe, minimalne zależności.
+
+### Decision
+Wprowadzony `IDocumentInputNormalizer` (Domain) + `DocumentInputNormalizer` (Infrastructure) jako
+jeden punkt normalizacji wejścia przed parserem DOCX→HTML (wpięty w `OpenDocumentQueryHandler`):
+detekcja po magic-bytes (ZIP/CFB), **dekrypcja DOCX hasłem przez NPOI** (POIFS/Crypt — pure-managed,
+zweryfikowane że buduje i działa), detekcja binarnego .doc (stream `WordDocument`).
+
+**Binarny .doc NIE jest konwertowany in-process** — zwraca kontrolowany status `UnsupportedLegacyDoc`
+(→ 400 z instrukcją „zapisz jako .docx"). Powód: brak dostępnego, czysto zarządzanego konwertera
+.doc→.docx — NPOI 2.8.0 nie zawiera HWPF; pakiet NuGet `b2xtranslator` 1.0.2 zawiera tylko
+OpenXmlLib/StructuredStorage, bez `DocFileFormat`/`WordprocessingMLMapping` (parsera .doc); LibreOffice
+zakazane. Obsługiwany jest natomiast mislabeled .doc będący w istocie DOCX (ZIP) — pass-through.
+
+Dodano `NPOI 2.8.0` do Infrastructure; SkiaSharp podbity 3.116.1→3.119.2 (NU1605, tranzytywnie z NPOI).
+
+### Consequences
+Hasło: działa end-to-end (`/open` + `password`, sentinele PASSWORD_REQUIRED/WRONG_PASSWORD → 422;
+GUI prompt+retry). Binarny .doc: kontrolowany komunikat zamiast cichego błędu parsera albo udawania.
+Pełna konwersja binarnego .doc wymaga decyzji infrastrukturalnej (sidecar konwersji / usługa) —
+poza zakresem reguły „bez ciężkich zależności". `IDocumentInputNormalizer` jest gotowym szwem do
+podłączenia takiej konwersji w przyszłości.
+
+### Alternatives considered
+Ręczna dekrypcja CFB + Agile/Standard (własny kod) — odrzucone: ~400 linii kryptografii bez fixtury
+testowej, wysokie ryzyko cichych błędów; NPOI jest sprawdzone. b2xtranslator do .doc — odrzucone:
+NuGet nie zawiera parsera. LibreOffice headless — odrzucone regułą projektu (kontener/GCP).
+Normalizacja na ścieżce ingest/storage (dashboard) — odłożone: osobny flow (persist), follow-up.

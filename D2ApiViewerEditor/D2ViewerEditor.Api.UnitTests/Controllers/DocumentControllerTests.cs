@@ -4,6 +4,7 @@ using D2ViewerEditor.Application.Features.Documents.Commands.UploadImage;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetNewDocument;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetTemplate;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetTemplates;
+using D2ViewerEditor.Application.Features.Documents.Queries.OpenDocument;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Models;
 using FluentAssertions;
@@ -182,18 +183,39 @@ public class DocumentControllerTests
     }
 
     [Test]
-    public async Task OpenDocument_WithLegacyDocFile_ShouldReturnBadRequest_WithConversionGuidance()
+    public async Task OpenDocument_WithBinaryLegacyDoc_ReturnsBadRequest_WithConversionGuidanceAndCode()
     {
-        // .doc is the legacy binary Word format — must be rejected with an actionable message,
-        // not handed to the DOCX parser (which would fail deep with an opaque error).
+        // Binarny .doc trafia teraz do normalizera (przez mediator) i wraca sentinelem
+        // UNSUPPORTED_LEGACY_DOC → kontroler mapuje na 400 z instrukcją konwersji + kodem.
         var fileMock = Substitute.For<IFormFile>();
         fileMock.FileName.Returns("stary.doc");
         fileMock.Length.Returns(100);
+        fileMock.OpenReadStream().Returns(new MemoryStream(new byte[] { 1, 2, 3 }));
+        _mediator.Send(Arg.Any<OpenDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Result<DocumentContent>.Failure(OpenDocumentQueryHandler.UnsupportedLegacyDocSentinel));
 
         var result = await _controller.OpenDocument(fileMock);
 
         var bad = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        bad.Value!.ToString().Should().Contain("UNSUPPORTED_LEGACY_DOC");
         bad.Value!.ToString().Should().Contain(".docx");
+    }
+
+    [Test]
+    public async Task OpenDocument_WhenPasswordRequired_Returns422_WithCode()
+    {
+        var fileMock = Substitute.For<IFormFile>();
+        fileMock.FileName.Returns("tajne.docx");
+        fileMock.Length.Returns(100);
+        fileMock.OpenReadStream().Returns(new MemoryStream(new byte[] { 1, 2, 3 }));
+        _mediator.Send(Arg.Any<OpenDocumentQuery>(), Arg.Any<CancellationToken>())
+            .Returns(Result<DocumentContent>.Failure(OpenDocumentQueryHandler.PasswordRequiredSentinel));
+
+        var result = await _controller.OpenDocument(fileMock);
+
+        var obj = result.Should().BeOfType<ObjectResult>().Subject;
+        obj.StatusCode.Should().Be(422);
+        obj.Value!.ToString().Should().Contain("PASSWORD_REQUIRED");
     }
 
     [Test]

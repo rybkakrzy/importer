@@ -1,4 +1,5 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { vi } from 'vitest';
 import { EditorToolbarComponent } from './editor-toolbar';
 import { EditorCommand, EditorState } from '../../models/document.model';
 
@@ -109,5 +110,50 @@ describe('EditorToolbarComponent — przyciski undo/redo', () => {
     component.openParagraph.subscribe(() => opened++);
     akapit.click();
     expect(opened).toBe(1);
+  });
+});
+
+/**
+ * Rozmiar czcionki z pola input — ENTER nie może kasować zaznaczonego tekstu.
+ * Przyczyna: synchroniczny blur w trakcie ENTER → setFontSize przywraca zaznaczenie do edytora,
+ * a domyślny ENTER kasuje je. Fix: preventDefault + odroczony blur (aplikacja przez blur).
+ */
+describe('EditorToolbarComponent — ENTER w polu rozmiaru czcionki', () => {
+  let fixture: ComponentFixture<EditorToolbarComponent>;
+  let component: EditorToolbarComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [EditorToolbarComponent] }).compileComponents();
+    fixture = TestBed.createComponent(EditorToolbarComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('ENTER blokuje domyślną akcję i odracza blur (nie aplikuje synchronicznie)', () => {
+    vi.useFakeTimers();
+    const input = document.createElement('input');
+    input.value = '20';
+    let prevented = false;
+    const blurSpy = vi.spyOn(input, 'blur');
+    const ev = { preventDefault: () => (prevented = true), target: input } as unknown as Event;
+
+    component.onFontSizeInputEnter(ev);
+
+    expect(prevented).toBe(true);              // domyślny ENTER zablokowany
+    expect(blurSpy).not.toHaveBeenCalled();    // blur NIE jest synchroniczny (w trakcie ENTER)
+
+    vi.runAllTimers();                         // dopiero po zdarzeniu ENTER
+    expect(blurSpy).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('blur (klik poza pole) aplikuje rozmiar od razu (emituje fontSizeChange)', () => {
+    const input = document.createElement('input');
+    input.value = '24';
+    let emitted: number | undefined;
+    component.fontSizeChange.subscribe(v => (emitted = v));
+
+    component.onFontSizeInputBlur({ target: input } as unknown as Event);
+
+    expect(emitted).toBe(24);
   });
 });

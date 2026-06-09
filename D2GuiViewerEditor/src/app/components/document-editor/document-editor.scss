@@ -1427,6 +1427,41 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   width: 100%;
 }
 
+/* Dialog hasła — mniejszy odstęp pod opisem (jest input), pole hasła + komunikat błędu. */
+.password-dialog .leave-dialog-message {
+  margin-bottom: 16px;
+}
+
+.password-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 13px;
+  margin: 0 0 14px;
+  font-size: 0.95rem;
+  color: #1a1a1a;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.password-dialog-input:focus {
+  border-color: #2b579a;
+  box-shadow: 0 0 0 3px rgba(43, 87, 154, 0.15);
+}
+
+.password-dialog-error {
+  width: 100%;
+  margin: -6px 0 14px;
+  color: #d83b01;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.password-dialog .leave-dialog-actions .btn {
+  flex: 1;
+}
+
 .leave-btn-cancel {
   flex: 1;
   padding: 11px 16px;

@@ -24,6 +24,8 @@ public static class DependencyInjection
         services.AddSingleton<IBarcodeGenerator, BarcodeGeneratorService>();
         // Stateless, pure-managed (no native deps) → safe as a singleton.
         services.AddSingleton<IGraphicConversionService, GraphicConversionService>();
+        // Stateless, pure-managed (NPOI) → safe jako singleton. Dekrypcja DOCX + detekcja .doc.
+        services.AddSingleton<IDocumentInputNormalizer, DocumentInputNormalizer>();
         services.AddScoped<IDocxToHtmlConverter, DocxToHtmlConverter>();
         services.AddScoped<IHtmlToDocxConverter, HtmlToDocxConverter>();
         services.AddScoped<IDigitalSignatureService, DigitalSignatureService>();

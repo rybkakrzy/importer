@@ -70,7 +70,7 @@ export class DashboardComponent {
   openFile(): void {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.docx,.pdf';
+    input.accept = '.docx,.doc,.pdf';
 
     input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
@@ -78,10 +78,11 @@ export class DashboardComponent {
 
       const lowerName = file.name.toLowerCase();
 
-      // .doc to starszy binarny format Worda (nie OOXML) — parser DOCX go nie odczyta.
-      // Odrzuć z instrukcją konwersji zamiast wysyłać i kończyć błędem parsera.
+      // Ta ścieżka (utwórz nowy z dysku) zapisuje plik bez normalizacji, więc binarny .doc /
+      // DOCX z hasłem nie zostaną tu przetworzone. Pliki .doc / zabezpieczone hasłem otwiera się
+      // w edytorze przez „Plik → Otwórz" (ścieżka /open z dekrypcją i detekcją .doc).
       if (lowerName.endsWith('.doc')) {
-        this.errorMessage.set('Format .doc (starszy Word) nie jest obsługiwany. Zapisz dokument jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx) i wczytaj ponownie.');
+        this.errorMessage.set('Plik .doc otwórz w edytorze przez „Plik → Otwórz" (obsługuje .doc oraz DOCX zabezpieczone hasłem). Tutaj wczytasz pliki .docx i .pdf.');
         return;
       }
       if (!lowerName.endsWith('.docx') && !lowerName.endsWith('.pdf')) {

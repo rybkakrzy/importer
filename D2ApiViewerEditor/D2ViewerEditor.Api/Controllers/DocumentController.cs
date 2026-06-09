@@ -22,23 +22,35 @@ public class DocumentController : BaseApiController
     /// </summary>
     [HttpPost("open")]
     [RequestSizeLimit(50 * 1024 * 1024)]
-    public async Task<IActionResult> OpenDocument(IFormFile file)
+    public async Task<IActionResult> OpenDocument(IFormFile file, [FromForm] string? password = null)
     {
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "Nie przesłano pliku" });
 
+        // .doc i .docx przepuszczamy do normalizera (detekcja formatu po zawartości, nie po rozszerzeniu):
+        // .docx zwykły / zaszyfrowany hasłem oraz .doc będący w istocie DOCX są obsługiwane; binarny .doc
+        // jest wykrywany i zwracany jako kontrolowany komunikat (UNSUPPORTED_LEGACY_DOC).
         var extension = Path.GetExtension(file.FileName).ToLower();
-        if (extension == ".doc")
-            // .doc is the legacy binary Word format (OLE/CFBF), not Office Open XML — the DOCX
-            // parser cannot read it and there is no DOC→DOCX converter in this pipeline. Reject
-            // explicitly with conversion guidance rather than failing deep in the parser.
-            return BadRequest(new { error = "Format .doc (starszy Word) nie jest obsługiwany. Zapisz dokument jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx) i wczytaj ponownie." });
-        if (extension != ".docx")
+        if (extension != ".docx" && extension != ".doc")
             return BadRequest(new { error = "Obsługiwane są tylko pliki DOCX i PDF." });
 
-        var query = new OpenDocumentQuery(file.OpenReadStream(), file.FileName);
+        var query = new OpenDocumentQuery(file.OpenReadStream(), file.FileName, password);
         var result = await Mediator.Send(query);
-        return HandleResult(result);
+
+        if (result.IsSuccess)
+            return Ok(result.Value);
+
+        // Specjalne przypadki wejścia — GUI rozpoznaje po polu `code` i reaguje (prompt hasła / komunikat).
+        return result.Error switch
+        {
+            OpenDocumentQueryHandler.PasswordRequiredSentinel => StatusCode(StatusCodes.Status422UnprocessableEntity,
+                new { code = "PASSWORD_REQUIRED", error = "Dokument jest zabezpieczony hasłem. Podaj hasło, aby go otworzyć." }),
+            OpenDocumentQueryHandler.WrongPasswordSentinel => StatusCode(StatusCodes.Status422UnprocessableEntity,
+                new { code = "WRONG_PASSWORD", error = "Nieprawidłowe hasło do dokumentu." }),
+            OpenDocumentQueryHandler.UnsupportedLegacyDocSentinel => BadRequest(
+                new { code = "UNSUPPORTED_LEGACY_DOC", error = "Plik .doc (starszy, binarny format Worda) wymaga konwersji do .docx. Otwórz go w Wordzie i zapisz jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx), a następnie wczytaj ponownie." }),
+            _ => HandleResult(result)
+        };
     }
 
     /// <summary>

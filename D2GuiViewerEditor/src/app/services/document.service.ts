@@ -12,6 +12,20 @@ import {
 } from '../models/document.model';
 import { ApiConfigService } from '../core/services/api-config.service';
 
+/** Kody błędów specjalnych zwracane przez POST /open (rozpoznawane przez GUI). */
+export type OpenDocumentErrorCode =
+  | 'PASSWORD_REQUIRED'
+  | 'WRONG_PASSWORD'
+  | 'UNSUPPORTED_LEGACY_DOC';
+
+/** Błąd otwarcia z opcjonalnym `code` (hasło wymagane/błędne, binarny .doc). */
+export class OpenDocumentError extends Error {
+  constructor(message: string, public readonly code?: OpenDocumentErrorCode) {
+    super(message);
+    this.name = 'OpenDocumentError';
+  }
+}
+
 /**
  * Serwis do komunikacji z API dokumentów
  */
@@ -27,14 +41,21 @@ export class DocumentService {
   }
 
   /**
-   * Otwiera dokument DOCX
+   * Otwiera dokument DOCX/DOC. Opcjonalne `password` odszyfrowuje DOCX zabezpieczony hasłem.
+   * Błędy specjalne (hasło wymagane/błędne, binarny .doc) są przekazywane jako {@link OpenDocumentError}
+   * z polem `code`, by komponent mógł zareagować (prompt hasła / komunikat).
    */
-  openDocument(file: File): Observable<DocumentContent> {
+  openDocument(file: File, password?: string): Observable<DocumentContent> {
     const formData = new FormData();
     formData.append('file', file);
+    if (password) formData.append('password', password);
 
     return this.http.post<DocumentContent>(`${this.apiUrl}/open`, formData)
-      .pipe(catchError(this.handleError));
+      .pipe(catchError((err: HttpErrorResponse) => {
+        const code: OpenDocumentErrorCode | undefined = err.error?.code;
+        const message = err.error?.error ?? 'Nie udało się otworzyć dokumentu.';
+        return throwError(() => new OpenDocumentError(message, code));
+      }));
   }
 
   /**

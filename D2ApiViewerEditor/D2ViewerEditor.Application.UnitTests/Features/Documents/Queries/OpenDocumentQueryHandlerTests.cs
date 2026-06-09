@@ -11,13 +11,18 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Queries;
 public class OpenDocumentQueryHandlerTests
 {
     private IDocxToHtmlConverter _converter;
+    private IDocumentInputNormalizer _normalizer;
     private OpenDocumentQueryHandler _handler;
 
     [SetUp]
     public void SetUp()
     {
         _converter = Substitute.For<IDocxToHtmlConverter>();
-        _handler = new OpenDocumentQueryHandler(_converter);
+        _normalizer = Substitute.For<IDocumentInputNormalizer>();
+        // Domyślnie: wejście jest poprawnym DOCX (pass-through) → handler woła konwerter.
+        _normalizer.Normalize(Arg.Any<byte[]>(), Arg.Any<string?>())
+            .Returns(DocumentInputResult.Success(new byte[] { 1, 2, 3 }));
+        _handler = new OpenDocumentQueryHandler(_converter, _normalizer);
     }
 
     [Test]
@@ -102,5 +107,56 @@ public class OpenDocumentQueryHandlerTests
 
         // Assert
         _converter.Received(1).Convert(Arg.Any<Stream>());
+    }
+
+    [Test]
+    public async Task Handle_WhenPasswordRequired_ReturnsSentinel_AndDoesNotConvert()
+    {
+        _normalizer.Normalize(Arg.Any<byte[]>(), Arg.Any<string?>())
+            .Returns(DocumentInputResult.Failure(DocumentInputStatus.PasswordRequired));
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+
+        var result = await _handler.Handle(new OpenDocumentQuery(stream, "tajne.docx"), CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Be(OpenDocumentQueryHandler.PasswordRequiredSentinel);
+        _converter.DidNotReceive().Convert(Arg.Any<Stream>());
+    }
+
+    [Test]
+    public async Task Handle_WhenWrongPassword_ReturnsSentinel()
+    {
+        _normalizer.Normalize(Arg.Any<byte[]>(), Arg.Any<string?>())
+            .Returns(DocumentInputResult.Failure(DocumentInputStatus.WrongPassword));
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+
+        var result = await _handler.Handle(new OpenDocumentQuery(stream, "tajne.docx", "złe"), CancellationToken.None);
+
+        result.Error.Should().Be(OpenDocumentQueryHandler.WrongPasswordSentinel);
+    }
+
+    [Test]
+    public async Task Handle_WhenBinaryLegacyDoc_ReturnsUnsupportedSentinel()
+    {
+        _normalizer.Normalize(Arg.Any<byte[]>(), Arg.Any<string?>())
+            .Returns(DocumentInputResult.Failure(DocumentInputStatus.UnsupportedLegacyDoc));
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+
+        var result = await _handler.Handle(new OpenDocumentQuery(stream, "stary.doc"), CancellationToken.None);
+
+        result.Error.Should().Be(OpenDocumentQueryHandler.UnsupportedLegacyDocSentinel);
+        _converter.DidNotReceive().Convert(Arg.Any<Stream>());
+    }
+
+    [Test]
+    public async Task Handle_PassesPasswordToNormalizer()
+    {
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        _converter.Convert(Arg.Any<Stream>())
+            .Returns(new DocumentContent { Html = "", Metadata = new DocumentMetadata() });
+
+        await _handler.Handle(new OpenDocumentQuery(stream, "f.docx", "sezam"), CancellationToken.None);
+
+        _normalizer.Received(1).Normalize(Arg.Any<byte[]>(), "sezam");
     }
 }

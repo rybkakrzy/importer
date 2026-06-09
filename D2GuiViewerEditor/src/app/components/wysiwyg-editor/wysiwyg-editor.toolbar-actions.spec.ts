@@ -73,6 +73,25 @@ describe('WysiwygEditorComponent — toolbar action guards', () => {
     expect(() => component.insertLink('')).not.toThrow();
   });
 
+  // --- Font-family: restore the lost caret BEFORE focus --------------------
+
+  it('setFontFamily restores the saved selection when focus left the editor (font <select> click)', () => {
+    const editor = document.createElement('div');
+    (component as any).getActiveEditor = () => editor;
+    (component as any).onContentChange = () => {}; // isolate from repaginate/emit
+    (component as any).savedSelection = document.createRange();
+    const spy = vi.spyOn(component as any, 'restoreSelection').mockImplementation(() => true);
+
+    // Picking a font from the native <select> blurs the contenteditable and clears the
+    // selection. setFontFamily must restore the saved caret BEFORE focus, otherwise the
+    // font span lands at the document start and newly typed text keeps the default font.
+    window.getSelection()?.removeAllRanges();
+    component.setFontFamily('Arial');
+
+    expect(spy).toHaveBeenCalled();
+    expect((component as any).currentFontFamily).toBe('Arial');
+  });
+
   // --- Issue 4: plain paste restores the lost editor selection -------------
 
   it('insertText restores the saved selection when focus left the editor (menu paste)', () => {

@@ -1,8 +1,8 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { ActivatedRoute, Router } from '@angular/router';
 import { DocumentEditorComponent } from './document-editor';
-import { DocumentService } from '../../services/document.service';
+import { DocumentService, OpenDocumentError } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { BuildInfoService } from '../../core/services/build-info.service';
 
@@ -628,5 +628,120 @@ describe('DocumentEditorComponent — pozycja menu kontekstowego (DOC2-UI-006)',
 
     expect(component.contextMenuX()).toBe(400);
     expect(component.contextMenuY()).toBe(200);
+  });
+});
+
+/**
+ * Dialog hasła do zaszyfrowanego dokumentu — zastępuje window.prompt.
+ */
+describe('DocumentEditorComponent — dialog hasła', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('confirm bez hasła nie zamyka i pokazuje błąd', () => {
+    component.showPasswordDialog.set(true);
+    component.passwordDialogValue = '';
+
+    component.confirmPasswordDialog();
+
+    expect(component.showPasswordDialog()).toBe(true);
+    expect(component.passwordDialogError()).toBeTruthy();
+  });
+
+  it('cancel zamyka dialog i czyści stan', () => {
+    component.showPasswordDialog.set(true);
+    component.passwordDialogValue = 'x';
+    component.passwordDialogError.set('err');
+
+    component.cancelPasswordDialog();
+
+    expect(component.showPasswordDialog()).toBe(false);
+    expect(component.passwordDialogValue).toBe('');
+    expect(component.passwordDialogError()).toBeNull();
+  });
+
+  it('confirm z hasłem zamyka dialog', () => {
+    component.showPasswordDialog.set(true);
+    component.passwordDialogValue = 'sezam'; // brak pliku oczekującego → tylko zamknięcie
+
+    component.confirmPasswordDialog();
+
+    expect(component.showPasswordDialog()).toBe(false);
+  });
+});
+
+/**
+ * Kluczowe: dialog hasła wyzwalany w ścieżce KONWERSJI (_convertAndLoad), z której korzysta
+ * zarówno otwarcie z dysku, jak i ładowanie wersji z bazy (loadFromStorage = dashboard/odświeżenie).
+ */
+describe('DocumentEditorComponent — dialog hasła wyzwalany przy konwersji', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+  let openCalls: any[][];
+  let openResult: any;
+
+  beforeEach(async () => {
+    openCalls = [];
+    openResult = of({ html: '', metadata: {}, styles: [] });
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: {
+            getTemplates: () => of([]),
+            openDocument: (...args: any[]) => { openCalls.push(args); return openResult; }
+        } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('PASSWORD_REQUIRED z /open otwiera dialog hasła', () => {
+    openResult = throwError(() => new OpenDocumentError('zabezpieczony', 'PASSWORD_REQUIRED'));
+
+    (component as any)._convertAndLoad(new File([], 'tajne.docx'), 'tajne.docx');
+
+    expect(component.showPasswordDialog()).toBe(true);
+  });
+
+  it('zatwierdzenie hasła ponawia konwersję z podanym hasłem', () => {
+    openResult = throwError(() => new OpenDocumentError('zabezpieczony', 'PASSWORD_REQUIRED'));
+    (component as any)._convertAndLoad(new File([], 'tajne.docx'), 'tajne.docx');
+
+    openResult = of({ html: '<p>ok</p>', metadata: {}, styles: [] }); // poprawne hasło → sukces
+    component.passwordDialogValue = 'sezam';
+    component.confirmPasswordDialog();
+
+    // Ostatnie wywołanie openDocument dostało hasło jako drugi argument.
+    expect(openCalls[openCalls.length - 1][1]).toBe('sezam');
+    expect(component.showPasswordDialog()).toBe(false);
+  });
+
+  it('WRONG_PASSWORD pokazuje dialog z komunikatem błędu', () => {
+    openResult = throwError(() => new OpenDocumentError('złe', 'WRONG_PASSWORD'));
+
+    (component as any)._convertAndLoad(new File([], 'tajne.docx'), 'tajne.docx');
+
+    expect(component.showPasswordDialog()).toBe(true);
+    expect(component.passwordDialogError()).toBeTruthy();
   });
 });

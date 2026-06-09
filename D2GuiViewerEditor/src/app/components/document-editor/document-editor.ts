@@ -19,7 +19,7 @@ import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
 import { RulerComponent } from '../ruler/ruler';
-import { DocumentService } from '../../services/document.service';
+import { DocumentService, OpenDocumentError } from '../../services/document.service';
 import { 
   DocumentContent, 
   DocumentMetadata, 
@@ -701,44 +701,17 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         const fileName = `dokument${ext}`;
 
         return bytes$.pipe(
-          switchMap(blob => {
-            const file = new File([blob], fileName, { type: mime || DocumentEditorComponent.DOCX_MIME });
-            return this.documentService.openDocument(file).pipe(
-              map(content => ({ content, fileName }))
-            );
-          })
+          map(blob => ({
+            file: new File([blob], fileName, { type: mime || DocumentEditorComponent.DOCX_MIME }),
+            fileName
+          }))
         );
       })
     ).subscribe({
-      next: ({ content, fileName }) => {
-        this.documentContent.set(content.html);
-        this.documentMetadata.set(content.metadata);
-        this.documentStyles.set(content.styles || []);
-        this.originalFileName.set(fileName);
-        // Spread the whole header/footer so first-page / odd-even variants survive
-        // (not just html + height); fall back to safe defaults when absent.
-        this.headerContent.set({
-          ...content.header,
-          html: content.header?.html || '',
-          height: content.header?.height || 1.25
-        });
-        this.footerContent.set({
-          ...content.footer,
-          html: content.footer?.html || '',
-          height: content.footer?.height || 1.25
-        });
-        if (content.margins) {
-          this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
-        }
-        if (content.pageSize) {
-          this.documentPageSize.set(content.pageSize);
-          this.pageSettings.update(s => ({ ...s, orientation: content.pageSize!.orientation }));
-        }
-        if (this.editor) {
-          this.editor.setContent(content.html);
-        }
-        this.documentSignatures.set(content.metadata.signatures || []);
-        this.isLoading.set(false);
+      next: ({ file, fileName }) => {
+        // Konwersja przez /open (z dekrypcją/detekcją .doc). Plik z hasłem → dialog hasła
+        // pojawia się też w tej ścieżce (otwarcie z dashboardu / odświeżenie edytora).
+        this._convertAndLoad(file, fileName);
       },
       error: (err) => {
         if (err?.handled) {
@@ -850,9 +823,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   openDocument(): void {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.docx,.pdf';
+    // .doc dozwolone — backend wykrywa po zawartości: zwykły/zaszyfrowany DOCX oraz .doc będący
+    // w istocie DOCX są otwierane; binarny .doc zwraca kontrolowany komunikat o konwersji.
+    input.accept = '.docx,.doc,.pdf';
 
-    input.onchange = async (e) => {
+    input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
@@ -863,38 +838,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         return;
       }
 
-      this.isLoading.set(true);
-      this.errorMessage.set(null);
-
-      try {
-        const base64 = await this.documentStorageService.fileToBase64(file);
-        this.documentStorageService.uploadDocument({
-          name: file.name,
-          mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-          content: base64
-        }).pipe(
-          // Ręczne wczytanie z dysku = zamiar edycji → od razu twórz wersję edytowalną (v2)
-          // i otwórz ją w trybie edycji. Oryginał (v1) pozostaje niezmienny; auto-save
-          // nadpisuje tylko v2. (Flow aplikacji zewnętrznej bez zmian: master → read-only,
-          // master+version → edycja.)
-          switchMap(result =>
-            this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
-              map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
-            )
-          )
-        ).subscribe({
-          next: ({ masterId, versionId }) => {
-            this.router.navigate(['/editor'], { queryParams: { masterId, versionId } });
-          },
-          error: () => {
-            this.showError('Nie udało się zapisać dokumentu w bazie danych');
-            this.isLoading.set(false);
-          }
-        });
-      } catch {
-        this.showError('Nie udało się odczytać pliku');
-        this.isLoading.set(false);
-      }
+      // Wczytanie przez /open (normalizer): obsługa DOCX, DOCX z hasłem (prompt) oraz detekcja .doc.
+      // Treść trafia bezpośrednio do edytora (HTML).
+      this.loadDocument(file);
     };
 
     input.click();
@@ -909,59 +855,114 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  /** Ładuje dokument z pliku z dysku ("Plik → Otwórz"). */
+  private loadDocument(file: File, password?: string): void {
+    this._convertAndLoad(file, file.name, password, true);
+  }
+
   /**
-   * Ładuje dokument z pliku
+   * Konwertuje plik (DOCX / .doc-jako-DOCX / odszyfrowany) przez /open i ładuje treść do edytora.
+   * WSPÓLNE dla otwierania z dysku oraz ładowania wersji z bazy (loadFromStorage) — dzięki temu
+   * dialog hasła pojawia się w OBU ścieżkach (wcześniej tylko przy otwieraniu z dysku).
+   * Plik zabezpieczony hasłem → dialog + ponowienie z tym samym plikiem i hasłem.
    */
-  private loadDocument(file: File): void {
+  private _convertAndLoad(file: File, fileName: string, password?: string, announce = false): void {
     this.isLoading.set(true);
     this.errorMessage.set(null);
-    
-    this.documentService.openDocument(file).subscribe({
+
+    this.documentService.openDocument(file, password).subscribe({
       next: (content) => {
-        this.documentContent.set(content.html);
-        this.documentMetadata.set(content.metadata);
-        this.documentStyles.set(content.styles || []);
-        this.originalFileName.set(file.name);
-        
-        // Wczytaj nagłówek i stopkę (resetuj jeśli brak w dokumencie).
-        // Spread the whole object so first-page / odd-even variants are not lost.
-        this.headerContent.set({
-          ...content.header,
-          html: content.header?.html || '',
-          height: content.header?.height || 1.25
-        });
-        this.footerContent.set({
-          ...content.footer,
-          html: content.footer?.html || '',
-          height: content.footer?.height || 1.25
-        });
-
-        // Wczytaj marginesy strony
-        if (content.margins) {
-          this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
-        }
-        if (content.pageSize) {
-          this.documentPageSize.set(content.pageSize);
-          this.pageSettings.update(s => ({ ...s, orientation: content.pageSize!.orientation }));
-        }
-
-        if (this.editor) {
-          this.editor.setContent(content.html);
-        }
-        
-        // Wczytaj podpisy
-        this.documentSignatures.set(content.metadata.signatures || []);
-        
-        this.showSuccess(`Otwarto dokument: ${file.name}`);
+        this._applyLoadedContent(content, fileName);
+        if (announce) this.showSuccess(`Otwarto dokument: ${fileName}`);
         this.isLoading.set(false);
-
-        // masterId już ustawiony przed wywołaniem loadDocument()
       },
       error: (err) => {
-        this.showError(err.message || 'Nie udało się otworzyć dokumentu');
         this.isLoading.set(false);
+        const code = err instanceof OpenDocumentError ? err.code : undefined;
+
+        // Plik zabezpieczony hasłem — pokaż dialog i ponów (z tym samym plikiem + hasłem).
+        if (code === 'PASSWORD_REQUIRED' || code === 'WRONG_PASSWORD') {
+          this.openPasswordDialog(pwd => this._convertAndLoad(file, fileName, pwd, announce), code === 'WRONG_PASSWORD');
+          return;
+        }
+
+        // Binarny .doc / inny błąd — komunikat z backendu wskazuje, co zrobić.
+        if (err?.status === 404) {
+          this.documentNotFound.set(true);
+        } else {
+          this.showError(err.message || 'Nie udało się otworzyć dokumentu');
+        }
       }
     });
+  }
+
+  /** Ustawia treść/metadane/nagłówki/stopki/marginesy/podpisy z DocumentContent w edytorze. */
+  private _applyLoadedContent(content: DocumentContent, fileName: string): void {
+    this.documentContent.set(content.html);
+    this.documentMetadata.set(content.metadata);
+    this.documentStyles.set(content.styles || []);
+    this.originalFileName.set(fileName);
+    // Spread całego obiektu nagłówka/stopki, by warianty first-page/odd-even nie ginęły.
+    this.headerContent.set({
+      ...content.header,
+      html: content.header?.html || '',
+      height: content.header?.height || 1.25
+    });
+    this.footerContent.set({
+      ...content.footer,
+      html: content.footer?.html || '',
+      height: content.footer?.height || 1.25
+    });
+    if (content.margins) {
+      this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
+    }
+    if (content.pageSize) {
+      this.documentPageSize.set(content.pageSize);
+      this.pageSettings.update(s => ({ ...s, orientation: content.pageSize!.orientation }));
+    }
+    if (this.editor) {
+      this.editor.setContent(content.html);
+    }
+    this.documentSignatures.set(content.metadata.signatures || []);
+  }
+
+  // ── Dialog hasła do zaszyfrowanego dokumentu ─────────────────────────────────
+  showPasswordDialog = signal(false);
+  passwordDialogValue = '';
+  passwordDialogError = signal<string | null>(null);
+  /** Callback ponawiający otwarcie z podanym hasłem (różny dla pliku z dysku vs wersji z bazy). */
+  private _passwordRetry: ((password: string) => void) | null = null;
+
+  /** Otwiera dialog hasła. `retry(pwd)` ponawia otwarcie; `wrong` = poprzednia próba miała błędne hasło. */
+  private openPasswordDialog(retry: (password: string) => void, wrong: boolean): void {
+    this._passwordRetry = retry;
+    this.passwordDialogValue = '';
+    this.passwordDialogError.set(wrong ? 'Nieprawidłowe hasło. Spróbuj ponownie.' : null);
+    this.showPasswordDialog.set(true);
+    // Po wyrenderowaniu @if ustaw fokus w polu hasła.
+    setTimeout(() => (document.querySelector('.password-dialog input') as HTMLInputElement | null)?.focus(), 50);
+  }
+
+  /** Zatwierdza hasło → ponawia otwarcie dokumentu z podanym hasłem. */
+  confirmPasswordDialog(): void {
+    const pwd = this.passwordDialogValue;
+    if (!pwd) {
+      this.passwordDialogError.set('Wpisz hasło.');
+      return;
+    }
+    const retry = this._passwordRetry;
+    this.showPasswordDialog.set(false);
+    this.passwordDialogValue = '';
+    this._passwordRetry = null;
+    retry?.(pwd);
+  }
+
+  /** Anuluje wprowadzanie hasła. */
+  cancelPasswordDialog(): void {
+    this.showPasswordDialog.set(false);
+    this.passwordDialogValue = '';
+    this._passwordRetry = null;
+    this.passwordDialogError.set(null);
   }
 
   /**

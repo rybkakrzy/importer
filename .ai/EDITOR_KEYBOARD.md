@@ -136,6 +136,7 @@ Uruchomienie:
 | ENTER / karetka | `wysiwyg-editor.enter-caret.spec.ts` | block-aware save/restore; pusty akapit ≠ poprzednia linia |
 | font-size | `wysiwyg-editor.toolbar-actions.spec.ts` | odrzucenie 0/NaN/zakresu; akceptacja poprawnego |
 | font-family | `FontFamilyWriteTests.cs` | `&quot;`/wielowyraz/single-quote+fallback/unquoted → `w:rFonts` bez cudzysłowów |
+| font-family (front) | `wysiwyg-editor.toolbar-actions.spec.ts` | `setFontFamily` odtwarza zapisaną selekcję **przed** `focus()` (wybór z `<select>` gubi selekcję → bez tego ZWS-span lądował na początku dokumentu i nowy tekst dziedziczył domyślną czcionkę) |
 | paste plain | `wysiwyg-editor.toolbar-actions.spec.ts` | `insertText` odtwarza selekcję po utracie fokusu |
 | line spacing | `LineSpacingMappingTests.cs` | single/1.5/double/exact/atLeast/before/after |
 | linki | `wysiwyg-editor.toolbar-actions.spec.ts` | normalizacja URL + escaping + no-op pustego |

@@ -539,9 +539,15 @@ export class EditorToolbarComponent {
    * Obsługa Enter w input rozmiaru czcionki
    */
   onFontSizeInputEnter(event: Event): void {
-    // Tylko blur — `onFontSizeInputBlur` zaaplikuje raz. Wcześniej Enter aplikował tu ORAZ
-    // ponownie w blur (podwójne wstawienie → zagnieżdżone spany / rosnący line-height).
-    (event.target as HTMLInputElement).blur();
+    // ENTER: zablokuj domyślną akcję i ODŁÓŻ aplikację na po zakończeniu zdarzenia.
+    // Synchroniczny blur() w trakcie obsługi ENTER powoduje, że `setFontSize` przywraca fokus
+    // i zaznaczenie do edytora JESZCZE w trakcie tego zdarzenia — domyślna akcja Enter (nowa
+    // linia) trafia wtedy w przywrócone zaznaczenie i KASUJE zaznaczony tekst. Klik poza pole
+    // (blur myszką) nie ma tego problemu, bo nie ma zdarzenia Enter. preventDefault + setTimeout
+    // rozdzielają aplikację od zdarzenia Enter. `onFontSizeInputBlur` aplikuje raz.
+    event.preventDefault();
+    const input = event.target as HTMLInputElement;
+    setTimeout(() => input.blur(), 0);
   }
 
   /**

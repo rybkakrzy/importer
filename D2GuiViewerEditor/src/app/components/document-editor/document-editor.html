@@ -954,6 +954,41 @@
     </div>
   }
 
+  <!-- Dialog: hasło do zaszyfrowanego dokumentu -->
+  @if (showPasswordDialog()) {
+    <div class="dialog-overlay leave-dialog-overlay" (click)="cancelPasswordDialog()">
+      <div class="dialog leave-dialog password-dialog" (click)="$event.stopPropagation()">
+        <div class="leave-dialog-icon">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none">
+            <rect x="5" y="11" width="14" height="9" rx="2" stroke="#2b579a" stroke-width="2"/>
+            <path d="M8 11V8a4 4 0 0 1 8 0v3" stroke="#2b579a" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="12" cy="15.5" r="1.4" fill="#2b579a"/>
+          </svg>
+        </div>
+        <h3 class="leave-dialog-title">Dokument zabezpieczony hasłem</h3>
+        <p class="leave-dialog-message">Wprowadź hasło, aby otworzyć dokument.</p>
+        <input
+          type="password"
+          class="password-dialog-input"
+          [(ngModel)]="passwordDialogValue"
+          (keydown.enter)="confirmPasswordDialog()"
+          (keydown.escape)="cancelPasswordDialog()"
+          (input)="passwordDialogError.set(null)"
+          placeholder="Hasło"
+          autocomplete="off"
+          aria-label="Hasło do dokumentu"
+        />
+        @if (passwordDialogError()) {
+          <p class="password-dialog-error">{{ passwordDialogError() }}</p>
+        }
+        <div class="leave-dialog-actions">
+          <button class="btn btn-secondary" (click)="cancelPasswordDialog()">Anuluj</button>
+          <button class="btn btn-primary" (click)="confirmPasswordDialog()">Otwórz</button>
+        </div>
+      </div>
+    </div>
+  }
+
 
 
   <!-- Page Setup Dialog -->
