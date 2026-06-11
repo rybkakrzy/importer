@@ -1144,6 +1144,30 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   color: #666;
 }
 
+.work-finished-hint {
+  margin: 4px 0 0;
+  font-size: 0.9rem;
+  max-width: 460px;
+  line-height: 1.6;
+  color: #8a5a00;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  padding: 12px 16px;
+
+  kbd {
+    display: inline-block;
+    padding: 1px 6px;
+    font-family: inherit;
+    font-size: 0.85em;
+    color: #333;
+    background: #fff;
+    border: 1px solid #d1d5db;
+    border-bottom-width: 2px;
+    border-radius: 4px;
+  }
+}
+
 .work-finished-btn {
   margin-top: 8px;
   padding: 11px 28px;

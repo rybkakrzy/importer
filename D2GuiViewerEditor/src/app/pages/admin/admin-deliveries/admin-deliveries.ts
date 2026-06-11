@@ -36,16 +36,15 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   filterDoc      = signal('');
   filterAtt      = signal('');
   filterCreated  = signal('');
-  filterLastAtt  = signal('');
-  filterNextAtt  = signal('');
-  filterDeadline = signal('');
   filterLock     = signal('');
-  filterError    = signal('');
   currentPage = signal(0);
   readonly pageSize = 10;
 
   isLoading = signal(true);
+  /** Błąd ŁADOWANIA listy — zastępuje tabelę (gdy nie da się pobrać danych). */
   error = signal<string | null>(null);
+  /** Błąd AKCJI (Wznów/Anuluj) — pokazywany jako baner NAD tabelą; NIE chowa tabeli. */
+  actionError = signal<string | null>(null);
   retryingId = signal<string | null>(null);
   cancelingId = signal<string | null>(null);
   notice = signal<string | null>(null);
@@ -62,21 +61,13 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
     const doc      = this.filterDoc().toLowerCase().trim();
     const att      = this.filterAtt().toLowerCase().trim();
     const created  = this.filterCreated().toLowerCase().trim();
-    const lastAtt  = this.filterLastAtt().toLowerCase().trim();
-    const nextAtt  = this.filterNextAtt().toLowerCase().trim();
-    const deadline = this.filterDeadline().toLowerCase().trim();
     const lock     = this.filterLock().toLowerCase().trim();
-    const err      = this.filterError().toLowerCase().trim();
     return this.allDeliveries().filter(d => {
       if (id       && !d.deliveryId.toLowerCase().includes(id))                          return false;
       if (doc      && !d.documentId.toLowerCase().includes(doc))                         return false;
       if (att      && !String(d.attemptCount).includes(att))                             return false;
       if (created  && !this.formatDate(d.createdAt).toLowerCase().includes(created))     return false;
-      if (lastAtt  && !this.formatDate(d.lastAttemptAt).toLowerCase().includes(lastAtt)) return false;
-      if (nextAtt  && !this.formatDate(d.nextAttemptAt).toLowerCase().includes(nextAtt)) return false;
-      if (deadline && !this.formatDate(d.deadlineAt).toLowerCase().includes(deadline))   return false;
       if (lock     && !(d.lockedBy ?? '').toLowerCase().includes(lock))                  return false;
-      if (err      && !(d.lastError ?? '').toLowerCase().includes(err))                  return false;
       return true;
     });
   });
@@ -102,6 +93,7 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   load(): void {
     this.isLoading.set(true);
     this.error.set(null);
+    this.actionError.set(null);
     this.notice.set(null);
     this.currentPage.set(0);
     this.fetch(/* silent */ false);
@@ -151,18 +143,14 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   }
 
   setFilter(
-    field: 'id' | 'doc' | 'att' | 'created' | 'lastAtt' | 'nextAtt' | 'deadline' | 'lock' | 'error',
+    field: 'id' | 'doc' | 'att' | 'created' | 'lock',
     value: string
   ): void {
     if (field === 'id')       this.filterId.set(value);
     if (field === 'doc')      this.filterDoc.set(value);
     if (field === 'att')      this.filterAtt.set(value);
     if (field === 'created')  this.filterCreated.set(value);
-    if (field === 'lastAtt')  this.filterLastAtt.set(value);
-    if (field === 'nextAtt')  this.filterNextAtt.set(value);
-    if (field === 'deadline') this.filterDeadline.set(value);
     if (field === 'lock')     this.filterLock.set(value);
-    if (field === 'error')    this.filterError.set(value);
     this.currentPage.set(0);
   }
 
@@ -196,15 +184,18 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
     event.stopPropagation();
     this.retryingId.set(item.deliveryId);
     this.notice.set(null);
+    this.actionError.set(null);
     this.storage.retryDelivery(item.deliveryId).subscribe({
       next: () => {
         this.retryingId.set(null);
         this.notice.set(`Zadanie ${this.shortId(item.deliveryId)} wznowione.`);
         this.refreshAfterAction();
       },
-      error: () => {
+      error: (err) => {
         this.retryingId.set(null);
-        this.error.set(`Nie udało się wznowić zadania ${this.shortId(item.deliveryId)}.`);
+        // Błąd akcji NIE chowa tabeli — baner nad listą (osobny od błędu ładowania).
+        this.actionError.set(err?.error?.error
+          || `Nie udało się wznowić zadania ${this.shortId(item.deliveryId)}.`);
       }
     });
   }
@@ -213,17 +204,23 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
     event.stopPropagation();
     this.cancelingId.set(item.deliveryId);
     this.notice.set(null);
+    this.actionError.set(null);
     this.storage.cancelDelivery(item.deliveryId).subscribe({
       next: () => {
         this.cancelingId.set(null);
         this.notice.set(`Zadanie ${this.shortId(item.deliveryId)} anulowane.`);
         this.refreshAfterAction();
       },
-      error: () => {
+      error: (err) => {
         this.cancelingId.set(null);
-        this.error.set(`Nie udało się anulować zadania ${this.shortId(item.deliveryId)}.`);
+        this.actionError.set(err?.error?.error
+          || `Nie udało się anulować zadania ${this.shortId(item.deliveryId)}.`);
       }
     });
+  }
+
+  dismissActionError(): void {
+    this.actionError.set(null);
   }
 
   /** Po akcji odświeżamy cicho (bez spinnera/resetu strony) — lista i tak auto-odświeża się co 3 s. */
@@ -232,17 +229,31 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * „Otwórz w edytorze" — przechodzi do edytora na podstawie danych wysyłki: `documentId`=masterId,
-   * `sourceVersionId`=versionId. Z versionId edytor ładuje wskazaną wersję edytowalną (tryb edycji),
-   * bez niego — podgląd wersji bazowej.
+   * „Kopiuj link" — buduje pełny, sformatowany link do edycji na podstawie danych wysyłki
+   * (`documentId`=masterId, `sourceVersionId`=versionId) i kopiuje go do schowka. Z versionId edytor
+   * otworzy wskazaną wersję edytowalną (tryb edycji), bez niego — podgląd wersji bazowej.
    */
-  openInEditor(item: DeliveryListItem, event: Event): void {
+  copyEditLink(item: DeliveryListItem, event: Event): void {
     event.stopPropagation();
     const masterId = item.documentId;
     const versionId = item.sourceVersionId;
-    this.router.navigate(['/editor'], {
+    const tree = this.router.createUrlTree(['/editor'], {
       queryParams: versionId ? { masterId, versionId } : { masterId }
     });
+    const url = `${window.location.origin}${this.router.serializeUrl(tree)}`;
+
+    this.notice.set(null);
+    this.actionError.set(null);
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(
+        () => this.notice.set('Skopiowano link do edycji do schowka.'),
+        () => this.actionError.set(`Nie udało się skopiować linku. Skopiuj ręcznie: ${url}`)
+      );
+    } else {
+      // Brak Clipboard API (np. kontekst nie-HTTPS) — pokaż link do ręcznego skopiowania.
+      this.actionError.set(`Kopiowanie niedostępne w tej przeglądarce. Link do edycji: ${url}`);
+    }
   }
 
   /** „Edytuj" — można zmienić adres odbiorcy, dopóki zadanie nie zostało wysłane / nie jest w toku. */

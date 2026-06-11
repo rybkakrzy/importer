@@ -139,6 +139,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * blokujący ekran końcowy — użytkownik NIE może dalej edytować zakończonego dokumentu.
    */
   workFinished = signal<boolean>(false);
+  /**
+   * Próba `window.close()` nie zamknęła karty (Chrome blokuje zamykanie kart nieotwartych skryptem)
+   * → pokazujemy wskazówkę o ręcznym zamknięciu (Ctrl/⌘+W).
+   */
+  tabCloseBlocked = signal<boolean>(false);
+  private tabCloseHintTimer?: ReturnType<typeof setTimeout>;
   /** Link zwrotny z metadanych dokumentu (źródło prawdy dla widoczności „Zakończ"). */
   returnUrl = signal<string | null>(null);
   /** „Zakończ" ma sens tylko, gdy istnieje poprawny link do zwrócenia pliku po edycji. */
@@ -589,6 +595,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.finishCountdownSub?.unsubscribe();
     this.finishSendSub?.unsubscribe();
     this.vRulerResizeObserver?.disconnect();
+    clearTimeout(this.tabCloseHintTimer);
   }
 
   /**
@@ -1921,9 +1928,16 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** Ponowna próba zamknięcia karty z ekranu końcowego (np. przycisk „Zamknij kartę"). */
+  /**
+   * Ponowna próba zamknięcia karty z ekranu końcowego (przycisk „Zamknij kartę").
+   * `window.close()` działa tylko dla kart otwartych skryptem (window.open) — gdy karta została
+   * otwarta ręcznie/linkiem, Chrome odmawia. Jeśli po próbie strona nadal żyje, pokazujemy
+   * wskazówkę o ręcznym zamknięciu (skrótem klawiaturowym).
+   */
   closeFinishedTab(): void {
     this.tryCloseBrowserTab();
+    clearTimeout(this.tabCloseHintTimer);
+    this.tabCloseHintTimer = setTimeout(() => this.tabCloseBlocked.set(true), 300);
   }
 
   openReportEmail(): void {

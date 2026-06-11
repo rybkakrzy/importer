@@ -1,6 +1,6 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { vi } from 'vitest';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { Router } from '@angular/router';
 import { AdminDeliveriesComponent } from './admin-deliveries';
 import { DeliveryListItem, DeliveryStatus, DocumentStorageService } from '../../../services/document-storage.service';
@@ -32,7 +32,15 @@ describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () 
       imports: [AdminDeliveriesComponent],
       providers: [
         { provide: DocumentStorageService, useValue: storage },
-        { provide: Router, useValue: { navigate: navigateSpy } },
+        { provide: Router, useValue: {
+            navigate: navigateSpy,
+            createUrlTree: (commands: unknown[], opts: { queryParams?: Record<string, string> }) =>
+              ({ commands, queryParams: opts?.queryParams ?? {} }),
+            serializeUrl: (tree: { commands: unknown[]; queryParams: Record<string, string> }) => {
+              const qs = Object.entries(tree.queryParams).map(([k, v]) => `${k}=${v}`).join('&');
+              return `${(tree.commands as string[]).join('/')}${qs ? `?${qs}` : ''}`;
+            },
+          } },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(AdminDeliveriesComponent);
@@ -74,26 +82,47 @@ describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () 
     expect(component.notice()).toContain('wznowione');
   });
 
-  it('openInEditor nawiguje do /editor z masterId=documentId i versionId=sourceVersionId', () => {
+  it('błąd akcji ustawia actionError, NIE error (tabela nie znika)', () => {
+    storage.retryDelivery.mockReturnValueOnce(throwError(() => ({ error: { error: 'boom z backendu' } })));
+    const ev = { stopPropagation: vi.fn() } as unknown as Event;
+
+    component.resume(item('DeadLettered'), ev);
+
+    expect(component.actionError()).toBe('boom z backendu');
+    expect(component.error()).toBeNull();           // błąd ładowania NIE ustawiony → tabela zostaje
+    expect(component.dismissActionError).toBeTypeOf('function');
+    component.dismissActionError();
+    expect(component.actionError()).toBeNull();
+  });
+
+  it('copyEditLink kopiuje sformatowany link do edycji (z versionId) do schowka', async () => {
+    const writeText = vi.fn((_url: string) => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     const ev = { stopPropagation: vi.fn() } as unknown as Event;
     const d = { ...item('Sent'), documentId: 'master-7', sourceVersionId: 'ver-9' };
 
-    component.openInEditor(d, ev);
+    component.copyEditLink(d, ev);
 
-    expect(navigateSpy).toHaveBeenCalledWith(['/editor'], {
-      queryParams: { masterId: 'master-7', versionId: 'ver-9' },
-    });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const url = writeText.mock.calls[0][0] as string;
+    expect(url).toContain('/editor?masterId=master-7&versionId=ver-9');
+    expect(url).toMatch(/^https?:\/\//); // pełny link (z origin)
+    await Promise.resolve();
+    expect(component.notice()).toContain('Skopiowano');
+    expect(navigateSpy).not.toHaveBeenCalled(); // nie nawiguje
   });
 
-  it('openInEditor bez sourceVersionId nawiguje tylko z masterId (podgląd)', () => {
+  it('copyEditLink bez sourceVersionId pomija versionId w linku', () => {
+    const writeText = vi.fn((_url: string) => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     const ev = { stopPropagation: vi.fn() } as unknown as Event;
     const d = { ...item('Sent'), documentId: 'master-7', sourceVersionId: '' };
 
-    component.openInEditor(d, ev);
+    component.copyEditLink(d, ev);
 
-    expect(navigateSpy).toHaveBeenCalledWith(['/editor'], {
-      queryParams: { masterId: 'master-7' },
-    });
+    const url = writeText.mock.calls[0][0] as string;
+    expect(url).toContain('/editor?masterId=master-7');
+    expect(url).not.toContain('versionId=');
   });
 
   it('canEdit dla wszystkiego poza Sent/Sending', () => {

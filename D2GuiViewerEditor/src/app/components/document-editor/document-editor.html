@@ -879,7 +879,15 @@
       <p class="work-finished-text">
         Plik został przekazany do wysłania do Twojej aplikacji. Możesz bezpiecznie zamknąć tę kartę.
       </p>
-      <button class="work-finished-btn" (click)="closeFinishedTab()">Zamknij kartę</button>
+      @if (tabCloseBlocked()) {
+        <p class="work-finished-hint">
+          Przeglądarka nie pozwala zamknąć tej karty automatycznie (można zamykać tylko karty
+          otwarte przez aplikację). Zamknij ją ręcznie skrótem Ctrl+W
+          (Windows/Linux) lub ⌘+W (Mac).
+        </p>
+      } @else {
+        <button class="work-finished-btn" (click)="closeFinishedTab()">Zamknij kartę</button>
+      }
     </div>
   }
 

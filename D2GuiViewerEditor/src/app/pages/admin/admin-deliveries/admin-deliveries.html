@@ -4,16 +4,22 @@
       <div>
         <h2 class="page-title">Pliki do wysłania</h2>
       </div>
-      <label class="auto-refresh-toggle" title="Lista odświeża się automatycznie co 3 s">
-        <input type="checkbox" [checked]="autoRefresh()" (change)="toggleAutoRefresh()" />
-        <span class="auto-refresh-dot" [class.on]="autoRefresh()"></span>
-        Autoodświeżanie (3 s)
-      </label>
     </div>
   </div>
 
   @if (notice()) {
     <div class="notice-banner">{{ notice() }}</div>
+  }
+
+  <!-- Błąd akcji (Wznów/Anuluj): baner NAD tabelą, nie chowa listy. Zamykany ręcznie. -->
+  @if (actionError()) {
+    <div class="error-banner action-error-banner">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+      </svg>
+      <span class="action-error-text">{{ actionError() }}</span>
+      <button class="action-error-close" type="button" aria-label="Zamknij" (click)="dismissActionError()">×</button>
+    </div>
   }
 
   @if (isLoading()) {
@@ -38,12 +44,7 @@
             <th class="col-status">Status</th>
             <th class="col-att">Próby</th>
             <th class="col-date">Utworzono</th>
-            <th class="col-date">Ostatnia próba</th>
-            <th class="col-date">Następna próba</th>
-            <th class="col-date">Deadline</th>
             <th class="col-lock">locked_by</th>
-            <th class="col-err">Ostatni błąd</th>
-            <th class="col-action"></th>
           </tr>
           <tr class="col-filters">
             <th class="col-id">
@@ -70,32 +71,15 @@
               <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
                      [ngModel]="filterCreated()" (ngModelChange)="setFilter('created', $event)" />
             </th>
-            <th class="col-date">
-              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
-                     [ngModel]="filterLastAtt()" (ngModelChange)="setFilter('lastAtt', $event)" />
-            </th>
-            <th class="col-date">
-              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
-                     [ngModel]="filterNextAtt()" (ngModelChange)="setFilter('nextAtt', $event)" />
-            </th>
-            <th class="col-date">
-              <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
-                     [ngModel]="filterDeadline()" (ngModelChange)="setFilter('deadline', $event)" />
-            </th>
             <th class="col-lock">
               <input class="col-filter-input" type="text" placeholder="Filtruj…"
                      [ngModel]="filterLock()" (ngModelChange)="setFilter('lock', $event)" />
             </th>
-            <th class="col-err">
-              <input class="col-filter-input" type="text" placeholder="Filtruj błąd…"
-                     [ngModel]="filterError()" (ngModelChange)="setFilter('error', $event)" />
-            </th>
-            <th class="col-action"></th>
           </tr>
         </thead>
         <tbody>
           @if (deliveries().length === 0) {
-            <tr><td colspan="11">
+            <tr><td colspan="6">
               <div class="empty-state">
                 <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#d1d5db" stroke-width="1.5">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -118,9 +102,6 @@
                 </td>
                 <td class="col-att">{{ d.attemptCount }}</td>
                 <td class="col-date">{{ formatDate(d.createdAt) }}</td>
-                <td class="col-date">{{ formatDate(d.lastAttemptAt) }}</td>
-                <td class="col-date">{{ formatDate(d.nextAttemptAt) }}</td>
-                <td class="col-date">{{ formatDate(d.deadlineAt) }}</td>
                 <td class="col-lock">
                   @if (d.lockedBy) {
                     <span class="mono lock-on" [title]="'locked_until: ' + formatDate(d.lockedUntil)">{{ d.lockedBy }}</span>
@@ -128,81 +109,70 @@
                     <span class="lock-off">—</span>
                   }
                 </td>
-                <td class="col-err">
-                  @if (d.lastError) {
-                    <span class="err-text" [title]="d.lastError">{{ d.lastError }}</span>
-                  } @else {
-                    —
-                  }
-                </td>
-                <td class="col-action">
-                  <div class="row-actions">
-                    <button class="dl-btn dl-btn-sm"
-                            title="Otwórz dokument w edytorze (Master/Version ID z wysyłki)"
-                            (click)="openInEditor(d, $event)">
-                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M15 3h6v6"/>
-                        <path d="M10 14 21 3"/>
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                      </svg>
-                      Otwórz
-                    </button>
-                    @if (canEdit(d)) {
-                      <button class="dl-btn dl-btn-sm"
-                              [disabled]="isBusy(d)"
-                              title="Edytuj adres odbiorcy (returnUrl)"
-                              (click)="startEdit(d, $event)">
-                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                          <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                        </svg>
-                        Edytuj
-                      </button>
-                    }
-                    @if (canResume(d)) {
-                      <button class="dl-btn dl-btn-sm"
-                              [class.loading]="retryingId() === d.deliveryId"
-                              [disabled]="isBusy(d)"
-                              title="Wznów wysyłkę teraz"
-                              (click)="resume(d, $event)">
-                        @if (retryingId() === d.deliveryId) {
-                          <span class="spinner-sm"></span>
-                        } @else {
-                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="23 4 23 10 17 10"/>
-                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-                          </svg>
-                        }
-                        Wznów
-                      </button>
-                    }
-                    @if (canCancel(d)) {
-                      <button class="dl-btn dl-btn-sm dl-btn-danger"
-                              [class.loading]="cancelingId() === d.deliveryId"
-                              [disabled]="isBusy(d)"
-                              title="Anuluj wysyłkę"
-                              (click)="cancel(d, $event)">
-                        @if (cancelingId() === d.deliveryId) {
-                          <span class="spinner-sm"></span>
-                        } @else {
-                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="18" y1="6" x2="6" y2="18"/>
-                            <line x1="6" y1="6" x2="18" y2="18"/>
-                          </svg>
-                        }
-                        Anuluj
-                      </button>
-                    }
-                  </div>
-                </td>
               </tr>
               @if (isExpanded(d.deliveryId)) {
                 <tr class="detail-row">
-                  <td colspan="11">
+                  <td colspan="6">
                     <div class="delivery-details">
-                      <div class="detail-item detail-wide">
-                        <span class="detail-label">Adres odbiorcy</span>
-                        <span class="detail-value mono">{{ d.recipientUrl || '—' }}</span>
+                      <!-- Wiersz nagłówka: label „Szczegóły" (1. kolumna) + wszystkie akcje (2. kolumna, 70%). -->
+                      <div class="detail-item detail-wide detail-header-row">
+                        <span class="detail-label">Szczegóły</span>
+                        <div class="detail-actions-buttons">
+                          <button class="dl-btn dl-btn-sm"
+                                  title="Kopiuj link do edycji (Master/Version ID z wysyłki) do schowka"
+                                  (click)="copyEditLink(d, $event)">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            </svg>
+                            Kopiuj link
+                          </button>
+                          @if (canEdit(d)) {
+                            <button class="dl-btn dl-btn-sm"
+                                    [disabled]="isBusy(d)"
+                                    title="Edycja metadanych (adres odbiorcy / returnUrl)"
+                                    (click)="startEdit(d, $event)">
+                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                                <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                              </svg>
+                              Edycja metadanych
+                            </button>
+                          }
+                          @if (canResume(d)) {
+                            <button class="dl-btn dl-btn-sm"
+                                    [class.loading]="retryingId() === d.deliveryId"
+                                    [disabled]="isBusy(d)"
+                                    title="Wznów wysyłkę teraz"
+                                    (click)="resume(d, $event)">
+                              @if (retryingId() === d.deliveryId) {
+                                <span class="spinner-sm"></span>
+                              } @else {
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                  <polyline points="23 4 23 10 17 10"/>
+                                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                                </svg>
+                              }
+                              Wznów
+                            </button>
+                          }
+                          @if (canCancel(d)) {
+                            <button class="dl-btn dl-btn-sm dl-btn-danger"
+                                    [class.loading]="cancelingId() === d.deliveryId"
+                                    [disabled]="isBusy(d)"
+                                    title="Anuluj wysyłkę"
+                                    (click)="cancel(d, $event)">
+                              @if (cancelingId() === d.deliveryId) {
+                                <span class="spinner-sm"></span>
+                              } @else {
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                                </svg>
+                              }
+                              Anuluj
+                            </button>
+                          }
+                        </div>
                       </div>
                       <div class="detail-item">
                         <span class="detail-label">Master ID</span>
@@ -223,6 +193,14 @@
                       <div class="detail-item">
                         <span class="detail-label">Ostatnia próba</span>
                         <span class="detail-value">{{ formatDate(d.lastAttemptAt) }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Następna próba</span>
+                        <span class="detail-value">{{ formatDate(d.nextAttemptAt) }}</span>
+                      </div>
+                      <div class="detail-item detail-wide">
+                        <span class="detail-label">Adres odbiorcy</span>
+                        <span class="detail-value mono">{{ d.recipientUrl || '—' }}</span>
                       </div>
                       <div class="detail-item detail-wide">
                         <span class="detail-label">Komunikat błędu</span>
@@ -268,11 +246,10 @@
     <div class="edit-overlay" (click)="cancelEdit()">
       <div class="edit-dialog" (click)="$event.stopPropagation()"
            role="dialog" aria-modal="true" aria-labelledby="edit-url-title">
-        <h3 class="edit-title" id="edit-url-title">Zmień adres odbiorcy</h3>
-        <p class="edit-hint">
-          Adres (returnUrl), na który zostanie wysłany plik. Po zmianie użyj „Wznów", aby ponowić wysyłkę.
-        </p>
+        <h3 class="edit-title" id="edit-url-title">Edycja metadanych</h3>
+        <label class="edit-label" for="edit-url-input">Adres odbiorcy (returnUrl)</label>
         <input
+          id="edit-url-input"
           type="url"
           class="edit-input"
           [ngModel]="editUrlValue()"
@@ -280,7 +257,7 @@
           (keydown.enter)="saveEdit()"
           placeholder="https://…"
           autocomplete="off"
-          aria-label="Adres odbiorcy"
+          aria-label="Adres odbiorcy (returnUrl)"
         />
         @if (editError()) {
           <p class="edit-error">{{ editError() }}</p>
