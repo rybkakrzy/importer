@@ -76,7 +76,8 @@ export type DeliveryStatus =
   | 'RetryScheduled'
   | 'Sent'
   | 'FailedPermanently'
-  | 'DeadLettered';
+  | 'DeadLettered'
+  | 'Cancelled';
 
 export interface FinishAndSendResult {
   deliveryId: string;
@@ -276,6 +277,14 @@ export class DocumentStorageService {
    */
   retryDelivery(deliveryId: string): Observable<RequeueDeliveryResult> {
     return this.http.post<RequeueDeliveryResult>(`${this.apiUrl}/deliveries/${deliveryId}/retry`, {});
+  }
+
+  /**
+   * Ręczne anulowanie zadania wysyłki (Pending / RetryScheduled) — przechodzi w stan Cancelled.
+   * @param deliveryId - GUID zadania wysyłki
+   */
+  cancelDelivery(deliveryId: string): Observable<RequeueDeliveryResult> {
+    return this.http.post<RequeueDeliveryResult>(`${this.apiUrl}/deliveries/${deliveryId}/cancel`, {});
   }
 
   /**

@@ -111,19 +111,24 @@ przybliżenie.
 |---|---|---|
 | `.docx` | Obsługiwany | upload → `OpenDocument` (`/open`) → parser OOXML |
 | `.pdf` | Obsługiwany | upload → podgląd PDF |
-| `.doc` | **Odrzucany (Wariant B)** | komunikat: „Format .doc (starszy Word) nie jest obsługiwany. Zapisz jako .docx…" |
+| `.doc` (binarny, OLE/CFBF) | **Konwertowany do .docx** (od 2026-06-11) | `/open` → `DocumentInputNormalizer` → `LegacyDocBinaryConverter` (FIB + piece table → tekst+akapity → DOCX) |
+| `.doc` mislabeled (faktycznie DOCX) | Obsługiwany | normalizer wykrywa ZIP → pass-through |
 | inne | Odrzucane | „Obsługiwane są pliki DOCX i PDF." |
 
-**Decyzja `.doc` (Issue 7):** `.doc` to **stary binarny format** (OLE/CFBF), nie OOXML — parser
-DOCX go nie odczyta, a w pipeline **nie ma konwertera DOC→DOCX** (brak LibreOffice headless/
-usługi konwersji). Wybrano **jawne odrzucenie z instrukcją konwersji** zamiast udawania obsługi
-(reguła: nie zmieniać tylko rozszerzenia). Walidacja:
-- Backend `DocumentController.OpenDocument` — `.doc` → 400 z komunikatem konwersji.
-- Frontend `dashboard.openFile` — `.doc` → komunikat, brak uploadu.
+**Decyzja `.doc` (Issue 7, zaktualizowana 2026-06-11):** `.doc` to **stary binarny format** (OLE/CFBF),
+nie OOXML. Zamiast odrzucać, **czysto zarządzany `LegacyDocBinaryConverter`** parsuje FIB
+(wIdent 0xA5EC, `fcClx`/`lcbClx` @0x01A2/0x01A6, `fWhichTblStm`) i piece table (CLX/PlcPcd; PCD.fc
+compressed=CP1252/Latin1 vs 16-bit Unicode), wyciąga **tekst + podział akapitów** i buduje DOCX
+przez OpenXML — bez LibreOffice/GDI (Linux/GCP-safe). **Świadome ograniczenie:** odzyskiwany jest
+tekst, NIE bogate formatowanie/tabele/obrazy (pełna wierność wymagałaby dużego parsera MS-DOC lub
+konwertera zewnętrznego). Gdy struktura jest niespójna → **fallback** na kontrolowane odrzucenie
+(`UnsupportedLegacyDoc` → 400 z instrukcją konwersji), nigdy śmieci. Walidacja:
+- Backend `DocumentController.OpenDocument` — rozszerzenie + detekcja po zawartości; binarny `.doc`
+  → konwersja, a przy niepowodzeniu 400 z komunikatem.
+- Frontend `document-editor.openDocument` — `accept=.docx,.doc,.pdf`, ładowanie przez `/open`.
+- `dashboard.openFile` (utwórz nowy z dysku, bez normalizacji) — kieruje `.doc` do „Plik → Otwórz".
 
-**Wariant A (przyszłość):** konwersja DOC→DOCX przez LibreOffice headless / usługę konwersji
-(pipeline asynchroniczny, przechowanie oryginału) — wymaga infrastruktury (sidecar/worker),
-poza zakresem tej zmiany.
+**Roadmapa:** pełna wierność (formatowanie/tabele/obrazy) przez LibreOffice headless / sidecar.
 
 ## 7. Testy regresji
 

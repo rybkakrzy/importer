@@ -69,11 +69,27 @@ public sealed class DocumentInputNormalizer : IDocumentInputNormalizer
             };
         }
 
-        // 2b. Binarny .doc (starszy Word) — strumień WordDocument. Brak wbudowanego, czysto zarządzanego
-        // konwertera .doc→.docx (NPOI nie ma HWPF; b2xtranslator NuGet nie zawiera parsera DocFileFormat;
-        // LibreOffice/System.Drawing zakazane). Zwracamy kontrolowany status — bez udawania konwersji.
+        // 2b. Binarny .doc (starszy Word) — strumień WordDocument. Czysto zarządzana konwersja .doc→.docx
+        // przez parsowanie FIB + piece table (LegacyDocBinaryConverter) — odzyskuje tekst i podział
+        // akapitów (bez bogatego formatowania). Gdy struktura jest niespójna/nieobsługiwana, spadamy do
+        // kontrolowanego odrzucenia z instrukcją konwersji (bez udawania pełnej obsługi, bez śmieci).
         if (fs.Root.HasEntry("WordDocument"))
+        {
+            try
+            {
+                var wordDocument = ReadCfbStream(fs, "WordDocument");
+                var table0 = fs.Root.HasEntry("0Table") ? ReadCfbStream(fs, "0Table") : null;
+                var table1 = fs.Root.HasEntry("1Table") ? ReadCfbStream(fs, "1Table") : null;
+                var docx = LegacyDocBinaryConverter.TryConvert(wordDocument, table0, table1);
+                if (docx != null)
+                    return DocumentInputResult.Success(docx);
+            }
+            catch
+            {
+                // Dowolny błąd parsowania → kontrolowane odrzucenie poniżej (nigdy nie wywracamy importu).
+            }
             return DocumentInputResult.Failure(DocumentInputStatus.UnsupportedLegacyDoc);
+        }
 
         return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
     }

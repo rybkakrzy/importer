@@ -1,6 +1,7 @@
 using D2ViewerEditor.Api.Controllers;
 using D2ViewerEditor.Application.Features.Documents.Commands.DownloadEditedDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.FinishAndSendDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.CancelDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.RequeueDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
@@ -369,6 +370,26 @@ public class DocumentStorageController : BaseApiController
     public async Task<IActionResult> RetryDelivery(Guid deliveryId)
     {
         var result = await Mediator.Send(new RequeueDeliveryCommand(deliveryId));
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// Ręczne anulowanie zadania wysyłki ("Anuluj") — dla zadań oczekujących/zaplanowanych
+    /// (Pending / RetryScheduled). Przechodzi w stan końcowy Cancelled.
+    /// </summary>
+    /// <param name="deliveryId">GUID zadania wysyłki</param>
+    [HttpPost("deliveries/{deliveryId:guid}/cancel")]
+    [ProducesResponseType(typeof(CancelDeliveryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> CancelDelivery(Guid deliveryId)
+    {
+        var result = await Mediator.Send(new CancelDeliveryCommand(deliveryId));
 
         return result.IsSuccess
             ? Ok(result.Value)

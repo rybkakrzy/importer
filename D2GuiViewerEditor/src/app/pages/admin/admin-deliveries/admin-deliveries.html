@@ -4,6 +4,11 @@
       <div>
         <h2 class="page-title">Pliki do wysłania</h2>
       </div>
+      <label class="auto-refresh-toggle" title="Lista odświeża się automatycznie co 3 s">
+        <input type="checkbox" [checked]="autoRefresh()" (change)="toggleAutoRefresh()" />
+        <span class="auto-refresh-dot" [class.on]="autoRefresh()"></span>
+        Autoodświeżanie (3 s)
+      </label>
     </div>
   </div>
 
@@ -131,22 +136,42 @@
                   }
                 </td>
                 <td class="col-action">
-                  @if (canRetry(d)) {
-                    <button class="dl-btn dl-btn-sm"
-                            [class.loading]="retryingId() === d.deliveryId"
-                            [disabled]="retryingId() === d.deliveryId"
-                            (click)="retry(d, $event)">
-                      @if (retryingId() === d.deliveryId) {
-                        <span class="spinner-sm"></span>
-                      } @else {
-                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                          <polyline points="23 4 23 10 17 10"/>
-                          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-                        </svg>
-                      }
-                      Ponów
-                    </button>
-                  }
+                  <div class="row-actions">
+                    @if (canResume(d)) {
+                      <button class="dl-btn dl-btn-sm"
+                              [class.loading]="retryingId() === d.deliveryId"
+                              [disabled]="isBusy(d)"
+                              title="Wznów wysyłkę teraz"
+                              (click)="resume(d, $event)">
+                        @if (retryingId() === d.deliveryId) {
+                          <span class="spinner-sm"></span>
+                        } @else {
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="23 4 23 10 17 10"/>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                          </svg>
+                        }
+                        Wznów
+                      </button>
+                    }
+                    @if (canCancel(d)) {
+                      <button class="dl-btn dl-btn-sm dl-btn-danger"
+                              [class.loading]="cancelingId() === d.deliveryId"
+                              [disabled]="isBusy(d)"
+                              title="Anuluj wysyłkę"
+                              (click)="cancel(d, $event)">
+                        @if (cancelingId() === d.deliveryId) {
+                          <span class="spinner-sm"></span>
+                        } @else {
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"/>
+                            <line x1="6" y1="6" x2="18" y2="18"/>
+                          </svg>
+                        }
+                        Anuluj
+                      </button>
+                    }
+                  </div>
                 </td>
               </tr>
               @if (isExpanded(d.deliveryId)) {

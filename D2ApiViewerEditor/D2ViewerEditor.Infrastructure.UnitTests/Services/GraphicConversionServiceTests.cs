@@ -97,6 +97,25 @@ public class GraphicConversionServiceTests
     }
 
     [Test]
+    public void Emf_WithEmbeddedDib_IsRasterizedToPng()
+    {
+        // EMF z rekordem EMR_STRETCHDIBITS niosącym DIB 2x2 24bpp → realny PNG (nie placeholder).
+        var emf = BuildEmfWithStretchDibits(2, 2);
+
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = emf, ContentType = "image/x-emf" });
+
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Emf);
+        result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Converted);
+        result.Web!.MimeType.Should().Be("image/png");
+        result.Web.IsPlaceholder.Should().BeFalse();        // KLUCZOWE: brak placeholdera „EMF — podgląd w Word"
+        result.Web.WidthPx.Should().Be(2);
+        result.Web.HeightPx.Should().Be(2);
+        result.PreserveOriginalPart.Should().BeTrue();      // oryginał EMF nadal jedzie do DOCX (eksport wektorowy)
+        result.Web.Data.AsSpan(0, 8).ToArray()
+            .Should().Equal(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }); // sygnatura PNG
+    }
+
+    [Test]
     public void Wmf_Placeable_GivesPlaceholderWithDimensions()
     {
         // bbox 0,0,1440,720 with 1440 units/inch = 1in x 0.5in = 96 x 48 px.
@@ -194,6 +213,45 @@ public class GraphicConversionServiceTests
         BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(36), frameBottom);
         BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(40), 0x464D4520);   // " EMF"
         return d;
+    }
+
+    /// <summary>
+    /// EMF: EMR_HEADER + EMR_STRETCHDIBITS (z osadzonym DIB w×h 24bpp BI_RGB) + EMR_EOF.
+    /// Odzwierciedla realny przypadek Worda, w którym EMF opakowuje bitmapę.
+    /// </summary>
+    private static byte[] BuildEmfWithStretchDibits(int w, int h)
+    {
+        var header = BuildEmf(10000, 5000); // 88-bajtowy EMR_HEADER (Detect rozpozna EMF)
+
+        int stride = ((w * 24 + 31) / 32) * 4;
+        int cbBits = stride * h;
+        const int cbBmi = 40;                 // BITMAPINFOHEADER, 24bpp → bez palety
+        const int dibStart = 80;              // BitmapBuffer w EMR_STRETCHDIBITS
+        int recSize = dibStart + cbBmi + cbBits;
+        recSize = (recSize + 3) & ~3;         // wyrównanie do 4
+
+        var rec = new byte[recSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(rec, 81);                 // iType = EMR_STRETCHDIBITS
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(4), (uint)recSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(48), dibStart);          // offBmiSrc
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(52), cbBmi);             // cbBmiSrc
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(56), dibStart + cbBmi);  // offBitsSrc
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(60), (uint)cbBits);      // cbBitsSrc
+        // BITMAPINFOHEADER
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(dibStart), 40);          // biSize
+        BinaryPrimitives.WriteInt32LittleEndian(rec.AsSpan(dibStart + 4), w);        // biWidth
+        BinaryPrimitives.WriteInt32LittleEndian(rec.AsSpan(dibStart + 8), h);        // biHeight
+        BinaryPrimitives.WriteUInt16LittleEndian(rec.AsSpan(dibStart + 12), 1);      // biPlanes
+        BinaryPrimitives.WriteUInt16LittleEndian(rec.AsSpan(dibStart + 14), 24);     // biBitCount
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(dibStart + 16), 0);      // BI_RGB
+        // pixel bits — niezerowe (kolor), by dekoder dał sensowny obraz
+        for (int i = dibStart + cbBmi; i < dibStart + cbBmi + cbBits; i++) rec[i] = 0x80;
+
+        var eof = new byte[20];
+        BinaryPrimitives.WriteUInt32LittleEndian(eof, 14);                 // iType = EMR_EOF
+        BinaryPrimitives.WriteUInt32LittleEndian(eof.AsSpan(4), 20);       // nSize
+
+        return header.Concat(rec).Concat(eof).ToArray();
     }
 
     private static byte[] BuildPlaceableWmf(short left, short top, short right, short bottom, ushort inch)

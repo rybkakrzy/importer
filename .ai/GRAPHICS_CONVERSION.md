@@ -32,8 +32,9 @@ DocxToHtmlConverter.WebGraphicForLegacy(...)        ← hook: EMF/WMF media part
 |---|---|---|---|
 | PNG/JPEG/GIF/BMP | passthrough | ten sam raster (data URL) | Lossless |
 | SVG | sanitizacja | SVG bezpieczny | Lossless/Fallback |
-| **EMF/WMF** z osadzonym rastrem | ekstrakcja PNG/JPEG z bajtów | osadzony raster | Lossy |
-| **EMF/WMF** bez rastra | **placeholder SVG** (wymiary z headera) + **pass-through oryginału** | placeholder | Fallback |
+| **EMF/WMF** z osadzonym PNG/JPEG | ekstrakcja PNG/JPEG z bajtów | osadzony raster | Lossy |
+| **EMF/WMF** z osadzonym DIB (StretchDIBits itp.) | DIB→BMP→**SkiaSharp**→PNG (od 2026-06-11) | PNG | Lossy |
+| **EMF/WMF** bez rastra (czysty wektor) | **placeholder SVG** (wymiary z headera) + **pass-through oryginału** | placeholder | Fallback |
 | **VML** rect/oval/line/roundrect | mapowanie bezpiecznego podzbioru | SVG (fill/stroke) | Lossy |
 | **VML** v:imagedata | rozwiązanie partu → ścieżka EMF/WMF/raster | jw. | jw. |
 | VML inne / nieznane | placeholder + diagnostyka | placeholder | Unsupported |
@@ -120,8 +121,12 @@ rastra skaluje się z rozmiarem (skan sygnatur). Brak natywnych alokacji (pure-m
 
 ## 10. Ograniczenia
 
-- **EMF/WMF nie są rasteryzowane** w przeglądarce (placeholder) — pełny podgląd dopiero w Word
-  (pass-through). Świadome, do czasu sidecara rasteryzującego.
+- **EMF/WMF z osadzonym rastrem (PNG/JPEG/DIB) SĄ rasteryzowane do PNG** w przeglądarce
+  (od 2026-06-11, przez SkiaSharp — `TryRasterizeMetafileToPng`/`TryExtractEmfDib`/`TryFindDibGeneric`
+  w `GraphicConversionService`). Pokrywa najczęstszy realny przypadek (EMF/WMF opakowujący bitmapę).
+  Eksport nadal niesie oryginalny metafile (`data-original-src`) → Word renderuje wektor.
+- **Czysto wektorowe EMF/WMF (bez osadzonego rastra)** wciąż nie są rasteryzowane (placeholder) —
+  pełny podgląd dopiero w Word (pass-through). Pełny interpreter wektora EMF = roadmapa (sidecar).
 - **VML**: tylko bezpieczny podzbiór kształtów (rect/roundrect/oval/line); paths/gradients/cienie/
   textboxy/rotacja → placeholder. Integracja `ConvertVmlShapeForEditor` w rendererze readera = roadmapa
   (obecnie reader obsługuje VML **v:imagedata**, najczęstszy realny przypadek; kształty wektorowe

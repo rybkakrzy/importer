@@ -123,6 +123,65 @@ public class DocumentDeliveryTests
         act.Should().Throw<InvalidOperationException>();
     }
 
+    [Test]
+    public void Requeue_FromRetryScheduled_ShouldSendNow()
+    {
+        var delivery = CreateValid();
+        delivery.ScheduleRetryOrDeadLetter("HTTP 503", new FixedBackoff(TimeSpan.FromMinutes(30)));
+
+        delivery.Requeue(TimeSpan.FromHours(24));
+
+        delivery.Status.Should().Be(DeliveryStatus.Pending);
+        delivery.NextAttemptAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5)); // „teraz", nie za 30 min
+        delivery.LastError.Should().BeNull();
+    }
+
+    [Test]
+    public void Requeue_FromCancelled_ShouldResetToPending()
+    {
+        var delivery = CreateValid();
+        delivery.Cancel();
+
+        delivery.Requeue(TimeSpan.FromHours(24));
+
+        delivery.Status.Should().Be(DeliveryStatus.Pending);
+        delivery.IsTerminal.Should().BeFalse();
+    }
+
+    [Test]
+    public void Cancel_FromPending_ShouldBecomeCancelledTerminal()
+    {
+        var delivery = CreateValid();
+
+        delivery.Cancel();
+
+        delivery.Status.Should().Be(DeliveryStatus.Cancelled);
+        delivery.IsTerminal.Should().BeTrue();
+        delivery.LockedUntil.Should().BeNull();
+    }
+
+    [Test]
+    public void Cancel_FromRetryScheduled_ShouldBecomeCancelled()
+    {
+        var delivery = CreateValid();
+        delivery.ScheduleRetryOrDeadLetter("err", new FixedBackoff(TimeSpan.FromMinutes(5)));
+
+        delivery.Cancel();
+
+        delivery.Status.Should().Be(DeliveryStatus.Cancelled);
+    }
+
+    [Test]
+    public void Cancel_FromSent_ShouldThrow()
+    {
+        var delivery = CreateValid();
+        delivery.MarkSent();
+
+        var act = () => delivery.Cancel();
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
     private sealed class FixedBackoff : IBackoffStrategy
     {
         private readonly TimeSpan _delay;

@@ -7,6 +7,7 @@ using System.Xml;
 using System.Xml.Linq;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
+using SkiaSharp;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -92,26 +93,34 @@ public sealed class GraphicConversionService : IGraphicConversionService
                     var (w, h) = kind == GraphicKind.Emf ? ReadEmfSize(source.Data) : ReadWmfSize(source.Data);
                     (w, h) = ResolveDims(w, h, source, options);
 
-                    // Best-effort: many EMF/EMF+ wrap a PNG/JPEG — extract and show that raster.
+                    // 1) Niektóre EMF/EMF+ opakowują gotowy PNG/JPEG — pokaż ten raster wprost.
                     var embedded = TryExtractEmbeddedRaster(source.Data);
                     if (embedded != null)
                     {
                         var ek = Detect(embedded);
                         var (ew, eh) = ReadRasterSize(ek, embedded);
-                        warnings.Add($"{kind} nie jest rasteryzowane — pokazano osadzony {ek} z metafile.");
+                        warnings.Add($"{kind}: pokazano osadzony {ek} z metafile.");
                         lost.Add("Wektorowe elementy metafile poza osadzonym rastrem.");
-                        return new GraphicConversionResult
-                        {
-                            Web = new WebGraphicRepresentation { MimeType = MimeFor(ek), Data = embedded, WidthPx = ew > 0 ? ew : w, HeightPx = eh > 0 ? eh : h },
-                            PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart,
-                            Diagnostics = Diag(kind, MimeFor(ek), GraphicConversionStatus.Converted, GraphicFidelity.Lossy, sw, warnings, lost)
-                        };
+                        return MetafileRaster(kind, MimeFor(ek), embedded, ew > 0 ? ew : w, eh > 0 ? eh : h, source, sw, warnings, lost);
                     }
 
-                    // No safe Linux-pure rasterizer for metafile → controlled placeholder; original
-                    // part preserved so Word still renders the real graphic on save.
-                    warnings.Add($"{kind} nie jest renderowane w przeglądarce — placeholder; oryginał zachowany w DOCX (pass-through).");
-                    lost.Add("Podgląd wektorowy metafile (renderowany dopiero w Word).");
+                    // 2) Najczęstszy realny przypadek: EMF/WMF z osadzoną bitmapą (StretchDIBits itp.).
+                    //    Wydobywamy DIB z rekordów i dekodujemy przez SkiaSharp → realny PNG do podglądu
+                    //    (pure-managed, cross-platform — bez GDI/System.Drawing/LibreOffice).
+                    var png = TryRasterizeMetafileToPng(source.Data, kind);
+                    if (png != null)
+                    {
+                        var (pw, ph) = ReadPngSize(png);
+                        warnings.Add($"{kind}: zrasteryzowano osadzoną bitmapę do PNG (SkiaSharp).");
+                        lost.Add("Elementy wektorowe metafile poza zrasteryzowaną bitmapą.");
+                        return MetafileRaster(kind, "image/png", png, pw > 0 ? pw : w, ph > 0 ? ph : h, source, sw, warnings, lost);
+                    }
+
+                    // 3) Czysto wektorowy metafile bez osadzonego rastra — brak pure-managed rasteryzera
+                    //    wektora → placeholder TYLKO jako ostateczność; oryginał EMF/WMF zachowany do
+                    //    eksportu (Word renderuje wektor z `data-original-src`).
+                    warnings.Add($"{kind}: brak osadzonego rastra do rasteryzacji — placeholder; oryginał zachowany w DOCX (Word renderuje wektorowo).");
+                    lost.Add("Podgląd wektorowego metafile (renderowany w Word z zachowanego oryginału).");
                     var placeholder = BuildPlaceholderSvg(kind, w, h);
                     return new GraphicConversionResult
                     {
@@ -367,6 +376,162 @@ public sealed class GraphicConversionService : IGraphicConversionService
             if (ok) return i;
         }
         return -1;
+    }
+
+    /// <summary>Buduje wynik dla metafile pokazanego jako realny raster (nie placeholder).</summary>
+    private static GraphicConversionResult MetafileRaster(
+        GraphicKind kind, string mime, byte[] raster, int w, int h, GraphicSource source,
+        Stopwatch sw, List<string> warnings, List<string> lost) => new()
+    {
+        Web = new WebGraphicRepresentation { MimeType = mime, Data = raster, WidthPx = w, HeightPx = h, IsPlaceholder = false },
+        // Oryginalny metafile jedzie do DOCX (pass-through) — Word renderuje wektor; PNG to tylko podgląd.
+        PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart,
+        Diagnostics = Diag(kind, mime, GraphicConversionStatus.Converted, GraphicFidelity.Lossy, sw, warnings, lost)
+    };
+
+    // ---- metafile rasterization (pure-managed via SkiaSharp) ----------------------
+
+    /// <summary>
+    /// Rasteryzuje metafile do PNG, wydobywając osadzony DIB (device-independent bitmap) z rekordów
+    /// EMF/WMF i dekodując go przez SkiaSharp (cross-platform; bez GDI/System.Drawing/LibreOffice).
+    /// Pokrywa najczęstszy realny przypadek — EMF/WMF opakowujący bitmapę (np. StretchDIBits). Zwraca
+    /// null dla metafile czysto wektorowego (brak DIB) lub gdy dekodowanie się nie powiedzie.
+    /// </summary>
+    private static byte[]? TryRasterizeMetafileToPng(byte[] data, GraphicKind kind)
+    {
+        var dib = kind == GraphicKind.Emf ? TryExtractEmfDib(data) : null;
+        dib ??= TryFindDibGeneric(data); // fallback (także dla WMF) — skan po nagłówku BITMAPINFOHEADER
+        if (dib == null) return null;
+
+        var bmp = WrapDibInBmpFile(dib);
+        return bmp == null ? null : DecodeToPng(bmp);
+    }
+
+    /// <summary>
+    /// Iteruje rekordy EMF i zwraca największy DIB niesiony przez rekordy rastrowe (offsety pól
+    /// offBmiSrc/cbBmiSrc/offBitsSrc/cbBitsSrc są względem początku rekordu — MS-EMF).
+    /// </summary>
+    private static byte[]? TryExtractEmfDib(byte[] d)
+    {
+        byte[]? best = null;
+        int o = 0, guard = 0;
+        while (o + 8 <= d.Length && guard++ < 200_000)
+        {
+            uint iType = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o));
+            uint nSize = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o + 4));
+            if (nSize < 8 || (long)o + nSize > d.Length) break; // uszkodzony strumień → przerwij
+
+            // Pozycja pól DIB zależy od typu rekordu (MS-EMF 2.3.1):
+            //  STRETCHDIBITS(81)/SETDIBITSTODEVICE(80) → offBmiSrc na offsecie 48,
+            //  BITBLT(76)/STRETCHBLT(77)/ALPHABLEND(114) → offBmiSrc na offsecie 84.
+            int? bmiFieldPos = iType switch
+            {
+                80 or 81 => 48,
+                76 or 77 or 114 => 84,
+                _ => null
+            };
+            if (bmiFieldPos is int p && p + 16 <= nSize)
+            {
+                uint offBmi = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o + p));
+                uint cbBmi = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o + p + 4));
+                uint offBits = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o + p + 8));
+                uint cbBits = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(o + p + 12));
+                var dib = SliceDib(d, o, offBmi, cbBmi, offBits, cbBits, nSize);
+                if (dib != null && (best == null || dib.Length > best.Length)) best = dib;
+            }
+
+            if (iType == 14) break; // EMR_EOF
+            o += (int)nSize;
+        }
+        return best;
+    }
+
+    /// <summary>Wycina blok (BITMAPINFOHEADER+palety + bity) z rekordu wg offsetów względnych.</summary>
+    private static byte[]? SliceDib(byte[] d, int recStart, uint offBmi, uint cbBmi, uint offBits, uint cbBits, uint recSize)
+    {
+        if (cbBmi < 40 || cbBits == 0) return null;
+        long bmiAbs = (long)recStart + offBmi, bitsAbs = (long)recStart + offBits;
+        if (offBmi + cbBmi > recSize || offBits + cbBits > recSize) return null;
+        if (bmiAbs + cbBmi > d.Length || bitsAbs + cbBits > d.Length) return null;
+
+        var bmi = d.AsSpan((int)bmiAbs, (int)cbBmi);
+        // Sanity-check nagłówka: biSize=40 (BITMAPINFOHEADER) i sensowny bitCount/compression.
+        uint biSize = BinaryPrimitives.ReadUInt32LittleEndian(bmi);
+        if (biSize != 40) return null;
+        var dib = new byte[cbBmi + cbBits];
+        bmi.CopyTo(dib);
+        d.AsSpan((int)bitsAbs, (int)cbBits).CopyTo(dib.AsSpan((int)cbBmi));
+        return dib;
+    }
+
+    /// <summary>
+    /// Konserwatywny skan: szuka prawidłowego BITMAPINFOHEADER i odtwarza DIB z policzonych rozmiarów
+    /// (palety + bitów). Fallback dla WMF i nietypowych EMF; przy niejasności zwraca null.
+    /// </summary>
+    private static byte[]? TryFindDibGeneric(byte[] d)
+    {
+        for (int i = 0; i + 40 <= d.Length; i += 2)
+        {
+            uint biSize = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(i));
+            if (biSize != 40) continue;
+            int width = BinaryPrimitives.ReadInt32LittleEndian(d.AsSpan(i + 4));
+            int height = BinaryPrimitives.ReadInt32LittleEndian(d.AsSpan(i + 8));
+            ushort planes = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(i + 12));
+            ushort bitCount = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(i + 14));
+            uint compression = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(i + 16));
+            uint clrUsed = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(i + 32));
+
+            if (planes != 1) continue;
+            if (bitCount is not (1 or 4 or 8 or 16 or 24 or 32)) continue;
+            if (compression is not (0u or 3u)) continue;          // tylko BI_RGB / BI_BITFIELDS (bez RLE)
+            int absH = Math.Abs(height);
+            if (width <= 0 || width > 20000 || absH <= 0 || absH > 20000) continue;
+
+            int masks = compression == 3 ? 12 : 0;                 // BI_BITFIELDS → 3×DWORD po nagłówku
+            int paletteEntries = bitCount <= 8 ? (clrUsed != 0 ? (int)clrUsed : 1 << bitCount) : 0;
+            int cbBmi = 40 + masks + paletteEntries * 4;
+            int stride = ((width * bitCount + 31) / 32) * 4;
+            long cbBits = (long)stride * absH;
+            if (cbBits <= 0 || cbBits > 64L * 1024 * 1024) continue;
+            if (i + cbBmi + cbBits > d.Length) continue;
+
+            var dib = new byte[cbBmi + cbBits];
+            d.AsSpan(i, (int)(cbBmi + cbBits)).CopyTo(dib);
+            return dib;
+        }
+        return null;
+    }
+
+    /// <summary>Opakowuje DIB w plik BMP (BITMAPFILEHEADER + DIB), gotowy do dekodowania.</summary>
+    private static byte[]? WrapDibInBmpFile(byte[] dib)
+    {
+        if (dib.Length < 40) return null;
+        uint cbBmi = BinaryPrimitives.ReadUInt32LittleEndian(dib);          // biSize = 40
+        ushort bitCount = BinaryPrimitives.ReadUInt16LittleEndian(dib.AsSpan(14));
+        uint compression = BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(16));
+        uint clrUsed = BinaryPrimitives.ReadUInt32LittleEndian(dib.AsSpan(32));
+        int masks = compression == 3 ? 12 : 0;
+        int paletteEntries = bitCount <= 8 ? (clrUsed != 0 ? (int)clrUsed : 1 << bitCount) : 0;
+        long headerAndPalette = cbBmi + masks + paletteEntries * 4L;
+        if (headerAndPalette > dib.Length) headerAndPalette = Math.Min(40 + masks, dib.Length);
+
+        const int FileHeader = 14;
+        var bmp = new byte[FileHeader + dib.Length];
+        bmp[0] = (byte)'B'; bmp[1] = (byte)'M';
+        BinaryPrimitives.WriteUInt32LittleEndian(bmp.AsSpan(2), (uint)(FileHeader + dib.Length)); // bfSize
+        BinaryPrimitives.WriteUInt32LittleEndian(bmp.AsSpan(10), (uint)(FileHeader + headerAndPalette)); // bfOffBits
+        dib.CopyTo(bmp.AsSpan(FileHeader));
+        return bmp;
+    }
+
+    /// <summary>Dekoduje BMP przez SkiaSharp i re-enkoduje do PNG. Zwraca null przy błędzie.</summary>
+    private static byte[]? DecodeToPng(byte[] bmp)
+    {
+        using var skbmp = SKBitmap.Decode(bmp);
+        if (skbmp == null || skbmp.Width <= 0 || skbmp.Height <= 0) return null;
+        using var image = SKImage.FromBitmap(skbmp);
+        using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+        return encoded?.ToArray();
     }
 
     // ---- placeholder + parsing helpers -------------------------------------------

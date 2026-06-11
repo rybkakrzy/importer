@@ -910,12 +910,9 @@
     <div class="dialog-overlay finish-dialog-overlay">
       <div class="dialog leave-dialog finish-dialog" role="dialog" aria-modal="true"
            aria-labelledby="finish-dialog-title">
-        <div class="leave-dialog-icon">
-          <svg viewBox="0 0 24 24" width="40" height="40" fill="none">
-            <path d="M3 11l18-8-8 18-2-7-8-3z" stroke="#ff6200" stroke-width="2"
-                  stroke-linejoin="round"/>
-          </svg>
-        </div>
+        <!-- Spójny wygląd z ekranem ładowania („Przetwarzanie…"): ten sam spinner (.loading-spinner)
+             zamiast osobnej ikony (Problem 3). -->
+        <div class="loading-spinner finish-dialog-spinner"></div>
         <h3 class="leave-dialog-title" id="finish-dialog-title">Trwa wysyłanie pliku do Twojej aplikacji</h3>
         <div class="leave-dialog-actions finish-dialog-actions">
           <button class="leave-btn-confirm finish-close-btn" (click)="closeFinishModalAndExit()">
@@ -979,8 +976,12 @@
 
   <!-- Dialog: hasło do zaszyfrowanego dokumentu -->
   @if (showPasswordDialog()) {
-    <div class="dialog-overlay leave-dialog-overlay" (click)="cancelPasswordDialog()">
-      <div class="dialog leave-dialog password-dialog" (click)="$event.stopPropagation()">
+    <!-- Brak (click) na overlay i brak (keydown.escape) na polu: dialog hasła zamykają WYŁĄCZNIE
+         przyciski „Anuluj"/„Otwórz". Klik w tło ani Escape go nie zamykają, żeby nie zostawić
+         użytkownika z pustym dokumentem (Problem 1). -->
+    <div class="dialog-overlay leave-dialog-overlay">
+      <div class="dialog leave-dialog password-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="password-dialog-title">
         <div class="leave-dialog-icon">
           <svg viewBox="0 0 24 24" width="40" height="40" fill="none">
             <rect x="5" y="11" width="14" height="9" rx="2" stroke="#2b579a" stroke-width="2"/>
@@ -988,14 +989,13 @@
             <circle cx="12" cy="15.5" r="1.4" fill="#2b579a"/>
           </svg>
         </div>
-        <h3 class="leave-dialog-title">Dokument zabezpieczony hasłem</h3>
+        <h3 class="leave-dialog-title" id="password-dialog-title">Dokument zabezpieczony hasłem</h3>
         <p class="leave-dialog-message">Wprowadź hasło, aby otworzyć dokument.</p>
         <input
           type="password"
           class="password-dialog-input"
           [(ngModel)]="passwordDialogValue"
           (keydown.enter)="confirmPasswordDialog()"
-          (keydown.escape)="cancelPasswordDialog()"
           (input)="passwordDialogError.set(null)"
           placeholder="Hasło"
           autocomplete="off"

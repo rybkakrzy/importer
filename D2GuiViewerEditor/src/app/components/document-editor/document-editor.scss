@@ -1510,6 +1510,12 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   justify-content: center;
 }
 
+/* Spinner w dialogu kończenia pracy — ten sam wizual co .loading-spinner ekranu ładowania
+   („Przetwarzanie…"), z odstępem pod spodem jak .leave-dialog-icon (Problem 3). */
+.finish-dialog-spinner {
+  margin-bottom: 16px;
+}
+
 .finish-close-btn {
   flex: 0 0 auto;
   min-width: 160px;

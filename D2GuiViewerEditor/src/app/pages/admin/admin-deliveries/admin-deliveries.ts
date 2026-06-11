@@ -1,6 +1,7 @@
-import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription, interval } from 'rxjs';
 import {
   DeliveryListItem,
   DeliveryStatus,
@@ -14,12 +15,17 @@ import {
   templateUrl: './admin-deliveries.html',
   styleUrl: './admin-deliveries.scss'
 })
-export class AdminDeliveriesComponent implements OnInit {
+export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   private storage = inject(DocumentStorageService);
 
   readonly statuses: DeliveryStatus[] = [
-    'DeadLettered', 'FailedPermanently', 'RetryScheduled', 'Sending', 'Pending', 'Sent'
+    'DeadLettered', 'FailedPermanently', 'RetryScheduled', 'Sending', 'Pending', 'Sent', 'Cancelled'
   ];
+
+  /** Interwał autoodświeżania listy (ms). */
+  private static readonly RefreshIntervalMs = 3000;
+  private refreshSub?: Subscription;
+  autoRefresh = signal(true);
 
   selectedStatus = signal<DeliveryStatus | 'all'>('all');
 
@@ -39,6 +45,7 @@ export class AdminDeliveriesComponent implements OnInit {
   isLoading = signal(true);
   error = signal<string | null>(null);
   retryingId = signal<string | null>(null);
+  cancelingId = signal<string | null>(null);
   notice = signal<string | null>(null);
   expandedId = signal<string | null>(null);
 
@@ -76,22 +83,55 @@ export class AdminDeliveriesComponent implements OnInit {
 
   ngOnInit(): void {
     this.load();
+    this.startAutoRefresh();
   }
 
+  ngOnDestroy(): void {
+    this.refreshSub?.unsubscribe();
+  }
+
+  /** Pełne załadowanie (ze spinnerem, resetem strony) — przy wejściu i zmianie filtra statusu. */
   load(): void {
     this.isLoading.set(true);
     this.error.set(null);
     this.notice.set(null);
     this.currentPage.set(0);
+    this.fetch(/* silent */ false);
+  }
+
+  /** Autoodświeżanie co 3 s: ciche pobranie (bez spinnera, bez resetu strony/filtrów/rozwinięcia). */
+  private startAutoRefresh(): void {
+    this.refreshSub?.unsubscribe();
+    this.refreshSub = interval(AdminDeliveriesComponent.RefreshIntervalMs).subscribe(() => {
+      // Nie odświeżamy w trakcie ładowania ani trwającej akcji (Anuluj/Wznów) — uniknięcie migotania
+      // i nadpisania stanu tuż przed reloadem akcji.
+      if (this.autoRefresh() && !this.isLoading() && !this.retryingId() && !this.cancelingId()) {
+        this.fetch(/* silent */ true);
+      }
+    });
+  }
+
+  toggleAutoRefresh(): void {
+    this.autoRefresh.update(v => !v);
+  }
+
+  private fetch(silent: boolean): void {
     const status = this.selectedStatus();
     this.storage.getDeliveries(status === 'all' ? null : status).subscribe({
       next: (items) => {
         this.allDeliveries.set(items);
-        this.isLoading.set(false);
+        if (!silent) this.isLoading.set(false);
+        // Strona mogła się skurczyć (np. zadanie zniknęło z filtra) — przytnij do zakresu.
+        if (this.currentPage() > this.totalPages() - 1) {
+          this.currentPage.set(Math.max(0, this.totalPages() - 1));
+        }
       },
       error: () => {
-        this.error.set('Nie udało się załadować listy plików do wysłania.');
-        this.isLoading.set(false);
+        if (!silent) {
+          this.error.set('Nie udało się załadować listy plików do wysłania.');
+          this.isLoading.set(false);
+        }
+        // Ciche odświeżenie nie pokazuje błędu — następny tick spróbuje ponownie.
       }
     });
   }
@@ -125,26 +165,61 @@ export class AdminDeliveriesComponent implements OnInit {
     return this.expandedId() === deliveryId;
   }
 
-  /** Retry ma sens tylko dla zadań w stanie terminalnie nieudanym. */
-  canRetry(item: DeliveryListItem): boolean {
-    return item.status === 'DeadLettered' || item.status === 'FailedPermanently';
+  /** „Wznów" — zadania nieudane, zaplanowane na później lub anulowane wracają do kolejki (wysyłka teraz). */
+  canResume(item: DeliveryListItem): boolean {
+    return item.status === 'DeadLettered'
+        || item.status === 'FailedPermanently'
+        || item.status === 'RetryScheduled'
+        || item.status === 'Cancelled';
   }
 
-  retry(item: DeliveryListItem, event: Event): void {
+  /** „Anuluj" — tylko zadania jeszcze nieprzetworzone i niezablokowane (Pending / RetryScheduled). */
+  canCancel(item: DeliveryListItem): boolean {
+    return item.status === 'Pending' || item.status === 'RetryScheduled';
+  }
+
+  /** Czy dla zadania jest jakakolwiek akcja w toku (blokuje przyciski w wierszu). */
+  isBusy(item: DeliveryListItem): boolean {
+    return this.retryingId() === item.deliveryId || this.cancelingId() === item.deliveryId;
+  }
+
+  resume(item: DeliveryListItem, event: Event): void {
     event.stopPropagation();
     this.retryingId.set(item.deliveryId);
     this.notice.set(null);
     this.storage.retryDelivery(item.deliveryId).subscribe({
       next: () => {
         this.retryingId.set(null);
-        this.notice.set(`Zadanie ${this.shortId(item.deliveryId)} ponowione.`);
-        this.load();
+        this.notice.set(`Zadanie ${this.shortId(item.deliveryId)} wznowione.`);
+        this.refreshAfterAction();
       },
       error: () => {
         this.retryingId.set(null);
-        this.error.set(`Nie udało się ponowić zadania ${this.shortId(item.deliveryId)}.`);
+        this.error.set(`Nie udało się wznowić zadania ${this.shortId(item.deliveryId)}.`);
       }
     });
+  }
+
+  cancel(item: DeliveryListItem, event: Event): void {
+    event.stopPropagation();
+    this.cancelingId.set(item.deliveryId);
+    this.notice.set(null);
+    this.storage.cancelDelivery(item.deliveryId).subscribe({
+      next: () => {
+        this.cancelingId.set(null);
+        this.notice.set(`Zadanie ${this.shortId(item.deliveryId)} anulowane.`);
+        this.refreshAfterAction();
+      },
+      error: () => {
+        this.cancelingId.set(null);
+        this.error.set(`Nie udało się anulować zadania ${this.shortId(item.deliveryId)}.`);
+      }
+    });
+  }
+
+  /** Po akcji odświeżamy cicho (bez spinnera/resetu strony) — lista i tak auto-odświeża się co 3 s. */
+  private refreshAfterAction(): void {
+    this.fetch(/* silent */ true);
   }
 
   /** Etykieta statusu po polsku (wartość enuma zostaje dla backendu). */
@@ -155,7 +230,8 @@ export class AdminDeliveriesComponent implements OnInit {
       RetryScheduled: 'Zaplanowano',
       Sent: 'Wysłano',
       FailedPermanently: 'Błąd',
-      DeadLettered: 'Porzucone'
+      DeadLettered: 'Porzucone',
+      Cancelled: 'Anulowano'
     };
     return map[status] ?? status;
   }
@@ -168,7 +244,8 @@ export class AdminDeliveriesComponent implements OnInit {
       RetryScheduled: 'status-editing',
       Sent: 'status-sent',
       FailedPermanently: 'status-failed',
-      DeadLettered: 'status-failed'
+      DeadLettered: 'status-failed',
+      Cancelled: 'status-cancelled'
     };
     return map[status] ?? 'status-saved';
   }

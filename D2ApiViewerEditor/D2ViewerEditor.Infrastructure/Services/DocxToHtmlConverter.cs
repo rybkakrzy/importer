@@ -2493,10 +2493,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var altAttr = !string.IsNullOrEmpty(alt) ? $" alt=\"{EscapeHtml(alt)}\"" : string.Empty;
 
         var legacyAttr = legacySrc?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
-        // Gdy w `src` jest tylko placeholder SVG (EMF/WMF nierenderowalny w przeglądarce),
-        // niesiemy ORYGINALNY metafile w `data-original-src`, żeby writer mógł zapisać prawdziwy
-        // EMF/WMF (Word renderuje natywnie) zamiast pisać niepoprawny goły blip SVG (= uszkodzony DOCX).
-        var originalAttr = legacySrc?.isPlaceholder == true
+        // Dla KAŻDEGO legacy metafile (EMF/WMF) — niezależnie czy w `src` jest placeholder SVG czy
+        // zrasteryzowany PNG — niesiemy ORYGINALNY metafile w `data-original-src`. Dzięki temu writer
+        // zapisuje do DOCX prawdziwy wektorowy EMF/WMF (Word renderuje natywnie), a PNG/placeholder
+        // służy tylko do podglądu w przeglądarce. `legacySrc != null` ⇔ part był EMF/WMF.
+        var originalAttr = legacySrc != null
             ? $" data-original-src=\"data:{contentType};base64,{base64Data}\""
             : string.Empty;
         return $"<img src=\"{drawingSrc}\" " +
@@ -2563,7 +2564,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             (long)(vmlWidth * 9525.0), (long)(vmlHeight * 9525.0));
         var vmlSrc = legacyVml?.dataUrl ?? $"data:{contentType};base64,{base64Data}";
         var vmlLegacyAttr = legacyVml?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
-        var vmlOriginalAttr = legacyVml?.isPlaceholder == true
+        // Jak wyżej: oryginalny EMF/WMF do round-tripu zapisu zawsze, gdy part był metafile.
+        var vmlOriginalAttr = legacyVml != null
             ? $" data-original-src=\"data:{contentType};base64,{base64Data}\""
             : string.Empty;
 

@@ -45,7 +45,8 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 | **POST** | `/{masterId}/user-download` | **„Pobierz dokument"** — konwertuje aktualny stan edytora (HTML+header/footer/margins) na DOCX dla użytkownika. Egzekwuje regułę domenową: tylko gdy `documents.metadata.userDownload == true`. Body: `SaveDocumentRequest`. → 200 plik DOCX / 403 (gate) / 404 / 400 |
 | GET | `/deliveries/{deliveryId}` | Status zadania wysyłki (polling z GUI) | `DeliveryStatusDto { deliveryId, documentId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, lastError?, updatedAt }` |
 | GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`; widok GUI `/admin/deliveries`) | `DeliveryListItemDto[] { deliveryId, documentId, status, attemptCount, createdAt, lastAttemptAt?, nextAttemptAt?, deadlineAt, lastError?, lockedUntil?, lockedBy }` |
-| POST | `/deliveries/{deliveryId}/retry` | Ręczne ponowienie nieudanego zadania (`DeadLettered`/`FailedPermanently`) | `RequeueDeliveryResult { deliveryId, status }` |
+| POST | `/deliveries/{deliveryId}/retry` | Ręczne wznowienie zadania (`DeadLettered`/`FailedPermanently`/`RetryScheduled`/`Cancelled` → kolejka, wysyłka teraz) | `RequeueDeliveryResult { deliveryId, status }` |
+| POST | `/deliveries/{deliveryId}/cancel` | Ręczne anulowanie zadania oczekującego/zaplanowanego (`Pending`/`RetryScheduled` → `Cancelled`) | `CancelDeliveryResult { deliveryId, status }` |
 
 Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DTO `SaveDocumentVersionRequest` używany też przez `finish`).
 

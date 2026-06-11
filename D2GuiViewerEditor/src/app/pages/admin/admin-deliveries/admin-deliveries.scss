@@ -136,6 +136,7 @@
 .status-badge.status-sending { background: #e0e7ff; color: #3730a3; }
 .status-badge.status-failed  { background: #fde2e1; color: #b42318; }
 .status-badge.status-sent    { background: #dcfce7; color: #15803d; }
+.status-badge.status-cancelled { background: #e5e7eb; color: #4b5563; }
 
 /* ── Row ── */
 .doc-row {
@@ -172,6 +173,46 @@
 .dl-btn-sm {
   padding: 4px 8px;
   font-size: 12px;
+}
+
+/* Wariant „Anuluj" (destrukcyjny) */
+.dl-btn-danger {
+  &:hover:not(:disabled) {
+    background: #fef2f2;
+    border-color: #fca5a5;
+    color: #b42318;
+  }
+}
+
+/* Akcje w wierszu — Wznów / Anuluj obok siebie, wyrównane do prawej */
+.row-actions {
+  display: inline-flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Przełącznik autoodświeżania w nagłówku */
+.auto-refresh-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #4b5563;
+  cursor: pointer;
+  user-select: none;
+}
+
+.auto-refresh-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+  transition: background .15s;
+
+  &.on {
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+  }
 }
 
 /* ── Pagination ── */

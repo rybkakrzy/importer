@@ -23,5 +23,8 @@ public enum DeliveryStatus
     FailedPermanently,
 
     /// <summary>Wyczerpano okno ponawiania (24 h) bez skutecznej wysyłki.</summary>
-    DeadLettered
+    DeadLettered,
+
+    /// <summary>Zadanie anulowane ręcznie (administrator) — nie podlega dalszemu przetwarzaniu.</summary>
+    Cancelled
 }

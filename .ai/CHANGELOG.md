@@ -13,6 +13,32 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-11 — „Pliki do wysłania": autoodświeżanie 3 s + akcje Anuluj/Wznów
+### Changed
+- **Domena:** `DeliveryStatus.Cancelled` (nowy stan końcowy); `DocumentDelivery.IsTerminal` obejmuje Cancelled; `Cancel()` (Pending/RetryScheduled→Cancelled, czyści lease, ustawia LastError „Anulowano ręcznie"); `Requeue()` rozszerzony o RetryScheduled (wyślij teraz) i Cancelled (poprzednio tylko DeadLettered/FailedPermanently). Worker bez zmian — claim selektuje Pending/RetryScheduled/stuck-Sending, więc Cancelled jest wykluczony.
+- **Application/API:** `CancelDeliveryCommand`+handler (anulowanie + `Document.MarkSaved`); endpoint `POST /api/documentstorage/deliveries/{id}/cancel`. „Wznów" reużywa istniejącego `/retry` (Requeue).
+- **SQL:** `infra/sql/008_add_delivery_cancelled_status.sql` — DROP+ADD `ck_document_deliveries_status` z wartością `Cancelled` (indeksy częściowe due/active bez zmian).
+- **GUI:** `admin-deliveries` — autoodświeżanie co 3 s (`interval`, ciche `fetch(silent)`, przełącznik, `OnDestroy`); przyciski „Wznów" (`canResume`) i „Anuluj" (`canCancel`, `dl-btn-danger`); `cancelDelivery()` w `document-storage.service`; `DeliveryStatus` +`Cancelled`; statusLabel „Anulowano"/statusClass `status-cancelled`; status w dropdownie filtra.
+### Verified
+- Backend: `dotnet build` sln OK; Domain `DocumentDelivery` 16 (+6 Cancel/Requeue), Application `CancelDeliveryCommandHandler` 3.
+- GUI: `ng build` OK; `ng test` **244** (+7 `admin-deliveries.spec`).
+### Notes
+- **Wymaga uruchomienia migracji `008` na każdym środowisku** (CHECK constraint). Bez niej zapis statusu `Cancelled` odrzuci baza.
+- Anulowanie zablokowane dla `Sending` (lease workera) — uniknięcie wyścigu z trwającą próbą.
+
+## 2026-06-11 — 5 zgłoszeń: dialog hasła, .doc, GUI „wysyłanie", EMF→PNG, VersionId w mailu
+### Changed
+- **(P1) Dialog hasła** — `document-editor.html`: usunięto `(click)=cancelPasswordDialog()` z overlay i `(keydown.escape)` z pola (dialog zamykają tylko `Anuluj`/`Otwórz`; dodano `role=dialog`/`aria-modal`). `document-editor.ts` `cancelPasswordDialog()`: bez `returnUrl` → `router.navigate(['/'])`, z `returnUrl` → `tryCloseBrowserTab()` — koniec pustego dokumentu po anulowaniu.
+- **(P3) Modal „Trwa wysyłanie pliku…"** — zamiast ikony papierowego samolotu używa `.loading-spinner` (klasa `.finish-dialog-spinner`, +SCSS `margin-bottom:16px`) — spójny z ekranem „Przetwarzanie…". Logika/countdown bez zmian.
+- **(P5) Mail „Zgłoś"** — `openReportEmail()` podstawia `Version ID` = `documentVersionId()` (było `documentMetadata().version` = zwykle `—`); fallback `—` tylko gdy wersji brak; `Master ID` bez zmian.
+- **(P4) EMF/WMF → PNG** — `GraphicConversionService`: `TryRasterizeMetafileToPng` + `TryExtractEmfDib` (rekordy STRETCHDIBITS/SETDIBITSTODEVICE/BITBLT/STRETCHBLT/ALPHABLEND) + `TryFindDibGeneric` + `WrapDibInBmpFile` + `DecodeToPng` (SkiaSharp). `DocxToHtmlConverter`: `data-original-src` niesiony dla każdego metafile (drawing + VML), nie tylko placeholdera → eksport wektorowy zachowany.
+- **(P2) Binarny .doc → .docx** — nowy `LegacyDocBinaryConverter` (FIB + piece table → tekst+akapity → DOCX/OpenXML); wpięty w `DocumentInputNormalizer` z fallbackiem `UnsupportedLegacyDoc`.
+### Verified
+- Backend: `dotnet build` sln OK (0 błędów); `Infrastructure.UnitTests` 155 (+1 EMF→PNG `Emf_WithEmbeddedDib_IsRasterizedToPng`, +4 `LegacyDocBinaryConverterTests`); `Api.UnitTests` DocumentController 13.
+- GUI: `ng build` OK; `ng test` **233** (+4 w `document-editor.spec`: VersionId obecny/fallback, cancel bez/z returnUrl).
+### Notes
+- Ograniczenia świadome: czysto wektorowe EMF (bez rastra) wciąż placeholder; `.doc` odzyskuje tekst+akapity, nie formatowanie/tabele/obrazy. Patrz ADR-0011. Pełna wierność = sidecar LibreOffice (roadmapa).
+
 ## 2026-06-09 — „Lista plików" (admin-files): statusy dokumentów po polsku
 ### Changed
 - `admin-files.ts` `statusLabel` — etykiety EN→PL: `Saved`→„Zapisany", `Editing`→„W edycji", `Sending`→„Wysyłanie do odbiorcy", `DeliveryFailed`→„Odbiorca nie odpowiada", `Sent`→„Wysłany". Wartości enuma `DocumentStatus` z API (klucze) bez zmian; `statusClass` (kolory) bez zmian. Filtr statusu jest free-text i matchuje po `statusLabel`, więc działa na polskich etykietach.

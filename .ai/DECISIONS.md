@@ -205,3 +205,40 @@ Ręczna dekrypcja CFB + Agile/Standard (własny kod) — odrzucone: ~400 linii k
 testowej, wysokie ryzyko cichych błędów; NPOI jest sprawdzone. b2xtranslator do .doc — odrzucone:
 NuGet nie zawiera parsera. LibreOffice headless — odrzucone regułą projektu (kontener/GCP).
 Normalizacja na ścieżce ingest/storage (dashboard) — odłożone: osobny flow (persist), follow-up.
+
+---
+
+## ADR-0011: Realna rasteryzacja EMF/WMF (SkiaSharp) i konwersja binarnego .doc (pure-managed) — 2026-06-11
+
+### Context
+Dwa zgłoszenia odrzucały dotychczasowe „honest fallbacky" wprowadzone w ADR-0010 i przy konwersji
+grafik (placeholder „EMF — podgląd w Word"): (P4) wymóg realnego podglądu grafiki EMF w przeglądarce,
+(P2) realna obsługa starszych plików `.doc`. Reguły bez zmian: bez LibreOffice/GDI/System.Drawing,
+Linux/GCP-safe, minimalne zależności. Dostępne darmowe libki: **SkiaSharp 3.119.2** (już w repo,
+NativeAssets.Linux) i **NPOI 2.8.0** (POIFS/CFB). Brak HWPF w NPOI potwierdzony.
+
+### Decision
+**EMF/WMF → PNG (preview):** `GraphicConversionService` wydobywa osadzony **DIB** z rekordów metafile
+(`EMR_STRETCHDIBITS`/`SETDIBITSTODEVICE` — offBmiSrc@48; `BITBLT`/`STRETCHBLT`/`ALPHABLEND` — @84;
++ konserwatywny skan `BITMAPINFOHEADER`), opakowuje w plik BMP i dekoduje przez **SkiaSharp**
+(`SKBitmap.Decode` → PNG). To pokrywa najczęstszy realny przypadek (EMF/WMF opakowujący bitmapę).
+Placeholder SVG zostaje TYLKO dla czysto wektorowego metafile bez rastra. **Eksport:** reader niesie
+oryginalny metafile w `data-original-src` dla KAŻDEGO EMF/WMF (nie tylko placeholdera), a writer
+(`ResolveImageSrc`) preferuje oryginał → DOCX dostaje wektorowy EMF/WMF; PNG to wyłącznie podgląd.
+
+**Binarny .doc → .docx:** nowy `LegacyDocBinaryConverter` (pure-managed) parsuje FIB + piece table
+(CLX/PlcPcd; PCD.fc compressed=CP1252/Latin1 vs 16-bit Unicode), wyciąga tekst + podział akapitów i
+buduje DOCX przez OpenXML. Wpięty w `DocumentInputNormalizer` (gałąź `WordDocument`) z fallbackiem na
+`UnsupportedLegacyDoc` przy niespójnej strukturze.
+
+### Consequences
+EMF/WMF z rastrem renderują się w edytorze (koniec placeholdera w dominującym przypadku) bez utraty
+wierności eksportu (wektor zostaje). `.doc` otwiera się z odzyskanym tekstem zamiast twardego
+odrzucenia. **Świadome ograniczenia:** (1) czysto wektorowe EMF wciąż placeholder (brak pure-managed
+interpretera wektora); (2) `.doc` odzyskuje tylko tekst+akapity, nie formatowanie/tabele/obrazy.
+Zero nowych zależności (SkiaSharp/NPOI już były). Roadmapa pełnej wierności: sidecar LibreOffice.
+
+### Alternatives considered
+System.Drawing (Windows-only) — odrzucone (PlatformNotSupported na Linux, sprzeczne z regułą).
+Magick.NET z natywnym delegatem WMF/EMF — odrzucone (brak delegatów w obrazie kontenera).
+Płatny Aspose/Spire — odrzucone (licencja). Sidecar LibreOffice — roadmapa (infrastruktura).

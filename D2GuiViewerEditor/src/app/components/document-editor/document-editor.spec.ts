@@ -406,6 +406,93 @@ describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () =>
       (window as any).open = origOpen;
     }
   });
+
+  /** Przechwytuje URL mailto przekazany do window.open i zwraca odkodowane body. */
+  function captureMailBody(): string {
+    let captured = '';
+    const origOpen = window.open;
+    (window as any).open = (url: string) => { captured = url; return null; };
+    try {
+      component.openReportEmail();
+    } finally {
+      (window as any).open = origOpen;
+    }
+    const body = /[?&]body=([^&]*)/.exec(captured)?.[1] ?? '';
+    return decodeURIComponent(body);
+  }
+
+  it('openReportEmail() wstawia poprawny Master ID i Version ID w treści maila (Problem 5)', () => {
+    component.documentMasterId.set('master-123');
+    component.documentVersionId.set('version-456');
+
+    const body = captureMailBody();
+
+    expect(body).toContain('Master ID');
+    expect(body).toContain('master-123');
+    expect(body).toContain('Version ID');
+    expect(body).toContain('version-456');
+    // VersionId NIE może być fallbackiem, skoro istnieje.
+    expect(body).not.toMatch(/Version ID\s*:\s*—/);
+  });
+
+  it('openReportEmail() używa fallbacku „—" dla Version ID tylko gdy wersja faktycznie nie istnieje', () => {
+    component.documentMasterId.set('master-123');
+    component.documentVersionId.set(null);
+
+    const body = captureMailBody();
+
+    expect(body).toMatch(/Version ID\s*:\s*—/);
+  });
+});
+
+describe('DocumentEditorComponent — dialog hasła: anulowanie (Problem 1)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+  let navigateSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    navigateSpy = vi.fn();
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: navigateSpy } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('Anuluj bez returnUrl → przekierowanie na dashboard (nie zostawia pustego dokumentu)', () => {
+    component.returnUrl.set(null);
+    component.showPasswordDialog.set(true);
+
+    component.cancelPasswordDialog();
+
+    expect(component.showPasswordDialog()).toBe(false);
+    expect(navigateSpy).toHaveBeenCalledWith(['/']);
+  });
+
+  it('Anuluj z returnUrl → przepływ powrotu (zamknięcie karty), bez nawigacji na dashboard', () => {
+    component.returnUrl.set('https://app.example.com/return');
+    component.showPasswordDialog.set(true);
+    const origClose = window.close;
+    const closeSpy = vi.fn();
+    (window as any).close = closeSpy;
+
+    try {
+      component.cancelPasswordDialog();
+    } finally {
+      (window as any).close = origClose;
+    }
+
+    expect(component.showPasswordDialog()).toBe(false);
+    expect(closeSpy).toHaveBeenCalled();
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('DocumentEditorComponent — userDownload (widoczność „Pobierz dokument")', () => {

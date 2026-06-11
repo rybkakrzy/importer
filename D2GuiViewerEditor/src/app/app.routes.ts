@@ -27,6 +27,11 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./pages/admin/admin-deliveries/admin-deliveries').then((m) => m.AdminDeliveriesComponent),
       },
+      {
+        path: 'open',
+        loadComponent: () =>
+          import('./pages/admin/admin-open-document/admin-open-document').then((m) => m.AdminOpenDocumentComponent),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

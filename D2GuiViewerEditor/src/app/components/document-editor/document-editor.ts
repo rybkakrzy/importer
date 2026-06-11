@@ -969,12 +969,23 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     retry?.(pwd);
   }
 
-  /** Anuluje wprowadzanie hasła. */
+  /**
+   * Anuluje wprowadzanie hasła. Nie wolno zostawić użytkownika z pustym dokumentem (Problem 1):
+   * - bez `returnUrl` (otwarcie z dashboardu / dysku) → powrót na dashboard,
+   * - z `returnUrl` (link z aplikacji zewnętrznej) → przepływ powrotu jak po „Zakończ"
+   *   (best-effort zamknięcie karty otwartej przez aplikację zewnętrzną).
+   */
   cancelPasswordDialog(): void {
     this.showPasswordDialog.set(false);
     this.passwordDialogValue = '';
     this._passwordRetry = null;
     this.passwordDialogError.set(null);
+
+    if (this.returnUrl()) {
+      this.tryCloseBrowserTab();
+    } else {
+      this.router.navigate(['/']);
+    }
   }
 
   /**
@@ -1901,7 +1912,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     // Triggered from the Pomoc dropdown — close it like the other menu actions do.
     this.closeAllMenus();
     const masterId = this.documentMasterId() ?? '—';
-    const version = this.documentMetadata()?.version ?? '—';
+    // VersionId aktualnie otwartej wersji edytowalnej (sygnał ustawiany z query param `versionId`).
+    // Fallback „—" TYLKO gdy faktycznie brak wersji (tryb podglądu read-only bez versionId).
+    const versionId = this.documentVersionId() ?? '—';
     const date = new Date().toLocaleString('pl-PL');
     const url = window.location.href;
     const buildNumber = this.buildInfo.buildNumber();
@@ -1913,7 +1926,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const rows: Array<[string, string]> = [
       ['Data zgłoszenia',   date],
       ['Master ID',         masterId],
-      ['Wersja dokumentu',  version],
+      ['Version ID',        versionId],
       ['Wersja aplikacji',  buildNumber],
       ['Środowisko',        environment],
       ['URL',               url],

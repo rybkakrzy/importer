@@ -93,7 +93,8 @@ public class DocumentDelivery
 
     /// <summary>Czy zadanie jest w stanie końcowym (nie podlega dalszemu przetwarzaniu).</summary>
     public bool IsTerminal =>
-        Status is DeliveryStatus.Sent or DeliveryStatus.FailedPermanently or DeliveryStatus.DeadLettered;
+        Status is DeliveryStatus.Sent or DeliveryStatus.FailedPermanently
+               or DeliveryStatus.DeadLettered or DeliveryStatus.Cancelled;
 
     public void MarkSent()
     {
@@ -137,13 +138,18 @@ public class DocumentDelivery
     }
 
     /// <summary>
-    /// Ręczne ponowienie zadania w stanie końcowym (np. DeadLettered) — wznawia kolejkowanie.
-    /// Wydłuża deadline o podane okno, żeby zadanie miało realną szansę na ponowną wysyłkę.
+    /// Ręczne wznowienie zadania ("Wznów") — wraca do kolejki i wysyła od razu. Dotyczy zadań
+    /// nieudanych (DeadLettered / FailedPermanently), zaplanowanych na później (RetryScheduled — wyślij
+    /// teraz zamiast czekać na backoff) oraz anulowanych (Cancelled). Wydłuża deadline o podane okno,
+    /// żeby zadanie miało realną szansę na ponowną wysyłkę. NIE dotyczy Sent (już wysłane), Sending
+    /// (próba w toku) ani Pending (już w kolejce).
     /// </summary>
     public void Requeue(TimeSpan retentionWindow)
     {
-        if (!IsTerminal || Status == DeliveryStatus.Sent)
-            throw new InvalidOperationException("Requeue dotyczy wyłącznie zadań w stanie nieudanym (DeadLettered / FailedPermanently)");
+        if (Status is not (DeliveryStatus.DeadLettered or DeliveryStatus.FailedPermanently
+                        or DeliveryStatus.RetryScheduled or DeliveryStatus.Cancelled))
+            throw new InvalidOperationException(
+                "Wznowienie dotyczy zadań nieudanych, zaplanowanych lub anulowanych (nie: wysłane/w toku/oczekujące)");
 
         var now = DateTime.UtcNow;
         Status = DeliveryStatus.Pending;
@@ -152,6 +158,23 @@ public class DocumentDelivery
         ClearLease();
         LastError = null;
         UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Ręczne anulowanie zadania ("Anuluj") — zatrzymuje wysyłkę i przechodzi w stan końcowy Cancelled.
+    /// Dozwolone tylko dla zadań jeszcze nieprzetworzonych i niezablokowanych przez workera
+    /// (Pending / RetryScheduled). Próby w toku (Sending) i stany końcowe nie podlegają anulowaniu.
+    /// </summary>
+    public void Cancel()
+    {
+        if (Status is not (DeliveryStatus.Pending or DeliveryStatus.RetryScheduled))
+            throw new InvalidOperationException(
+                "Anulować można tylko zadanie oczekujące lub zaplanowane (nie: w toku/wysłane/zakończone)");
+
+        Status = DeliveryStatus.Cancelled;
+        ClearLease();
+        LastError = "Anulowano ręcznie (administrator).";
+        UpdatedAt = DateTime.UtcNow;
     }
 
     public static bool IsValidRecipientUrl(string? url) =>
