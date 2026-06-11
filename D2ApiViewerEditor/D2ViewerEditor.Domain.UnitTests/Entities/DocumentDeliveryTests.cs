@@ -182,6 +182,39 @@ public class DocumentDeliveryTests
         act.Should().Throw<InvalidOperationException>();
     }
 
+    [Test]
+    public void UpdateRecipientUrl_WithValidUrl_ShouldChangeAddress()
+    {
+        var delivery = CreateValid();
+
+        delivery.UpdateRecipientUrl("https://nowy.example.com/cb");
+
+        delivery.RecipientUrl.Should().Be("https://nowy.example.com/cb");
+    }
+
+    [TestCase("")]
+    [TestCase("ftp://example.com")]
+    [TestCase("not-a-url")]
+    public void UpdateRecipientUrl_WithInvalidUrl_ShouldThrow(string url)
+    {
+        var delivery = CreateValid();
+
+        var act = () => delivery.UpdateRecipientUrl(url);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Test]
+    public void UpdateRecipientUrl_WhenSent_ShouldThrow()
+    {
+        var delivery = CreateValid();
+        delivery.MarkSent();
+
+        var act = () => delivery.UpdateRecipientUrl("https://nowy.example.com/cb");
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
     private sealed class FixedBackoff : IBackoffStrategy
     {
         private readonly TimeSpan _delay;

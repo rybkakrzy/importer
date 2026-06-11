@@ -47,6 +47,7 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 | GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`; widok GUI `/admin/deliveries`) | `DeliveryListItemDto[] { deliveryId, documentId, status, attemptCount, createdAt, lastAttemptAt?, nextAttemptAt?, deadlineAt, lastError?, lockedUntil?, lockedBy }` |
 | POST | `/deliveries/{deliveryId}/retry` | Ręczne wznowienie zadania (`DeadLettered`/`FailedPermanently`/`RetryScheduled`/`Cancelled` → kolejka, wysyłka teraz) | `RequeueDeliveryResult { deliveryId, status }` |
 | POST | `/deliveries/{deliveryId}/cancel` | Ręczne anulowanie zadania oczekującego/zaplanowanego (`Pending`/`RetryScheduled` → `Cancelled`) | `CancelDeliveryResult { deliveryId, status }` |
+| PUT | `/deliveries/{deliveryId}/recipient-url` | Zmiana adresu odbiorcy (returnUrl) zadania; body `{ recipientUrl }`; dozwolone dla zadań ≠ `Sent`/`Sending` | `UpdateDeliveryRecipientUrlResult { deliveryId, recipientUrl, status }` |
 
 Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DTO `SaveDocumentVersionRequest` używany też przez `finish`).
 

@@ -49,6 +49,12 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   notice = signal<string | null>(null);
   expandedId = signal<string | null>(null);
 
+  // Edycja adresu odbiorcy (returnUrl) — modal.
+  editingId = signal<string | null>(null);
+  editUrlValue = signal('');
+  editError = signal<string | null>(null);
+  savingEdit = signal(false);
+
   private filtered = computed(() => {
     const id       = this.filterId().toLowerCase().trim();
     const doc      = this.filterDoc().toLowerCase().trim();
@@ -105,7 +111,8 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
     this.refreshSub = interval(AdminDeliveriesComponent.RefreshIntervalMs).subscribe(() => {
       // Nie odświeżamy w trakcie ładowania ani trwającej akcji (Anuluj/Wznów) — uniknięcie migotania
       // i nadpisania stanu tuż przed reloadem akcji.
-      if (this.autoRefresh() && !this.isLoading() && !this.retryingId() && !this.cancelingId()) {
+      if (this.autoRefresh() && !this.isLoading() && !this.retryingId()
+          && !this.cancelingId() && !this.editingId()) {
         this.fetch(/* silent */ true);
       }
     });
@@ -220,6 +227,51 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   /** Po akcji odświeżamy cicho (bez spinnera/resetu strony) — lista i tak auto-odświeża się co 3 s. */
   private refreshAfterAction(): void {
     this.fetch(/* silent */ true);
+  }
+
+  /** „Edytuj" — można zmienić adres odbiorcy, dopóki zadanie nie zostało wysłane / nie jest w toku. */
+  canEdit(item: DeliveryListItem): boolean {
+    return item.status !== 'Sent' && item.status !== 'Sending';
+  }
+
+  startEdit(item: DeliveryListItem, event: Event): void {
+    event.stopPropagation();
+    this.editError.set(null);
+    this.editUrlValue.set(item.recipientUrl ?? '');
+    this.editingId.set(item.deliveryId);
+  }
+
+  cancelEdit(): void {
+    this.editingId.set(null);
+    this.editUrlValue.set('');
+    this.editError.set(null);
+    this.savingEdit.set(false);
+  }
+
+  saveEdit(): void {
+    const deliveryId = this.editingId();
+    if (!deliveryId) return;
+    const url = this.editUrlValue().trim();
+    if (!/^https?:\/\/.+/i.test(url)) {
+      this.editError.set('Podaj poprawny adres http(s).');
+      return;
+    }
+
+    this.savingEdit.set(true);
+    this.editError.set(null);
+    this.storage.updateDeliveryRecipientUrl(deliveryId, url).subscribe({
+      next: () => {
+        this.savingEdit.set(false);
+        const id = this.shortId(deliveryId);
+        this.cancelEdit();
+        this.notice.set(`Zmieniono adres odbiorcy zadania ${id}.`);
+        this.refreshAfterAction();
+      },
+      error: (err) => {
+        this.savingEdit.set(false);
+        this.editError.set(err?.error?.error || 'Nie udało się zmienić adresu odbiorcy.');
+      }
+    });
   }
 
   /** Etykieta statusu po polsku (wartość enuma zostaje dla backendu). */

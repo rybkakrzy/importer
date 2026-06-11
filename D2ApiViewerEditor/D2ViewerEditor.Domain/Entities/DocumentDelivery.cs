@@ -177,6 +177,24 @@ public class DocumentDelivery
         UpdatedAt = DateTime.UtcNow;
     }
 
+    /// <summary>
+    /// Zmiana adresu odbiorcy ("Edytuj returnUrl") — np. korekta błędnego adresu na zadaniu, które
+    /// nie doszło. Dozwolona dla zadań niewysłanych i nieblokowanych przez workera (NIE: Sent/Sending).
+    /// Po zmianie zadanie zwykle wymaga „Wznów", by ponowić wysyłkę na nowy adres.
+    /// </summary>
+    public void UpdateRecipientUrl(string url)
+    {
+        if (Status is DeliveryStatus.Sent or DeliveryStatus.Sending)
+            throw new InvalidOperationException(
+                "Adresu odbiorcy nie można zmienić dla zadania wysłanego ani w trakcie wysyłki");
+
+        if (!IsValidRecipientUrl(url))
+            throw new ArgumentException("recipientUrl musi być absolutnym adresem http(s)", nameof(url));
+
+        RecipientUrl = url;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
     public static bool IsValidRecipientUrl(string? url) =>
         !string.IsNullOrWhiteSpace(url)
         && Uri.TryCreate(url, UriKind.Absolute, out var uri)

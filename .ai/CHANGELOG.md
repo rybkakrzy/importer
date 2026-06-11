@@ -13,6 +13,17 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-11 — „Pliki do wysłania": edycja adresu odbiorcy (returnUrl)
+### Changed
+- **Domena:** `DocumentDelivery.UpdateRecipientUrl(url)` — walidacja absolutnego http(s) + blokada dla `Sent`/`Sending`.
+- **Application/API:** `UpdateDeliveryRecipientUrlCommand`+handler (przycina URL, mapuje Invalid/Argument → Failure, brak → NotFound); endpoint `PUT /api/documentstorage/deliveries/{id}/recipient-url` (body `{ recipientUrl }`) + `UpdateDeliveryRecipientUrlRequest`.
+- **GUI:** `admin-deliveries` — przycisk „Edytuj" (gdy `canEdit`: ≠ Sent/Sending) → modal (`edit-overlay`/`edit-dialog`) z polem URL, walidacją i Zapisz/Anuluj; sygnały `editingId`/`editUrlValue`/`editError`/`savingEdit`; autoodświeżanie pauzowane przy otwartym modalu. `updateDeliveryRecipientUrl()` + `UpdateDeliveryRecipientUrlResult` w `document-storage.service`. `dl-btn-primary` (SCSS).
+### Verified
+- Backend: `dotnet build` sln OK; Domain `DocumentDelivery` 21 (+5 UpdateRecipientUrl), Application `UpdateDeliveryRecipientUrlCommandHandler` 3.
+- GUI: `ng build` OK; `admin-deliveries.spec` 11 (+4 edycja).
+### Notes
+- Bez migracji SQL (zmiana wartości kolumny `recipient_url`, nie schematu). Po zmianie adresu zadanie zwykle wymaga „Wznów".
+
 ## 2026-06-11 — „Pliki do wysłania": autoodświeżanie 3 s + akcje Anuluj/Wznów
 ### Changed
 - **Domena:** `DeliveryStatus.Cancelled` (nowy stan końcowy); `DocumentDelivery.IsTerminal` obejmuje Cancelled; `Cancel()` (Pending/RetryScheduled→Cancelled, czyści lease, ustawia LastError „Anulowano ręcznie"); `Requeue()` rozszerzony o RetryScheduled (wyślij teraz) i Cancelled (poprzednio tylko DeadLettered/FailedPermanently). Worker bez zmian — claim selektuje Pending/RetryScheduled/stuck-Sending, więc Cancelled jest wykluczony.

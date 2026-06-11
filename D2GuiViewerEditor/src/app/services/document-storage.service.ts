@@ -117,6 +117,12 @@ export interface RequeueDeliveryResult {
   status: DeliveryStatus;
 }
 
+export interface UpdateDeliveryRecipientUrlResult {
+  deliveryId: string;
+  recipientUrl: string;
+  status: DeliveryStatus;
+}
+
 /**
  * Serwis do zarządzania dokumentami z wersjonowaniem
  */
@@ -285,6 +291,17 @@ export class DocumentStorageService {
    */
   cancelDelivery(deliveryId: string): Observable<RequeueDeliveryResult> {
     return this.http.post<RequeueDeliveryResult>(`${this.apiUrl}/deliveries/${deliveryId}/cancel`, {});
+  }
+
+  /**
+   * Zmiana adresu odbiorcy (returnUrl/recipientUrl) zadania wysyłki — panel admina.
+   * Dozwolone dla zadań niewysłanych i nie w trakcie wysyłki.
+   * @param deliveryId - GUID zadania wysyłki
+   * @param recipientUrl - nowy absolutny adres http(s)
+   */
+  updateDeliveryRecipientUrl(deliveryId: string, recipientUrl: string): Observable<UpdateDeliveryRecipientUrlResult> {
+    return this.http.put<UpdateDeliveryRecipientUrlResult>(
+      `${this.apiUrl}/deliveries/${deliveryId}/recipient-url`, { recipientUrl });
   }
 
   /**

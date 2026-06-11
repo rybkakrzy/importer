@@ -16,13 +16,14 @@ function item(status: DeliveryStatus, id = 'd1'): DeliveryListItem {
 describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () => {
   let fixture: ComponentFixture<AdminDeliveriesComponent>;
   let component: AdminDeliveriesComponent;
-  let storage: { getDeliveries: ReturnType<typeof vi.fn>; retryDelivery: ReturnType<typeof vi.fn>; cancelDelivery: ReturnType<typeof vi.fn>; };
+  let storage: { getDeliveries: ReturnType<typeof vi.fn>; retryDelivery: ReturnType<typeof vi.fn>; cancelDelivery: ReturnType<typeof vi.fn>; updateDeliveryRecipientUrl: ReturnType<typeof vi.fn>; };
 
   beforeEach(async () => {
     storage = {
       getDeliveries: vi.fn(() => of([])),
       retryDelivery: vi.fn(() => of({ deliveryId: 'd1', status: 'Pending' as DeliveryStatus })),
       cancelDelivery: vi.fn(() => of({ deliveryId: 'd1', status: 'Cancelled' as DeliveryStatus })),
+      updateDeliveryRecipientUrl: vi.fn(() => of({ deliveryId: 'd1', recipientUrl: 'https://new.example.com', status: 'Pending' as DeliveryStatus })),
     };
     await TestBed.configureTestingModule({
       imports: [AdminDeliveriesComponent],
@@ -65,6 +66,48 @@ describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () 
 
     expect(storage.retryDelivery).toHaveBeenCalledWith('d1');
     expect(component.notice()).toContain('wznowione');
+  });
+
+  it('canEdit dla wszystkiego poza Sent/Sending', () => {
+    expect(component.canEdit(item('Pending'))).toBe(true);
+    expect(component.canEdit(item('RetryScheduled'))).toBe(true);
+    expect(component.canEdit(item('DeadLettered'))).toBe(true);
+    expect(component.canEdit(item('Cancelled'))).toBe(true);
+    expect(component.canEdit(item('Sent'))).toBe(false);
+    expect(component.canEdit(item('Sending'))).toBe(false);
+  });
+
+  it('startEdit ładuje bieżący adres do formularza', () => {
+    const ev = { stopPropagation: vi.fn() } as unknown as Event;
+    const it1 = { ...item('Pending'), recipientUrl: 'https://old.example.com' };
+    component.startEdit(it1, ev);
+
+    expect(component.editingId()).toBe('d1');
+    expect(component.editUrlValue()).toBe('https://old.example.com');
+  });
+
+  it('saveEdit z poprawnym URL woła serwis, zamyka modal i ustawia komunikat', () => {
+    const ev = { stopPropagation: vi.fn() } as unknown as Event;
+    component.startEdit(item('Pending'), ev);
+    component.editUrlValue.set('https://new.example.com');
+
+    component.saveEdit();
+
+    expect(storage.updateDeliveryRecipientUrl).toHaveBeenCalledWith('d1', 'https://new.example.com');
+    expect(component.editingId()).toBeNull();
+    expect(component.notice()).toContain('adres odbiorcy');
+  });
+
+  it('saveEdit z niepoprawnym URL nie woła serwisu i pokazuje błąd', () => {
+    const ev = { stopPropagation: vi.fn() } as unknown as Event;
+    component.startEdit(item('Pending'), ev);
+    component.editUrlValue.set('zły-adres');
+
+    component.saveEdit();
+
+    expect(storage.updateDeliveryRecipientUrl).not.toHaveBeenCalled();
+    expect(component.editError()).toBeTruthy();
+    expect(component.editingId()).toBe('d1'); // modal zostaje otwarty
   });
 
   it('toggleAutoRefresh przełącza flagę', () => {

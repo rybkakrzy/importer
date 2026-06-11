@@ -3,6 +3,7 @@ using D2ViewerEditor.Application.Features.Documents.Commands.DownloadEditedDocum
 using D2ViewerEditor.Application.Features.Documents.Commands.FinishAndSendDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.CancelDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.RequeueDelivery;
+using D2ViewerEditor.Application.Features.Documents.Commands.UpdateDeliveryRecipientUrl;
 using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
@@ -397,8 +398,31 @@ public class DocumentStorageController : BaseApiController
                 ? NotFound(new { error = result.Error })
                 : BadRequest(new { error = result.Error });
     }
+
+    /// <summary>
+    /// Zmiana adresu odbiorcy (returnUrl/recipientUrl) zadania wysyłki — panel admina.
+    /// Dozwolone dla zadań niewysłanych i nie w trakcie wysyłki.
+    /// </summary>
+    /// <param name="deliveryId">GUID zadania wysyłki</param>
+    [HttpPut("deliveries/{deliveryId:guid}/recipient-url")]
+    [ProducesResponseType(typeof(UpdateDeliveryRecipientUrlResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UpdateDeliveryRecipientUrl(
+        Guid deliveryId, [FromBody] UpdateDeliveryRecipientUrlRequest request)
+    {
+        var result = await Mediator.Send(
+            new UpdateDeliveryRecipientUrlCommand(deliveryId, request.RecipientUrl));
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+    }
 }
 
 // Request DTOs
 public record UploadDocumentRequest(string Name, string MimeType, byte[] Content, string? CreatedBy);
 public record SaveDocumentVersionRequest(byte[] Content, string? CreatedBy);
+public record UpdateDeliveryRecipientUrlRequest(string RecipientUrl);
