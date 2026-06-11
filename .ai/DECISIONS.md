@@ -242,3 +242,36 @@ Zero nowych zależności (SkiaSharp/NPOI już były). Roadmapa pełnej wiernośc
 System.Drawing (Windows-only) — odrzucone (PlatformNotSupported na Linux, sprzeczne z regułą).
 Magick.NET z natywnym delegatem WMF/EMF — odrzucone (brak delegatów w obrazie kontenera).
 Płatny Aspose/Spire — odrzucone (licencja). Sidecar LibreOffice — roadmapa (infrastruktura).
+
+---
+
+## ADR-0012: Strukturalne logi JSON dla Google Cloud Logging (severity) — 2026-06-11
+
+### Context
+W GCP Logs Explorer wyjątki (logowane `LogError`/`LogCritical`/Serilog `Error`/`Fatal`) pojawiały się
+jako severity **INFO**. Przyczyna nie była w kodzie (poziomy logów były poprawne), lecz w sinku:
+domyślny formatter konsoli (.NET `Microsoft.Extensions.Logging` w internal API; Serilog `WriteTo.Console()`
+w external API) pisze **zwykły tekst na stdout**, a Cloud Logging nadaje każdemu wpisowi stdout severity
+DEFAULT/INFO, bo nie ma pola `severity`.
+
+### Decision
+Oba hosty emitują na stdout **JSON w jednej linii z polem `severity`** (mapowanym z poziomu logu na
+LogSeverity GCP), gdy nie działają w Development (lub gdy `Logging:UseGcpFormat=true`); lokalnie zostaje
+czytelny tekst. Wyjątek dołączany do `message` (Error Reporting grupuje po stack trace).
+- Internal API: `GcpJsonConsoleFormatter : ConsoleFormatter` + `AddGcpStructuredLogging()` (Program.cs).
+- External API: `GcpJsonSerilogFormatter : ITextFormatter` podany do `WriteTo.Console(...)` (Program.cs).
+Zero nowych zależności (formattery z frameworka / już obecnego Seriloga).
+
+### Consequences
+`LogError`/`LogCritical` widać w Logs Explorer jako ERROR/CRITICAL; severity filtrowalne; stack trace w
+treści wpisu. Plik-sink Seriloga (lokalny dev) bez zmian. Mapowanie pokryte testami (`GcpJsonConsoleFormatterTests`).
+
+### Alternatives considered
+`Serilog.Sinks.GoogleCloudLogging` / `Google.Cloud.Logging` (push do API) — odrzucone: wymaga creds/SDK,
+a na Cloud Run/GKE idiomatyczny jest structured stdout. Logowanie błędów na stderr — odrzucone: gubi
+rozróżnienie WARNING/ERROR/CRITICAL (stderr = ERROR ryczałtem).
+
+### Known follow-up
+`LoggingBehaviour<TRequest,TResponse>` loguje `{@Request}` na Information — serializuje pełny payload
+(np. base64 treści dokumentu): hałas + potencjalne dane wrażliwe. Rekomendacja: logować tylko nazwę
+żądania / wybrane pola. Poza zakresem tej zmiany (dotyczy severity).

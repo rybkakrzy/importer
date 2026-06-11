@@ -867,6 +867,22 @@
     </div>
   }
 
+  <!-- Ekran końcowy po „Zakończ": blokuje dalszą pracę, gdy przeglądarka nie zamknęła karty -->
+  @if (workFinished()) {
+    <div class="work-finished-overlay" role="dialog" aria-modal="true" aria-labelledby="work-finished-title">
+      <svg viewBox="0 0 24 24" width="72" height="72" fill="none"
+           stroke="#16a34a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+        <polyline points="22 4 12 14.01 9 11.01"/>
+      </svg>
+      <h2 class="work-finished-title" id="work-finished-title">Praca nad dokumentem zakończona</h2>
+      <p class="work-finished-text">
+        Plik został przekazany do wysłania do Twojej aplikacji. Możesz bezpiecznie zamknąć tę kartę.
+      </p>
+      <button class="work-finished-btn" (click)="closeFinishedTab()">Zamknij kartę</button>
+    </div>
+  }
+
   <!-- Not Found Overlay -->
   @if (documentNotFound()) {
     <div class="not-found-overlay">

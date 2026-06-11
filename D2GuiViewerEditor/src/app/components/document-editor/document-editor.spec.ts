@@ -838,6 +838,25 @@ describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + za
     }
   });
 
+  it('po „Zamknij" wchodzi w stan końcowy (workFinished) i wyłącza auto-save — brak powrotu do edycji', () => {
+    const origClose = window.close;
+    // Symulacja przeglądarki, która NIE zamyka karty (typowe dla kart nieotwartych skryptem).
+    (window as any).close = () => { /* brak efektu — karta zostaje */ };
+
+    try {
+      component.autoSaveEnabled.set(true);
+      component.finishDocument();
+
+      component.closeFinishModalAndExit();
+
+      expect(component.workFinished()).toBe(true);     // blokujący ekran końcowy
+      expect(component.autoSaveEnabled()).toBe(false);  // auto-save zatrzymany
+      expect(component.showFinishModal()).toBe(false);
+    } finally {
+      (window as any).close = origClose;
+    }
+  });
+
   it('błąd natychmiastowej wysyłki pokazuje komunikat o ponowieniu w tle, a modal zostaje otwarty', async () => {
     finishResult = { error: new Error('network') };
     // mockImplementation, bo realny showError planuje setTimeout(5 s) na wyczyszczenie toasta —

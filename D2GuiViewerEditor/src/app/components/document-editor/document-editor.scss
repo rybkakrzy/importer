@@ -1113,6 +1113,56 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   z-index: 1000;
 }
 
+/* Ekran końcowy po „Zakończ" — blokuje cały edytor (nad toolbarem), uniemożliwiając dalszą pracę */
+.work-finished-overlay {
+  position: fixed;
+  inset: 0;
+  background: #f5f5f5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  z-index: 3000;
+  color: #555;
+  text-align: center;
+  padding: 24px;
+}
+
+.work-finished-title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.work-finished-text {
+  margin: 0;
+  font-size: 1rem;
+  max-width: 420px;
+  line-height: 1.6;
+  color: #666;
+}
+
+.work-finished-btn {
+  margin-top: 8px;
+  padding: 11px 28px;
+  border: none;
+  border-radius: 8px;
+  background: #ff6200;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, box-shadow 0.15s;
+
+  &:hover {
+    background: #e55a00;
+    box-shadow: 0 4px 12px rgba(255, 98, 0, 0.35);
+  }
+}
+
 /* Not Found Overlay */
 .not-found-overlay {
   position: fixed;

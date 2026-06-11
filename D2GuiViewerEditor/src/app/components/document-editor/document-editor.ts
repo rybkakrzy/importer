@@ -133,6 +133,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   showFinishModal = signal<boolean>(false);
   /** Inicjalnie = FINISH_COUNTDOWN_SECONDS; ustawiane ponownie przy każdym otwarciu modala. */
   finishCountdown = signal<number>(30);
+  /**
+   * Praca nad dokumentem zakończona (po „Zamknij"/odliczaniu). Gdy przeglądarka nie pozwoli
+   * zamknąć karty (window.close() działa tylko dla okien otwartych skryptem), wyświetlamy
+   * blokujący ekran końcowy — użytkownik NIE może dalej edytować zakończonego dokumentu.
+   */
+  workFinished = signal<boolean>(false);
   /** Link zwrotny z metadanych dokumentu (źródło prawdy dla widoczności „Zakończ"). */
   returnUrl = signal<string | null>(null);
   /** „Zakończ" ma sens tylko, gdy istnieje poprawny link do zwrócenia pliku po edycji. */
@@ -1883,15 +1889,22 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Wspólna akcja dla końca odliczania ORAZ kliknięcia „Zamknij": zatrzymuje odliczanie,
-   * zamyka modal i próbuje zamknąć kartę przeglądarki. Reset `isFinishing` pozwala ponowić
-   * „Zakończ", jeśli przeglądarka nie pozwoli zamknąć karty.
+   * Wspólna akcja dla końca odliczania ORAZ kliknięcia „Zamknij": zatrzymuje odliczanie i auto-save,
+   * zamyka modal i próbuje zamknąć kartę przeglądarki. Praca jest zakończona — gdy przeglądarka NIE
+   * pozwoli zamknąć karty (typowe dla kart nieotwartych skryptem), pokazujemy blokujący ekran końcowy,
+   * żeby użytkownik nie wrócił do edycji zakończonego dokumentu (bug: „znika tylko informacja").
    */
   closeFinishModalAndExit(): void {
     this.finishCountdownSub?.unsubscribe();
     this.finishCountdownSub = undefined;
     this.showFinishModal.set(false);
+
+    // Zakończ sesję edycji: stop auto-save i wejście w stan końcowy (blokuje dalszą pracę).
     this.isFinishing.set(false);
+    this.stopAutoSave();
+    this.autoSaveEnabled.set(false);
+    this.workFinished.set(true);
+
     this.tryCloseBrowserTab();
   }
 
@@ -1906,6 +1919,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     } catch {
       // Neutralny stan końcowy — brak dalszych akcji.
     }
+  }
+
+  /** Ponowna próba zamknięcia karty z ekranu końcowego (np. przycisk „Zamknij kartę"). */
+  closeFinishedTab(): void {
+    this.tryCloseBrowserTab();
   }
 
   openReportEmail(): void {

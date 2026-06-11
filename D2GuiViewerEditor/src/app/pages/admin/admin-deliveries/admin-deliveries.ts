@@ -1,6 +1,7 @@
 import { Component, computed, inject, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { Subscription, interval } from 'rxjs';
 import {
   DeliveryListItem,
@@ -17,6 +18,7 @@ import {
 })
 export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   private storage = inject(DocumentStorageService);
+  private router = inject(Router);
 
   readonly statuses: DeliveryStatus[] = [
     'DeadLettered', 'FailedPermanently', 'RetryScheduled', 'Sending', 'Pending', 'Sent', 'Cancelled'
@@ -227,6 +229,20 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   /** Po akcji odświeżamy cicho (bez spinnera/resetu strony) — lista i tak auto-odświeża się co 3 s. */
   private refreshAfterAction(): void {
     this.fetch(/* silent */ true);
+  }
+
+  /**
+   * „Otwórz w edytorze" — przechodzi do edytora na podstawie danych wysyłki: `documentId`=masterId,
+   * `sourceVersionId`=versionId. Z versionId edytor ładuje wskazaną wersję edytowalną (tryb edycji),
+   * bez niego — podgląd wersji bazowej.
+   */
+  openInEditor(item: DeliveryListItem, event: Event): void {
+    event.stopPropagation();
+    const masterId = item.documentId;
+    const versionId = item.sourceVersionId;
+    this.router.navigate(['/editor'], {
+      queryParams: versionId ? { masterId, versionId } : { masterId }
+    });
   }
 
   /** „Edytuj" — można zmienić adres odbiorcy, dopóki zadanie nie zostało wysłane / nie jest w toku. */

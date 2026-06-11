@@ -1,4 +1,5 @@
 using D2ServicesViewerEditor.Api.Extensions;
+using D2ServicesViewerEditor.Api.Logging;
 using D2ViewerEditor.Application;
 using D2ViewerEditor.Infrastructure;
 using Microsoft.OpenApi.Models;
@@ -14,12 +15,23 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Host.UseSerilog((context, services, configuration) => configuration
-        .ReadFrom.Configuration(context.Configuration)
-        .ReadFrom.Services(services)
-        .Enrich.FromLogContext()
-        .WriteTo.Console()
-        .WriteTo.File("logs/d2services-.log", rollingInterval: RollingInterval.Day));
+    builder.Host.UseSerilog((context, services, configuration) =>
+    {
+        configuration
+            .ReadFrom.Configuration(context.Configuration)
+            .ReadFrom.Services(services)
+            .Enrich.FromLogContext()
+            .WriteTo.File("logs/d2services-.log", rollingInterval: RollingInterval.Day);
+
+        // Konsola: w GCP/kontenerze strukturalny JSON (pole `severity` → ERROR/CRITICAL w Logs
+        // Explorer); lokalnie (Development) czytelny tekst. Sterowanie configiem `Logging:UseGcpFormat`.
+        var useGcp = context.Configuration.GetValue<bool?>("Logging:UseGcpFormat")
+                     ?? !context.HostingEnvironment.IsDevelopment();
+        if (useGcp)
+            configuration.WriteTo.Console(new GcpJsonSerilogFormatter());
+        else
+            configuration.WriteTo.Console();
+    });
 
     builder.Configuration.SetBasePath(Directory.GetCurrentDirectory())
         .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)

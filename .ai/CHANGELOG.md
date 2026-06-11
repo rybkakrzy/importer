@@ -13,6 +13,40 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-11 — „Otwórz w edytorze": z osobnej zakładki na przycisk w wierszu wysyłki
+### Changed
+- **Usunięto** stronę `admin-open-document` (+route `/admin/open`, +pozycję sidebaru w `admin-shell`, +spec).
+- **Dodano** w `admin-deliveries` przycisk „Otwórz" per wiersz → `openInEditor(item)`: `router.navigate(['/editor'], { queryParams })` z `masterId=documentId`, `versionId=sourceVersionId` (bez versionId → podgląd). `Router` wstrzyknięty do komponentu.
+### Verified
+- `admin-deliveries.spec` **13** (+2 nawigacja z/bez sourceVersionId); `ng build` OK.
+
+## 2026-06-11 — Wysyłka na returnUrl jako multipart/form-data
+### Changed
+- `HttpDeliverySender.SendAsync`: zamiast `ByteArrayContent` (`application/octet-stream`) wysyła `MultipartFormDataContent` — plik w polu **`file`**, filename `document.docx`, part Content-Type = DOCX MIME. Nagłówki `Idempotency-Key`/`X-Content-SHA256` i klasyfikacja statusów bez zmian.
+### Verified
+- `Infrastructure.UnitTests` +3 `HttpDeliverySenderTests` (multipart + name=file/filename + nagłówki; 422→Permanent; 503→Retryable). Build OK.
+### Notes
+- **Zmiana kontraktu wysyłki**: odbiorca na `returnUrl` musi odczytać plik z pola form-data `file` (np. `IFormFile file`), nie z surowego body. Nazwa pola jest stała (`file`) — gdyby odbiorca wymagał innej, do sparametryzowania w `HttpDeliverySender`.
+
+## 2026-06-11 — Observability: strukturalne logi JSON dla GCP (severity)
+### Changed
+- **Internal API** (`D2ViewerEditor.Api`): nowy `Logging/GcpJsonConsoleFormatter` (ConsoleFormatter → JSON z `severity`, `message`+stack trace, `category`, `eventId`, `exceptionType`); `Extensions/LoggingExtensions.AddGcpStructuredLogging()` wpięte w `Program.cs`. Aktywne poza Development lub gdy `Logging:UseGcpFormat=true`.
+- **External API** (`D2ServicesViewerEditor.Api`): nowy `Logging/GcpJsonSerilogFormatter : ITextFormatter`; `Program.cs` `WriteTo.Console(new GcpJsonSerilogFormatter())` poza Development (inaczej zwykły tekst). File-sink bez zmian.
+### Verified
+- `dotnet build` obu hostów OK; `Api.UnitTests` **43** (+8 `GcpJsonConsoleFormatterTests`: mapowanie poziomów, wyjątek=ERROR+stack w message, jedna linia JSON).
+- Manualnie do potwierdzenia w GCP: po deployu wyjątki w Logs Explorer mają severity ERROR/CRITICAL i są filtrowalne; Error Reporting grupuje po stack trace.
+### Notes
+- Root cause: stdout plain-text → Cloud Logging nadaje INFO; rozwiązanie = pole `severity` w JSON. ADR-0012.
+- Follow-up: `LoggingBehaviour` loguje `{@Request}` (pełny payload — hałas/dane wrażliwe), do okrojenia osobno.
+
+## 2026-06-11 — Fix: „Zamknij" w modalu wysyłki zostawiał edytowalny dokument
+### Changed
+- `document-editor`: nowy sygnał `workFinished`; `closeFinishModalAndExit()` zatrzymuje auto-save i ustawia stan końcowy zamiast tylko zamykać modal. Nowy blokujący `work-finished-overlay` (z-index 3000) z przyciskiem „Zamknij kartę" (`closeFinishedTab()`). `window.close()` pozostaje best-effort, ale gdy zawiedzie, użytkownik widzi ekran końcowy i nie wraca do edycji.
+### Verified
+- `ng build` OK; `document-editor.spec` **62** (+1: po „Zamknij" `workFinished=true`, auto-save off, modal zamknięty).
+### Notes
+- Root cause: `window.close()` działa tylko dla kart otwartych przez `window.open` — dla zwykłych/otwartych przez link przeglądarka odmawia. Dlatego potrzebny jawny stan końcowy w UI.
+
 ## 2026-06-11 — „Pliki do wysłania": edycja adresu odbiorcy (returnUrl)
 ### Changed
 - **Domena:** `DocumentDelivery.UpdateRecipientUrl(url)` — walidacja absolutnego http(s) + blokada dla `Sent`/`Sending`.

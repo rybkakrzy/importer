@@ -1,6 +1,7 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { vi } from 'vitest';
 import { of } from 'rxjs';
+import { Router } from '@angular/router';
 import { AdminDeliveriesComponent } from './admin-deliveries';
 import { DeliveryListItem, DeliveryStatus, DocumentStorageService } from '../../../services/document-storage.service';
 
@@ -17,6 +18,7 @@ describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () 
   let fixture: ComponentFixture<AdminDeliveriesComponent>;
   let component: AdminDeliveriesComponent;
   let storage: { getDeliveries: ReturnType<typeof vi.fn>; retryDelivery: ReturnType<typeof vi.fn>; cancelDelivery: ReturnType<typeof vi.fn>; updateDeliveryRecipientUrl: ReturnType<typeof vi.fn>; };
+  let navigateSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     storage = {
@@ -25,9 +27,13 @@ describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () 
       cancelDelivery: vi.fn(() => of({ deliveryId: 'd1', status: 'Cancelled' as DeliveryStatus })),
       updateDeliveryRecipientUrl: vi.fn(() => of({ deliveryId: 'd1', recipientUrl: 'https://new.example.com', status: 'Pending' as DeliveryStatus })),
     };
+    navigateSpy = vi.fn();
     await TestBed.configureTestingModule({
       imports: [AdminDeliveriesComponent],
-      providers: [{ provide: DocumentStorageService, useValue: storage }],
+      providers: [
+        { provide: DocumentStorageService, useValue: storage },
+        { provide: Router, useValue: { navigate: navigateSpy } },
+      ],
     }).compileComponents();
     fixture = TestBed.createComponent(AdminDeliveriesComponent);
     component = fixture.componentInstance;
@@ -66,6 +72,28 @@ describe('AdminDeliveriesComponent — Anuluj / Wznów / autoodświeżanie', () 
 
     expect(storage.retryDelivery).toHaveBeenCalledWith('d1');
     expect(component.notice()).toContain('wznowione');
+  });
+
+  it('openInEditor nawiguje do /editor z masterId=documentId i versionId=sourceVersionId', () => {
+    const ev = { stopPropagation: vi.fn() } as unknown as Event;
+    const d = { ...item('Sent'), documentId: 'master-7', sourceVersionId: 'ver-9' };
+
+    component.openInEditor(d, ev);
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/editor'], {
+      queryParams: { masterId: 'master-7', versionId: 'ver-9' },
+    });
+  });
+
+  it('openInEditor bez sourceVersionId nawiguje tylko z masterId (podgląd)', () => {
+    const ev = { stopPropagation: vi.fn() } as unknown as Event;
+    const d = { ...item('Sent'), documentId: 'master-7', sourceVersionId: '' };
+
+    component.openInEditor(d, ev);
+
+    expect(navigateSpy).toHaveBeenCalledWith(['/editor'], {
+      queryParams: { masterId: 'master-7' },
+    });
   });
 
   it('canEdit dla wszystkiego poza Sent/Sending', () => {

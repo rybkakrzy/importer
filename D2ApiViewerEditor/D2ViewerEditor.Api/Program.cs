@@ -10,6 +10,10 @@ var builder = WebApplication.CreateBuilder(args);
 var env = builder.Environment.EnvironmentName;
 builder.Configuration.AddJsonFile($"appsettings.{env}.secrets.json", optional: true, reloadOnChange: false);
 
+// Strukturalne logi JSON z polem `severity` → Cloud Logging pokazuje ERROR/CRITICAL poprawnie
+// (zamiast wszystkiego jako INFO). Lokalnie (Development) zostaje czytelny formatter.
+builder.AddGcpStructuredLogging();
+
 // Add Architecture layers
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
