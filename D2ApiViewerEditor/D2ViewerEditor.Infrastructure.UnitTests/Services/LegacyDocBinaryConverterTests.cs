@@ -43,6 +43,17 @@ public class LegacyDocBinaryConverterTests
     }
 
     [Test]
+    public void TryConvert_WithPrcBeforePcdt_SkipsPrcAndExtractsText()
+    {
+        var (wd, table0) = BuildMinimalDoc("Hello", textByteOffset: 512, compressed: true, useTable1: false, withPrc: true);
+
+        var docx = LegacyDocBinaryConverter.TryConvert(wd, table0, null);
+
+        docx.Should().NotBeNull();
+        ReadParagraphs(docx!).Should().Contain("Hello");
+    }
+
+    [Test]
     public void TryConvert_BadMagic_ReturnsNull()
     {
         var (wd, table0) = BuildMinimalDoc("Hello", 512, compressed: true, useTable1: false);
@@ -64,7 +75,8 @@ public class LegacyDocBinaryConverterTests
     /// <summary>
     /// Buduje minimalny strumień WordDocument (FIB) + tablicę (CLX/PlcPcd) z jednym piece.
     /// </summary>
-    private static (byte[] wd, byte[] table) BuildMinimalDoc(string text, int textByteOffset, bool compressed, bool useTable1)
+    private static (byte[] wd, byte[] table) BuildMinimalDoc(
+        string text, int textByteOffset, bool compressed, bool useTable1, bool withPrc = false)
     {
         var textBytes = compressed ? Encoding.Latin1.GetBytes(text) : Encoding.Unicode.GetBytes(text);
         int cch = text.Length;
@@ -83,11 +95,16 @@ public class LegacyDocBinaryConverterTests
             : (uint)textByteOffset;                         // unicode: fc = offset
         BinaryPrimitives.WriteUInt32LittleEndian(plcPcd.AsSpan(8 + 2), fc);     // PCD.fc (po 2 B flag)
 
-        // CLX: Pcdt (clxt=2) + lcb (UInt32) + PlcPcd
-        var clx = new byte[1 + 4 + plcPcd.Length];
-        clx[0] = 0x02;
-        BinaryPrimitives.WriteUInt32LittleEndian(clx.AsSpan(1), (uint)plcPcd.Length);
-        plcPcd.CopyTo(clx, 5);
+        // Pcdt: clxt=2 + lcb (UInt32) + PlcPcd
+        var pcdt = new byte[1 + 4 + plcPcd.Length];
+        pcdt[0] = 0x02;
+        BinaryPrimitives.WriteUInt32LittleEndian(pcdt.AsSpan(1), (uint)plcPcd.Length);
+        plcPcd.CopyTo(pcdt, 5);
+
+        // Opcjonalny Prc (clxt=1, cbGrpprl=4 + 4 bajty) przed Pcdt — parser musi go pominąć.
+        byte[] clx = withPrc
+            ? new byte[] { 0x01, 0x04, 0x00, 0xAA, 0xBB, 0xCC, 0xDD }.Concat(pcdt).ToArray()
+            : pcdt;
 
         // fcClx = 0, lcbClx = clx.Length (CLX na początku strumienia tablicy)
         BinaryPrimitives.WriteInt32LittleEndian(wd.AsSpan(0x01A2), 0);

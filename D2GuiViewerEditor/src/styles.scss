@@ -1,4 +1,101 @@
 @use 'assets/fonts/corporate-font';
+@use 'styles/abstracts' as *;
+
+// GUI color tokens exposed as CSS custom properties. Components reference these via var(...),
+// which keeps component styles decoupled from import paths and enables runtime theming
+// (e.g. dark mode / per-client theme) later. Scope: editor GUI only — NOT the document surface.
+:root {
+  // Backgrounds
+  --color-background-app: #{$color-background-app};
+  --color-background-surface: #{$color-background-surface};
+  --color-background-subtle: #{$color-background-subtle};
+  --color-background-toolbar: #{$color-background-toolbar};
+  --color-background-panel: #{$color-background-panel};
+  --color-background-dropdown: #{$color-background-dropdown};
+  --color-background-hover: #{$color-background-hover};
+  --color-background-active: #{$color-background-active};
+  --color-background-disabled: #{$color-background-disabled};
+
+  // Text
+  --color-text-primary: #{$color-text-primary};
+  --color-text-strong: #{$color-text-strong};
+  --color-text-secondary: #{$color-text-secondary};
+  --color-text-muted: #{$color-text-muted};
+  --color-text-subtle: #{$color-text-subtle};
+  --color-text-inverted: #{$color-text-inverted};
+  --color-text-disabled: #{$color-text-disabled};
+  --color-text-link: #{$color-text-link};
+
+  // Borders / separators
+  --color-border-default: #{$color-border-default};
+  --color-border-subtle: #{$color-border-subtle};
+  --color-border-strong: #{$color-border-strong};
+  --color-border-focus: #{$color-border-focus};
+
+  // Actions / buttons
+  --color-action-primary: #{$color-action-primary};
+  --color-action-primary-hover: #{$color-action-primary-hover};
+  --color-action-primary-text: #{$color-action-primary-text};
+  --color-action-secondary: #{$color-action-secondary};
+  --color-action-danger: #{$color-action-danger};
+  --color-action-accent: #{$color-action-accent};
+  --color-brand: #{$color-brand};
+
+  // GUI surfaces
+  --color-gui-toolbar-background: #{$color-gui-toolbar-background};
+  --color-gui-toolbar-border: #{$color-gui-toolbar-border};
+  --color-gui-panel-background: #{$color-gui-panel-background};
+  --color-gui-panel-border: #{$color-gui-panel-border};
+  --color-gui-menu-background: #{$color-gui-menu-background};
+  --color-gui-menu-hover: #{$color-gui-menu-hover};
+  --color-gui-control-active: #{$color-gui-control-active};
+  --color-gui-control-disabled: #{$color-gui-control-disabled};
+  --color-gui-scrollbar-track: #{$color-gui-scrollbar-track};
+  --color-gui-scrollbar-thumb: #{$color-gui-scrollbar-thumb};
+  --color-gui-scrollbar-thumb-hover: #{$color-gui-scrollbar-thumb-hover};
+
+  // States
+  --color-state-info-bg: #{$color-state-info-bg};
+  --color-state-info-text: #{$color-state-info-text};
+  --color-state-info-border: #{$color-state-info-border};
+  --color-state-success-bg: #{$color-state-success-bg};
+  --color-state-success-text: #{$color-state-success-text};
+  --color-state-success-border: #{$color-state-success-border};
+  --color-state-success-solid: #{$color-state-success-solid};
+  --color-state-success-strong: #{$color-state-success-strong};
+  --color-state-warning-bg: #{$color-state-warning-bg};
+  --color-state-warning-text: #{$color-state-warning-text};
+  --color-state-error-bg: #{$color-state-error-bg};
+  --color-state-error-text: #{$color-state-error-text};
+  --color-state-error-border: #{$color-state-error-border};
+  --color-state-error-strong: #{$color-state-error-strong};
+  --color-state-error-hover: #{$color-state-error-hover};
+  --color-state-error-accent: #{$color-state-error-accent};
+  --color-state-pending-bg: #{$color-state-pending-bg};
+  --color-state-pending-text: #{$color-state-pending-text};
+  --color-state-sending-bg: #{$color-state-sending-bg};
+  --color-state-sending-text: #{$color-state-sending-text};
+  --color-state-sent-bg: #{$color-state-sent-bg};
+  --color-state-sent-text: #{$color-state-sent-text};
+  --color-state-failed-bg: #{$color-state-failed-bg};
+  --color-state-failed-text: #{$color-state-failed-text};
+  --color-state-cancelled-bg: #{$color-state-cancelled-bg};
+  --color-state-cancelled-text: #{$color-state-cancelled-text};
+  --color-state-hover-bg: #{$color-state-hover-bg};
+  --color-state-hover-border: #{$color-state-hover-border};
+  --color-state-hover-text: #{$color-state-hover-text};
+
+  // Focus rings
+  --color-ring-primary: #{$color-ring-primary};
+  --color-ring-blue: #{$color-ring-blue};
+  --color-ring-success: #{$color-ring-success};
+
+  // Shadows / overlays
+  --color-shadow-card: #{$color-shadow-card};
+  --color-shadow-popover: #{$color-shadow-popover};
+  --color-shadow-modal: #{$color-shadow-modal};
+  --color-overlay: #{$color-overlay};
+}
 
 * {
   box-sizing: border-box;
@@ -77,17 +174,17 @@ d2-admin-shell textarea {
 }
 
 ::-webkit-scrollbar-track {
-  background: #f0f0f0;
+  background: var(--color-gui-scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c0c0c0;
+  background: var(--color-gui-scrollbar-thumb);
   border-radius: 6px;
-  border: 2px solid #f0f0f0;
+  border: 2px solid var(--color-gui-scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #a0a0a0;
+  background: var(--color-gui-scrollbar-thumb-hover);
 }
 
 /* Print styles */

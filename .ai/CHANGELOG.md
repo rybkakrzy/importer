@@ -13,6 +13,25 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-13 — Fix: ProblemDetails serializowany przez typ runtime (errors w body)
+### Changed
+- `ExceptionHandlingMiddleware` serializował `problemDetails` przez **statyczny typ bazowy** `ProblemDetails` → `ValidationProblemDetails.Errors` ginęło w body (System.Text.Json honoruje typ statyczny). Fix: `JsonSerializer.Serialize(problemDetails, problemDetails.GetType(), options)` — serializacja po typie runtime, więc słownik `errors` (zgrupowany po `PropertyName`) trafia do odpowiedzi 400.
+- Test `InvokeAsync_ValidationException_EmitsGroupedErrorsInBody` asercjonuje teraz realną obecność `errors.Name`/`errors.Email` w body (poprzedni test „realnego zachowania bez errors" zastąpiony zachowaniem docelowym).
+### Verified
+- `dotnet test D2ViewerEditor.Api.UnitTests` — **51** pass (+1). Reszta solucji bez zmian.
+### Notes
+- Kontrakt API wzbogacony (dodane pole `errors` w 400 dla błędów walidacji) — zgodne z RFC 7807 `ValidationProblemDetails`; klienci dotychczas i tak nie dostawali `errors`, więc brak regresji.
+
+## 2026-06-13 — Pokrycie testami: pipeline behaviours, metadata, exception middleware
+### Changed
+- **Application.UnitTests** (+19): `ExternalDocumentMetadataTests` (parse tolerancyjny null/empty/malformed/json-null, mapowanie pól, case-insensitive, `IsUserDownloadAllowed` tylko dla jawnego `true`, round-trip serialize→parse, camelCase keys); `ValidationBehaviourTests` (brak walidatorów→next, wszystkie pass→next, fail→`ValidationException`+short-circuit, agregacja błędów z wielu walidatorów); `LoggingBehaviourTests` (przekazanie odpowiedzi, log na wejściu+wyjściu, brak połykania wyjątku).
+- **Api.UnitTests** (+7): `ExceptionHandlingMiddlewareTests` — pass-through bez wyjątku, mapowanie `ValidationException`→400 problem+json, `ArgumentException`→400 z detail, `KeyNotFoundException`→404, `OperationCanceledException`→400, nieoczekiwany→500 **bez przeciekania** szczegółów, camelCase ProblemDetails.
+### Verified
+- `dotnet test D2ViewerEditor.sln` — Domain 67, Api **50** (+7), Application **258** (+19), Infrastructure 164, Integration 6 skip. 0 failures.
+### Notes
+- Odkryta latentna obserwacja: middleware serializuje `ValidationProblemDetails` przez statyczny typ `ProblemDetails`, więc słownik `errors` NIE trafia do body (test asercjonuje realne zachowanie: 400 + tytuł „Błąd walidacji", bez `errors`). Nie zmieniano produkcyjnego zachowania w ramach dodawania testów.
+- Nadal nietestowane (świadomie, wymaga infra/seam): `DeliveryAttemptRunner`, `DocumentDeliveryWorker`, `OoxmlAgileDecryptor`, repo/GCS.
+
 ## 2026-06-11 — „Otwórz w edytorze": z osobnej zakładki na przycisk w wierszu wysyłki
 ### Changed
 - **Usunięto** stronę `admin-open-document` (+route `/admin/open`, +pozycję sidebaru w `admin-shell`, +spec).

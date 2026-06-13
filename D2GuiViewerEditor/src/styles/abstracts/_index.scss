@@ -1,0 +1,4 @@
+// Barrel for the GUI color system. `@use 'styles/abstracts' as *;` to access raw palette
+// and semantic tokens. The runtime CSS custom properties are emitted from `styles.scss`.
+@forward 'colors';
+@forward 'theme';

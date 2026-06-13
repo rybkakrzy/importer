@@ -1,0 +1,81 @@
+// Raw color palette — the single source of truth for color VALUES used by the editor GUI
+// (everything around the Word document editing surface). Do not reference these directly in
+// components; use the semantic tokens from `_theme.scss` (exposed as CSS custom properties).
+// Values are taken from the existing GUI so the current look is preserved 1:1.
+
+// ── Base ──────────────────────────────────────────────────────────────────────
+$color-white: #ffffff;
+$color-black: #000000;
+
+// ── Gray scale ────────────────────────────────────────────────────────────────
+$color-gray-50:  #f9fafb;
+$color-gray-100: #f3f4f6;
+$color-gray-200: #e5e7eb;
+$color-gray-300: #d1d5db;
+$color-gray-400: #9ca3af;
+$color-gray-500: #6b7280;
+$color-gray-600: #4b5563;
+$color-gray-700: #374151;
+$color-gray-800: #1f2937;
+$color-gray-900: #111827;
+
+// Legacy neutrals — ad-hoc grays already present in older GUI styles, kept as exact values
+// so migrating those files later causes no visual change.
+$color-neutral-150: #e8e8e8;
+$color-neutral-200: #e0e0e0;
+$color-neutral-track: #f0f0f0;
+$color-neutral-thumb: #c0c0c0;
+$color-neutral-thumb-strong: #a0a0a0;
+
+// ── Brand orange ──────────────────────────────────────────────────────────────
+$color-orange-50:     #fff7ed;
+$color-orange-500:    #f48024;
+$color-orange-600:    #ea580c;
+$color-orange-700:    #c2410c;
+$color-orange-accent: #ff6200;
+
+// ── Blue (links / info / focus) ───────────────────────────────────────────────
+$color-blue-50:  #eff6ff;
+$color-blue-100: #e8f0fe;
+$color-blue-300: #93c5fd;
+$color-blue-700: #1d4ed8;
+$color-blue-800: #1a56db;
+
+// ── Indigo (in-progress / sending) ────────────────────────────────────────────
+$color-indigo-100: #e0e7ff;
+$color-indigo-800: #3730a3;
+
+// ── Green (success) ───────────────────────────────────────────────────────────
+$color-green-50:  #ecfdf5;
+$color-green-100: #dcfce7;
+$color-green-200: #a7f3d0;
+$color-green-500: #22c55e;
+$color-green-700: #15803d;
+$color-green-800: #047857;
+
+// ── Amber (warning / editing) ─────────────────────────────────────────────────
+$color-amber-100: #fef3c7;
+$color-amber-800: #92632e;
+
+// ── Red (danger / error) ──────────────────────────────────────────────────────
+$color-red-50:        #fef2f2;
+$color-red-100:       #fde2e1;
+$color-red-200:       #fecaca;
+$color-red-300:       #fca5a5;
+$color-red-600:       #dc2626;
+$color-red-700:       #b91c1c;
+$color-red-800:       #7f1d1d;
+$color-red-danger:    #b42318;
+
+// ── Shadows / overlays (alpha) ────────────────────────────────────────────────
+$color-shadow-xs:  rgba(0, 0, 0, 0.04);
+$color-shadow-sm:  rgba(0, 0, 0, 0.06);
+$color-shadow-md:  rgba(0, 0, 0, 0.1);
+$color-shadow-lg:  rgba(0, 0, 0, 0.15);
+$color-shadow-xl:  rgba(0, 0, 0, 0.2);
+$color-overlay-backdrop: rgba(17, 24, 39, 0.45);
+
+// Focus rings (alpha tints of the corresponding hues).
+$color-ring-primary: rgba(234, 88, 12, 0.15);
+$color-ring-blue:    rgba(59, 130, 246, 0.1);
+$color-ring-success: rgba(34, 197, 94, 0.2);

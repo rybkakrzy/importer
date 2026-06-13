@@ -48,7 +48,10 @@ public class ExceptionHandlingMiddleware
         context.Response.ContentType = "application/problem+json";
 
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        await context.Response.WriteAsync(JsonSerializer.Serialize(problemDetails, options));
+        // Serialize via the runtime type so derived members (e.g. ValidationProblemDetails.Errors)
+        // are emitted — System.Text.Json otherwise honours the static type and would drop them.
+        await context.Response.WriteAsync(
+            JsonSerializer.Serialize(problemDetails, problemDetails.GetType(), options));
     }
 
     private static (int, ProblemDetails) HandleValidationException(ValidationException exception)

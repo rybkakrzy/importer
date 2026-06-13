@@ -1,0 +1,100 @@
+// Semantic GUI tokens — describe INTENT, not raw color. These cover the editor GUI (chrome
+// around the Word document): app shell, toolbars, menus, panels, buttons, borders, states.
+// They intentionally do NOT cover the document editing surface (page background, document text,
+// selection, caret) — those stay owned by the editor content styles.
+
+@use 'colors' as *;
+
+// ── Backgrounds ───────────────────────────────────────────────────────────────
+$color-background-app:       $color-gray-50;
+$color-background-surface:   $color-white;
+$color-background-subtle:    $color-gray-50;
+$color-background-toolbar:   $color-gray-100;
+$color-background-panel:     $color-white;
+$color-background-dropdown:  $color-white;
+$color-background-hover:     $color-gray-100;
+$color-background-active:    $color-gray-200;
+$color-background-disabled:  $color-gray-100;
+
+// ── Text ──────────────────────────────────────────────────────────────────────
+$color-text-primary:   $color-gray-900;
+$color-text-strong:    $color-gray-700;
+$color-text-secondary: $color-gray-600;
+$color-text-muted:     $color-gray-500;
+$color-text-subtle:    $color-gray-400;
+$color-text-inverted:  $color-white;
+$color-text-disabled:  $color-gray-400;
+$color-text-link:      $color-blue-700;
+
+// ── Borders / separators ──────────────────────────────────────────────────────
+$color-border-default: $color-gray-200;
+$color-border-subtle:  $color-neutral-150;
+$color-border-strong:  $color-gray-300;
+$color-border-focus:   $color-blue-300;
+
+// ── Actions / buttons ─────────────────────────────────────────────────────────
+$color-action-primary:        $color-orange-600;
+$color-action-primary-hover:  $color-orange-700;
+$color-action-primary-text:   $color-white;
+$color-action-secondary:      $color-gray-600;
+$color-action-danger:         $color-red-danger;
+$color-action-accent:         $color-orange-accent;
+$color-brand:                 $color-orange-500;
+
+// ── GUI surfaces (toolbar / panels / menus / controls) ────────────────────────
+$color-gui-toolbar-background: $color-background-toolbar;
+$color-gui-toolbar-border:     $color-border-default;
+$color-gui-panel-background:   $color-background-panel;
+$color-gui-panel-border:       $color-border-default;
+$color-gui-menu-background:    $color-background-dropdown;
+$color-gui-menu-hover:         $color-background-hover;
+$color-gui-control-active:     $color-background-active;
+$color-gui-control-disabled:   $color-background-disabled;
+
+// Scrollbars (GUI only — not the document).
+$color-gui-scrollbar-track:        $color-neutral-track;
+$color-gui-scrollbar-thumb:        $color-neutral-thumb;
+$color-gui-scrollbar-thumb-hover:  $color-neutral-thumb-strong;
+
+// ── State colors (UI feedback) ────────────────────────────────────────────────
+$color-state-info-bg:      $color-blue-50;
+$color-state-info-text:    $color-blue-800;
+$color-state-info-border:  $color-blue-100;
+
+$color-state-success-bg:      $color-green-50;
+$color-state-success-text:    $color-green-800;
+$color-state-success-border:  $color-green-200;
+$color-state-success-solid:   $color-green-500;
+$color-state-success-strong:  $color-green-700;
+
+$color-state-warning-bg:    $color-amber-100;
+$color-state-warning-text:  $color-amber-800;
+
+$color-state-error-bg:      $color-red-50;
+$color-state-error-text:    $color-red-700;
+$color-state-error-border:  $color-red-200;
+$color-state-error-strong:  $color-red-danger;
+$color-state-error-hover:   $color-red-800;
+$color-state-error-accent:  $color-red-600;
+
+$color-state-pending-bg:    $color-blue-100;
+$color-state-pending-text:  $color-blue-800;
+$color-state-sending-bg:    $color-indigo-100;
+$color-state-sending-text:  $color-indigo-800;
+$color-state-sent-bg:       $color-green-100;
+$color-state-sent-text:     $color-green-700;
+$color-state-failed-bg:     $color-red-100;
+$color-state-failed-text:   $color-red-danger;
+$color-state-cancelled-bg:  $color-gray-200;
+$color-state-cancelled-text:$color-gray-600;
+
+// Interactive hover hints (links/buttons that turn blue on hover).
+$color-state-hover-bg:      $color-blue-50;
+$color-state-hover-border:  $color-blue-300;
+$color-state-hover-text:    $color-blue-700;
+
+// ── Shadows / overlays ────────────────────────────────────────────────────────
+$color-shadow-card:    $color-shadow-xs;
+$color-shadow-popover: $color-shadow-lg;
+$color-shadow-modal:   $color-shadow-xl;
+$color-overlay:        $color-overlay-backdrop;

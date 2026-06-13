@@ -116,6 +116,34 @@ public class GraphicConversionServiceTests
     }
 
     [Test]
+    public void Wmf_WithEmbeddedDib_IsRasterizedToPng_ViaGenericScan()
+    {
+        // WMF (placeable) z dołączonym DIB-em → generyczny skan BITMAPINFOHEADER → PNG (nie placeholder).
+        var wmf = BuildPlaceableWmf(0, 0, 96, 48, 96).Concat(BuildDib(2, 2)).ToArray();
+
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = wmf, ContentType = "image/x-wmf" });
+
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Wmf);
+        result.Web!.MimeType.Should().Be("image/png");
+        result.Web.IsPlaceholder.Should().BeFalse();
+    }
+
+    [Test]
+    public void Emf_WithCorruptDib_FallsBackToPlaceholder_WithoutThrowing()
+    {
+        // EMR_STRETCHDIBITS deklaruje DIB, ale nagłówek jest niepoprawny (biSize≠40) i offsety poza
+        // rekordem → ani ścieżka rekordowa, ani skan generyczny nie znajdą rastra → placeholder, bez wyjątku.
+        var emf = BuildEmfWithCorruptDibits();
+
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = emf, ContentType = "image/x-emf" });
+
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Emf);
+        result.Web!.IsPlaceholder.Should().BeTrue();
+        result.Web.MimeType.Should().Be("image/svg+xml");
+        result.PreserveOriginalPart.Should().BeTrue();
+    }
+
+    [Test]
     public void Wmf_Placeable_GivesPlaceholderWithDimensions()
     {
         // bbox 0,0,1440,720 with 1440 units/inch = 1in x 0.5in = 96 x 48 px.
@@ -252,6 +280,37 @@ public class GraphicConversionServiceTests
         BinaryPrimitives.WriteUInt32LittleEndian(eof.AsSpan(4), 20);       // nSize
 
         return header.Concat(rec).Concat(eof).ToArray();
+    }
+
+    /// <summary>Goły DIB (BITMAPINFOHEADER 40B, 24bpp BI_RGB + bity) — do testów skanu generycznego.</summary>
+    private static byte[] BuildDib(int w, int h)
+    {
+        int stride = ((w * 24 + 31) / 32) * 4;
+        int cbBits = stride * h;
+        var dib = new byte[40 + cbBits];
+        BinaryPrimitives.WriteUInt32LittleEndian(dib, 40);                 // biSize
+        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(4), w);         // biWidth
+        BinaryPrimitives.WriteInt32LittleEndian(dib.AsSpan(8), h);         // biHeight
+        BinaryPrimitives.WriteUInt16LittleEndian(dib.AsSpan(12), 1);       // biPlanes
+        BinaryPrimitives.WriteUInt16LittleEndian(dib.AsSpan(14), 24);      // biBitCount
+        BinaryPrimitives.WriteUInt32LittleEndian(dib.AsSpan(16), 0);       // BI_RGB
+        for (int i = 40; i < dib.Length; i++) dib[i] = 0x80;
+        return dib;
+    }
+
+    /// <summary>EMF z rekordem EMR_STRETCHDIBITS o niepoprawnym DIB (biSize=0, offsety poza rekordem).</summary>
+    private static byte[] BuildEmfWithCorruptDibits()
+    {
+        var header = BuildEmf(10000, 5000);
+        const int recSize = 88; // wyrównane do 4
+        var rec = new byte[recSize];
+        BinaryPrimitives.WriteUInt32LittleEndian(rec, 81);                  // EMR_STRETCHDIBITS
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(4), recSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(48), 9000);     // offBmiSrc poza rekordem
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(52), 40);       // cbBmiSrc
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(56), 9100);     // offBitsSrc poza rekordem
+        BinaryPrimitives.WriteUInt32LittleEndian(rec.AsSpan(60), 16);       // cbBitsSrc
+        return header.Concat(rec).ToArray();
     }
 
     private static byte[] BuildPlaceableWmf(short left, short top, short right, short bottom, ushort inch)
