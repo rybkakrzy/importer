@@ -11,5 +11,14 @@ export const environment = {
   autoSave: {
     enabled: true,
     intervalSeconds: 30
+  },
+  // Entra ID (MSAL) — DEV. Uzupełnij wartościami z app registration DEV.
+  auth: {
+    clientId: '<DEV_SPA_CLIENT_ID>',
+    authority: 'https://login.microsoftonline.com/<DEV_TENANT_ID>',
+    redirectUri: 'http://localhost:4200/',
+    postLogoutRedirectUri: 'http://localhost:4200/',
+    apiScopes: ['<DEV_API_SCOPE>'],
+    adminRole: 'APP_Admin'
   }
 };

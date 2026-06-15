@@ -27,6 +27,12 @@ Funkcje systemu z perspektywy produktu i implementacji. Aktualizuj przy zmianie 
 | Edycja nagłówka/stopki (Word-like) | Implemented | konwersja DOCX↔HTML (`DocxToHtmlConverter`/`HtmlToDocxConverter`) | `wysiwyg-editor`: wejście (db)klik, kontekstowy toolbar, „Zamknij", first/odd/even, numery stron | część `save`/`PUT` (header/footer w `SaveDocumentRequest`) |
 | Import nagłówka/stopki: wybór wariantu sekcji | Implemented (import: default+first+even) | `ExtractHeader/ExtractFooter` wg `sectPr`/refs + `titlePg`/`evenAndOddHeaders` | spread pełnego obiektu header/footer | — |
 | Round-trip first/even header/footer (zapis) | Implemented (single-section) | `HtmlToDocxConverter.WriteHeaderPart`/`WriteFooterPart(html, type)` + `EnsureTitlePage`/`EnsureEvenAndOddHeaders` | bez zmian (model TS już ma pola) | część `PUT .../versions/{vid}` (przez `SaveDocumentRequest`) |
+| Kontrola dostępu do dokumentu (`allowedCorporateKeys`) | Implemented | `DocumentAccessPolicy` + `IDocumentAccessGuard`; 403 w handlerach treści/metadanych; admin omija listę | `documentAccessGuard` + `DocumentAccessDeniedComponent` | 403 na `GET /{id}`, `/metadata`, `/download`, `/versions/{vid}/download` |
+| Uwierzytelnianie + role Entra ID (`APP_Pracownik`/`APP_Admin`) | Implemented (wymaga konfiguracji Entra + restore/npm install) | **Microsoft.Identity.Web** (`AddMicrosoftIdentityWebApi`), policy `RequireAppEmployee`/`RequireAppAdmin`, `[Authorize]` globalnie, `ClaimsCurrentUserProvider` | MSAL: `MsalGuard`, `appAdminGuard`, `MsalInterceptor`; runtime `config.json` | 401 (brak tokena), 403 (rola/dostęp); admin: `GET /`, `deliveries*` |
+| Mapowanie grup→role Entra (Doc2, ADR-0012) | Implemented (placeholdery; wymaga grup `GSAPW4D_DOC2_*`) | `RolesOptions` (sekcja `Roles`) + `Doc2ClaimsTransformer` (claim `groups`→`APP_*`; App Roles współistnieją) | role z runtime `config.json` (`adminRole`) | — |
+| Microsoft Graph — lookup userów (Doc2, ADR-0012) | Implemented (app-only; wymaga ClientSecret z GCP) | Graph v5 `GraphUserService` + `IdentityController` | — | `GET /api/identity/users?query=` (RequireAppAdmin) |
+| Keycloak (legacy) dual-auth (Doc2, ADR-0012) | Implemented (off; gdy `Keycloak:Enabled`) | policy scheme `EntraOrKeycloak` (wybór po issuerze) + drugi `JwtBearer` | — | tokeny Keycloak akceptowane obok Entra |
+| Sekrety w GCP Secret Manager (Doc2, ADR-0012) | Implemented (off lokalnie) | `EntraSecretLoader` → `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret` | — | — |
 
 ## Statusy
 

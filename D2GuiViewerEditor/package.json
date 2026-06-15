@@ -29,6 +29,8 @@
     "@angular/forms": "^20.0.0",
     "@angular/platform-browser": "^20.0.0",
     "@angular/router": "^20.0.0",
+    "@azure/msal-angular": "^4.0.0",
+    "@azure/msal-browser": "^4.0.0",
     "pdfjs-dist": "^5.5.207",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",

@@ -206,9 +206,58 @@ testowej, wysokie ryzyko cichych błędów; NPOI jest sprawdzone. b2xtranslator 
 NuGet nie zawiera parsera. LibreOffice headless — odrzucone regułą projektu (kontener/GCP).
 Normalizacja na ścieżce ingest/storage (dashboard) — odłożone: osobny flow (persist), follow-up.
 
+## ADR-0011: Uwierzytelnianie i autoryzacja przez Microsoft Entra ID
+
+- Date: 2026-05-26
+- Status: Accepted; **częściowo zastąpione przez ADR-0012** (2026-06-10) — biblioteka (JwtBearer→Microsoft.Identity.Web) oraz model ról (App Roles → **mapowanie grup→role**, App Roles zachowane jako współistniejące). Reszta (CorporateKey z claimu, admin omija `allowedCorporateKeys`, backend = źródło prawdy, MSAL na froncie) bez zmian.
+
+### Context
+Aplikacja nie miała uwierzytelniania; kontrola dostępu do dokumentu (v1) opierała się o `allowedCorporateKeys` + nagłówek `X-Corporate-Key` (seam). Cel: pełne uwierzytelnianie użytkowników + dwie role aplikacyjne (`APP_Pracownik`, `APP_Admin`) z zabezpieczeniem modułu admina.
+
+### Decision
+- **App Roles** (nie group claims) — `APP_Pracownik`/`APP_Admin` jako appRoles → claim `roles` (eliminuje group overage, stabilne, czytelne).
+- **CorporateKey z access tokena** — konfigurowalny claim (`AzureAd:CorporateKeyClaim`, domyślnie `ck`); brak/pusty → null (dokumenty ograniczone → 403). Bez fallbacku DB w tej wersji.
+- **Logowanie dla całej aplikacji** — `[Authorize]` na `BaseApiController`; „publiczny po linku" = każdy zalogowany (authenticated-public). Health pozostaje anonimowy.
+- **APP_Admin omija `allowedCorporateKeys`** — decyzja biznesowa: rola admina daje pełny wgląd w treść (bypass w `DocumentAccessGuard`).
+- Backend: JwtBearer (`Microsoft.AspNetCore.Authentication.JwtBearer`), `RoleClaimType="roles"`, policy `RequireAppEmployee`/`RequireAppAdmin`, `ClaimsCurrentUserProvider`. Endpointy admina (`GET /`, `deliveries`, `deliveries/{id}/retry`) → `RequireAppAdmin` (401/403). Backend = źródło prawdy.
+- Frontend: MSAL (`@azure/msal-angular`/`-browser`), `MsalGuard` na całej aplikacji, `appAdminGuard` (UX) na `/admin`, MsalInterceptor (Bearer), `documentAccessGuard` zostaje. Front nie decyduje o bezpieczeństwie.
+
+### Consequences
+Spójna tożsamość; admin chroniony backendowo (wcześniej tylko trasa Angulara). Istniejące linki integratorów wymagają logowania (zmiana zachowania — świadoma). Wymaga konfiguracji Entra (app registration, appRoles, optional claim CorporateKey, redirect URI per env) i `npm install` MSAL. External API pozostaje app-to-app (osobny temat).
+
+### Alternatives considered
+Group claims — odrzucone (overage, GUID-y). Fallback DB/Graph dla CorporateKey — odłożony (claim-only na start). Logowanie tylko dla dokumentów ograniczonych — odrzucone na rzecz spójności (cała aplikacja za logowaniem). Admin bez bypassu — rozważone; biznes wybrał pełny wgląd admina.
+
+## ADR-0012: Pełny wzorzec Doc2/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak)
+
+- Date: 2026-06-10
+- Status: Accepted (kod gotowy; aktywacja per-środowisko wymaga realnych wartości Entra/GCP/Keycloak)
+
+### Context
+Po wdrożeniu lekkiej integracji Entra (ADR-0011: goły JwtBearer + App Roles) padła decyzja, by ViewerEditor przyjął **pełny wzorzec referencyjny Doc2/D2WebCore** (analiza: `analiza_implementacji_entra_id_pelna.md`). Wybór użytkownika: pełny wzorzec, **mapowanie grup→role**, praca na bieżącym drzewie. Wzorzec Doc2 to serwerowy web-app+API; ViewerEditor to SPA+API — adoptujemy części pasujące do tego kształtu (bez serwerowego OIDC/cookie).
+
+### Decision
+- **Biblioteka:** `Microsoft.Identity.Web` 3.12.0 (`AddMicrosoftIdentityWebApi`) zamiast gołego `JwtBearer`. JwtBearer NIE jest już pinowany (Identity.Web dostarcza go tranzytywnie per-TFM — pin 8.0.12 dawał NU1605 vs wymóg 9.x na konsumentach net9.0).
+- **Mapowanie grup→role (Doc2):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `Doc2ClaimsTransformer : IClaimsTransformation` — claim `groups` → role aplikacyjne (`APP_Pracownik`/`APP_Admin`). **App Roles zachowane** (claim `roles` z tokena przeżywa) → grupy i App Roles **współistnieją**. Polityki `RequireAppEmployee`/`RequireAppAdmin` bez zmian (wymagają tych samych nazw ról).
+- **Microsoft Graph** (v5, **5.103.0** jak Doc2): `IGraphUserService`/`GraphUserService` app-only (`ClientSecretCredential` + `.default`), `GET /api/identity/users?query=` (RequireAppAdmin). Aktywny tylko gdy jest ClientSecret; inaczej `DisabledGraphUserService` (no-op) → lokalnie bez sekretu działa. **Nie** użyto `Microsoft.Identity.Web.MicrosoftGraph` (to Graph v4).
+- **GCP Secret Manager** (`Google.Cloud.SecretManager.V1` 2.6.0): `EntraSecretLoader` wstrzykuje `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret` na starcie. Guard `Enabled` + try/catch → nigdy nie wywala startu (lokalnie wyłączone).
+- **Keycloak (legacy) dual-auth:** gdy `Keycloak:Enabled`, drugi schemat `JwtBearer` obok Entra + **policy scheme** `EntraOrKeycloak` wybierający schemat po **issuerze tokena** (`AuthSchemes.SelectByIssuer`). Wyłączony → tylko Entra (bez zmian zachowania).
+- **Frontend runtime config (Doc2):** `assets/configs/config.json` ładowany w `main.ts` **przed** bootstrapem → `RUNTIME_AUTH_CONFIG` (token z root-factory = `environment.auth` jako fallback). Fabryki MSAL + `appAdminGuard` + `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
+- **Wszystkie wartości środowiskowe to placeholdery** (tenant, clientId, grupy `GSAPW4D_DOC2_*`, sekrety, GCP project, Keycloak) — nigdy realnych sekretów w repo.
+
+### Consequences
+Architektura zbieżna z Doc2 w częściach pasujących do SPA+API. Mapowanie grup→role odwraca decyzję „App Roles only" z ADR-0011, ale je zachowuje (hybryda). Build backendu OK; testy: Api.UnitTests **50** (`Doc2ClaimsTransformerTests` 6, `AuthSchemesTests` 5, `IdentityControllerTests` 4), GUI **240** (`runtime-config.spec` 4), AOT build OK. **Aktywacja wymaga** realnych wartości w `appsettings.{ENV}.json`/`config.json` + (dla Graph) sekretu z GCP + (dla dual-auth) realnego Keycloaka. Graph używa app-only — wymaga uprawnień aplikacyjnych (`User.Read.All`) + admin consent. **Niezweryfikowane runtime** (brak tenanta/GCP/Keycloak lokalnie): start aplikacji z realnym Identity.Web, walidacja tokenów Entra, faktyczne mapowanie grup z realnego tokena, pobranie sekretu z GCP, selekcja schematu Keycloak.
+
+**Hardening (analiza problemów):** (1) `RoleClaimType="roles"` ustawiony przez **`PostConfigure`** (rejestrowany po `AddMicrosoftIdentityWebApi`) — gwarantuje, że wygrywa nad konfiguracją Identity.Web, inaczej `RequireRole` mogłoby szukać `ClaimTypes.Role`. (2) `AuthSchemes.SelectByIssuer` w try/catch — niepoprawny token → fallback Entra (→401). (3) `RUNTIME_AUTH_CONFIG` ma root-factory default (=`environment.auth`) → injection zawsze się rozwiązuje (testy + bezpiecznik); `main.ts` nadpisuje wartością runtime; fetch `config.json` z fallbackiem przy 404/niepoprawnym JSON.
+
+**Znane ograniczenia:** (a) **Group overage** — user w > ~200 grupach: Entra pomija claim `groups` (emituje `_claim_names`/`_claim_sources` → Graph). Transformer NIE rozwiązuje overage przez Graph → tacy użytkownicy nie dostają ról z grup; ratują App Roles (współistnieją) lub przyszłe rozwiązanie overage. (b) `groups` domyślnie niesie **object-id** (GUID), nie nazwy — konfiguracja Entra (optional claim) musi emitować nazwy `GSAPW4D_DOC2_*` albo w `RolesOptions.GroupNames` trzeba wpisać GUID-y. (c) start z PUSTYM `AzureAd:ClientId` (bazowy `appsettings.json` PRD) może rzucić walidacją Identity.Web przy pierwszym żądaniu — uruchamiać z env DEV (placeholdery niepuste) lub realną konfiguracją.
+
+### Alternatives considered
+Serwerowy OIDC (`AddMicrosoftIdentityWebApp` + cookie) jak w Doc2 — **pominięty**: ViewerEditor to SPA (interaktywny login robi MSAL w przeglądarce), backend pozostaje czystym resource-serverem. `Microsoft.Identity.Web.MicrosoftGraph` (Graph v4) — odrzucone na rzecz Graph v5 (zgodność z Doc2 5.103.0 + nowocześniejsze API). Delegated Graph zamiast app-only — odrzucone (lookup userów to funkcja admina, app-only prostsze).
+
 ---
 
-## ADR-0011: Realna rasteryzacja EMF/WMF (SkiaSharp) i konwersja binarnego .doc (pure-managed) — 2026-06-11
+## ADR-0013: Realna rasteryzacja EMF/WMF (SkiaSharp) i konwersja binarnego .doc (pure-managed) — 2026-06-11
 
 ### Context
 Dwa zgłoszenia odrzucały dotychczasowe „honest fallbacky" wprowadzone w ADR-0010 i przy konwersji
@@ -245,7 +294,7 @@ Płatny Aspose/Spire — odrzucone (licencja). Sidecar LibreOffice — roadmapa 
 
 ---
 
-## ADR-0012: Strukturalne logi JSON dla Google Cloud Logging (severity) — 2026-06-11
+## ADR-0014: Strukturalne logi JSON dla Google Cloud Logging (severity) — 2026-06-11
 
 ### Context
 W GCP Logs Explorer wyjątki (logowane `LogError`/`LogCritical`/Serilog `Error`/`Fatal`) pojawiały się

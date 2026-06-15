@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentBaseContent;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -12,6 +13,7 @@ public class GetDocumentBaseContentQueryHandlerTests
 {
     private IDocumentRepository _documentRepository;
     private IDocumentStorageService _storageService;
+    private IDocumentAccessGuard _accessGuard;
     private GetDocumentBaseContentQueryHandler _handler;
 
     [SetUp]
@@ -19,7 +21,9 @@ public class GetDocumentBaseContentQueryHandlerTests
     {
         _documentRepository = Substitute.For<IDocumentRepository>();
         _storageService = Substitute.For<IDocumentStorageService>();
-        _handler = new GetDocumentBaseContentQueryHandler(_documentRepository, _storageService);
+        _accessGuard = Substitute.For<IDocumentAccessGuard>();
+        _accessGuard.IsViewAllowed(Arg.Any<string?>()).Returns(true);
+        _handler = new GetDocumentBaseContentQueryHandler(_documentRepository, _storageService, _accessGuard);
     }
 
     [Test]

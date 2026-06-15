@@ -1,5 +1,6 @@
-import { Component } from '@angular/core';
+import { Component, OnInit, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
+import { MsalService } from '@azure/msal-angular';
 import { GlobalBannersComponent } from './components/global-banners/global-banners';
 
 @Component({
@@ -21,4 +22,17 @@ import { GlobalBannersComponent } from './components/global-banners/global-banne
     }
   `]
 })
-export class App {}
+export class App implements OnInit {
+  private readonly msal = inject(MsalService);
+
+  ngOnInit(): void {
+    // Complete any redirect login and keep an active account selected for token acquisition.
+    this.msal.instance.enableAccountStorageEvents();
+    this.msal.handleRedirectObservable().subscribe(() => {
+      const accounts = this.msal.instance.getAllAccounts();
+      if (accounts.length > 0 && !this.msal.instance.getActiveAccount()) {
+        this.msal.instance.setActiveAccount(accounts[0]);
+      }
+    });
+  }
+}

@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentMetadata;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -13,13 +14,16 @@ public class GetDocumentMetadataQueryHandlerTests
     private const string DocxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     private Mock<IDocumentRepository> _documentRepo = null!;
+    private Mock<IDocumentAccessGuard> _accessGuard = null!;
     private GetDocumentMetadataQueryHandler _handler = null!;
 
     [SetUp]
     public void SetUp()
     {
         _documentRepo = new Mock<IDocumentRepository>();
-        _handler = new GetDocumentMetadataQueryHandler(_documentRepo.Object);
+        _accessGuard = new Mock<IDocumentAccessGuard>();
+        _accessGuard.Setup(g => g.IsViewAllowed(It.IsAny<string?>())).Returns(true);
+        _handler = new GetDocumentMetadataQueryHandler(_documentRepo.Object, _accessGuard.Object);
     }
 
     private async Task<DocumentMetadataDto> HandleWithMetadataAsync(string? metadata)

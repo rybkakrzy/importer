@@ -1,0 +1,10 @@
+{
+  "auth": {
+    "clientId": "<SPA_CLIENT_ID>",
+    "authority": "https://login.microsoftonline.com/<TENANT_ID>",
+    "redirectUri": "/",
+    "postLogoutRedirectUri": "/",
+    "apiScopes": ["<API_SCOPE>"],
+    "adminRole": "APP_Admin"
+  }
+}

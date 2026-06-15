@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Interfaces;
 using MediatR;
@@ -12,11 +13,16 @@ public class GetDocumentVersionContentQueryHandler
 {
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentStorageService _storageService;
+    private readonly IDocumentAccessGuard _accessGuard;
 
-    public GetDocumentVersionContentQueryHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
+    public GetDocumentVersionContentQueryHandler(
+        IDocumentRepository documentRepository,
+        IDocumentStorageService storageService,
+        IDocumentAccessGuard accessGuard)
     {
         _documentRepository = documentRepository;
         _storageService = storageService;
+        _accessGuard = accessGuard;
     }
 
     public async Task<Result<DocumentVersionContentDto>> Handle(
@@ -28,6 +34,9 @@ public class GetDocumentVersionContentQueryHandler
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
                 return Result<DocumentVersionContentDto>.NotFound();
+
+            if (!_accessGuard.IsViewAllowed(document.Metadata))
+                return Result<DocumentVersionContentDto>.Forbidden("Brak uprawnień do podglądu tego dokumentu.");
 
             var version = document.Versions.FirstOrDefault(v => v.Id == request.VersionId);
             if (version == null)

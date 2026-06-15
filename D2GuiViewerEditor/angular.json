@@ -89,7 +89,7 @@
           "builder": "@angular/build:unit-test",
           "options": {
             "tsConfig": "tsconfig.spec.json",
-            "buildTarget": "d2-gui-viewereditor:build",
+            "buildTarget": "::development",
             "runner": "vitest",
             "setupFiles": ["src/test-setup.ts"]
           }

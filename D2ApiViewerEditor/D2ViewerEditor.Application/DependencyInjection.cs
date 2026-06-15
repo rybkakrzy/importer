@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using FluentValidation;
 using D2ViewerEditor.Application.Common.Behaviours;
+using D2ViewerEditor.Application.Common.Security;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -21,6 +22,10 @@ public static class DependencyInjection
 
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehaviour<,>));
         services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehaviour<,>));
+
+        // Document view-access guard (CorporateKey allow-list). ICurrentUserProvider is
+        // supplied by the host (Api) — see HttpHeaderCurrentUserProvider.
+        services.AddScoped<IDocumentAccessGuard, DocumentAccessGuard>();
 
         return services;
     }

@@ -1,14 +1,18 @@
 ﻿using D2ViewerEditor.Domain.Common;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace D2ViewerEditor.Api.Controllers;
 
 /// <summary>
-/// Bazowy kontroler API z obsługą wzorca Result
+/// Bazowy kontroler API z obsługą wzorca Result.
+/// Wymaga uwierzytelnienia (Entra ID) dla wszystkich akcji — cała aplikacja jest za logowaniem.
+/// Endpointy administracyjne dokładają politykę <see cref="Security.AuthorizationPolicies.RequireAppAdmin"/>.
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public abstract class BaseApiController : ControllerBase
 {
     private IMediator? _mediator;

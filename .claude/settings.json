@@ -15,7 +15,9 @@
       "PowerShell(dotnet build D2ApiViewerEditor\\\\D2ViewerEditor.sln -v q --nologo 2>&1)",
       "Bash(python -)",
       "Bash(which soffice *)",
-      "Bash(ls \"/c/Program Files/LibreOffice/program/soffice.exe\")"
+      "Bash(ls \"/c/Program Files/LibreOffice/program/soffice.exe\")",
+      "PowerShell(dotnet build \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ApiViewerEditor\\\\D2ViewerEditor.sln\" --nologo -v m 2>&1)",
+      "PowerShell(dotnet restore \"C:\\\\Projekty\\\\Jit\\\\ImportParametryzacji\\\\importer\\\\D2ApiViewerEditor\\\\D2ViewerEditor.Api\\\\D2ViewerEditor.Api.csproj\" --nologo 2>&1)"
     ]
   }
 }

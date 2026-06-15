@@ -15,6 +15,12 @@ export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
     catchError((error: HttpErrorResponse) => {
       let errorMessage = 'Wystąpił nieoczekiwany błąd';
 
+      if (error.status === 403) {
+        // Access denied is handled by the document-access guard (redirect to /access-denied)
+        // and dedicated views — don't surface a duplicate toast.
+        return throwError(() => error);
+      }
+
       if (error.status === 0) {
         connectionStatus.reportApiError();
         errorMessage = 'Nie można połączyć się z serwerem. Sprawdź połączenie sieciowe.';

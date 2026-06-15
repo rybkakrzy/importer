@@ -16,6 +16,8 @@ using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentMetadata;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersionContent;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersions;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocuments;
+using D2ViewerEditor.Api.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace D2ViewerEditor.Api.Controllers;
@@ -30,6 +32,7 @@ public class DocumentStorageController : BaseApiController
     /// </summary>
     /// <returns>Lista dokumentów bez contentu</returns>
     [HttpGet]
+    [Authorize(Policy = AuthorizationPolicies.RequireAppAdmin)]
     [ProducesResponseType(typeof(List<DocumentListItemDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetDocuments([FromQuery] int skip = 0, [FromQuery] int take = 200)
     {
@@ -134,6 +137,9 @@ public class DocumentStorageController : BaseApiController
         var query = new GetDocumentMetadataQuery(masterId);
         var result = await Mediator.Send(query);
 
+        if (result.IsForbidden)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
+
         return result.IsSuccess
             ? Ok(result.Value)
             : NotFound(new { error = result.Error });
@@ -151,6 +157,9 @@ public class DocumentStorageController : BaseApiController
     {
         var query = new GetDocumentQuery(masterId);
         var result = await Mediator.Send(query);
+
+        if (result.IsForbidden)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
 
         return result.IsSuccess
             ? Ok(result.Value)
@@ -188,6 +197,8 @@ public class DocumentStorageController : BaseApiController
         var query = new GetDocumentBaseContentQuery(masterId);
         var result = await Mediator.Send(query);
 
+        if (result.IsForbidden)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
         if (!result.IsSuccess)
             return NotFound(new { error = result.Error });
 
@@ -209,6 +220,8 @@ public class DocumentStorageController : BaseApiController
         var query = new GetDocumentVersionContentQuery(masterId, versionId);
         var result = await Mediator.Send(query);
 
+        if (result.IsForbidden)
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = result.Error });
         if (!result.IsSuccess)
             return NotFound(new { error = result.Error });
 
@@ -348,6 +361,7 @@ public class DocumentStorageController : BaseApiController
     /// <param name="skip">Offset paginacji</param>
     /// <param name="take">Rozmiar strony</param>
     [HttpGet("deliveries")]
+    [Authorize(Policy = AuthorizationPolicies.RequireAppAdmin)]
     [ProducesResponseType(typeof(IReadOnlyList<DeliveryListItemDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> GetDeliveries(
@@ -365,6 +379,7 @@ public class DocumentStorageController : BaseApiController
     /// </summary>
     /// <param name="deliveryId">GUID zadania wysyłki</param>
     [HttpPost("deliveries/{deliveryId:guid}/retry")]
+    [Authorize(Policy = AuthorizationPolicies.RequireAppAdmin)]
     [ProducesResponseType(typeof(RequeueDeliveryResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

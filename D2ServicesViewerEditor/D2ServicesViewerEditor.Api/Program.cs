@@ -42,6 +42,12 @@ try
     builder.Services.AddApplication();
     builder.Services.AddInfrastructure(builder.Configuration);
 
+    // External API authenticates app-to-app (not per user). The shared Application layer
+    // registers IDocumentAccessGuard (→ ICurrentUserProvider); provide a no-user system
+    // provider so DI is valid. Ingest does not perform per-user document access checks.
+    builder.Services.AddScoped<D2ViewerEditor.Application.Common.Security.ICurrentUserProvider,
+        D2ViewerEditor.Application.Common.Security.SystemCurrentUserProvider>();
+
     // Limity uploadu: validator dopuszcza pliki do 100 MB — Kestrel i parser multipart
     // muszą zezwalać na co najmniej tyle (z drobnym zapasem na nagłówki i metadane).
     const long MaxUploadBytes = 110L * 1024 * 1024;

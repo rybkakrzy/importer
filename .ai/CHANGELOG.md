@@ -55,7 +55,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 - `dotnet build` obu hostów OK; `Api.UnitTests` **43** (+8 `GcpJsonConsoleFormatterTests`: mapowanie poziomów, wyjątek=ERROR+stack w message, jedna linia JSON).
 - Manualnie do potwierdzenia w GCP: po deployu wyjątki w Logs Explorer mają severity ERROR/CRITICAL i są filtrowalne; Error Reporting grupuje po stack trace.
 ### Notes
-- Root cause: stdout plain-text → Cloud Logging nadaje INFO; rozwiązanie = pole `severity` w JSON. ADR-0012.
+- Root cause: stdout plain-text → Cloud Logging nadaje INFO; rozwiązanie = pole `severity` w JSON. ADR-0014.
 - Follow-up: `LoggingBehaviour` loguje `{@Request}` (pełny payload — hałas/dane wrażliwe), do okrojenia osobno.
 
 ## 2026-06-11 — Fix: „Zamknij" w modalu wysyłki zostawiał edytowalny dokument
@@ -101,7 +101,22 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 - Backend: `dotnet build` sln OK (0 błędów); `Infrastructure.UnitTests` 155 (+1 EMF→PNG `Emf_WithEmbeddedDib_IsRasterizedToPng`, +4 `LegacyDocBinaryConverterTests`); `Api.UnitTests` DocumentController 13.
 - GUI: `ng build` OK; `ng test` **233** (+4 w `document-editor.spec`: VersionId obecny/fallback, cancel bez/z returnUrl).
 ### Notes
-- Ograniczenia świadome: czysto wektorowe EMF (bez rastra) wciąż placeholder; `.doc` odzyskuje tekst+akapity, nie formatowanie/tabele/obrazy. Patrz ADR-0011. Pełna wierność = sidecar LibreOffice (roadmapa).
+- Ograniczenia świadome: czysto wektorowe EMF (bez rastra) wciąż placeholder; `.doc` odzyskuje tekst+akapity, nie formatowanie/tabele/obrazy. Patrz ADR-0013. Pełna wierność = sidecar LibreOffice (roadmapa).
+## 2026-06-10 — Pełny wzorzec Doc2/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak + runtime config)
+### Changed (ADR-0012)
+- **Backend — biblioteka:** `JwtBearer` (goły) → **`Microsoft.Identity.Web` 3.12.0** (`AddMicrosoftIdentityWebApi`). Pin `JwtBearer 8.0.12` **usunięty** (Identity.Web dostarcza per-TFM; pin dawał NU1605 na net9.0). Dodano `AzureAd:ClientId`/`ClientSecret`.
+- **Backend — grupy→role (Doc2):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `Doc2ClaimsTransformer : IClaimsTransformation` mapuje claim `groups` → role `APP_Pracownik`/`APP_Admin`. **App Roles zachowane** (współistnieją). Polityki bez zmian. Test `Doc2ClaimsTransformerTests` **6/6**.
+- **Backend — Microsoft Graph v5 (5.103.0):** `IGraphUserService`/`GraphUserService` (app-only `ClientSecretCredential`) + `GET /api/identity/users?query=` (`IdentityController`, RequireAppAdmin). Aktywny tylko z ClientSecret; inaczej `DisabledGraphUserService`. (NIE `Identity.Web.MicrosoftGraph` = Graph v4.)
+- **Backend — GCP Secret Manager** (`Google.Cloud.SecretManager.V1` 2.6.0): `EntraSecretLoader` wstrzykuje `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret`; guard `Enabled` + try/catch (nigdy nie wywala startu).
+- **Backend — Keycloak dual-auth:** gdy `Keycloak:Enabled` — drugi schemat JwtBearer + policy scheme `EntraOrKeycloak` wybierający po issuerze tokena (`AuthSchemes.SelectByIssuer`). Wyłączony → tylko Entra.
+- **Frontend — runtime config (Doc2):** `public/assets/configs/config.json` ładowany w `main.ts` przed bootstrapem → `RUNTIME_AUTH_CONFIG` (root-factory fallback = `environment.auth`). Fabryki MSAL (`msal.config`), `appAdminGuard`, `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
+- **Konfiguracja:** `appsettings.json`/`appsettings.DEV.json` rozszerzone o `AzureAd.ClientId/ClientSecret`, `Roles`, `Keycloak`, `GCPSecretManager` — wszystko **placeholdery** (zero realnych sekretów/tenanta).
+### Verified
+- `dotnet build` API OK (Identity.Web/Graph 5.103.0/Azure.Identity/SecretManager restore). `Api.UnitTests` **41** (+6 `Doc2ClaimsTransformerTests`). GUI `tsc` OK, `ng test` **236**, `ng build` (AOT) OK; `config.json` shippowany do `dist/.../assets/configs/`.
+- **Niezweryfikowane runtime** (brak tenanta/GCP/Keycloak lokalnie): walidacja tokenów Entra, mapowanie grup z realnego tokena, pobranie sekretu z GCP, selekcja schematu Keycloak. Aktywacja wymaga realnych wartości per środowisko + app consent dla Graph (`User.Read.All`).
+### Notes
+- Adaptacja Doc2 do kształtu SPA+API: **bez** serwerowego OIDC/cookie (`AddMicrosoftIdentityWebApp`) — interaktywny login robi MSAL w przeglądarce, backend = resource server.
+- Zmiana wykonana na bieżącym drzewie (niezakończony merge `feature/azure`); `.claude/settings.json` nadal do rozwiązania przez użytkownika.
 
 ## 2026-06-09 — „Lista plików" (admin-files): statusy dokumentów po polsku
 ### Changed
@@ -920,6 +935,38 @@ Reader emitował break-only akapit (`<w:p><w:r><w:br type=page/></w:r></w:p>`) j
 ### Notes
 - Sanitizacja HTML przy zwykłym wklejaniu nadal opiera się na regexie (`sanitizeHtml`) — patrz R-09 (rekomendacja DOMPurify, wymaga decyzji o zależności).
 - Toolbar/menu kontekstowe „Wklej tylko tekst" (poza zdarzeniem paste, przez `navigator.clipboard.readText()`) — nie wdrożone, kolejny inkrement.
+
+## 2026-05-26 — Microsoft Entra ID: uwierzytelnianie + role (docelowo)
+
+### Changed
+- **Backend (Internal API):** JwtBearer (`Microsoft.AspNetCore.Authentication.JwtBearer`), sekcja `AzureAd` (Authority/Audience/CorporateKeyClaim/role), `RoleClaimType="roles"`. Policy `RequireAppEmployee`/`RequireAppAdmin`. `[Authorize]` na `BaseApiController` (cała aplikacja za logowaniem; Health anonimowy). Endpointy admina (`GET /`, `deliveries`, `deliveries/{id}/retry`) → `RequireAppAdmin`.
+- **Tożsamość:** `ICurrentUserProvider` + `IsAdmin`; `ClaimsCurrentUserProvider` (CorporateKey z konfigurowalnego claimu access tokena, admin z roli). `HttpHeaderCurrentUserProvider` jako DEV. `SystemCurrentUserProvider` w External API.
+- **Dostęp do dokumentu:** `DocumentAccessGuard` — **APP_Admin omija `allowedCorporateKeys`** (ADR-0011).
+- **Frontend:** MSAL (`@azure/msal-angular`/`-browser`) — `msal.config`, providery w `app.config` (MsalInterceptor + init), `MsalGuard` na całej aplikacji, `appAdminGuard` (UX) na `/admin`, obsługa redirect w `App`. `CurrentUserService` czyta rolę/`ck` z konta MSAL (UX). Usunięto `corporateKeyInterceptor`. Sekcja `auth` w `environment(.development).ts`.
+
+### Verified
+- Backend: Domain (63) + Application (155) zielone wcześniej; dodano test bypassu admina. Build pełnej solucji blokowany środowiskowo (DLL zajęte przez API/Rider) — weryfikacja przez projekty testowe.
+- **Niezweryfikowane (kroki deployowe):** `dotnet restore` JwtBearer; **frontend wymaga `npm install`** MSAL (do tego czasu „Cannot find module '@azure/msal-angular'" jest oczekiwane); `app.spec.ts` będzie wymagał providerów MSAL w TestBed.
+
+### Notes
+- ADR-0011: App Roles (nie groups), CorporateKey z access tokena (claim-only), logowanie dla całej aplikacji, admin omija `allowedCorporateKeys`. Wartości Entra to placeholdery per środowisko (nie sekrety).
+
+## 2026-05-26 — Kontrola dostępu do dokumentu (allowedCorporateKeys) — v1
+
+### Changed
+- Domena: `DocumentAccessPolicy` (czysta reguła: brak/null/pusta lista → publiczny dla posiadacza linku; niepusta → tylko pasujący `CorporateKey`; porównanie Trim + Ordinal-IgnoreCase).
+- Application: `ICurrentUserProvider` (seam tożsamości), `IDocumentAccessGuard`/`DocumentAccessGuard` (parsuje `allowedCorporateKeys` z `documents.metadata`, stosuje politykę). Rejestracja w DI.
+- Api: `HttpHeaderCurrentUserProvider` (v1: czyta nagłówek `X-Corporate-Key`; seam pod Entra ID) + `AddHttpContextAccessor`.
+- `Result`/`Result<T>`: nowy stan `Forbidden`/`IsForbidden`.
+- Egzekwowanie (403) w handlerach zwracających treść/metadane: `GetDocumentMetadata` (brama GUI), `GetDocument`, `GetDocumentBaseContent`, `GetDocumentVersionContent`. Kontroler mapuje `Forbidden → 403`.
+- GUI: `CurrentUserService` (seam, opcjonalny `localStorage('corporateKey')`), `corporateKeyInterceptor` (dodaje `X-Corporate-Key`), `documentAccessGuard` (CanActivate na `/editor` i `/viewer` — blokuje wejście przed inicjalizacją edytora), wspólny `DocumentAccessDeniedComponent` + trasa `/access-denied`. `http-error.interceptor` nie pokazuje toasta dla 403 (obsługuje guard/widok).
+
+### Verified
+- `dotnet build D2ViewerEditor.Application.UnitTests` — 0 błędów (testy referencują Domain+Application → potwierdza kompilację warstw). Pozostałe MSB3021/3026 w solucji to blokady DLL przez działające API/Rider, nie błędy kodu.
+- Nowe testy: `DocumentAccessPolicyTests` (Domain), `DocumentAccessGuardTests` (Application). Zaktualizowano konstruktory w `GetDocument*`/`GetDocumentMetadata*` testach (nowa zależność guarda).
+
+### Notes
+- v1 nie ma realnej tożsamości — `CorporateKey` z nagłówka; dokumenty bez `allowedCorporateKeys` pozostają publiczne (brak regresji). Wszystkie odmowy → 403 (401 zarezerwowany na fazę Entra ID). Backend = źródło prawdy; front tylko blokuje wejście i pokazuje widok.
 
 ## 2026-05-25 — Panel admina „Wysyłki" + uruchomienie migracji DB
 

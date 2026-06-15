@@ -15,6 +15,7 @@ Agent nie może zgadywać wersji technologii. Musi sprawdzić fakty w repozytori
 | Architektura | Clean Architecture (Domain/Application/Infrastructure/Api) | layout solucji |
 | CQRS / mediator | MediatR | `Application` + behaviours |
 | Walidacja | FluentValidation (wszystkie komendy mają walidatory) | `Application/Validators` |
+| Auth (Internal API) | Microsoft Entra ID — `Microsoft.AspNetCore.Authentication.JwtBearer` 8.0.12 (walidacja access tokena, App Roles, policy) | `Api.csproj`, `Program.cs` |
 | ORM | EF Core 8 (`Microsoft.EntityFrameworkCore` 8.0.12) | `Infrastructure.csproj` |
 | Baza | PostgreSQL via Npgsql (`Npgsql.EntityFrameworkCore.PostgreSQL` 8.0.11) | `Infrastructure.csproj` |
 | Storage | Google Cloud Storage (`Google.Cloud.Storage.V1` 4.10.0); fake-gcs-server w DEV | `Infrastructure` |
@@ -33,6 +34,7 @@ Agent nie może zgadywać wersji technologii. Musi sprawdzić fakty w repozytori
 | Framework | Angular 20 (`@angular/core` ^20.0.0), standalone components | `package.json` |
 | Język | TypeScript ~5.8.2 | `package.json` |
 | Stan | Signals (brak NgRx); RxJS ~7.8 tylko do HTTP | kod |
+| Auth | MSAL — `@azure/msal-angular` ^4 + `@azure/msal-browser` ^4 (Entra ID; wymaga `npm install`) | `package.json`, `core/auth/msal.config.ts` |
 | PDF | `pdfjs-dist` ^5.5.207 | `package.json` |
 | Testy | **Vitest** ^3.1.1 (`ng test`) | `package.json` |
 | Formatowanie | Prettier (printWidth 100, singleQuote) | `package.json` |
