@@ -51,7 +51,7 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 
 Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DTO `SaveDocumentVersionRequest` używany też przez `finish`).
 
-**Uwierzytelnianie (Entra ID):** Internal API (via **Microsoft.Identity.Web**) wymaga **access tokena** (`Authorization: Bearer …`) dla wszystkich endpointów poza `GET /api/health`. Brak/nieważny token → **401**. Token dołącza front przez `MsalInterceptor`. Role: App Roles + **mapowanie grup→role** (`groups`→`APP_*`). Opcjonalny **Keycloak dual-auth** (wybór schematu po issuerze). Admin: `GET /api/identity/users?query=` (Graph user lookup, `RequireAppAdmin`). Patrz `SECURITY.md`, `DECISIONS.md` ADR-0011 + **ADR-0012**.
+**Uwierzytelnianie (Entra ID):** Internal API (via **Microsoft.Identity.Web**) wymaga **access tokena** (`Authorization: Bearer …`) dla wszystkich endpointów poza `GET /api/health`. Brak/nieważny token → **401**. Token dołącza front przez `MsalInterceptor`. Role: App Roles + **mapowanie grup→role** (`groups`→`APP_*`). Admin: `GET /api/identity/users?query=` (Graph user lookup, `RequireAppAdmin`). Patrz `SECURITY.md`, `DECISIONS.md` ADR-0011 + **ADR-0012**.
 
 **Autoryzacja (role):** endpointy administracyjne — `GET /api/documentstorage`, `GET /api/documentstorage/deliveries`, `POST /api/documentstorage/deliveries/{id}/retry` — wymagają roli `APP_Admin` (policy `RequireAppAdmin`); inaczej **403**.
 

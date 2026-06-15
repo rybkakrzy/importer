@@ -56,35 +56,10 @@ var azureAd = new AzureAdOptions();
 builder.Configuration.GetSection(AzureAdOptions.SectionName).Bind(azureAd);
 builder.Services.Configure<AzureAdOptions>(builder.Configuration.GetSection(AzureAdOptions.SectionName));
 
-var keycloak = new KeycloakOptions();
-builder.Configuration.GetSection(KeycloakOptions.SectionName).Bind(keycloak);
-
 // Authentication: Entra ID access tokens validated via Microsoft.Identity.Web (Doc2/D2WebCore
-// pattern) instead of raw JwtBearer. When Keycloak is enabled, a second JWT scheme runs alongside
-// Entra and the active scheme is chosen per request by the token issuer (legacy coexistence).
-if (keycloak.Enabled && !string.IsNullOrWhiteSpace(keycloak.Authority))
-{
-    // AddMicrosoftIdentityWebApi returns a specialized builder, so call each Add* on the base
-    // AuthenticationBuilder as separate statements rather than chaining.
-    var authBuilder = builder.Services.AddAuthentication(AuthSchemes.EntraOrKeycloak);
-    authBuilder.AddPolicyScheme(AuthSchemes.EntraOrKeycloak, "Entra ID or Keycloak", options =>
-    {
-        options.ForwardDefaultSelector = ctx => AuthSchemes.SelectByIssuer(ctx, keycloak.Authority);
-    });
-    authBuilder.AddMicrosoftIdentityWebApi(builder.Configuration, AzureAdOptions.SectionName, AuthSchemes.Entra);
-    authBuilder.AddJwtBearer(AuthSchemes.Keycloak, options =>
-    {
-        options.Authority = keycloak.Authority;
-        options.Audience = keycloak.Audience;
-        options.TokenValidationParameters.RoleClaimType = "roles";
-        options.TokenValidationParameters.NameClaimType = "name";
-    });
-}
-else
-{
-    builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-        .AddMicrosoftIdentityWebApi(builder.Configuration, AzureAdOptions.SectionName);
-}
+// pattern) instead of raw JwtBearer.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration, AzureAdOptions.SectionName);
 
 // Both native Entra app-role claims AND group→role mappings surface in the "roles" claim, so
 // IsInRole / RequireRole work uniformly. PostConfigure (registered after AddMicrosoftIdentityWebApi)

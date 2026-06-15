@@ -231,7 +231,7 @@ Group claims — odrzucone (overage, GUID-y). Fallback DB/Graph dla CorporateKey
 ## ADR-0012: Pełny wzorzec Doc2/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak)
 
 - Date: 2026-06-10
-- Status: Accepted (kod gotowy; aktywacja per-środowisko wymaga realnych wartości Entra/GCP/Keycloak)
+- Status: Accepted; **Keycloak dual-auth USUNIĘTY 2026-06-13** (patrz CURRENT_STATE). Aktywacja per-środowisko wymaga realnych wartości Entra/GCP.
 
 ### Context
 Po wdrożeniu lekkiej integracji Entra (ADR-0011: goły JwtBearer + App Roles) padła decyzja, by ViewerEditor przyjął **pełny wzorzec referencyjny Doc2/D2WebCore** (analiza: `analiza_implementacji_entra_id_pelna.md`). Wybór użytkownika: pełny wzorzec, **mapowanie grup→role**, praca na bieżącym drzewie. Wzorzec Doc2 to serwerowy web-app+API; ViewerEditor to SPA+API — adoptujemy części pasujące do tego kształtu (bez serwerowego OIDC/cookie).
@@ -241,7 +241,7 @@ Po wdrożeniu lekkiej integracji Entra (ADR-0011: goły JwtBearer + App Roles) p
 - **Mapowanie grup→role (Doc2):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `Doc2ClaimsTransformer : IClaimsTransformation` — claim `groups` → role aplikacyjne (`APP_Pracownik`/`APP_Admin`). **App Roles zachowane** (claim `roles` z tokena przeżywa) → grupy i App Roles **współistnieją**. Polityki `RequireAppEmployee`/`RequireAppAdmin` bez zmian (wymagają tych samych nazw ról).
 - **Microsoft Graph** (v5, **5.103.0** jak Doc2): `IGraphUserService`/`GraphUserService` app-only (`ClientSecretCredential` + `.default`), `GET /api/identity/users?query=` (RequireAppAdmin). Aktywny tylko gdy jest ClientSecret; inaczej `DisabledGraphUserService` (no-op) → lokalnie bez sekretu działa. **Nie** użyto `Microsoft.Identity.Web.MicrosoftGraph` (to Graph v4).
 - **GCP Secret Manager** (`Google.Cloud.SecretManager.V1` 2.6.0): `EntraSecretLoader` wstrzykuje `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret` na starcie. Guard `Enabled` + try/catch → nigdy nie wywala startu (lokalnie wyłączone).
-- **Keycloak (legacy) dual-auth:** gdy `Keycloak:Enabled`, drugi schemat `JwtBearer` obok Entra + **policy scheme** `EntraOrKeycloak` wybierający schemat po **issuerze tokena** (`AuthSchemes.SelectByIssuer`). Wyłączony → tylko Entra (bez zmian zachowania).
+- ~~Keycloak (legacy) dual-auth~~ — **USUNIĘTE 2026-06-13** (`AuthSchemes`/`KeycloakOptions`/sekcja `Keycloak` skasowane; wyłącznie Entra).
 - **Frontend runtime config (Doc2):** `assets/configs/config.json` ładowany w `main.ts` **przed** bootstrapem → `RUNTIME_AUTH_CONFIG` (token z root-factory = `environment.auth` jako fallback). Fabryki MSAL + `appAdminGuard` + `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
 - **Wszystkie wartości środowiskowe to placeholdery** (tenant, clientId, grupy `GSAPW4D_DOC2_*`, sekrety, GCP project, Keycloak) — nigdy realnych sekretów w repo.
 
