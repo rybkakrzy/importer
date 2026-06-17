@@ -13,6 +13,50 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-17 — Konsumpcja proxy Entra: `AzureAd:Proxy:Url` → JwtBearer backchannel (D2WebCore pattern)
+### Changed
+- Nowy `EntraBackchannel.CreateProxy(AzureAdOptions)` — buduje `WebProxy` z `AzureAd:Proxy:Url` (bypass `storage.googleapis.com`, `UseDefaultCredentials=true`) lub `null` gdy brak URL. `Program.cs` (gałąź Entra): gdy proxy ustawione → `HttpClient.DefaultProxy = proxy` oraz `JwtBearerOptions.BackchannelHttpHandler` (pobieranie OpenID metadata/JWKS zza korpo-proxy). Brak URL / lokalnie → bez zmian (direct).
+### Verified
+- `dotnet build` 0 błędów; `dotnet test` Api.UnitTests **67/67** (dodano `EntraBackchannelTests` 3).
+### Notes
+- `IdentityModelEventSource.ShowPII` z wzorca dodany, ale **gated `!IsProduction()`** (nigdy w PRD — wyciek PII to HIGH w analizie; w PRD off). Gating na `!IsProduction()` a nie `IsDevelopment()`, bo env nazywa się „DEV"/itp., nie „Development".
+- **Graph/Azure.Identity** (`ClientSecretCredential` w `GraphUserService`) NIE jest objęty `HttpClient.DefaultProxy` — Azure.Identity używa własnego pipeline'u (proxy via env `HTTPS_PROXY` lub `TokenCredentialOptions.Transport`). Follow-up, jeśli Graph ma działać zza proxy.
+
+## 2026-06-17 — Finalne nazewnictwo ról: `Administrator` / `Operator` (rename z `APP_Admin`/`APP_Pracownik`)
+### Changed
+- Backend: globalny rename wartości `APP_Admin`→`Administrator`, `APP_Pracownik`→`Operator` w `AzureAdOptions` (default `AdminRole`), `appsettings.json`/`appsettings.DEV.json` (sekcja `Roles`→`RoleName`), `DevAuthHandler` (claimy), testach (`Doc2ClaimsTransformerTests`, `IdentityControllerTests`) + komentarzach.
+- Rename **identyfikatorów**: właściwość `AzureAdOptions.EmployeeRole`→`OperatorRole` (klucz `AzureAd:OperatorRole`), stała polityki `RequireAppEmployee`→`RequireAppOperator` (nazwa+wartość), `isEmployee`→`isOperator`, nazwy testów. `RequireAppAdmin`/`AdminRole` bez zmian. Semantyka `ResourcesProvider`/polityk bez zmian.
+- **GUI:** brak zmian kodu — autoryzacja resource-based (ADR-0016), front nie zna nazw ról (potwierdzone grepem).
+- Docs „żywe" (SECURITY/DOMAIN/FEATURES/API_CONTRACTS/CURRENT_STATE) zaktualizowane na nowe nazwy; historyczne ADR-y zachowane.
+### Verified
+- API: `dotnet build` 0 błędów; `dotnet test` Api.UnitTests **64/64**.
+### Notes
+- Patrz ADR-0017. R-26: realne Entra appRoles/`RolesOptions` muszą emitować `Administrator`/`Operator` (albo nadpisać `AzureAd:OperatorRole`/`AdminRole`).
+- Niezwiązane: `D2ViewerEditor.Application.UnitTests` ma **wcześniej istniejący** błąd kompilacji (`GetDocumentVersionContentQueryHandlerTests` — brak arg. `accessGuard`) — nie z tej zmiany.
+
+## 2026-06-17 — Autoryzacja resource-based (backend /identity/resources + ResourcesProvider, front resourceGuard)
+### Changed
+- **Backend (D2ApiViewerEditor):** nowy `ResourcesProvider` (rola→zasoby: employee/admin→editor,viewer; admin→+admin) + endpoint `GET /api/identity/resources` (`RequireAppEmployee`). Polityka admina w `IdentityController` przeniesiona z klasy na akcję `users`. DI `AddScoped<ResourcesProvider>()`. `AzureAdOptions` + `Scopes[]`/`Proxy{Url}` (+ appsettings.json/DEV) — powierzchnia konfiguracji (konsumpcja = follow-up).
+- **Front (D2GuiViewerEditor):** `ResourceAccessService` (cache + dev-bypass) + `resourceGuard` (gating po `route.path` względem listy z backendu, fail-closed→/access-denied). `resourceGuard` zastąpił `documentRoleGuard`/`appAdminGuard` na /editor,/viewer,/admin. **Usunięto:** `documentRoleGuard`, `appAdminGuard`, `CurrentUserService` (+spec), pola `adminRole`/`viewerRole` z `AppAuthConfig`/`config.json` — front nie zna już nazw ról.
+### Verified
+- API: `dotnet build` 0 błędów; `dotnet test` Api.UnitTests **64/64** (IdentityController 7). GUI: `tsc` czysto; `ng test` **262/262** (dodano `resource-access.service.spec` 3; usunięto `current-user.service.spec` 5).
+### Notes
+- Zamyka R-25 (rozjazd nazw ról front↔backend — front już nie zna ról). Otwiera **R-26**: backend `IsInRole` wymaga, by Entra emitowało `APP_Pracownik`/`APP_Admin` (albo nadpisać `AzureAd:EmployeeRole`/`AdminRole`). Patrz ADR-0016.
+- `Scopes`/`Proxy` to na razie tylko config — konsumpcja (proxy na Graph/token, downstream scopes) niewdrożona.
+
+## 2026-06-16 — Front Entra: MSAL standalone (redirect-component), config.json jako źródło auth, model ról Administrator/Przeglądający
+### Changed
+- `main.ts`/`index.html`: `MsalRedirectComponent` (`<app-redirect>`) bootstrapowany przez `appRef.bootstrap(...)` (standalone, bez AppModule); `App` nie woła już `handleRedirectObservable()` (aktywne konto po `inProgress$===None`).
+- Wartości auth usunięte z `environment.*` → jedyne źródło to `src/assets/configs/config.json` (przeniesiony z `public/`). `DEFAULT_AUTH_CONFIG` = neutralne defaulty strukturalne. Token DI `RUNTIME_AUTH_CONFIG` → `MSAL_CUSTOM_CONFIG`.
+- `msal.config.ts`: helper `apiScopesFor()` (jawne `apiScopes` lub fallback `{clientId}/.default`), jawne `navigateToLoginRequestUrl: true`.
+- RBAC (UX): `AppAuthConfig.viewerRole` (domyślnie „Przeglądający"), `adminRole` domyślnie „Administrator". `CurrentUserService` scentralizowany (`isAdmin`/`isViewer`/`canAccessDocuments`, admin=nadzbiór, dev-bypass). Nowy `documentRoleGuard` na `/editor` i `/viewer`; `appAdminGuard` przez `CurrentUserService`.
+- Lokalny `config.json` = dev-bypass (`auth.enabled=false`) — aplikacja startuje bez realnej rejestracji Entra.
+### Verified
+- `tsc --noEmit -p tsconfig.app.json` — czysto. `ng test --watch=false` — **264/264** (dodano `current-user.service.spec` — 5; zaktualizowano `app.spec`, `runtime-config.spec`).
+### Notes
+- **Rozjazd nazw ról z backendem** (ADR-0011/0012: `APP_Pracownik`/`APP_Admin`): dosynchronizować Entra appRoles/`RolesOptions` lub nadpisać `adminRole`/`viewerRole` w config.json. Patrz ADR-0015.
+- Niezweryfikowane runtime (brak tenanta lokalnie): realny redirect + claim `roles`.
+
 ## 2026-06-13 — Fix: ProblemDetails serializowany przez typ runtime (errors w body)
 ### Changed
 - `ExceptionHandlingMiddleware` serializował `problemDetails` przez **statyczny typ bazowy** `ProblemDetails` → `ValidationProblemDetails.Errors` ginęło w body (System.Text.Json honoruje typ statyczny). Fix: `JsonSerializer.Serialize(problemDetails, problemDetails.GetType(), options)` — serializacja po typie runtime, więc słownik `errors` (zgrupowany po `PropertyName`) trafia do odpowiedzi 400.

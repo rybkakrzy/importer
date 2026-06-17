@@ -53,9 +53,9 @@ Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DT
 
 **Uwierzytelnianie (Entra ID):** Internal API (via **Microsoft.Identity.Web**) wymaga **access tokena** (`Authorization: Bearer …`) dla wszystkich endpointów poza `GET /api/health`. Brak/nieważny token → **401**. Token dołącza front przez `MsalInterceptor`. Role: App Roles + **mapowanie grup→role** (`groups`→`APP_*`). Admin: `GET /api/identity/users?query=` (Graph user lookup, `RequireAppAdmin`). Patrz `SECURITY.md`, `DECISIONS.md` ADR-0011 + **ADR-0012**.
 
-**Autoryzacja (role):** endpointy administracyjne — `GET /api/documentstorage`, `GET /api/documentstorage/deliveries`, `POST /api/documentstorage/deliveries/{id}/retry` — wymagają roli `APP_Admin` (policy `RequireAppAdmin`); inaczej **403**.
+**Autoryzacja (role):** endpointy administracyjne — `GET /api/documentstorage`, `GET /api/documentstorage/deliveries`, `POST /api/documentstorage/deliveries/{id}/retry` — wymagają roli `Administrator` (policy `RequireAppAdmin`); inaczej **403**.
 
-**Kontrola dostępu do dokumentu:** endpointy treści/metadanych (`GET /{masterId}`, `/{masterId}/metadata`, `/{masterId}/download`, `/{masterId}/versions/{versionId}/download`) sprawdzają `allowedCorporateKeys` względem `CorporateKey` z claimu access tokena (`AzureAd:CorporateKeyClaim`). Brak uprawnień → **403** `{ error }`. Dokument bez `allowedCorporateKeys` = każdy zalogowany. **`APP_Admin` omija listę.** GUI: `documentAccessGuard` → `/access-denied`.
+**Kontrola dostępu do dokumentu:** endpointy treści/metadanych (`GET /{masterId}`, `/{masterId}/metadata`, `/{masterId}/download`, `/{masterId}/versions/{versionId}/download`) sprawdzają `allowedCorporateKeys` względem `CorporateKey` z claimu access tokena (`AzureAd:CorporateKeyClaim`). Brak uprawnień → **403** `{ error }`. Dokument bez `allowedCorporateKeys` = każdy zalogowany. **`Administrator` omija listę.** GUI: `documentAccessGuard` → `/access-denied`.
 
 ## DocumentController — `/api/document` (operacje bezstanowe, bez DB/GCS)
 

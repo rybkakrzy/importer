@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Identity.Web;
 using Microsoft.OpenApi.Models;
+using System.Net;
 using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -42,7 +43,7 @@ if (devAuthBypass)
     builder.Services.AddAuthorization(options =>
     {
         // W trybie dev autoryzacja jest „otwarta" — każdy (sztuczny) użytkownik przechodzi, też admin.
-        options.AddPolicy(AuthorizationPolicies.RequireAppEmployee, p => p.RequireAuthenticatedUser());
+        options.AddPolicy(AuthorizationPolicies.RequireAppOperator, p => p.RequireAuthenticatedUser());
         options.AddPolicy(AuthorizationPolicies.RequireAppAdmin, p => p.RequireAuthenticatedUser());
     });
     builder.Services.AddHttpContextAccessor();
@@ -56,6 +57,20 @@ var azureAd = new AzureAdOptions();
 builder.Configuration.GetSection(AzureAdOptions.SectionName).Bind(azureAd);
 builder.Services.Configure<AzureAdOptions>(builder.Configuration.GetSection(AzureAdOptions.SectionName));
 
+// Detailed PII in Microsoft.IdentityModel logs (claim values, token internals) — a debugging aid for
+// token-validation failures. NEVER in Production (leaks PII to logs); the env name here is "DEV"/etc.
+// (not "Development"), so we gate on !IsProduction() rather than IsDevelopment().
+Microsoft.IdentityModel.Logging.IdentityModelEventSource.ShowPII = !builder.Environment.IsProduction();
+
+// Enterprise forward proxy (D2WebCore pattern): when AzureAd:Proxy:Url is set, route outbound HTTP
+// through it so the API can reach Entra (token metadata/JWKS) + downstream HTTP from behind a
+// corporate proxy. GCS stays direct (bypass). Not configured (local / no proxy) → direct, no-op.
+var entraProxy = EntraBackchannel.CreateProxy(azureAd);
+if (entraProxy is not null)
+{
+    HttpClient.DefaultProxy = entraProxy;
+}
+
 // Authentication: Entra ID access tokens validated via Microsoft.Identity.Web (Doc2/D2WebCore
 // pattern) instead of raw JwtBearer.
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -68,6 +83,12 @@ builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.Authenticatio
 {
     options.TokenValidationParameters.RoleClaimType = "roles";
     options.TokenValidationParameters.NameClaimType = "name";
+
+    // Route the JwtBearer backchannel (OpenID metadata + JWKS fetch) through the corporate proxy.
+    if (entraProxy is not null)
+    {
+        options.BackchannelHttpHandler = new HttpClientHandler { UseProxy = true, Proxy = entraProxy };
+    }
 });
 
 // Group→role mapping (Doc2): map the Entra "groups" claim onto application role claims.
@@ -76,8 +97,8 @@ builder.Services.AddScoped<IClaimsTransformation, Doc2ClaimsTransformer>();
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy(AuthorizationPolicies.RequireAppEmployee, policy =>
-        policy.RequireRole(azureAd.EmployeeRole, azureAd.AdminRole)); // admin also has app access
+    options.AddPolicy(AuthorizationPolicies.RequireAppOperator, policy =>
+        policy.RequireRole(azureAd.OperatorRole, azureAd.AdminRole)); // admin also has app access
     options.AddPolicy(AuthorizationPolicies.RequireAppAdmin, policy =>
         policy.RequireRole(azureAd.AdminRole));
 });
@@ -100,6 +121,11 @@ else
     builder.Services.AddSingleton<IGraphUserService, DisabledGraphUserService>();
 }
 }
+
+// Role→resource authorization map (Doc2 ResourcesProvider). Reads role names from AzureAdOptions
+// (defaults Operator/Administrator in dev where the section isn't bound). Backend = source of truth
+// for the Angular resource guard (GET /api/identity/resources).
+builder.Services.AddScoped<ResourcesProvider>();
 
 // Add API services
 builder.Services.AddControllers();

@@ -1,8 +1,9 @@
 import { mergeAuthConfig, DEFAULT_AUTH_CONFIG } from './runtime-config';
 
 /**
- * Runtime config merge: config.json (Doc2) overrides build-time `environment.auth` field-by-field;
- * missing/invalid config falls back to defaults so a build runs even without config.json.
+ * Runtime config merge: config.json (Doc2) is the source of auth values and overrides the
+ * structural DEFAULT_AUTH_CONFIG field-by-field; missing/invalid config falls back to those
+ * defaults so the app still bootstraps without config.json.
  */
 describe('mergeAuthConfig', () => {
   it('returns the build-time defaults when the runtime config is null/undefined', () => {
@@ -21,7 +22,7 @@ describe('mergeAuthConfig', () => {
     expect(merged.authority).toBe('https://login.microsoftonline.com/real-tenant');
     // Untouched fields keep the defaults.
     expect(merged.redirectUri).toBe(DEFAULT_AUTH_CONFIG.redirectUri);
-    expect(merged.adminRole).toBe(DEFAULT_AUTH_CONFIG.adminRole);
+    expect(merged.postLogoutRedirectUri).toBe(DEFAULT_AUTH_CONFIG.postLogoutRedirectUri);
     expect(merged.apiScopes).toEqual(DEFAULT_AUTH_CONFIG.apiScopes);
   });
 

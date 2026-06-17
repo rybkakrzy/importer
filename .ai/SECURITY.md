@@ -13,7 +13,7 @@ Bezpieczeństwo ma pierwszeństwo przed wygodą implementacji.
 ## Auth i autoryzacja (Microsoft Entra ID)
 
 - **Uwierzytelnianie:** Entra ID przez **`Microsoft.Identity.Web`** (`AddMicrosoftIdentityWebApi`, sekcja `AzureAd` — `ClientId`/`TenantId`/`Instance`/`Audience`). **Cała aplikacja za logowaniem** — `[Authorize]` na `BaseApiController`; Health anonimowy. Front: MSAL (redirect), token dołączany `MsalInterceptor`. Patrz ADR-0012.
-- **Role:** dwa źródła współistnieją (ADR-0012): **App Roles** (claim `roles`, `APP_Pracownik`/`APP_Admin`) **oraz mapowanie grup→role** (`Doc2ClaimsTransformer`: claim `groups` + sekcja `Roles` `GroupNames`→`RoleName`). `RoleClaimType="roles"`. Policy: `RequireAppEmployee` (oba), `RequireAppAdmin` (admin) na module admina (`GET /api/documentstorage`, `deliveries`, `deliveries/{id}/retry`, `GET /api/identity/users`). Patrz ADR-0011 + ADR-0012.
+- **Role:** dwa źródła współistnieją (ADR-0012): **App Roles** (claim `roles`, `Operator`/`Administrator`) **oraz mapowanie grup→role** (`Doc2ClaimsTransformer`: claim `groups` + sekcja `Roles` `GroupNames`→`RoleName`). `RoleClaimType="roles"`. Policy: `RequireAppOperator` (oba), `RequireAppAdmin` (admin) na module admina (`GET /api/documentstorage`, `deliveries`, `deliveries/{id}/retry`, `GET /api/identity/users`). Patrz ADR-0011 + ADR-0012.
 - **Microsoft Graph (app-only):** `GraphUserService` (`ClientSecretCredential`, scope `.default`) — lookup userów dla admina; aktywny tylko z `AzureAd:ClientSecret` (z GCP Secret Manager), inaczej no-op. **GCP Secret Manager:** `EntraSecretLoader` wstrzykuje `ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret`. Sekrety nigdy w repo (placeholdery).
 - **Backend = źródło prawdy.** Angular guardy (`MsalGuard`, `appAdminGuard`) to tylko UX — ukrycie/blokada wejścia, nie zabezpieczenie.
 - External API (`D2ServicesViewerEditor`) — app-to-app (nie per user); rejestruje `SystemCurrentUserProvider`. Traktuj wejście jako niezaufane.
@@ -22,7 +22,7 @@ Bezpieczeństwo ma pierwszeństwo przed wygodą implementacji.
 
 - Reguła (`DocumentAccessPolicy`, Domain): metadane mogą zawierać `allowedCorporateKeys`. Brak/null/pusta → dokument dla każdego **zalogowanego** (authenticated-public); niepusta → tylko użytkownik z pasującym `CorporateKey`. Porównanie: `Trim()` + Ordinal **ignore-case**.
 - **`CorporateKey` z access tokena** — `ClaimsCurrentUserProvider` czyta konfigurowalny claim (`AzureAd:CorporateKeyClaim`, domyślnie `ck`); brak/pusty → null → dokument ograniczony = **403**. (Dev: `HttpHeaderCurrentUserProvider` z nagłówka — nie rejestrowany w produkcji.)
-- **`APP_Admin` omija `allowedCorporateKeys`** — pełny wgląd (`DocumentAccessGuard` zwraca true dla admina). Decyzja biznesowa ADR-0011.
+- **`Administrator` omija `allowedCorporateKeys`** — pełny wgląd (`DocumentAccessGuard` zwraca true dla admina). Decyzja biznesowa ADR-0011.
 - Egzekwowanie: `IDocumentAccessGuard` w handlerach treści/metadanych → `Result.Forbidden` → **403**; brak/nieważny token → **401** (JwtBearer). GCS tylko przez backend.
 - Frontend: `documentAccessGuard` (po `MsalGuard`) — 403 → `/access-denied` (wspólny `DocumentAccessDeniedComponent` dla DOCX i PDF).
 - Nie loguj `allowedCorporateKeys` ani `CorporateKey` (dane wrażliwe) — polityka jest czysta i nie loguje.

@@ -6,9 +6,9 @@ namespace D2ViewerEditor.Api.Security;
 /// </summary>
 public static class AuthorizationPolicies
 {
-    /// <summary>Standard application access (APP_Pracownik or APP_Admin).</summary>
-    public const string RequireAppEmployee = "RequireAppEmployee";
+    /// <summary>Standard application access (Operator or Administrator).</summary>
+    public const string RequireAppOperator = "RequireAppOperator";
 
-    /// <summary>Administrative module access (APP_Admin only).</summary>
+    /// <summary>Administrative module access (Administrator only).</summary>
     public const string RequireAppAdmin = "RequireAppAdmin";
 }

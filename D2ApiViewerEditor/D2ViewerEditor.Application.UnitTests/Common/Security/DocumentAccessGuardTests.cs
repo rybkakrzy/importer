@@ -69,7 +69,7 @@ public class DocumentAccessGuardTests
     [Test]
     public void Admin_BypassesRestrictedAllowList()
     {
-        // APP_Admin sees every document regardless of allowedCorporateKeys (business decision).
+        // Administrator sees every document regardless of allowedCorporateKeys (business decision).
         Guard(userKey: null, isAdmin: true)
             .IsViewAllowed("{\"allowedCorporateKeys\":[\"CK-1\",\"CK-2\"]}")
             .Should().BeTrue();

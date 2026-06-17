@@ -2,7 +2,8 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
-import { MsalService } from '@azure/msal-angular';
+import { MsalService, MsalBroadcastService } from '@azure/msal-angular';
+import { InteractionStatus } from '@azure/msal-browser';
 import { of } from 'rxjs';
 import { App } from './app';
 import { BuildInfoService } from './core/services/build-info.service';
@@ -15,7 +16,8 @@ describe('App', () => {
       providers: [
         provideRouter([]),
         provideHttpClient(),
-        // Minimal MSAL stub: App.ngOnInit completes the redirect and selects an account.
+        // Minimal MSAL stubs: App.ngOnInit selects an active account once MSAL is idle.
+        // Redirect completion now lives in MsalRedirectComponent, not App.
         {
           provide: MsalService,
           useValue: {
@@ -25,9 +27,9 @@ describe('App', () => {
               getActiveAccount: () => null,
               setActiveAccount: () => {},
             },
-            handleRedirectObservable: () => of(null),
           },
         },
+        { provide: MsalBroadcastService, useValue: { inProgress$: of(InteractionStatus.None) } },
         // Stub the health-check chain so the shell renders without real HTTP.
         { provide: BuildInfoService, useValue: { environment: signal('DEV') } },
         { provide: ConnectionStatusService, useValue: { isOffline: signal(false), dismiss: () => {} } },

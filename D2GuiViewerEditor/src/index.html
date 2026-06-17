@@ -9,5 +9,8 @@
 </head>
 <body>
   <d2-root></d2-root>
+  <!-- MSAL redirect handler (MsalRedirectComponent, bootstrapped in main.ts). Must stay
+       outside <d2-root> so it processes the redirect hash independently of app routing. -->
+  <app-redirect></app-redirect>
 </body>
 </html>

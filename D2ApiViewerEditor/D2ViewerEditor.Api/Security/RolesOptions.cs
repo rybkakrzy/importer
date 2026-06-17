@@ -21,7 +21,7 @@ public sealed class RolesOptions
 /// <summary>One application role and the Entra ID groups that map onto it.</summary>
 public sealed class RoleGroupMapping
 {
-    /// <summary>Application role name added as a role claim (e.g. <c>APP_Admin</c>, <c>APP_Pracownik</c>).</summary>
+    /// <summary>Application role name added as a role claim (e.g. <c>Administrator</c>, <c>Operator</c>).</summary>
     public string RoleName { get; set; } = string.Empty;
 
     /// <summary>AD group identifiers (display names or object ids) whose membership grants <see cref="RoleName"/>.</summary>

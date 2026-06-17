@@ -16,7 +16,7 @@ public sealed class DocumentAccessGuard : IDocumentAccessGuard
 
     public bool IsViewAllowed(string? metadataJson)
     {
-        // APP_Admin has full document oversight — bypasses the per-document allow-list
+        // Administrator has full document oversight — bypasses the per-document allow-list
         // (business decision: admin role grants content oversight). Audited via logs upstream.
         if (_currentUser.IsAdmin)
             return true;

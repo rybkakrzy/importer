@@ -243,14 +243,14 @@ Po wdrożeniu lekkiej integracji Entra (ADR-0011: goły JwtBearer + App Roles) p
 - **GCP Secret Manager** (`Google.Cloud.SecretManager.V1` 2.6.0): `EntraSecretLoader` wstrzykuje `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret` na starcie. Guard `Enabled` + try/catch → nigdy nie wywala startu (lokalnie wyłączone).
 - ~~Keycloak (legacy) dual-auth~~ — **USUNIĘTE 2026-06-13** (`AuthSchemes`/`KeycloakOptions`/sekcja `Keycloak` skasowane; wyłącznie Entra).
 - **Frontend runtime config (Doc2):** `assets/configs/config.json` ładowany w `main.ts` **przed** bootstrapem → `RUNTIME_AUTH_CONFIG` (token z root-factory = `environment.auth` jako fallback). Fabryki MSAL + `appAdminGuard` + `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
-- **Wszystkie wartości środowiskowe to placeholdery** (tenant, clientId, grupy `GSAPW4D_DOC2_*`, sekrety, GCP project, Keycloak) — nigdy realnych sekretów w repo.
+- **Wszystkie wartości środowiskowe to placeholdery** (tenant, clientId, grupy `*`, sekrety, GCP project, Keycloak) — nigdy realnych sekretów w repo.
 
 ### Consequences
 Architektura zbieżna z Doc2 w częściach pasujących do SPA+API. Mapowanie grup→role odwraca decyzję „App Roles only" z ADR-0011, ale je zachowuje (hybryda). Build backendu OK; testy: Api.UnitTests **50** (`Doc2ClaimsTransformerTests` 6, `AuthSchemesTests` 5, `IdentityControllerTests` 4), GUI **240** (`runtime-config.spec` 4), AOT build OK. **Aktywacja wymaga** realnych wartości w `appsettings.{ENV}.json`/`config.json` + (dla Graph) sekretu z GCP + (dla dual-auth) realnego Keycloaka. Graph używa app-only — wymaga uprawnień aplikacyjnych (`User.Read.All`) + admin consent. **Niezweryfikowane runtime** (brak tenanta/GCP/Keycloak lokalnie): start aplikacji z realnym Identity.Web, walidacja tokenów Entra, faktyczne mapowanie grup z realnego tokena, pobranie sekretu z GCP, selekcja schematu Keycloak.
 
 **Hardening (analiza problemów):** (1) `RoleClaimType="roles"` ustawiony przez **`PostConfigure`** (rejestrowany po `AddMicrosoftIdentityWebApi`) — gwarantuje, że wygrywa nad konfiguracją Identity.Web, inaczej `RequireRole` mogłoby szukać `ClaimTypes.Role`. (2) `AuthSchemes.SelectByIssuer` w try/catch — niepoprawny token → fallback Entra (→401). (3) `RUNTIME_AUTH_CONFIG` ma root-factory default (=`environment.auth`) → injection zawsze się rozwiązuje (testy + bezpiecznik); `main.ts` nadpisuje wartością runtime; fetch `config.json` z fallbackiem przy 404/niepoprawnym JSON.
 
-**Znane ograniczenia:** (a) **Group overage** — user w > ~200 grupach: Entra pomija claim `groups` (emituje `_claim_names`/`_claim_sources` → Graph). Transformer NIE rozwiązuje overage przez Graph → tacy użytkownicy nie dostają ról z grup; ratują App Roles (współistnieją) lub przyszłe rozwiązanie overage. (b) `groups` domyślnie niesie **object-id** (GUID), nie nazwy — konfiguracja Entra (optional claim) musi emitować nazwy `GSAPW4D_DOC2_*` albo w `RolesOptions.GroupNames` trzeba wpisać GUID-y. (c) start z PUSTYM `AzureAd:ClientId` (bazowy `appsettings.json` PRD) może rzucić walidacją Identity.Web przy pierwszym żądaniu — uruchamiać z env DEV (placeholdery niepuste) lub realną konfiguracją.
+**Znane ograniczenia:** (a) **Group overage** — user w > ~200 grupach: Entra pomija claim `groups` (emituje `_claim_names`/`_claim_sources` → Graph). Transformer NIE rozwiązuje overage przez Graph → tacy użytkownicy nie dostają ról z grup; ratują App Roles (współistnieją) lub przyszłe rozwiązanie overage. (b) `groups` domyślnie niesie **object-id** (GUID), nie nazwy — konfiguracja Entra (optional claim) musi emitować nazwy `KUTAS_200_*` albo w `RolesOptions.GroupNames` trzeba wpisać GUID-y. (c) start z PUSTYM `AzureAd:ClientId` (bazowy `appsettings.json` PRD) może rzucić walidacją Identity.Web przy pierwszym żądaniu — uruchamiać z env DEV (placeholdery niepuste) lub realną konfiguracją.
 
 ### Alternatives considered
 Serwerowy OIDC (`AddMicrosoftIdentityWebApp` + cookie) jak w Doc2 — **pominięty**: ViewerEditor to SPA (interaktywny login robi MSAL w przeglądarce), backend pozostaje czystym resource-serverem. `Microsoft.Identity.Web.MicrosoftGraph` (Graph v4) — odrzucone na rzecz Graph v5 (zgodność z Doc2 5.103.0 + nowocześniejsze API). Delegated Graph zamiast app-only — odrzucone (lookup userów to funkcja admina, app-only prostsze).
@@ -324,3 +324,70 @@ rozróżnienie WARNING/ERROR/CRITICAL (stderr = ERROR ryczałtem).
 `LoggingBehaviour<TRequest,TResponse>` loguje `{@Request}` na Information — serializuje pełny payload
 (np. base64 treści dokumentu): hałas + potencjalne dane wrażliwe. Rekomendacja: logować tylko nazwę
 żądania / wybrane pola. Poza zakresem tej zmiany (dotyczy severity).
+
+---
+
+## ADR-0015: Front MSAL standalone (MsalRedirectComponent) + dwurolowy model „Administrator"/„Przeglądający" — 2026-06-16
+
+- Date: 2026-06-16
+- Status: Accepted; **model ról zastąpiony przez ADR-0016 (2026-06-17)** — frontowe guardy per-nazwa-roli (`Administrator`/`Przeglądający`, `documentRoleGuard`/`appAdminGuard`, `CurrentUserService`, `adminRole`/`viewerRole` w config) **usunięte** na rzecz autoryzacji resource-based. Reszta ADR-0015 (MSAL standalone, `MsalRedirectComponent`, config.json jako źródło auth, rename tokenu, `apiScopesFor`/`.default`, `navigateToLoginRequestUrl`) — **bez zmian, aktualna**.
+
+### Context
+Doprecyzowanie integracji Entra na froncie (Angular 20 **standalone**, nie NgModule jak referencja Doc2/D2AngularNew). Cele: poprawny redirect handling, jeden build na środowiska bez trzymania wartości auth w `environment`, oraz docelowy model RBAC z dwiema rolami: **moduł admina tylko dla „Administrator"**, **podgląd/edycja dokumentów dla „Przeglądający"** (admin = nadzbiór).
+
+### Decision
+- **Redirect handling:** `MsalRedirectComponent` (`<app-redirect>` w `index.html`) bootstrapowany jako drugi komponent przez `appRef.bootstrap(...)` w `main.ts` — kanoniczny wzorzec MSAL dla aplikacji standalone, **bez AppModule**. `App` przestaje wołać `handleRedirectObservable()` (robi to redirect-component); aktywne konto ustawiane po `MsalBroadcastService.inProgress$ === None`.
+- **Źródło wartości auth = `assets/configs/config.json`** (plik w `src/assets/configs/`, nie `public/`). Usunięto blok `auth` z `environment.ts`/`environment.development.ts`. `DEFAULT_AUTH_CONFIG` w `runtime-config.ts` to **neutralne defaulty strukturalne** (fallback/testy), nie wartości środowiskowe.
+- **Token DI przemianowany** `RUNTIME_AUTH_CONFIG` → **`MSAL_CUSTOM_CONFIG`** (parytet nazewnictwa z analizą Doc2).
+- **Scope:** helper `apiScopesFor(auth)` — preferuje jawne `apiScopes` z config.json, fallback `{clientId}/.default`; używany spójnie w guardzie i interceptorze. `navigateToLoginRequestUrl: true` ustawiony jawnie (domyślny MSAL).
+- **Dwurolowy model (front, UX):** `AppAuthConfig.adminRole` (domyślnie **„Administrator"**) + nowe `viewerRole` (**„Przeglądający"**). Logika scentralizowana w `CurrentUserService`: `isAdmin()`, `isViewer()`, `canAccessDocuments()` (= viewer **lub** admin — admin nadzbiór; dev-bypass `enabled=false` przepuszcza). Nowy `documentRoleGuard` na `/editor` i `/viewer` (przed `documentAccessGuard`); `appAdminGuard` zrefaktoryzowany do `CurrentUserService.isAdmin()`. Dashboard bez zmian (gating na trasie). Backend = źródło prawdy.
+
+### Consequences
+Front spójny z MSAL standalone; jeden build na środowiska; auth wyłącznie w config.json (deploy podmienia plik). **Rozjazd nazw ról z backendem:** ADR-0011/0012 używały `APP_Pracownik`/`APP_Admin`; front używa teraz `Przeglądający`/`Administrator`. Trzeba albo (a) skonfigurować Entra appRoles/`RolesOptions` na te nazwy, albo (b) nadpisać `adminRole`/`viewerRole` w config.json wartościami zgodnymi z backendem — inaczej guardy odmówią dostępu mimo poprawnego tokenu. GUI testy: 264 (dodano `current-user.service.spec` — 5; `app.spec`/`runtime-config.spec` zaktualizowane). Niezweryfikowane runtime (brak realnego tenanta lokalnie): faktyczny przepływ redirect + obecność claimu `roles` z realnymi nazwami.
+
+### Alternatives considered
+Konwersja na NgModule (`platformBrowserDynamic().bootstrapModule(AppModule)`) jak dosłownie w analizie — **odrzucone** (broad refactor, brak korzyści; standalone już realizuje runtime-config). Ścisły rozdział ról (dokumenty wymagają *dokładnie* „Przeglądający", admin bez niej zablokowany) — odrzucone na rzecz nadzbioru (admin nie zablokuje się sam). Własny `jwt.interceptor.ts` (jak legacy) — odrzucone: `MsalInterceptor` realizuje to samo (Bearer + silent refresh + cache) bez ręcznego trzymania tokenu w localStorage.
+
+---
+
+## ADR-0016: Autoryzacja resource-based (backend `/identity/resources` + `ResourcesProvider`, front `resourceGuard`) — 2026-06-17
+
+- Date: 2026-06-17
+- Status: Accepted; **zastępuje frontowy model ról z ADR-0015** (per-nazwa-roli). Zgodne z wzorcem D2WebCore (`ResourcesProvider` + `AuthGuard.hasAccessToResource`). Rozwiązuje rozjazd nazw ról (R-25): front nie zna nazw ról.
+
+### Context
+Inne aplikacje ekosystemu (D2WebCore/D2AngularNew) autoryzują **po zasobach**, nie po nazwach ról na froncie: backend mapuje role→zasoby i wystawia listę dozwolonych zasobów, a frontowy `AuthGuard` bierze nazwę trasy i pyta backend „czy mam dostęp". ADR-0015 zrobił gating po nazwach ról czytanych z claimu na froncie (`Administrator`/`Przeglądający`) — niezgodne z backendem (`APP_Pracownik`/`APP_Admin`, R-25) i sprzęgające front z nazwami ról.
+
+### Decision
+- **Backend (D2ApiViewerEditor):** `ResourcesProvider.GetForUser(ClaimsPrincipal)` mapuje role (`User.IsInRole` z `AzureAdOptions.EmployeeRole`/`AdminRole`) → zasoby: employee/admin → `["editor","viewer"]`, admin dodatkowo → `"admin"` (nadzbiór). Endpoint `GET /api/identity/resources` (`[Authorize(RequireAppEmployee)]`) zwraca `string[]`. W `IdentityController` polityka admina przeniesiona z poziomu klasy na akcję `users` (żeby `resources` było dostępne dla employee). DI: `AddScoped<ResourcesProvider>()` poza gałęzią dev/prod (w dev `IOptions<AzureAdOptions>` = defaulty `APP_Pracownik`/`APP_Admin`). `DevAuthHandler` daje obie role → dev widzi wszystko.
+- **Front (D2GuiViewerEditor):** `ResourceAccessService` (cache udanej odpowiedzi per sesja, dev-bypass `enabled=false` → `of(true)` bez wołania API) + `resourceGuard` (nazwa zasobu = `route.routeConfig.path`; fail-closed → `/access-denied` przy odmowie/błędzie). `resourceGuard` zastąpił `documentRoleGuard` i `appAdminGuard` na `/editor`,`/viewer`,`/admin`. Token dokleja `MsalInterceptor` (URL pod `apiUrl`).
+- **Usunięte (front):** `documentRoleGuard`, `appAdminGuard`, `CurrentUserService` (+spec), pola `adminRole`/`viewerRole` z `AppAuthConfig`/`DEFAULT_AUTH_CONFIG`/`config.json` — front nie zna już nazw ról.
+- **Config (parytet ekosystemu):** `AzureAdOptions` rozszerzony o `Scopes: string[]` i `Proxy: { Url }` (+ w `appsettings.json`/`appsettings.DEV.json`). **Konsumpcja proxy wdrożona 2026-06-17** (`EntraBackchannel` → JwtBearer `BackchannelHttpHandler` + `HttpClient.DefaultProxy`, bypass GCS; patrz CHANGELOG). **Pozostaje follow-up:** proxy dla Graph/Azure.Identity (własny pipeline) oraz downstream `Scopes`.
+
+### Consequences
+Front odsprzężony od nazw ról (znika R-25 po stronie frontu); backend = jedyne źródło mapy rola→zasób. Dodanie nowego zasobu = zmiana w `ResourcesProvider` + nazwa trasy. Testy: API **64** (IdentityController 7, w tym 3 resources), GUI **262** (dodano `resource-access.service.spec` 3; usunięto `current-user.service.spec` 5). Build API 0 błędów, `tsc` GUI czysto. **Wymaga**, by realne Entra appRoles/`RolesOptions` emitowały `APP_Pracownik`/`APP_Admin` (nazwy z `AzureAdOptions`) — inaczej `IsInRole` zwróci false i lista zasobów będzie pusta. **Niezweryfikowane runtime:** realny token z claimem `roles`, wywołanie `/resources` z frontu z Bearer.
+
+### Alternatives considered
+Zostawić role-claim na froncie (ADR-0015) z poprawą nazw do `APP_Admin`/`APP_Pracownik` — odrzucone: utrzymuje sprzężenie frontu z nazwami ról i duplikuje wiedzę o autoryzacji. Resource = nazwa semantyczna (`documents`/`admin`) z mapą tras na froncie — odrzucone na rzecz `route.path` = nazwa zasobu (prościej, wiernie wzorcowi). `return of(true)` na błędzie (jak legacy `AuthGuard`) — odrzucone: fail-open to dziura; u nas fail-closed (`/access-denied`).
+
+---
+
+## ADR-0017: Finalne nazewnictwo ról aplikacyjnych — `Administrator` / `Operator` — 2026-06-17
+
+- Date: 2026-06-17
+- Status: Accepted; **zastępuje nazwy z ADR-0011/0012** (`APP_Admin`/`APP_Pracownik`). Wcześniejsze ADR-y odnoszą się do starych nazw historycznie.
+
+### Context
+Dotychczasowe role: `APP_Admin` (admin) i `APP_Pracownik` (standardowy użytkownik). Decyzja biznesowa: ostateczne nazewnictwo to **`Administrator`** i **`Operator`**. Po przejściu na autoryzację resource-based (ADR-0016) nazwy ról żyją wyłącznie w backendzie — GUI nie zna nazw ról.
+
+### Decision
+- Globalny rename wartości ról w backendzie: `APP_Admin`→`Administrator`, `APP_Pracownik`→`Operator`. Objęte: `AzureAdOptions.AdminRole` (default), sekcja `Roles` w `appsettings.json`/`appsettings.DEV.json` (`RoleName`), `DevAuthHandler` (claimy `roles`), polityki (przez opcje, bez literałów), testy (`Doc2ClaimsTransformerTests`, `IdentityControllerTests`) + komentarze.
+- **Rename identyfikatorów** (spójność z „Operator"): właściwość `AzureAdOptions.EmployeeRole`→**`OperatorRole`** (więc też klucz configu `AzureAd:OperatorRole`), stała polityki `RequireAppEmployee`→**`RequireAppOperator`** (nazwa + wartość; konsumowana tylko przez stałą, więc bezpieczne), zmienna/komentarze (`isEmployee`→`isOperator`, nazwy testów `*_employee_*`→`*_operator_*`). `RequireAppAdmin`/`AdminRole` bez zmian („Admin" = Administrator).
+- **GUI bez zmian kodu** — autoryzacja resource-based (ADR-0016), front nie zna nazw ról; potwierdzone grepem (zero literałów ról w `D2GuiViewerEditor/src`).
+- Semantyka bez zmian: `RequireAppOperator` = `Operator` lub `Administrator`; `RequireAppAdmin` = `Administrator`; admin nadzbiór (omija `allowedCorporateKeys`). `ResourcesProvider`: Operator/Administrator→`editor,viewer`; Administrator→`+admin`.
+
+### Consequences
+Jedna spójna nazwa w całym kodzie/konfigu/testach. **Wymaga** (R-26), by realne Entra appRoles/`RolesOptions` emitowały `Administrator`/`Operator` (albo nadpisać `AzureAd:EmployeeRole`/`AdminRole` per środowisko) — inaczej `IsInRole` = false → pusta lista zasobów. Testy: API **64/64**, build 0 błędów. Dokumenty „żywe" (SECURITY/DOMAIN/FEATURES/API_CONTRACTS/CURRENT_STATE) zaktualizowane; historyczne ADR-0011/0012/0015/0016 zachowują stare nazwy. **Uwaga niezwiązana:** `D2ViewerEditor.Application.UnitTests` ma wcześniej istniejący błąd kompilacji (`GetDocumentVersionContentQueryHandlerTests` — brak arg. `accessGuard`), niezależny od tej zmiany.
+
+### Alternatives considered
+Zostawić `APP_*` i tylko zmapować w Entra — odrzucone: rozjazd kodu z biznesowym nazewnictwem. Trzymać nazwy też na froncie — bezprzedmiotowe po ADR-0016 (front nie zna ról).

@@ -1,6 +1,9 @@
-import { Component, OnInit, inject } from '@angular/core';
+import { Component, OnInit, inject, DestroyRef } from '@angular/core';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterOutlet } from '@angular/router';
-import { MsalService } from '@azure/msal-angular';
+import { MsalService, MsalBroadcastService } from '@azure/msal-angular';
+import { InteractionStatus } from '@azure/msal-browser';
+import { filter } from 'rxjs';
 import { GlobalBannersComponent } from './components/global-banners/global-banners';
 
 @Component({
@@ -24,15 +27,24 @@ import { GlobalBannersComponent } from './components/global-banners/global-banne
 })
 export class App implements OnInit {
   private readonly msal = inject(MsalService);
+  private readonly broadcast = inject(MsalBroadcastService);
+  private readonly destroyRef = inject(DestroyRef);
 
   ngOnInit(): void {
-    // Complete any redirect login and keep an active account selected for token acquisition.
+    // Redirect completion is handled by MsalRedirectComponent (<app-redirect>), which owns the
+    // single handleRedirectObservable() call. Here we only keep an active account selected once
+    // MSAL is idle (post-redirect / on reload), so token acquisition always has an account.
     this.msal.instance.enableAccountStorageEvents();
-    this.msal.handleRedirectObservable().subscribe(() => {
-      const accounts = this.msal.instance.getAllAccounts();
-      if (accounts.length > 0 && !this.msal.instance.getActiveAccount()) {
-        this.msal.instance.setActiveAccount(accounts[0]);
-      }
-    });
+    this.broadcast.inProgress$
+      .pipe(
+        filter((status) => status === InteractionStatus.None),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(() => {
+        const accounts = this.msal.instance.getAllAccounts();
+        if (accounts.length > 0 && !this.msal.instance.getActiveAccount()) {
+          this.msal.instance.setActiveAccount(accounts[0]);
+        }
+      });
   }
 }

@@ -3,17 +3,20 @@ import { DashboardComponent } from './pages/dashboard/dashboard';
 import { DocumentEditorComponent } from './components/document-editor/document-editor';
 import { PdfMaintenanceComponent } from './pages/pdf-maintenance/pdf-maintenance';
 import { documentAccessGuard } from './guards/document-access.guard';
-import { appAdminGuard } from './guards/app-admin.guard';
+import { resourceGuard } from './guards/resource.guard';
 import { authGuard } from './guards/auth.guard';
 
-// Cała aplikacja wymaga logowania (authGuard → MsalGuard; bypass gdy auth.enabled=false). Dokumenty
-// dokładają documentAccessGuard (403), moduł admina dokłada appAdminGuard (UX; backend egzekwuje RequireAppAdmin).
+// Cała aplikacja wymaga logowania (authGuard → MsalGuard; bypass gdy auth.enabled=false). Dostęp do
+// zasobów (editor/viewer/admin) gatinguje resourceGuard po nazwie trasy względem backendowej listy
+// (GET /api/identity/resources); dokumenty dokładają documentAccessGuard (per-dokument 403).
+// Backend = źródło prawdy; guardy frontowe są tylko UX.
 export const routes: Routes = [
   { path: '', component: DashboardComponent, canActivate: [authGuard] },
-  { path: 'editor', component: DocumentEditorComponent, canActivate: [authGuard, documentAccessGuard] },
+  {
+    path: 'editor', component: DocumentEditorComponent, canActivate: [authGuard, resourceGuard, documentAccessGuard] },
   {
     path: 'viewer',
-    canActivate: [authGuard, documentAccessGuard],
+    canActivate: [authGuard, resourceGuard, documentAccessGuard],
     loadComponent: () =>
       import('./pages/pdf-viewer/pdf-viewer').then((m) => m.PdfViewerComponent),
   },
@@ -25,7 +28,7 @@ export const routes: Routes = [
   { path: 'pdf-maintenance', component: PdfMaintenanceComponent, canActivate: [authGuard] },
   {
     path: 'admin',
-    canActivate: [authGuard, appAdminGuard],
+    canActivate: [authGuard, resourceGuard],
     loadComponent: () =>
       import('./pages/admin/admin-shell/admin-shell').then((m) => m.AdminShellComponent),
     children: [

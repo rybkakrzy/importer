@@ -10,6 +10,6 @@ public interface ICurrentUserProvider
     /// <summary>CorporateKey of the user, or null when unavailable.</summary>
     string? CorporateKey { get; }
 
-    /// <summary>True when the user holds the application admin role (APP_Admin).</summary>
+    /// <summary>True when the user holds the application admin role (Administrator).</summary>
     bool IsAdmin { get; }
 }

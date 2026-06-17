@@ -28,8 +28,8 @@ public sealed class DevAuthHandler : AuthenticationHandler<AuthenticationSchemeO
         {
             new Claim(ClaimTypes.NameIdentifier, "dev-local"),
             new Claim("name", "Local Dev"),
-            new Claim("roles", "APP_Pracownik"),
-            new Claim("roles", "APP_Admin"),
+            new Claim("roles", "Operator"),
+            new Claim("roles", "Administrator"),
         };
         var identity = new ClaimsIdentity(claims, SchemeName, nameType: "name", roleType: "roles");
         var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);

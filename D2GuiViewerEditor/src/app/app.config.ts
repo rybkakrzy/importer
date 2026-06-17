@@ -26,7 +26,7 @@ import { routes } from './app.routes';
 import { httpErrorInterceptor } from './core/interceptors/http-error.interceptor';
 import { GlobalErrorHandler } from './core/error-handling/global-error-handler';
 import { ConnectionStatusService } from './core/services/connection-status.service';
-import { RUNTIME_AUTH_CONFIG } from './core/config/runtime-config';
+import { MSAL_CUSTOM_CONFIG } from './core/config/runtime-config';
 import {
   msalInstanceFactory,
   msalGuardConfigFactory,
@@ -42,11 +42,11 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(withInterceptorsFromDi(), withInterceptors([httpErrorInterceptor])),
     { provide: HTTP_INTERCEPTORS, useClass: MsalInterceptor, multi: true },
 
-    // MSAL (Entra ID) — auth config comes from RUNTIME_AUTH_CONFIG (Doc2 runtime config.json),
+    // MSAL (Entra ID) — auth config comes from MSAL_CUSTOM_CONFIG (Doc2 runtime config.json),
     // provided at bootstrap in main.ts with build-time environment fallback.
-    { provide: MSAL_INSTANCE, useFactory: msalInstanceFactory, deps: [RUNTIME_AUTH_CONFIG] },
-    { provide: MSAL_GUARD_CONFIG, useFactory: msalGuardConfigFactory, deps: [RUNTIME_AUTH_CONFIG] },
-    { provide: MSAL_INTERCEPTOR_CONFIG, useFactory: msalInterceptorConfigFactory, deps: [RUNTIME_AUTH_CONFIG] },
+    { provide: MSAL_INSTANCE, useFactory: msalInstanceFactory, deps: [MSAL_CUSTOM_CONFIG] },
+    { provide: MSAL_GUARD_CONFIG, useFactory: msalGuardConfigFactory, deps: [MSAL_CUSTOM_CONFIG] },
+    { provide: MSAL_INTERCEPTOR_CONFIG, useFactory: msalInterceptorConfigFactory, deps: [MSAL_CUSTOM_CONFIG] },
     MsalService,
     MsalGuard,
     MsalBroadcastService,

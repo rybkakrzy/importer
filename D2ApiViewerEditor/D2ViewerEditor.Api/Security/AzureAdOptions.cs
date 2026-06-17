@@ -29,11 +29,26 @@ public sealed class AzureAdOptions
     public string CorporateKeyClaim { get; set; } = "ck";
 
     /// <summary>App role value for a standard application user.</summary>
-    public string EmployeeRole { get; set; } = "APP_Pracownik";
+    public string OperatorRole { get; set; } = "Operator";
 
     /// <summary>App role value for an application administrator.</summary>
-    public string AdminRole { get; set; } = "APP_Admin";
+    public string AdminRole { get; set; } = "Administrator";
+
+    /// <summary>Delegated scopes requested for downstream calls (per environment, e.g. ["User.Read"]).
+    /// Config surface for ecosystem parity (D2WebCore); empty = none.</summary>
+    public string[] Scopes { get; set; } = [];
+
+    /// <summary>Outbound HTTP proxy for reaching Entra / Graph in enterprise environments. Optional;
+    /// empty <see cref="ProxyOptions.Url"/> = no proxy.</summary>
+    public ProxyOptions Proxy { get; set; } = new();
 
     /// <summary>v2.0 authority built from Instance + TenantId.</summary>
     public string Authority => $"{Instance.TrimEnd('/')}/{TenantId}/v2.0";
+}
+
+/// <summary>Outbound proxy configuration for enterprise environments behind a forward proxy.</summary>
+public sealed class ProxyOptions
+{
+    /// <summary>Proxy URL, e.g. http://localhost:3128. Empty = no proxy.</summary>
+    public string Url { get; set; } = string.Empty;
 }

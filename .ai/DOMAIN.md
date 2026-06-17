@@ -62,8 +62,8 @@ Język domenowy, reguły biznesowe i model pojęciowy. Czytaj przed zmianą logi
 | BR-011 | Dla jednego dokumentu może istnieć tylko jedno aktywne (nieterminalne) zadanie wysyłki — wymuszone unique partial index; wielokrotne kliknięcie zwraca istniejące zadanie (idempotencja) | Active |
 | BR-012 | Wysyłany jest niezmienny snapshot zamrożony w chwili „Zakończ" (`deliveries/{deliveryId}`), nie bieżąca v2 — auto-save po zakończeniu nie zmienia wysyłanego pliku | Active |
 | BR-013 | Wysyłka jest at-least-once z retry (exponential backoff + jitter, cap 15 min) do twardego limitu 24 h; po przekroczeniu zadanie → `DeadLettered`; błąd non-retryable → `FailedPermanently` | Active |
-| BR-014 | Dostęp do podglądu: gdy metadane mają niepustą `allowedCorporateKeys`, dokument widzi tylko użytkownik z pasującym `CorporateKey` (Trim + ignore-case); brak/null/pusta lista = dokument dla każdego **zalogowanego**. Egzekwowane w backendzie (`DocumentAccessPolicy`/`IDocumentAccessGuard`) → 403; brak tożsamości → 401. `CorporateKey` z claimu access tokena Entra (konfigurowalny). **`APP_Admin` omija `allowedCorporateKeys`** (pełny wgląd). Patrz ADR-0011 | Active |
-| BR-015 | Cała aplikacja wymaga uwierzytelnienia (Entra ID). Moduł admina (`APP_Admin`) chroniony backendowo (policy `RequireAppAdmin`); guardy Angulara to tylko UX | Active |
+| BR-014 | Dostęp do podglądu: gdy metadane mają niepustą `allowedCorporateKeys`, dokument widzi tylko użytkownik z pasującym `CorporateKey` (Trim + ignore-case); brak/null/pusta lista = dokument dla każdego **zalogowanego**. Egzekwowane w backendzie (`DocumentAccessPolicy`/`IDocumentAccessGuard`) → 403; brak tożsamości → 401. `CorporateKey` z claimu access tokena Entra (konfigurowalny). **`Administrator` omija `allowedCorporateKeys`** (pełny wgląd). Patrz ADR-0011 | Active |
+| BR-015 | Cała aplikacja wymaga uwierzytelnienia (Entra ID). Moduł admina (`Administrator`) chroniony backendowo (policy `RequireAppAdmin`); guardy Angulara to tylko UX | Active |
 
 ## Zasady dla agenta
 
