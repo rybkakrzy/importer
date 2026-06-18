@@ -7,7 +7,7 @@ parserze, rendererze, edytorze i writerze. Powiązane: `DOCX_CONVERSION.md`, `RI
 
 ## 0. Po co to w ogóle robimy
 
-Cały produkt stoi na jednej obietnicy: dokument z Worda wygląda i wraca z DOC2 tak samo, a edycja
+Cały produkt stoi na jednej obietnicy: dokument z Worda wygląda i wraca z Qutas tak samo, a edycja
 jest płynna. Te benchmarki to wczesny alarm — łapią moment, w którym zmiana w konwerterze cicho
 psuje wierność albo spowalnia pipeline, **zanim** zobaczy to użytkownik (albo Word komunikatem
 „dokument uszkodzony"). Bez nich regresje wychodzą dopiero na realnych plikach klienta, gdzie są

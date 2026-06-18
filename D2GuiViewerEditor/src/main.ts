@@ -6,7 +6,7 @@ import { App } from './app/app';
 import { AppAuthConfig, MSAL_CUSTOM_CONFIG, mergeAuthConfig } from './app/core/config/runtime-config';
 
 /**
- * Doc2 runtime config: fetch `assets/configs/config.json` BEFORE bootstrap so a single build can
+ * Qutas runtime config: fetch `assets/configs/config.json` BEFORE bootstrap so a single build can
  * be deployed to every environment (clientId/authority/redirect supplied per environment, no
  * rebuild). config.json is the source of auth values; a missing/invalid file falls back to the
  * structural defaults in runtime-config.ts (DEFAULT_AUTH_CONFIG).

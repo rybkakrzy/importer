@@ -6,7 +6,7 @@ namespace D2ViewerEditor.Api.Security;
 
 /// <summary>
 /// Maps Entra ID group memberships (the <c>groups</c> claim) to application role claims
-/// (Doc2 / D2WebCore pattern). Runs on every authenticated request and is idempotent.
+/// (Qutas / D2WebCore pattern). Runs on every authenticated request and is idempotent.
 /// Native Entra <c>app role</c> claims (also surfaced as <c>roles</c>) are preserved, so
 /// App Roles and group→role mapping can coexist during migration.
 /// <para>
@@ -19,7 +19,7 @@ namespace D2ViewerEditor.Api.Security;
 /// <see cref="RolesOptions"/> so the configured GroupNames match the token's values.
 /// </para>
 /// </summary>
-public sealed class Doc2ClaimsTransformer : IClaimsTransformation
+public sealed class ClaimsTransformer : IClaimsTransformation
 {
     private const string GroupsClaimType = "groups";
 
@@ -28,7 +28,7 @@ public sealed class Doc2ClaimsTransformer : IClaimsTransformation
 
     private readonly RolesOptions _roles;
 
-    public Doc2ClaimsTransformer(IOptions<RolesOptions> roles) => _roles = roles.Value;
+    public ClaimsTransformer(IOptions<RolesOptions> roles) => _roles = roles.Value;
 
     public Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
     {
@@ -38,12 +38,18 @@ public sealed class Doc2ClaimsTransformer : IClaimsTransformation
         if (_roles.Roles.Count == 0)
             return Task.FromResult(principal);
 
-        var groups = principal.FindAll(GroupsClaimType)
+        // Match against group/role identifiers regardless of which claim type Entra/federation used
+        // (D2WebCore pattern): `groups`, `roles`/native app roles, the WS-Fed role URI.
+        var candidateValues = principal.Claims
+            .Where(c => c.Type == GroupsClaimType
+                     || c.Type == RolesClaimType
+                     || c.Type == ClaimTypes.Role
+                     || c.Type.Contains("identity/claims/role", StringComparison.OrdinalIgnoreCase))
             .Select(c => c.Value.Trim())
             .Where(v => v.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (groups.Count == 0)
+        if (candidateValues.Count == 0)
             return Task.FromResult(principal);
 
         foreach (var mapping in _roles.Roles)
@@ -51,7 +57,7 @@ public sealed class Doc2ClaimsTransformer : IClaimsTransformation
             if (string.IsNullOrWhiteSpace(mapping.RoleName))
                 continue;
 
-            var granted = mapping.GroupNames.Any(g => groups.Contains(g.Trim()));
+            var granted = mapping.GroupNames?.Any(g => candidateValues.Contains(g.Trim())) is true;
             if (!granted)
                 continue;
 

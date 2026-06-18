@@ -4,7 +4,7 @@ using Microsoft.Graph;
 
 namespace D2ViewerEditor.Api.Security;
 
-/// <summary>User profile fields read from Microsoft Graph (Doc2 <c>GraphUserService</c>).</summary>
+/// <summary>User profile fields read from Microsoft Graph (Qutas <c>GraphUserService</c>).</summary>
 public sealed record GraphUserInfo(
     string? Id,
     string? UserPrincipalName,
@@ -23,7 +23,7 @@ public interface IGraphUserService
 }
 
 /// <summary>
-/// Microsoft Graph user lookup using app-only (client-credentials) auth — Doc2 pattern.
+/// Microsoft Graph user lookup using app-only (client-credentials) auth — Qutas pattern.
 /// Registered only when AzureAd ClientId/TenantId/ClientSecret are present (secret comes from
 /// GCP Secret Manager); otherwise <see cref="DisabledGraphUserService"/> is used.
 /// </summary>

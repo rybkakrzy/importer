@@ -42,7 +42,7 @@ export const appConfig: ApplicationConfig = {
     provideHttpClient(withInterceptorsFromDi(), withInterceptors([httpErrorInterceptor])),
     { provide: HTTP_INTERCEPTORS, useClass: MsalInterceptor, multi: true },
 
-    // MSAL (Entra ID) — auth config comes from MSAL_CUSTOM_CONFIG (Doc2 runtime config.json),
+    // MSAL (Entra ID) — auth config comes from MSAL_CUSTOM_CONFIG (Qutas runtime config.json),
     // provided at bootstrap in main.ts with build-time environment fallback.
     { provide: MSAL_INSTANCE, useFactory: msalInstanceFactory, deps: [MSAL_CUSTOM_CONFIG] },
     { provide: MSAL_GUARD_CONFIG, useFactory: msalGuardConfigFactory, deps: [MSAL_CUSTOM_CONFIG] },

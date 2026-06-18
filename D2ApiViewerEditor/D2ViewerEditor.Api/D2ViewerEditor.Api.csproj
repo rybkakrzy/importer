@@ -16,18 +16,18 @@
 
   <ItemGroup>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
-    <!-- Entra ID (Doc2/D2WebCore pattern): Identity.Web for WebApi token validation +
+    <!-- Entra ID (Qutas/D2WebCore pattern): Identity.Web for WebApi token validation +
          downstream token acquisition (Microsoft Graph). Group→role mapping via IClaimsTransformation.
          JwtBearer is supplied transitively by Identity.Web (per-TFM), so it is NOT pinned here
          (pinning 8.0.12 caused an NU1605 downgrade vs Identity.Web's 9.x requirement on net9.0 consumers). -->
     <PackageReference Include="Microsoft.Identity.Web" Version="3.12.0" />
-    <!-- Microsoft Graph v5 (Doc2 uses 5.103.0) for user lookup — built directly with
+    <!-- Microsoft Graph v5 (Qutas uses 5.103.0) for user lookup — built directly with
          ClientSecretCredential (app-only), NOT via Identity.Web.MicrosoftGraph (which is Graph v4). -->
     <PackageReference Include="Microsoft.Graph" Version="5.103.0" />
-    <!-- App-only (client-credentials) ClientSecretCredential for Microsoft Graph user lookup (Doc2). -->
+    <!-- App-only (client-credentials) ClientSecretCredential for Microsoft Graph user lookup (Qutas). -->
     <PackageReference Include="Azure.Identity" Version="1.13.1" />
     <!-- Keycloak (legacy) dual-auth: standard OIDC/JWT, no extra package needed beyond JwtBearer. -->
-    <!-- GCP Secret Manager: ClientSecret retrieval per environment (Doc2 SMC01{ENV}2_APP00404_entra_secret). -->
+    <!-- GCP Secret Manager: ClientSecret retrieval per environment (Qutas SMC01{ENV}2_APP00404_entra_secret). -->
     <PackageReference Include="Google.Cloud.SecretManager.V1" Version="2.6.0" />
   </ItemGroup>
 

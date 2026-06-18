@@ -208,7 +208,7 @@ describe('WysiwygEditorComponent — cross-page caret + page-number font', () =>
     expect(component.activePageIndex()).toBe(0);
   });
 
-  // --- saveSelection nie gubi zaznaczenia przy przejściu do toolbara (DOC2-FMT-004) ---
+  // --- saveSelection nie gubi zaznaczenia przy przejściu do toolbara (Qutas-FMT-004) ---
 
   it('saveSelection NIE nadpisuje realnego zaznaczenia pustą karetką, gdy edytor stracił fokus', () => {
     const { page0 } = setupTwoPages();

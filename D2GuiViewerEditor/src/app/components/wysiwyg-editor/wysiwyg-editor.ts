@@ -2357,7 +2357,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Zapisuj TYLKO gdy edytor naprawdę ma fokus. Klik w pole toolbara (np. input rozmiaru
       // czcionki) przenosi fokus i zwija selekcję contenteditable do karetki — `blur`/`selectionchange`
       // odpalają się WTEDY z karetką wciąż „w edytorze", więc bez tego strażnika nadpisywaliśmy
-      // realne zaznaczenie pustą karetką → `setFontSize` nie miał czego sformatować (DOC2-FMT-004).
+      // realne zaznaczenie pustą karetką → `setFontSize` nie miał czego sformatować (Qutas-FMT-004).
       if (this.isSelectionInEditor(selection) && this.editorHasFocus()) {
         this.savedSelection = range.cloneRange();
       }

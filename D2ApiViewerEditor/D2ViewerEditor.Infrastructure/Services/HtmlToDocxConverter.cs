@@ -2551,7 +2551,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (!string.IsNullOrEmpty(metadata.Manager))
             extPropsPart.Properties.Manager = new Manager(metadata.Manager);
 
-        extPropsPart.Properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application("Doc2 D2Tools");
+        extPropsPart.Properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application("Qutas D2Tools");
         extPropsPart.Properties.Save();
     }
 

@@ -213,7 +213,7 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
     expect((component as any)._isPageBreakBlock(plain)).toBe(false);
   });
 
-  // DOC2-IMP-005: domyślny rozmiar/krój z `.document-content` musi przetrwać paginację
+  // Qutas-IMP-005: domyślny rozmiar/krój z `.document-content` musi przetrwać paginację
   // (która rozwija ten wrapper) — przenosimy go na contenteditable strony.
   it('_captureDocumentDefaults czyta font-size/family z wrappera .document-content', () => {
     const html = '<div class="document-content" style="font-family:\'Times New Roman\';font-size:14pt;">'

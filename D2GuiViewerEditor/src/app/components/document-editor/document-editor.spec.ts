@@ -583,7 +583,7 @@ describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () 
 });
 
 /**
- * DOC2-PAR-007: „Ustaw jako domyślne" w ustawieniach akapitu.
+ * Qutas-PAR-007: „Ustaw jako domyślne" w ustawieniach akapitu.
  * Regresja: przycisk RESETOWAŁ formularz do wartości bazowych zamiast zapisać
  * bieżące ustawienia jako domyślne. Teraz: zachowuje bieżące wartości jako default
  * sesji i seeduje nimi dialog, gdy nie ma aktywnej selekcji.
@@ -591,7 +591,7 @@ describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () 
  * jsdom nie ma layoutu/contenteditable — `applyParagraphSettings()` przy braku selekcji
  * robi no-op i zamyka dialog; testujemy stan modelu (paragraphData / default sesji).
  */
-describe('DocumentEditorComponent — „Ustaw jako domyślne" akapitu (DOC2-PAR-007)', () => {
+describe('DocumentEditorComponent — „Ustaw jako domyślne" akapitu (Qutas-PAR-007)', () => {
   let fixture: ComponentFixture<DocumentEditorComponent>;
   let component: DocumentEditorComponent;
 
@@ -649,11 +649,11 @@ describe('DocumentEditorComponent — „Ustaw jako domyślne" akapitu (DOC2-PAR
 });
 
 /**
- * DOC2-UI-006: menu kontekstowe nie może zasłaniać UI (toolbar) ani wychodzić poza viewport.
+ * Qutas-UI-006: menu kontekstowe nie może zasłaniać UI (toolbar) ani wychodzić poza viewport.
  * Regresja: clamp dolnej krawędzi bez `Math.max(8, …)` dawał ujemne `y` na niskim oknie →
  * menu wjeżdżało nad viewport, zasłaniając toolbar.
  */
-describe('DocumentEditorComponent — pozycja menu kontekstowego (DOC2-UI-006)', () => {
+describe('DocumentEditorComponent — pozycja menu kontekstowego (Qutas-UI-006)', () => {
   let fixture: ComponentFixture<DocumentEditorComponent>;
   let component: DocumentEditorComponent;
   let origW: number;

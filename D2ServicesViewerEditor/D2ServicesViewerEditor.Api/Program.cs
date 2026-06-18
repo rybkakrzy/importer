@@ -61,7 +61,15 @@ try
         options.ValueLengthLimit = int.MaxValue;
     });
 
-    builder.Services.AddControllers();
+    builder.Services.AddControllers()
+        .AddJsonOptions(options =>
+        {
+            // Enumy serializujemy jako nazwy (nie liczby) — dzięki temu Swashbuckle renderuje
+            // w Swaggerze listę dozwolonych wartości (np. Saved/Editing/Sending/...), a nie
+            // gołe "string". Format po drucie pozostaje stringowy, więc kontrakt bez zmian.
+            options.JsonSerializerOptions.Converters.Add(
+                new System.Text.Json.Serialization.JsonStringEnumConverter());
+        });
     builder.Services.AddEndpointsApiExplorer();
 
     builder.Services.AddSwaggerGen(options =>

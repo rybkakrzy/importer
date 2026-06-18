@@ -1952,7 +1952,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const buildNumber = this.buildInfo.buildNumber();
     const environment = this.buildInfo.environment();
 
-    const subject = encodeURIComponent('[Doc2 Editor] Zgłoszenie');
+    const subject = encodeURIComponent('[Qutas Editor] Zgłoszenie');
 
     // Wyrównane etykiety dla czytelnej kolumny "key: value"
     const rows: Array<[string, string]> = [
@@ -3509,7 +3509,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * „Ustaw jako domyślne" — zapisuje BIEŻĄCE ustawienia akapitu z dialogu jako domyślne
    * (per-sesja edytora) i od razu stosuje je do aktywnego akapitu.
    *
-   * Wcześniej ten przycisk wołał reset do wartości bazowych (DOC2-PAR-007: „ustaw jako
+   * Wcześniej ten przycisk wołał reset do wartości bazowych (Qutas-PAR-007: „ustaw jako
    * domyślne resetuje zamiast zapisywać"). Teraz zachowuje się zgodnie z nazwą:
    *  1. zapamiętuje snapshot ustawień jako default sesji (`_paragraphDefaults`),
    *  2. stosuje ustawienia do bieżącego akapitu (jak OK) — nowe akapity tworzone Enterem

@@ -13,6 +13,40 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-19 — Kestrel: globalny limit body 150 MB (duże dokumenty) + AddServerHeader=false
+### Changed
+- `Program.cs` `ConfigureKestrel`: `MaxRequestBodySize` konfigurowalny (`Kestrel:MaxRequestBodySizeBytes`, domyślnie 150 MB), `MinRequestBodyDataRate`/`MinResponseDataRate=null`, `AddServerHeader=false`. Powód: endpointy `DocumentStorageController` (upload/save/finish, base64) nie miały limitu → domyślny ~30 MB Kestrel groził **413** dla dużych dokumentów. Per-action `[RequestSizeLimit]` (DocumentController) dalej obowiązuje gdzie ostrzejszy.
+### Verified
+- `dotnet build` 0 błędów.
+### Changed (cd.)
+- **Wymuszenie `https`** (wzorzec D2WebCore, bezwarunkowo): middleware `context.Request.Scheme = "https"` jako pierwszy w pipeline — poprawne URL-e / OIDC redirect URI za TLS-terminującym proxy (potrzebne dla OIDC z ADR-0019).
+### Notes
+- Z przeglądu wzorca D2WebCore `Program.cs` **pominięto**: NLog (mamy structured `ILogger` — ADR-0014/0018), `InitializeCulture` (konwertery już używają `InvariantCulture`), `CodePagesEncodingProvider` (kod używa wbudowanego `Encoding.Latin1`, nie code-page; wymagałby nowego pakietu), inline GCP secret load (mamy `EntraSecretLoader`), `UseWindowsService`/`Startup` (kontenery + minimal hosting).
+
+## 2026-06-19 — Parytet z D2WebCore: ClaimsTransformer (szersze typy claimów) + proxy z credentialami
+### Changed
+- `ClaimsTransformer`: dopasowuje identyfikatory grup/ról niezależnie od typu claimu (`groups`/`roles`/`ClaimTypes.Role`/`*identity/claims/role*`) — jak wzorcowy `ClaimsTransformer`. **Output nadal `roles`** (nasz `RoleClaimType`), nie `ClaimTypes.Role` (inaczej `IsInRole` by nie działał). Tolerancja null `GroupNames`.
+- `ProxyOptions` (= `BusinessProxy`): +`Username`/`Password`; `EntraBackchannel` używa `NetworkCredential` gdy username podany, inaczej `UseDefaultCredentials`. Dodane do appsettings (puste; Password z secret store).
+- **Nazwy klas bez zmian** (`AzureAdOptions`/`ClaimsTransformer`/`RolesOptions`) — ugruntowane; pominięto martwe pola wzorca (`UserNameClaimType`/`RefreshThresholdMinutes`).
+### Verified
+- `dotnet build` 0 błędów; Api.UnitTests **73/73** (+`CreateProxy_uses_explicit_credentials`, +`Maps_group_identifier_carried_under_role_claim_type`).
+
+## 2026-06-19 — Entra: jawny `IS_LOCAL_DEV` + serwerowy OIDC `AddMicrosoftIdentityWebApp` (hybryda WebApi+WebApp)
+### Changed
+- `AddEntraIdAuthentication` (ConfigureAuthentication): **jawny** `IS_LOCAL_DEV` (env var) steruje proxy — lokalnie `UseProxy=false`, inaczej `WebProxy` z `AzureAd:Proxy:Url` (bypass GCS) jako `BackchannelHttpHandler` (WebApi + WebApp) i `HttpClient.DefaultProxy`.
+- **Dodano serwerowy OIDC** `AddMicrosoftIdentityWebApp` (scheme `MyAzureAdScheme`): code flow + cookie (`SignInScheme`, `NonceCookie/CorrelationCookie SecurePolicy=Always`, scope `offline_access`/`email`, `ResponseType=Code`) + `EnableTokenAcquisitionToCallDownstreamApi()` + `AddInMemoryTokenCaches()`. WebApi (JWT) pozostaje **domyślnym** schematem dla API SPA. Na wyraźną prośbę — **odwraca** „resource-server-only" z ADR-0011/0012. Patrz ADR-0019.
+- Bez nowej zależności (`AddMicrosoftIdentityWebApp` tranzytywnie z `Microsoft.Identity.Web` 3.12.0). `Microsoft.AspNetCore.Authentication.OpenIdConnect` ściągany tranzytywnie.
+### Verified
+- `dotnet build` 0 błędów; Api.UnitTests **71/71**. **Runtime NIEzweryfikowane** (brak tenanta/ClientSecret lokalnie): faktyczny flow OIDC, cookie, token acquisition — patrz R-27.
+
+## 2026-06-19 — Refaktor: wiring Entra do `ConfigureAuthentication` (parytet z D2WebCore)
+### Changed
+- Wydzielono auth z `Program.cs` do `Security/ConfigureAuthentication.cs`: `AddDevBypassAuthentication()` + `AddEntraIdAuthentication(configuration, environment)` (bind AzureAd, ShowPII gated, proxy backchannel, Identity.Web JWT, RoleClaimType PostConfigure, grupy→role, polityki, ClaimsCurrentUserProvider, Graph). `Program.cs` = `if (devAuthBypass) AddDevBypass… else AddEntraId…`. Zachowanie 1:1.
+- Dodano (z wzorca, gated) `JwtBearerOptions.IncludeErrorDetails = !IsProduction()` — szczegóły 401 w dev/TST, off w PRD.
+- ~~Świadomie NIE dodano `AddMicrosoftIdentityWebApp`~~ — **zmienione w nowszym wpisie (powyżej)**: dodane na wyraźną prośbę (ADR-0019).
+### Verified
+- `dotnet build` 0 błędów; Api.UnitTests **71/71**.
+
 ## 2026-06-17 — 3 zgłoszenia: payload wysyłki (master/version/corporateKey), widok „Brak uprawnień", observability ELK
 ### Changed
 - **Z1 (wysyłka):** `HttpDeliverySender` (multipart) dokłada obok `file` pola `masterId`/`versionId`/`corporateKey` + log techniczny (bez treści, corporateKey jako flaga). `DeliveryDispatch` +`MasterId`/`VersionId`/`CorporateKey`; `DeliveryAttemptRunner` wypełnia z encji. `DocumentDelivery` +`CorporateKey` (kolumna `corporate_key`, SQL `009`, EF map), `FinishAndSendDocumentCommandHandler` czyta `ICurrentUserProvider.CorporateKey`. Backward compatible (pole `file` bez zmian).
@@ -35,7 +69,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## 2026-06-17 — Finalne nazewnictwo ról: `Administrator` / `Operator` (rename z `APP_Admin`/`APP_Pracownik`)
 ### Changed
-- Backend: globalny rename wartości `APP_Admin`→`Administrator`, `APP_Pracownik`→`Operator` w `AzureAdOptions` (default `AdminRole`), `appsettings.json`/`appsettings.DEV.json` (sekcja `Roles`→`RoleName`), `DevAuthHandler` (claimy), testach (`Doc2ClaimsTransformerTests`, `IdentityControllerTests`) + komentarzach.
+- Backend: globalny rename wartości `APP_Admin`→`Administrator`, `APP_Pracownik`→`Operator` w `AzureAdOptions` (default `AdminRole`), `appsettings.json`/`appsettings.DEV.json` (sekcja `Roles`→`RoleName`), `DevAuthHandler` (claimy), testach (`ClaimsTransformerTests`, `IdentityControllerTests`) + komentarzach.
 - Rename **identyfikatorów**: właściwość `AzureAdOptions.EmployeeRole`→`OperatorRole` (klucz `AzureAd:OperatorRole`), stała polityki `RequireAppEmployee`→`RequireAppOperator` (nazwa+wartość), `isEmployee`→`isOperator`, nazwy testów. `RequireAppAdmin`/`AdminRole` bez zmian. Semantyka `ResourcesProvider`/polityk bez zmian.
 - **GUI:** brak zmian kodu — autoryzacja resource-based (ADR-0016), front nie zna nazw ról (potwierdzone grepem).
 - Docs „żywe" (SECURITY/DOMAIN/FEATURES/API_CONTRACTS/CURRENT_STATE) zaktualizowane na nowe nazwy; historyczne ADR-y zachowane.
@@ -157,20 +191,20 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 - GUI: `ng build` OK; `ng test` **233** (+4 w `document-editor.spec`: VersionId obecny/fallback, cancel bez/z returnUrl).
 ### Notes
 - Ograniczenia świadome: czysto wektorowe EMF (bez rastra) wciąż placeholder; `.doc` odzyskuje tekst+akapity, nie formatowanie/tabele/obrazy. Patrz ADR-0013. Pełna wierność = sidecar LibreOffice (roadmapa).
-## 2026-06-10 — Pełny wzorzec Doc2/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak + runtime config)
+## 2026-06-10 — Pełny wzorzec Qutas/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak + runtime config)
 ### Changed (ADR-0012)
 - **Backend — biblioteka:** `JwtBearer` (goły) → **`Microsoft.Identity.Web` 3.12.0** (`AddMicrosoftIdentityWebApi`). Pin `JwtBearer 8.0.12` **usunięty** (Identity.Web dostarcza per-TFM; pin dawał NU1605 na net9.0). Dodano `AzureAd:ClientId`/`ClientSecret`.
-- **Backend — grupy→role (Doc2):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `Doc2ClaimsTransformer : IClaimsTransformation` mapuje claim `groups` → role `APP_Pracownik`/`APP_Admin`. **App Roles zachowane** (współistnieją). Polityki bez zmian. Test `Doc2ClaimsTransformerTests` **6/6**.
+- **Backend — grupy→role (Qutas):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `ClaimsTransformer : IClaimsTransformation` mapuje claim `groups` → role `APP_Pracownik`/`APP_Admin`. **App Roles zachowane** (współistnieją). Polityki bez zmian. Test `ClaimsTransformerTests` **6/6**.
 - **Backend — Microsoft Graph v5 (5.103.0):** `IGraphUserService`/`GraphUserService` (app-only `ClientSecretCredential`) + `GET /api/identity/users?query=` (`IdentityController`, RequireAppAdmin). Aktywny tylko z ClientSecret; inaczej `DisabledGraphUserService`. (NIE `Identity.Web.MicrosoftGraph` = Graph v4.)
 - **Backend — GCP Secret Manager** (`Google.Cloud.SecretManager.V1` 2.6.0): `EntraSecretLoader` wstrzykuje `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret`; guard `Enabled` + try/catch (nigdy nie wywala startu).
 - **Backend — Keycloak dual-auth:** gdy `Keycloak:Enabled` — drugi schemat JwtBearer + policy scheme `EntraOrKeycloak` wybierający po issuerze tokena (`AuthSchemes.SelectByIssuer`). Wyłączony → tylko Entra.
-- **Frontend — runtime config (Doc2):** `public/assets/configs/config.json` ładowany w `main.ts` przed bootstrapem → `RUNTIME_AUTH_CONFIG` (root-factory fallback = `environment.auth`). Fabryki MSAL (`msal.config`), `appAdminGuard`, `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
+- **Frontend — runtime config (Qutas):** `public/assets/configs/config.json` ładowany w `main.ts` przed bootstrapem → `RUNTIME_AUTH_CONFIG` (root-factory fallback = `environment.auth`). Fabryki MSAL (`msal.config`), `appAdminGuard`, `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
 - **Konfiguracja:** `appsettings.json`/`appsettings.DEV.json` rozszerzone o `AzureAd.ClientId/ClientSecret`, `Roles`, `Keycloak`, `GCPSecretManager` — wszystko **placeholdery** (zero realnych sekretów/tenanta).
 ### Verified
-- `dotnet build` API OK (Identity.Web/Graph 5.103.0/Azure.Identity/SecretManager restore). `Api.UnitTests` **41** (+6 `Doc2ClaimsTransformerTests`). GUI `tsc` OK, `ng test` **236**, `ng build` (AOT) OK; `config.json` shippowany do `dist/.../assets/configs/`.
+- `dotnet build` API OK (Identity.Web/Graph 5.103.0/Azure.Identity/SecretManager restore). `Api.UnitTests` **41** (+6 `ClaimsTransformerTests`). GUI `tsc` OK, `ng test` **236**, `ng build` (AOT) OK; `config.json` shippowany do `dist/.../assets/configs/`.
 - **Niezweryfikowane runtime** (brak tenanta/GCP/Keycloak lokalnie): walidacja tokenów Entra, mapowanie grup z realnego tokena, pobranie sekretu z GCP, selekcja schematu Keycloak. Aktywacja wymaga realnych wartości per środowisko + app consent dla Graph (`User.Read.All`).
 ### Notes
-- Adaptacja Doc2 do kształtu SPA+API: **bez** serwerowego OIDC/cookie (`AddMicrosoftIdentityWebApp`) — interaktywny login robi MSAL w przeglądarce, backend = resource server.
+- Adaptacja Qutas do kształtu SPA+API: **bez** serwerowego OIDC/cookie (`AddMicrosoftIdentityWebApp`) — interaktywny login robi MSAL w przeglądarce, backend = resource server.
 - Zmiana wykonana na bieżącym drzewie (niezakończony merge `feature/azure`); `.claude/settings.json` nadal do rozwiązania przez użytkownika.
 
 ## 2026-06-09 — „Lista plików" (admin-files): statusy dokumentów po polsku
@@ -256,7 +290,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ## 2026-06-09 — Dwa bugi: dekrypcja hasłem (NPOI nie działa→własna) + input font-size gubił selekcję
 ### Changed
 - **Hasło — root cause i realna naprawa:** `NPOI 2.8.0` ma interfejs dekryptora, ale **NIE implementację Agile** (typ `AgileEncryptionInfoBuilder` nieobecny we wszystkich TFM-ach → `EncryptionInfo(fs)` rzuca `EncryptedDocumentException`), więc poprzedni kod mapował każdy plik (nawet z dobrym hasłem) na „WrongPassword". Nowy `OoxmlAgileDecryptor` — **własna, czysto zarządzana dekrypcja Agile** (MS-OFFCRYPTO §2.3.4.10+: SHA512 spinCount + AES-256-CBC, blockKeys, weryfikacja hasła, dekrypcja pakietu segmentami 4096B). NPOI używane już TYLKO do czytania kontenera CFB (`CreateDocumentInputStream`). `DocumentInputNormalizer` wymaga `EncryptionInfo` **i** `EncryptedPackage`; rozróżnia WrongPassword (niezgodność weryfikatora) od Invalid/Unsupported (Standard/CryptoAPI Office 2007 nieobsługiwany).
-- **Font-size input (DOC2-FMT-004, naprawa właściwa):** `saveSelection()` zapisywał też ZWINIĘTE selekcje, a leciał na `blur`/`selectionchange` — czyli dokładnie gdy klik w input toolbara zwija zaznaczenie do karetki „wciąż w edytorze" → realne zaznaczenie nadpisywane pustą karetką → „nie ma na czym". Fix: nowy strażnik `editorHasFocus()` (activeElement w obszarze edytowalnym) — `saveSelection` zapisuje TYLKO gdy edytor ma fokus; przy przejściu do toolbara zostaje zaznaczenie z `mouseup`/`keyup`.
+- **Font-size input (Qutas-FMT-004, naprawa właściwa):** `saveSelection()` zapisywał też ZWINIĘTE selekcje, a leciał na `blur`/`selectionchange` — czyli dokładnie gdy klik w input toolbara zwija zaznaczenie do karetki „wciąż w edytorze" → realne zaznaczenie nadpisywane pustą karetką → „nie ma na czym". Fix: nowy strażnik `editorHasFocus()` (activeElement w obszarze edytowalnym) — `saveSelection` zapisuje TYLKO gdy edytor ma fokus; przy przejściu do toolbara zostaje zaznaczenie z `mouseup`/`keyup`.
 ### Verified
 - Backend Infrastructure **150** (+2: realny round-trip Agile encrypt→decrypt — poprawne hasło → odszyfrowany ważny DOCX otwierany OpenXml SDK; złe hasło → WrongPassword; brak hasła → PasswordRequired; enkryptor testowy też spec-zgodny). `D2ViewerEditor.sln` build OK. GUI **213** (+1: saveSelection nie gubi zaznaczenia po utracie fokusu).
 ### Notes
@@ -286,11 +320,11 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## 2026-06-08 — EMF/eksport + font-size import + page-break import + selekcja font-size
 ### Changed
-- **DOC2-IMG-009 (EMF psuje DOCX) — root cause + fix:** writer pisał placeholder SVG jako goły `a:blip` (SVG bez rastra = NIEPOPRAWNY OOXML → Word „uszkodzony"). Reader (`DocxToHtmlConverter`) niesie teraz oryginalny metafile w `data-original-src`; writer (`ResolveImageSrc`) preferuje go i zapisuje prawdziwy **EMF part** (`ImagePartType.Emf`, Word renderuje natywnie); `BuildImageDrawing` ma **twardy guard**: nigdy nie emituje gołego SVG blip (return null). Mapowanie x-emf/x-wmf dodane.
+- **Qutas-IMG-009 (EMF psuje DOCX) — root cause + fix:** writer pisał placeholder SVG jako goły `a:blip` (SVG bez rastra = NIEPOPRAWNY OOXML → Word „uszkodzony"). Reader (`DocxToHtmlConverter`) niesie teraz oryginalny metafile w `data-original-src`; writer (`ResolveImageSrc`) preferuje go i zapisuje prawdziwy **EMF part** (`ImagePartType.Emf`, Word renderuje natywnie); `BuildImageDrawing` ma **twardy guard**: nigdy nie emituje gołego SVG blip (return null). Mapowanie x-emf/x-wmf dodane.
 - **DWA pre-existing bugi schematu w `styles.xml`** (wykryte OpenXmlValidatorem, psuły KAŻDY zapis): heading `w:rPr` miał złą kolejność (`sz`/`color`/`b`/`i`) → poprawione na `rFonts→b→i→color→sz`; heading `w:pPr` miał `spacing` przed `keepNext` → `keepNext→keepLines→spacing→outlineLvl`.
-- **DOC2-IMP-005 (14pt → ~10pt) — root cause frontend:** reader poprawny (4 testy: direct/styl/docDefaults/Normal). Bug: `_flattenTopBlocks` ROZWIJA wrapper `.document-content`, na którym reader trzyma default → ginął. Fix: `_captureDocumentDefaults` czyta font-size/family z wrappera; nowe sygnały `documentDefaultFontSize/Family` zbindowane na `[style.font-size/font-family]` contenteditable strony.
-- **DOC2-IMP-008 (3 strony → 1):** reader IGNOROWAŁ `w:pageBreakBefore`. Fix: `HasPageBreakBefore` → emit `<div class="page-break">` przed akapitem (ten sam mechanizm co manualny break; writer round-tripuje).
-- **DOC2-FMT-004 (input font-size gubił selekcję) — root cause:** `savedSelection` zapisywany tylko na `blur` (zbyt późno — selekcja już znika przy klik w input). Fix: `onSelectionChange` zapisuje selekcję na bieżąco. Dodatkowo Enter w input nie aplikuje podwójnie (był apply + blur→apply → zagnieżdżone spany).
+- **Qutas-IMP-005 (14pt → ~10pt) — root cause frontend:** reader poprawny (4 testy: direct/styl/docDefaults/Normal). Bug: `_flattenTopBlocks` ROZWIJA wrapper `.document-content`, na którym reader trzyma default → ginął. Fix: `_captureDocumentDefaults` czyta font-size/family z wrappera; nowe sygnały `documentDefaultFontSize/Family` zbindowane na `[style.font-size/font-family]` contenteditable strony.
+- **Qutas-IMP-008 (3 strony → 1):** reader IGNOROWAŁ `w:pageBreakBefore`. Fix: `HasPageBreakBefore` → emit `<div class="page-break">` przed akapitem (ten sam mechanizm co manualny break; writer round-tripuje).
+- **Qutas-FMT-004 (input font-size gubił selekcję) — root cause:** `savedSelection` zapisywany tylko na `blur` (zbyt późno — selekcja już znika przy klik w input). Fix: `onSelectionChange` zapisuje selekcję na bieżąco. Dodatkowo Enter w input nie aplikuje podwójnie (był apply + blur→apply → zagnieżdżone spany).
 ### Verified
 - Backend `dotnet test Infrastructure.UnitTests` → **144 passed** (+EMF round-trip z OpenXmlValidator=0 błędów, +4 FontSizeImport, +2 pageBreakBefore). Frontend `ng test` → **211 passed** (+2 captureDocumentDefaults).
 ### Notes
@@ -298,16 +332,16 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## 2026-06-08 — Edytor: 4 realne naprawy (paginacja / Backspace / context-menu / PDF diag)
 ### Changed
-- **DOC2-PAG-002 (Enter wydłuża stronę):** `_schedulePaginate` debounce **600 → 250 ms** (komentarz mówił 300 — kod zdryfował). Strona `min-height:1122px; overflow:visible` rosła widocznie przez całe okno debounce zanim treść spłynęła; 250 ms eliminuje rozciąganie poza A4.
-- **DOC2-PAG-001 (Backspace na 2. stronie):** nowy `_tryMergeAcrossPageBackwards()` wpięty w `handleKeyboard` (`_tryDeletePageBreakBackwards() || _tryMergeAcrossPageBackwards()`). Wcześniej obsługiwany był TYLKO manualny page-break; strony z AUTO-paginacji nie scalały się (osobne contenteditable → przeglądarka nie łączy). Teraz: pusty blok wiodący → usuń; bloki mergeable (P/DIV/H/LI) → scal treść jak Word; tabela/niekompatybilne → tylko nawigacja karetki (treść nietknięta). Po operacji repaginacja spływa treść w górę.
-- **DOC2-UI-006 (context-menu zasłania UI):** `onContextMenu` clamp z `Math.max(8, …)` na obu osiach — wcześniej dolny clamp dawał ujemne `y` na niskim oknie → menu nad viewportem zasłaniało toolbar.
-- **DOC2-PDF-010 (PDF „prace techniczne"):** `pdf-viewer.ts` `catch {}` → `catch (err)` z `console.error` + rozróżnieniem awarii workera (cold-start/404/MIME `.mjs`) od uszkodzonego pliku. Przestaje maskować przyczynę.
+- **Qutas-PAG-002 (Enter wydłuża stronę):** `_schedulePaginate` debounce **600 → 250 ms** (komentarz mówił 300 — kod zdryfował). Strona `min-height:1122px; overflow:visible` rosła widocznie przez całe okno debounce zanim treść spłynęła; 250 ms eliminuje rozciąganie poza A4.
+- **Qutas-PAG-001 (Backspace na 2. stronie):** nowy `_tryMergeAcrossPageBackwards()` wpięty w `handleKeyboard` (`_tryDeletePageBreakBackwards() || _tryMergeAcrossPageBackwards()`). Wcześniej obsługiwany był TYLKO manualny page-break; strony z AUTO-paginacji nie scalały się (osobne contenteditable → przeglądarka nie łączy). Teraz: pusty blok wiodący → usuń; bloki mergeable (P/DIV/H/LI) → scal treść jak Word; tabela/niekompatybilne → tylko nawigacja karetki (treść nietknięta). Po operacji repaginacja spływa treść w górę.
+- **Qutas-UI-006 (context-menu zasłania UI):** `onContextMenu` clamp z `Math.max(8, …)` na obu osiach — wcześniej dolny clamp dawał ujemne `y` na niskim oknie → menu nad viewportem zasłaniało toolbar.
+- **Qutas-PDF-010 (PDF „prace techniczne"):** `pdf-viewer.ts` `catch {}` → `catch (err)` z `console.error` + rozróżnieniem awarii workera (cold-start/404/MIME `.mjs`) od uszkodzonego pliku. Przestaje maskować przyczynę.
 ### Verified
 - `npx tsc --noEmit` OK; `npx ng test --watch=false` → **209 passed** (+4 merge w `caret-field.spec.ts`, +3 context-menu w `document-editor.spec.ts`).
 ### Notes
 - Diagnoza Problem 4 (font-size input): apply-path JEST poprawny (`applyFontSizeToSelection` re-selektuje wstawioną treść 1996–2006; `setFontSize` odtwarza `savedSelection`). Residualne ryzyko = stała `Range` po repaginacji — wymaga selekcji path-based (większa zmiana, nie ruszane).
 
-## 2026-06-08 — Akapit: „Ustaw jako domyślne" zapisuje zamiast resetować (DOC2-PAR-007)
+## 2026-06-08 — Akapit: „Ustaw jako domyślne" zapisuje zamiast resetować (Qutas-PAR-007)
 ### Changed
 - `document-editor.html` — przycisk „Ustaw jako domyślne" wołał `resetParagraphDefaults()` (reset do wartości bazowych) → teraz `setParagraphAsDefault()`.
 - `document-editor.ts` — usunięto `resetParagraphDefaults()`; dodano `setParagraphAsDefault()` (snapshot bieżących ustawień → `_paragraphDefaults` + `applyParagraphSettings()` na bieżącym akapicie). Nowe pole `_paragraphDefaults` (default per-sesja). `readCurrentParagraphSettings()` przy braku selekcji seeduje formularz z `_paragraphDefaults` zamiast zostawiać stałe wartości.
@@ -393,7 +427,7 @@ Pełna referencja: `.ai/EDITOR_KEYBOARD.md`.
 ### Verified / tests
 - Nowy `pages/layout-shell.spec.ts` (2): dashboard i pdf-maintenance — wstrzyknięty scoped CSS wrappera **nie zawiera `100vh`** i ma `min-height:100%` (kontrakt layoutu; jsdom nie robi layoutu, więc asercja na faktycznie zregresowanym CSS, nie na pikselach). GUI **185** (było 183, +2). Edytor nietknięty (te same testy zielone).
 ### Scenariusze manualne
-- Dashboard z bannerem DEV: „Witaj w Doc2" wyśrodkowane, stopka `© 2026 ING` widoczna, brak scrolla/skoku. Bez bannera (PROD): identyczny układ. Edytor (screen A): toolbar/panele/stopka bez zmian. Środowiska Local/DEV/TST/PRE: różny kolor bannera, **ta sama wysokość** layoutu. Małe rozdzielczości: gdy treść > obszar, host scrolluje (nic nie ucięte).
+- Dashboard z bannerem DEV: „Witaj w Qutas" wyśrodkowane, stopka `© 2026 ING` widoczna, brak scrolla/skoku. Bez bannera (PROD): identyczny układ. Edytor (screen A): toolbar/panele/stopka bez zmian. Środowiska Local/DEV/TST/PRE: różny kolor bannera, **ta sama wysokość** layoutu. Małe rozdzielczości: gdy treść > obszar, host scrolluje (nic nie ucięte).
 ### Ograniczenia
 - `min-height:100%` wymaga definite-height hosta — zapewnia go shell (`flex:1 1 0` w `d2-root height:100vh`); ten sam mechanizm, na którym opiera się edytor.
 

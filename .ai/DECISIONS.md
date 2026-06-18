@@ -228,32 +228,32 @@ Spójna tożsamość; admin chroniony backendowo (wcześniej tylko trasa Angular
 ### Alternatives considered
 Group claims — odrzucone (overage, GUID-y). Fallback DB/Graph dla CorporateKey — odłożony (claim-only na start). Logowanie tylko dla dokumentów ograniczonych — odrzucone na rzecz spójności (cała aplikacja za logowaniem). Admin bez bypassu — rozważone; biznes wybrał pełny wgląd admina.
 
-## ADR-0012: Pełny wzorzec Doc2/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak)
+## ADR-0012: Pełny wzorzec Qutas/D2WebCore dla Entra ID (Identity.Web + grupy→role + Graph + Secret Manager + Keycloak)
 
 - Date: 2026-06-10
 - Status: Accepted; **Keycloak dual-auth USUNIĘTY 2026-06-13** (patrz CURRENT_STATE). Aktywacja per-środowisko wymaga realnych wartości Entra/GCP.
 
 ### Context
-Po wdrożeniu lekkiej integracji Entra (ADR-0011: goły JwtBearer + App Roles) padła decyzja, by ViewerEditor przyjął **pełny wzorzec referencyjny Doc2/D2WebCore** (analiza: `analiza_implementacji_entra_id_pelna.md`). Wybór użytkownika: pełny wzorzec, **mapowanie grup→role**, praca na bieżącym drzewie. Wzorzec Doc2 to serwerowy web-app+API; ViewerEditor to SPA+API — adoptujemy części pasujące do tego kształtu (bez serwerowego OIDC/cookie).
+Po wdrożeniu lekkiej integracji Entra (ADR-0011: goły JwtBearer + App Roles) padła decyzja, by ViewerEditor przyjął **pełny wzorzec referencyjny Qutas/D2WebCore** (analiza: `analiza_implementacji_entra_id_pelna.md`). Wybór użytkownika: pełny wzorzec, **mapowanie grup→role**, praca na bieżącym drzewie. Wzorzec Qutas to serwerowy web-app+API; ViewerEditor to SPA+API — adoptujemy części pasujące do tego kształtu (bez serwerowego OIDC/cookie).
 
 ### Decision
 - **Biblioteka:** `Microsoft.Identity.Web` 3.12.0 (`AddMicrosoftIdentityWebApi`) zamiast gołego `JwtBearer`. JwtBearer NIE jest już pinowany (Identity.Web dostarcza go tranzytywnie per-TFM — pin 8.0.12 dawał NU1605 vs wymóg 9.x na konsumentach net9.0).
-- **Mapowanie grup→role (Doc2):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `Doc2ClaimsTransformer : IClaimsTransformation` — claim `groups` → role aplikacyjne (`APP_Pracownik`/`APP_Admin`). **App Roles zachowane** (claim `roles` z tokena przeżywa) → grupy i App Roles **współistnieją**. Polityki `RequireAppEmployee`/`RequireAppAdmin` bez zmian (wymagają tych samych nazw ról).
-- **Microsoft Graph** (v5, **5.103.0** jak Doc2): `IGraphUserService`/`GraphUserService` app-only (`ClientSecretCredential` + `.default`), `GET /api/identity/users?query=` (RequireAppAdmin). Aktywny tylko gdy jest ClientSecret; inaczej `DisabledGraphUserService` (no-op) → lokalnie bez sekretu działa. **Nie** użyto `Microsoft.Identity.Web.MicrosoftGraph` (to Graph v4).
+- **Mapowanie grup→role (Qutas):** `RolesOptions` (sekcja `Roles`: `GroupPrefix` + `Roles[]{RoleName,GroupNames}`) + `ClaimsTransformer : IClaimsTransformation` — claim `groups` → role aplikacyjne (`APP_Pracownik`/`APP_Admin`). **App Roles zachowane** (claim `roles` z tokena przeżywa) → grupy i App Roles **współistnieją**. Polityki `RequireAppEmployee`/`RequireAppAdmin` bez zmian (wymagają tych samych nazw ról).
+- **Microsoft Graph** (v5, **5.103.0** jak Qutas): `IGraphUserService`/`GraphUserService` app-only (`ClientSecretCredential` + `.default`), `GET /api/identity/users?query=` (RequireAppAdmin). Aktywny tylko gdy jest ClientSecret; inaczej `DisabledGraphUserService` (no-op) → lokalnie bez sekretu działa. **Nie** użyto `Microsoft.Identity.Web.MicrosoftGraph` (to Graph v4).
 - **GCP Secret Manager** (`Google.Cloud.SecretManager.V1` 2.6.0): `EntraSecretLoader` wstrzykuje `AzureAd:ClientSecret` z `SMC01{ENV}2_APP00404_entra_secret` na starcie. Guard `Enabled` + try/catch → nigdy nie wywala startu (lokalnie wyłączone).
 - ~~Keycloak (legacy) dual-auth~~ — **USUNIĘTE 2026-06-13** (`AuthSchemes`/`KeycloakOptions`/sekcja `Keycloak` skasowane; wyłącznie Entra).
-- **Frontend runtime config (Doc2):** `assets/configs/config.json` ładowany w `main.ts` **przed** bootstrapem → `RUNTIME_AUTH_CONFIG` (token z root-factory = `environment.auth` jako fallback). Fabryki MSAL + `appAdminGuard` + `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
+- **Frontend runtime config (Qutas):** `assets/configs/config.json` ładowany w `main.ts` **przed** bootstrapem → `RUNTIME_AUTH_CONFIG` (token z root-factory = `environment.auth` jako fallback). Fabryki MSAL + `appAdminGuard` + `CurrentUserService` czytają z runtime-configu. Jeden build na wszystkie środowiska.
 - **Wszystkie wartości środowiskowe to placeholdery** (tenant, clientId, grupy `*`, sekrety, GCP project, Keycloak) — nigdy realnych sekretów w repo.
 
 ### Consequences
-Architektura zbieżna z Doc2 w częściach pasujących do SPA+API. Mapowanie grup→role odwraca decyzję „App Roles only" z ADR-0011, ale je zachowuje (hybryda). Build backendu OK; testy: Api.UnitTests **50** (`Doc2ClaimsTransformerTests` 6, `AuthSchemesTests` 5, `IdentityControllerTests` 4), GUI **240** (`runtime-config.spec` 4), AOT build OK. **Aktywacja wymaga** realnych wartości w `appsettings.{ENV}.json`/`config.json` + (dla Graph) sekretu z GCP + (dla dual-auth) realnego Keycloaka. Graph używa app-only — wymaga uprawnień aplikacyjnych (`User.Read.All`) + admin consent. **Niezweryfikowane runtime** (brak tenanta/GCP/Keycloak lokalnie): start aplikacji z realnym Identity.Web, walidacja tokenów Entra, faktyczne mapowanie grup z realnego tokena, pobranie sekretu z GCP, selekcja schematu Keycloak.
+Architektura zbieżna z Qutas w częściach pasujących do SPA+API. Mapowanie grup→role odwraca decyzję „App Roles only" z ADR-0011, ale je zachowuje (hybryda). Build backendu OK; testy: Api.UnitTests **50** (`ClaimsTransformerTests` 6, `AuthSchemesTests` 5, `IdentityControllerTests` 4), GUI **240** (`runtime-config.spec` 4), AOT build OK. **Aktywacja wymaga** realnych wartości w `appsettings.{ENV}.json`/`config.json` + (dla Graph) sekretu z GCP + (dla dual-auth) realnego Keycloaka. Graph używa app-only — wymaga uprawnień aplikacyjnych (`User.Read.All`) + admin consent. **Niezweryfikowane runtime** (brak tenanta/GCP/Keycloak lokalnie): start aplikacji z realnym Identity.Web, walidacja tokenów Entra, faktyczne mapowanie grup z realnego tokena, pobranie sekretu z GCP, selekcja schematu Keycloak.
 
 **Hardening (analiza problemów):** (1) `RoleClaimType="roles"` ustawiony przez **`PostConfigure`** (rejestrowany po `AddMicrosoftIdentityWebApi`) — gwarantuje, że wygrywa nad konfiguracją Identity.Web, inaczej `RequireRole` mogłoby szukać `ClaimTypes.Role`. (2) `AuthSchemes.SelectByIssuer` w try/catch — niepoprawny token → fallback Entra (→401). (3) `RUNTIME_AUTH_CONFIG` ma root-factory default (=`environment.auth`) → injection zawsze się rozwiązuje (testy + bezpiecznik); `main.ts` nadpisuje wartością runtime; fetch `config.json` z fallbackiem przy 404/niepoprawnym JSON.
 
 **Znane ograniczenia:** (a) **Group overage** — user w > ~200 grupach: Entra pomija claim `groups` (emituje `_claim_names`/`_claim_sources` → Graph). Transformer NIE rozwiązuje overage przez Graph → tacy użytkownicy nie dostają ról z grup; ratują App Roles (współistnieją) lub przyszłe rozwiązanie overage. (b) `groups` domyślnie niesie **object-id** (GUID), nie nazwy — konfiguracja Entra (optional claim) musi emitować nazwy `KUTAS_200_*` albo w `RolesOptions.GroupNames` trzeba wpisać GUID-y. (c) start z PUSTYM `AzureAd:ClientId` (bazowy `appsettings.json` PRD) może rzucić walidacją Identity.Web przy pierwszym żądaniu — uruchamiać z env DEV (placeholdery niepuste) lub realną konfiguracją.
 
 ### Alternatives considered
-Serwerowy OIDC (`AddMicrosoftIdentityWebApp` + cookie) jak w Doc2 — **pominięty**: ViewerEditor to SPA (interaktywny login robi MSAL w przeglądarce), backend pozostaje czystym resource-serverem. `Microsoft.Identity.Web.MicrosoftGraph` (Graph v4) — odrzucone na rzecz Graph v5 (zgodność z Doc2 5.103.0 + nowocześniejsze API). Delegated Graph zamiast app-only — odrzucone (lookup userów to funkcja admina, app-only prostsze).
+Serwerowy OIDC (`AddMicrosoftIdentityWebApp` + cookie) jak w Qutas — **pominięty**: ViewerEditor to SPA (interaktywny login robi MSAL w przeglądarce), backend pozostaje czystym resource-serverem. `Microsoft.Identity.Web.MicrosoftGraph` (Graph v4) — odrzucone na rzecz Graph v5 (zgodność z Qutas 5.103.0 + nowocześniejsze API). Delegated Graph zamiast app-only — odrzucone (lookup userów to funkcja admina, app-only prostsze).
 
 ---
 
@@ -333,12 +333,12 @@ rozróżnienie WARNING/ERROR/CRITICAL (stderr = ERROR ryczałtem).
 - Status: Accepted; **model ról zastąpiony przez ADR-0016 (2026-06-17)** — frontowe guardy per-nazwa-roli (`Administrator`/`Przeglądający`, `documentRoleGuard`/`appAdminGuard`, `CurrentUserService`, `adminRole`/`viewerRole` w config) **usunięte** na rzecz autoryzacji resource-based. Reszta ADR-0015 (MSAL standalone, `MsalRedirectComponent`, config.json jako źródło auth, rename tokenu, `apiScopesFor`/`.default`, `navigateToLoginRequestUrl`) — **bez zmian, aktualna**.
 
 ### Context
-Doprecyzowanie integracji Entra na froncie (Angular 20 **standalone**, nie NgModule jak referencja Doc2/D2AngularNew). Cele: poprawny redirect handling, jeden build na środowiska bez trzymania wartości auth w `environment`, oraz docelowy model RBAC z dwiema rolami: **moduł admina tylko dla „Administrator"**, **podgląd/edycja dokumentów dla „Przeglądający"** (admin = nadzbiór).
+Doprecyzowanie integracji Entra na froncie (Angular 20 **standalone**, nie NgModule jak referencja Qutas/D2AngularNew). Cele: poprawny redirect handling, jeden build na środowiska bez trzymania wartości auth w `environment`, oraz docelowy model RBAC z dwiema rolami: **moduł admina tylko dla „Administrator"**, **podgląd/edycja dokumentów dla „Przeglądający"** (admin = nadzbiór).
 
 ### Decision
 - **Redirect handling:** `MsalRedirectComponent` (`<app-redirect>` w `index.html`) bootstrapowany jako drugi komponent przez `appRef.bootstrap(...)` w `main.ts` — kanoniczny wzorzec MSAL dla aplikacji standalone, **bez AppModule**. `App` przestaje wołać `handleRedirectObservable()` (robi to redirect-component); aktywne konto ustawiane po `MsalBroadcastService.inProgress$ === None`.
 - **Źródło wartości auth = `assets/configs/config.json`** (plik w `src/assets/configs/`, nie `public/`). Usunięto blok `auth` z `environment.ts`/`environment.development.ts`. `DEFAULT_AUTH_CONFIG` w `runtime-config.ts` to **neutralne defaulty strukturalne** (fallback/testy), nie wartości środowiskowe.
-- **Token DI przemianowany** `RUNTIME_AUTH_CONFIG` → **`MSAL_CUSTOM_CONFIG`** (parytet nazewnictwa z analizą Doc2).
+- **Token DI przemianowany** `RUNTIME_AUTH_CONFIG` → **`MSAL_CUSTOM_CONFIG`** (parytet nazewnictwa z analizą Qutas).
 - **Scope:** helper `apiScopesFor(auth)` — preferuje jawne `apiScopes` z config.json, fallback `{clientId}/.default`; używany spójnie w guardzie i interceptorze. `navigateToLoginRequestUrl: true` ustawiony jawnie (domyślny MSAL).
 - **Dwurolowy model (front, UX):** `AppAuthConfig.adminRole` (domyślnie **„Administrator"**) + nowe `viewerRole` (**„Przeglądający"**). Logika scentralizowana w `CurrentUserService`: `isAdmin()`, `isViewer()`, `canAccessDocuments()` (= viewer **lub** admin — admin nadzbiór; dev-bypass `enabled=false` przepuszcza). Nowy `documentRoleGuard` na `/editor` i `/viewer` (przed `documentAccessGuard`); `appAdminGuard` zrefaktoryzowany do `CurrentUserService.isAdmin()`. Dashboard bez zmian (gating na trasie). Backend = źródło prawdy.
 
@@ -381,7 +381,7 @@ Zostawić role-claim na froncie (ADR-0015) z poprawą nazw do `APP_Admin`/`APP_P
 Dotychczasowe role: `APP_Admin` (admin) i `APP_Pracownik` (standardowy użytkownik). Decyzja biznesowa: ostateczne nazewnictwo to **`Administrator`** i **`Operator`**. Po przejściu na autoryzację resource-based (ADR-0016) nazwy ról żyją wyłącznie w backendzie — GUI nie zna nazw ról.
 
 ### Decision
-- Globalny rename wartości ról w backendzie: `APP_Admin`→`Administrator`, `APP_Pracownik`→`Operator`. Objęte: `AzureAdOptions.AdminRole` (default), sekcja `Roles` w `appsettings.json`/`appsettings.DEV.json` (`RoleName`), `DevAuthHandler` (claimy `roles`), polityki (przez opcje, bez literałów), testy (`Doc2ClaimsTransformerTests`, `IdentityControllerTests`) + komentarze.
+- Globalny rename wartości ról w backendzie: `APP_Admin`→`Administrator`, `APP_Pracownik`→`Operator`. Objęte: `AzureAdOptions.AdminRole` (default), sekcja `Roles` w `appsettings.json`/`appsettings.DEV.json` (`RoleName`), `DevAuthHandler` (claimy `roles`), polityki (przez opcje, bez literałów), testy (`ClaimsTransformerTests`, `IdentityControllerTests`) + komentarze.
 - **Rename identyfikatorów** (spójność z „Operator"): właściwość `AzureAdOptions.EmployeeRole`→**`OperatorRole`** (więc też klucz configu `AzureAd:OperatorRole`), stała polityki `RequireAppEmployee`→**`RequireAppOperator`** (nazwa + wartość; konsumowana tylko przez stałą, więc bezpieczne), zmienna/komentarze (`isEmployee`→`isOperator`, nazwy testów `*_employee_*`→`*_operator_*`). `RequireAppAdmin`/`AdminRole` bez zmian („Admin" = Administrator).
 - **GUI bez zmian kodu** — autoryzacja resource-based (ADR-0016), front nie zna nazw ról; potwierdzone grepem (zero literałów ról w `D2GuiViewerEditor/src`).
 - Semantyka bez zmian: `RequireAppOperator` = `Operator` lub `Administrator`; `RequireAppAdmin` = `Administrator`; admin nadzbiór (omija `allowedCorporateKeys`). `ResourcesProvider`: Operator/Administrator→`editor,viewer`; Administrator→`+admin`.
@@ -414,3 +414,25 @@ Logi indeksowalne i korelowalne w Kibanie; błędy z kontekstem (correlationId, 
 
 ### Alternatives considered
 Serilog + Elastic.Serilog.Sinks / Elastic APM — odrzucone: nowa zależność, a wbudowany formatter+scope realizują structured JSON na stdout (idiomatyczne dla zbieraczy ELK). Osobny correlation-id provider/DI — odrzucone na rzecz `HttpContext.Items` + scope (prościej, bez stanu współdzielonego).
+
+---
+
+## ADR-0019: Hybryda WebApi + WebApp (serwerowy OIDC `AddMicrosoftIdentityWebApp`) — 2026-06-19
+
+- Date: 2026-06-19
+- Status: Accepted; **odwraca „resource-server-only"** z ADR-0011/0012 na wyraźną decyzję właściciela (parytet z D2WebCore `ConfigureAuthentication`).
+
+### Context
+ADR-0011/0012 świadomie pominęły serwerowy OIDC (`AddMicrosoftIdentityWebApp`), bo backend jest resource-serverem dla SPA (login interaktywny robi MSAL w przeglądarce). Właściciel zdecydował o przyjęciu pełnego wzorca ekosystemu z **obydwoma** schematami oraz jawnym `IS_LOCAL_DEV`.
+
+### Decision
+- **Wiring w `Security/ConfigureAuthentication.cs`** (`AddEntraIdAuthentication`). **WebApi** (JWT bearer) pozostaje **schematem domyślnym** — API SPA bez zmian. **WebApp** dodany jako scheme **`MyAzureAdScheme`**: `AddMicrosoftIdentityWebApp` (code flow, `SignInScheme`=cookie, `NonceCookie/CorrelationCookie SecurePolicy=Always`, `ResponseType=Code`, scope `offline_access`/`email`, `ValidateIssuerSigningKey`) + `EnableTokenAcquisitionToCallDownstreamApi()` + `AddInMemoryTokenCaches()`.
+- **Proxy:** jawny `IS_LOCAL_DEV` (env var) — lokalnie `UseProxy=false`; inaczej `WebProxy` z `AzureAd:Proxy:Url` (bypass `storage.googleapis.com`) jako `BackchannelHttpHandler` (oba schematy) + `HttpClient.DefaultProxy`. `EntraBackchannel.CreateProxy` buduje `WebProxy`.
+- `ShowPII`/`IncludeErrorDetails` gated `!IsProduction()`. `RoleClaimType="roles"` nadal przez `PostConfigure` (wygrywa).
+- **Bez nowej zależności** — `AddMicrosoftIdentityWebApp`/OIDC handler tranzytywnie z `Microsoft.Identity.Web` 3.12.0.
+
+### Consequences
+Backend potrafi serwerowy interaktywny login (cookie/OIDC) obok walidacji tokenów API. Build OK; Api.UnitTests 71. **Wymaga realnej konfiguracji** (ClientId/TenantId/ClientSecret z GCP) i — dla realnego flow — endpointu logowania/redirect URI w app registration. WebApp to scheme **niedomyślny**: uruchamia się tylko na jawny challenge `MyAzureAdScheme`, więc dla obecnych endpointów API (JWT) nic się nie zmienia. **Runtime niezweryfikowane** (brak tenanta/secretu lokalnie) — R-27.
+
+### Alternatives considered
+Zostawić tylko WebApi (ADR-0011/0012) — odrzucone decyzją właściciela. Zastąpić WebApi przez WebApp — odrzucone: SPA potrzebuje walidacji JWT dla wywołań API; hybryda zachowuje oba.

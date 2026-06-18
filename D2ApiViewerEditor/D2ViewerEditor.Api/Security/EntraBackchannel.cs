@@ -20,11 +20,21 @@ public static class EntraBackchannel
             return null;
         }
 
-        return new WebProxy
+        var proxy = new WebProxy
         {
             Address = new Uri(url),
             BypassList = ["storage.googleapis.com"],
-            UseDefaultCredentials = true,
         };
+
+        if (!string.IsNullOrEmpty(options.Proxy!.Username))
+        {
+            proxy.Credentials = new NetworkCredential(options.Proxy.Username, options.Proxy.Password);
+        }
+        else
+        {
+            proxy.UseDefaultCredentials = true;
+        }
+
+        return proxy;
     }
 }

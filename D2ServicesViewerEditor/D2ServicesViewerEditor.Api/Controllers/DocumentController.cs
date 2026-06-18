@@ -3,6 +3,7 @@ using D2ViewerEditor.Application.Features.Documents.Commands.IngestExternalDocum
 using D2ViewerEditor.Application.Features.Documents.Commands.UnlockDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.UpdateCallbackUrl;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentStatus;
+using D2ViewerEditor.Domain.Entities;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 
@@ -168,13 +169,15 @@ public class DocumentController : ControllerBase
     }
 
     /// <summary>
-    /// Zwraca aktualny stan dokumentu (status cyklu życia, aktywna wersja, najnowsze zadanie
-    /// wysyłki, flaga <c>HasCallbackUrl</c>). Status jest na poziomie master — wersje nie
-    /// mają własnego statusu, więc endpoint identyfikuje dokument jedynie przez
-    /// <c>masterGuid</c>. Pełny <c>callbackUrl</c> NIE jest zwracany (może zawierać token).
+    /// Zwraca wyłącznie status cyklu życia dokumentu (na poziomie master). W tej, zewnętrznej
+    /// integracji odpowiedź jest celowo zawężona do <c>masterId</c> + <c>status</c> — bez
+    /// danych o aktywnej wersji, dostawie czy flagach (<c>HasCallbackUrl</c>/<c>UserDownload</c>).
+    /// Pod spodem nadal używane jest współdzielone <see cref="GetDocumentStatusQuery"/>, ale
+    /// jego pełny <see cref="DocumentStatusDto"/> jest tu rzutowany na okrojoną odpowiedź,
+    /// więc bogatszy kontrakt D2ApiViewerEditor pozostaje bez zmian.
     /// </summary>
     [HttpGet("{masterId:guid}/status")]
-    [ProducesResponseType(typeof(DocumentStatusDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(DocumentStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetDocumentStatus(
@@ -182,9 +185,14 @@ public class DocumentController : ControllerBase
         CancellationToken cancellationToken)
     {
         var result = await _mediator.Send(new GetDocumentStatusQuery(masterId), cancellationToken);
-        return result.IsSuccess
-            ? Ok(result.Value)
-            : NotFound(new { error = result.Error });
+        if (!result.IsSuccess)
+            return NotFound(new { error = result.Error });
+
+        var status = result.Value!;
+        // DocumentStatusDto.Status to nazwa enuma (document.Status.ToString()) — rzutujemy ją
+        // z powrotem na DocumentStatus, by w Swaggerze odpowiedź pokazywała listę opcji enuma.
+        var statusEnum = Enum.Parse<DocumentStatus>(status.Status);
+        return Ok(new DocumentStatusResponse(status.MasterId, statusEnum));
     }
 
     private static string ResolveMimeType(IFormFile file)
@@ -245,3 +253,12 @@ public record UpdateCallbackUrlRequest(string? Url);
 
 /// <summary>Request body for POST /api/v1/document/{masterId}/unlock (Reason optional, audited).</summary>
 public record UnlockDocumentRequest(string? Reason);
+
+/// <summary>
+/// Okrojona odpowiedź GET /api/v1/document/{masterId}/status dla integracji zewnętrznej —
+/// świadomie zawiera wyłącznie identyfikator master i status cyklu życia. Pełny kontrakt
+/// (wersja, dostawa, flagi) udostępnia <c>DocumentStatusDto</c> w D2ApiViewerEditor.
+/// </summary>
+/// <param name="MasterId">Identyfikator dokumentu master.</param>
+/// <param name="Status">Status cyklu życia dokumentu (serializowany jako nazwa enuma).</param>
+public record DocumentStatusResponse(Guid MasterId, DocumentStatus Status);

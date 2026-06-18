@@ -46,9 +46,17 @@ public sealed class AzureAdOptions
     public string Authority => $"{Instance.TrimEnd('/')}/{TenantId}/v2.0";
 }
 
-/// <summary>Outbound proxy configuration for enterprise environments behind a forward proxy.</summary>
+/// <summary>Outbound proxy configuration for enterprise environments behind a forward proxy
+/// (D2WebCore <c>BusinessProxy</c>). Explicit credentials are optional — empty username falls back to
+/// the process default credentials.</summary>
 public sealed class ProxyOptions
 {
     /// <summary>Proxy URL, e.g. http://localhost:3128. Empty = no proxy.</summary>
     public string Url { get; set; } = string.Empty;
+
+    /// <summary>Proxy username. Empty → use default credentials.</summary>
+    public string Username { get; set; } = string.Empty;
+
+    /// <summary>Proxy password (supply via secret store/env, not committed config).</summary>
+    public string Password { get; set; } = string.Empty;
 }

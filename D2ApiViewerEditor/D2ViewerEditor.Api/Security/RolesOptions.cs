@@ -1,9 +1,9 @@
 namespace D2ViewerEditor.Api.Security;
 
 /// <summary>
-/// Group→role mapping configuration (Doc2 / D2WebCore pattern), bound from the "Roles" section.
+/// Group→role mapping configuration (Qutas / D2WebCore pattern), bound from the "Roles" section.
 /// Entra ID emits the user's group memberships in the <c>groups</c> claim; the claims transformer
-/// (<see cref="Doc2ClaimsTransformer"/>) maps those group identifiers to application role names
+/// (<see cref="ClaimsTransformer"/>) maps those group identifiers to application role names
 /// used by the authorization policies. Group identifiers and role names are environment-specific
 /// and supplied via configuration (no secrets — only group/role names).
 /// </summary>

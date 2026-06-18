@@ -1,7 +1,7 @@
 import { InjectionToken } from '@angular/core';
 
 /**
- * Auth configuration consumed by MSAL. In the Doc2 pattern this is the single source of auth
+ * Auth configuration consumed by MSAL. In the Qutas pattern this is the single source of auth
  * values: loaded at runtime from `assets/configs/config.json` (filled per environment at deploy,
  * so one build is deployed everywhere). Auth values are intentionally NOT kept in `environment.*`.
  */

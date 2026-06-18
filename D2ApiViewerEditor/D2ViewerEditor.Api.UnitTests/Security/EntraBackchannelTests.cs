@@ -1,3 +1,4 @@
+using System.Net;
 using D2ViewerEditor.Api.Security;
 using FluentAssertions;
 using NUnit.Framework;
@@ -31,5 +32,21 @@ public class EntraBackchannelTests
         proxy!.Address.Should().Be(new Uri("http://corp-proxy:3128"));
         proxy.BypassList.Should().Contain("storage.googleapis.com");
         proxy.UseDefaultCredentials.Should().BeTrue();
+    }
+
+    [Test]
+    public void CreateProxy_uses_explicit_credentials_when_username_set()
+    {
+        var options = new AzureAdOptions
+        {
+            Proxy = new ProxyOptions { Url = "http://corp-proxy:3128", Username = "svc", Password = "pwd" }
+        };
+
+        var proxy = EntraBackchannel.CreateProxy(options);
+
+        proxy!.UseDefaultCredentials.Should().BeFalse();
+        var credential = proxy.Credentials.Should().BeOfType<NetworkCredential>().Subject;
+        credential.UserName.Should().Be("svc");
+        credential.Password.Should().Be("pwd");
     }
 }

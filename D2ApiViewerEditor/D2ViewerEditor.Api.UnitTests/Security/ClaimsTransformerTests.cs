@@ -7,13 +7,13 @@ using NUnit.Framework;
 namespace D2ViewerEditor.Api.UnitTests.Security;
 
 /// <summary>
-/// Group→role mapping (Doc2 pattern): the transformer turns Entra "groups" claims into
+/// Group→role mapping (Qutas pattern): the transformer turns Entra "groups" claims into
 /// application role claims used by the authorization policies.
 /// </summary>
 [TestFixture]
-public class Doc2ClaimsTransformerTests
+public class ClaimsTransformerTests
 {
-    private static Doc2ClaimsTransformer BuildTransformer() =>
+    private static ClaimsTransformer BuildTransformer() =>
         new(Options.Create(new RolesOptions
         {
             GroupPrefix = "KUTAS_200_",
@@ -50,6 +50,20 @@ public class Doc2ClaimsTransformerTests
         var result = await BuildTransformer().TransformAsync(principal);
 
         result.IsInRole("Operator").Should().BeTrue();
+    }
+
+    [Test]
+    public async Task Maps_group_identifier_carried_under_role_claim_type()
+    {
+        // Some federations emit the group/role identifier under the WS-Fed role URI rather than "groups".
+        var identity = new ClaimsIdentity(
+            new[] { new Claim(ClaimTypes.Role, "KUTAS_200_Administrator") },
+            "TestAuth", "name", "roles");
+        var principal = new ClaimsPrincipal(identity);
+
+        var result = await BuildTransformer().TransformAsync(principal);
+
+        result.IsInRole("Administrator").Should().BeTrue();
     }
 
     [Test]
