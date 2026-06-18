@@ -11,9 +11,17 @@ public enum DeliveryOutcome
 }
 
 /// <summary>
-/// Dane jednej próby dostarczenia: niezmienny snapshot + adres odbiorcy + hash do idempotencji.
+/// Dane jednej próby dostarczenia: niezmienny snapshot + adres odbiorcy + hash do idempotencji,
+/// oraz dane identyfikacyjne wysyłane obok pliku (masterId, versionId, corporateKey).
 /// </summary>
-public sealed record DeliveryDispatch(Guid DeliveryId, string RecipientUrl, byte[] Content, string Sha256);
+public sealed record DeliveryDispatch(
+    Guid DeliveryId,
+    string RecipientUrl,
+    byte[] Content,
+    string Sha256,
+    Guid MasterId,
+    Guid VersionId,
+    string? CorporateKey);
 
 /// <summary>
 /// Wynik próby wysyłki z perspektywy infrastruktury (klasyfikacja + ewentualny komunikat błędu).

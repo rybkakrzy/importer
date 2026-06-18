@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentVersionContent;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -14,6 +15,7 @@ public class GetDocumentVersionContentQueryHandlerTests
 
     private IDocumentRepository _repo = null!;
     private IDocumentStorageService _storage = null!;
+    private IDocumentAccessGuard _accessGuard = null!;
     private GetDocumentVersionContentQueryHandler _handler = null!;
 
     [SetUp]
@@ -21,7 +23,9 @@ public class GetDocumentVersionContentQueryHandlerTests
     {
         _repo = Substitute.For<IDocumentRepository>();
         _storage = Substitute.For<IDocumentStorageService>();
-        _handler = new GetDocumentVersionContentQueryHandler(_repo, _storage);
+        _accessGuard = Substitute.For<IDocumentAccessGuard>();
+        _accessGuard.IsViewAllowed(Arg.Any<string?>()).Returns(true);
+        _handler = new GetDocumentVersionContentQueryHandler(_repo, _storage, _accessGuard);
     }
 
     private static (Document doc, DocumentVersion version) DocWithVersion()

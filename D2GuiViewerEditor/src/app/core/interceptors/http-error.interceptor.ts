@@ -1,5 +1,6 @@
 import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
+import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
 import { NotificationService } from '../services/notification.service';
 import { ConnectionStatusService } from '../services/connection-status.service';
@@ -10,14 +11,16 @@ import { ConnectionStatusService } from '../services/connection-status.service';
 export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
   const notificationService = inject(NotificationService);
   const connectionStatus = inject(ConnectionStatusService);
+  const router = inject(Router);
 
   return next(req).pipe(
     catchError((error: HttpErrorResponse) => {
       let errorMessage = 'Wystąpił nieoczekiwany błąd';
 
       if (error.status === 403) {
-        // Access denied is handled by the document-access guard (redirect to /access-denied)
-        // and dedicated views — don't surface a duplicate toast.
+        // 403 → dedicated "Brak uprawnień" view (not a toast, and distinct from 401/404/500).
+        // Route guards may also redirect here; navigating to the same target is idempotent.
+        void router.navigateByUrl('/brak-uprawnien');
         return throwError(() => error);
       }
 

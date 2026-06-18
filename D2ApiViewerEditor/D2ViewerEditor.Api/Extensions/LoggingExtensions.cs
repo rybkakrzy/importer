@@ -1,15 +1,15 @@
 using D2ViewerEditor.Api.Logging;
-using Microsoft.Extensions.Logging.Console;
 
 namespace D2ViewerEditor.Api.Extensions;
 
 public static class LoggingExtensions
 {
     /// <summary>
-    /// Włącza strukturalne logowanie JSON zgodne z Google Cloud Logging (pole `severity`), żeby
-    /// wyjątki (`LogError`/`LogCritical`) były widoczne w Logs Explorer jako ERROR/CRITICAL, a nie
-    /// INFO. Poza GCP/kontenerem (lokalny dev) zostaje czytelny domyślny formatter konsoli.
-    /// Sterowanie jawne configiem `Logging:UseGcpFormat` (gdy brak — domyślnie poza Development).
+    /// Włącza strukturalne logowanie JSON (jedna linia/wpis na stdout) przyjazne dla ELK
+    /// (Elasticsearch/Logstash/Kibana) oraz Google Cloud Logging: pole `severity` (GCP) + `level`,
+    /// `service`, `environment`, `traceId`, pola ze scope'ów (correlationId, business context).
+    /// Poza kontenerem (lokalny dev) zostaje czytelny domyślny formatter konsoli. Sterowanie jawne
+    /// configiem `Logging:UseGcpFormat` (gdy brak — domyślnie poza Development).
     /// </summary>
     public static WebApplicationBuilder AddGcpStructuredLogging(this WebApplicationBuilder builder)
     {
@@ -19,7 +19,11 @@ public static class LoggingExtensions
             return builder;
 
         builder.Logging.AddConsole(options => options.FormatterName = GcpJsonConsoleFormatter.FormatterName);
-        builder.Logging.AddConsoleFormatter<GcpJsonConsoleFormatter, ConsoleFormatterOptions>();
+        builder.Logging.AddConsoleFormatter<GcpJsonConsoleFormatter, StructuredLogFormatterOptions>(options =>
+        {
+            options.Service = builder.Environment.ApplicationName;
+            options.Environment = builder.Environment.EnvironmentName;
+        });
         return builder;
     }
 }

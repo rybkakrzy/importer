@@ -44,6 +44,13 @@ public class ExceptionHandlingMiddleware
 
         _logger.LogError(exception, "Wystąpił wyjątek: {Message}", exception.Message);
 
+        // Surface the correlation id to the client so a failed call can be traced in Kibana.
+        if (context.Items.TryGetValue(RequestObservabilityMiddleware.CorrelationIdItemKey, out var correlationId)
+            && correlationId is string id)
+        {
+            problemDetails.Extensions["correlationId"] = id;
+        }
+
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/problem+json";
 

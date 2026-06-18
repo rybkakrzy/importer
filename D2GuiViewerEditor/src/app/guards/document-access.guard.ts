@@ -26,7 +26,7 @@ export const documentAccessGuard: CanActivateFn = (route) => {
     map(() => true),
     catchError((err: HttpErrorResponse) => {
       if (err.status === 403) {
-        return of(router.createUrlTree(['/access-denied']));
+        return of(router.createUrlTree(['/brak-uprawnien']));
       }
       // 404 / other errors: let the target view render its own not-found/error state.
       return of(true);

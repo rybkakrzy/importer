@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -17,15 +18,18 @@ public class FinishAndSendDocumentCommandHandler
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentDeliveryRepository _deliveryRepository;
     private readonly IDocumentStorageService _storage;
+    private readonly ICurrentUserProvider _currentUser;
 
     public FinishAndSendDocumentCommandHandler(
         IDocumentRepository documentRepository,
         IDocumentDeliveryRepository deliveryRepository,
-        IDocumentStorageService storage)
+        IDocumentStorageService storage,
+        ICurrentUserProvider currentUser)
     {
         _documentRepository = documentRepository;
         _deliveryRepository = deliveryRepository;
         _storage = storage;
+        _currentUser = currentUser;
     }
 
     public async Task<Result<FinishAndSendResult>> Handle(
@@ -76,7 +80,8 @@ public class FinishAndSendDocumentCommandHandler
                 recipientUrl: recipientUrl!,
                 createdBy: request.CreatedBy ?? document.CreatedBy,
                 correlationId: Guid.NewGuid(),
-                retentionWindow: RetentionWindow);
+                retentionWindow: RetentionWindow,
+                corporateKey: _currentUser.CorporateKey);
 
             await _deliveryRepository.AddAsync(delivery, cancellationToken);
 

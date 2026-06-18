@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Commands.FinishAndSendDocument;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -15,6 +16,7 @@ public class FinishAndSendDocumentCommandHandlerTests
     private Mock<IDocumentRepository> _documentRepo = null!;
     private Mock<IDocumentDeliveryRepository> _deliveryRepo = null!;
     private Mock<IDocumentStorageService> _storage = null!;
+    private Mock<ICurrentUserProvider> _currentUser = null!;
     private FinishAndSendDocumentCommandHandler _handler = null!;
 
     [SetUp]
@@ -23,8 +25,9 @@ public class FinishAndSendDocumentCommandHandlerTests
         _documentRepo = new Mock<IDocumentRepository>();
         _deliveryRepo = new Mock<IDocumentDeliveryRepository>();
         _storage = new Mock<IDocumentStorageService>();
+        _currentUser = new Mock<ICurrentUserProvider>();
         _handler = new FinishAndSendDocumentCommandHandler(
-            _documentRepo.Object, _deliveryRepo.Object, _storage.Object);
+            _documentRepo.Object, _deliveryRepo.Object, _storage.Object, _currentUser.Object);
     }
 
     private static Document BuildDocumentWithEditableVersion(out Guid versionId, string? metadata)
@@ -46,6 +49,11 @@ public class FinishAndSendDocumentCommandHandlerTests
             .ReturnsAsync(document);
         _deliveryRepo.Setup(r => r.GetActiveByDocumentIdAsync(document.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync((DocumentDelivery?)null);
+        _currentUser.SetupGet(u => u.CorporateKey).Returns("ACME-42");
+
+        DocumentDelivery? created = null;
+        _deliveryRepo.Setup(r => r.AddAsync(It.IsAny<DocumentDelivery>(), It.IsAny<CancellationToken>()))
+            .Callback<DocumentDelivery, CancellationToken>((d, _) => created = d);
 
         var command = new FinishAndSendDocumentCommand(document.Id, versionId, new byte[] { 1, 2, 3 }, "User");
         var result = await _handler.Handle(command, CancellationToken.None);
@@ -53,6 +61,12 @@ public class FinishAndSendDocumentCommandHandlerTests
         result.IsSuccess.Should().BeTrue();
         result.Value!.Status.Should().Be(nameof(DeliveryStatus.Pending));
         document.Status.Should().Be(DocumentStatus.Sending);
+
+        // Delivery carries the identifying fields sent to the recipient: masterId, versionId, corporateKey.
+        created.Should().NotBeNull();
+        created!.DocumentId.Should().Be(document.Id);
+        created.SourceVersionId.Should().Be(versionId);
+        created.CorporateKey.Should().Be("ACME-42");
 
         _storage.Verify(s => s.UploadAsync(versionId, It.IsAny<byte[]>(), DocxMime, It.IsAny<CancellationToken>()), Times.Once);
         _storage.Verify(s => s.UploadRawAsync(It.Is<string>(n => n.StartsWith("deliveries/")), It.IsAny<byte[]>(), DocxMime, It.IsAny<CancellationToken>()), Times.Once);

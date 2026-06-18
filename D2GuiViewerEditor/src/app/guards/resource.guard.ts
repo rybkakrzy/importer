@@ -6,7 +6,7 @@ import { ResourceAccessService } from '../core/services/resource-access.service'
 /**
  * UX guard: gates a route by its resource name (the route's path segment, e.g. "editor", "viewer",
  * "admin") against the backend resource list (GET /api/identity/resources). Backend is the source of
- * truth — on denial or error we fail closed and redirect to /access-denied. Dev bypass (auth
+ * truth — on denial or error we fail closed and redirect to /brak-uprawnien. Dev bypass (auth
  * disabled) passes through via ResourceAccessService.
  *
  * Used for both document routes and the admin module, replacing per-role frontend guards: the
@@ -16,7 +16,7 @@ export const resourceGuard: CanActivateFn = (route: ActivatedRouteSnapshot) => {
   const router = inject(Router);
   const resource = route.routeConfig?.path ?? route.url[0]?.path ?? '';
   return inject(ResourceAccessService).hasAccessToResource(resource).pipe(
-    map((allowed) => (allowed ? true : router.createUrlTree(['/access-denied']))),
-    catchError(() => of(router.createUrlTree(['/access-denied']))),
+    map((allowed) => (allowed ? true : router.createUrlTree(['/brak-uprawnien']))),
+    catchError(() => of(router.createUrlTree(['/brak-uprawnien']))),
   );
 };

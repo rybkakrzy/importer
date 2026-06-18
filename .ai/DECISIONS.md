@@ -391,3 +391,26 @@ Jedna spójna nazwa w całym kodzie/konfigu/testach. **Wymaga** (R-26), by realn
 
 ### Alternatives considered
 Zostawić `APP_*` i tylko zmapować w Entra — odrzucone: rozjazd kodu z biznesowym nazewnictwem. Trzymać nazwy też na froncie — bezprzedmiotowe po ADR-0016 (front nie zna ról).
+
+---
+
+## ADR-0018: Observability ELK — structured JSON na stdout + correlation middleware — 2026-06-17
+
+- Date: 2026-06-17
+- Status: Accepted; rozszerza ADR-0014 (GCP JSON severity) o pełny standard ELK. Bez nowej biblioteki.
+
+### Context
+Logi miały `severity` (GCP) ale formatter **ignorował scope'y**, brak correlationId per HTTP request, brak access-logu i pól service/environment/trace. Cel: spójne, korelowalne, filtrowalne logi dla ELK (Elasticsearch/Logstash/Kibana) na produkcji.
+
+### Decision
+- **Format:** rozszerzony `GcpJsonConsoleFormatter` — jedna linia JSON na stdout, dual ELK+GCP: `timestamp/severity/level/message/category/service/environment/traceId/spanId/exceptionType` + flatten **scope'ów** (`ForEachScope`) i **argumentów szablonu** (klucze zarezerwowane chronione). `service`=ApplicationName, `environment`=EnvironmentName przez `StructuredLogFormatterOptions`.
+- **Korelacja:** `RequestObservabilityMiddleware` (outermost, przed exception) — `X-Correlation-ID` z nagłówka lub generowany (`Activity.TraceId`/GUID), scope `{correlationId, requestId}` na cały request (więc wyjątki też go niosą), nagłówek w odpowiedzi, `correlationId` w ProblemDetails. Jeden **access-log** na request (Info/Warn/Error wg statusu) z method/path/statusCode/elapsedMs/userId.
+- **Bezpieczeństwo:** nie logujemy treści plików/tokenów/sekretów/PII; `userId`=subject/oid (nieosobowy); `corporateKey` w wysyłce tylko jako flaga obecności.
+- **Stack:** wyłącznie wbudowany `ILogger` + scope'y + ConsoleFormatter (zero nowych zależności — bez Serilog/OTel/Elastic APM).
+- **Dokumentacja:** `.ai/OBSERVABILITY.md` (pola, korelacja, poziomy, KQL Kibana, zasady nie-logowania).
+
+### Consequences
+Logi indeksowalne i korelowalne w Kibanie; błędy z kontekstem (correlationId, trace, exceptionType, stack). Format niesie nadal `severity` → GCP Cloud Logging bez zmian. Testy: `GcpJsonConsoleFormatterTests` (+service/env/level, +scopes), `RequestObservabilityMiddlewareTests` (correlation header). Lokalnie (Development) zostaje czytelny tekst — JSON włączany poza Dev / `Logging:UseGcpFormat=true`.
+
+### Alternatives considered
+Serilog + Elastic.Serilog.Sinks / Elastic APM — odrzucone: nowa zależność, a wbudowany formatter+scope realizują structured JSON na stdout (idiomatyczne dla zbieraczy ELK). Osobny correlation-id provider/DI — odrzucone na rzecz `HttpContext.Items` + scope (prościej, bez stanu współdzielonego).

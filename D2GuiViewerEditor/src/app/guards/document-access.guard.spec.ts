@@ -46,14 +46,14 @@ describe('documentAccessGuard', () => {
     expect(result).toBe(true);
   });
 
-  it('redirects to /access-denied on 403', async () => {
+  it('redirects to /brak-uprawnien on 403', async () => {
     storage.getDocumentMetadata.mockReturnValue(
       throwError(() => new HttpErrorResponse({ status: 403 }))
     );
     const router = TestBed.inject(Router);
     const result = await resolve(runGuard(snapshotWith('m')));
     expect(result).toBeInstanceOf(UrlTree);
-    expect((result as UrlTree).toString()).toBe(router.createUrlTree(['/access-denied']).toString());
+    expect((result as UrlTree).toString()).toBe(router.createUrlTree(['/brak-uprawnien']).toString());
   });
 
   it('does not block on 404 (target view handles not-found)', async () => {

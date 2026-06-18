@@ -20,6 +20,10 @@ public class HttpDeliverySender : IDeliverySender
     private const string FileName = "document.docx";
     private const string DocxContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+    private const string MasterIdFieldName = "masterId";
+    private const string VersionIdFieldName = "versionId";
+    private const string CorporateKeyFieldName = "corporateKey";
+
     private readonly HttpClient _http;
     private readonly ILogger<HttpDeliverySender> _logger;
 
@@ -38,9 +42,22 @@ public class HttpDeliverySender : IDeliverySender
         fileContent.Headers.ContentType = new MediaTypeHeaderValue(DocxContentType);
         content.Add(fileContent, FileFieldName, FileName);
 
+        // Identifying fields alongside the file (backward compatible — the "file" part is unchanged).
+        // corporateKey may be absent → empty value so the field set stays predictable for the recipient.
+        content.Add(new StringContent(dispatch.MasterId.ToString()), MasterIdFieldName);
+        content.Add(new StringContent(dispatch.VersionId.ToString()), VersionIdFieldName);
+        content.Add(new StringContent(dispatch.CorporateKey ?? string.Empty), CorporateKeyFieldName);
+
         using var request = new HttpRequestMessage(HttpMethod.Post, dispatch.RecipientUrl) { Content = content };
         request.Headers.TryAddWithoutValidation("Idempotency-Key", dispatch.DeliveryId.ToString());
         request.Headers.TryAddWithoutValidation("X-Content-SHA256", dispatch.Sha256);
+
+        // Technical log: IDs + size only, never the file content. corporateKey is a business-context
+        // identifier (not a secret); logged as presence flag to stay conservative.
+        _logger.LogInformation(
+            "Sending delivery {DeliveryId} (master={MasterId} version={VersionId}, {SizeBytes} B, corporateKey={HasCorporateKey})",
+            dispatch.DeliveryId, dispatch.MasterId, dispatch.VersionId, dispatch.Content.Length,
+            string.IsNullOrEmpty(dispatch.CorporateKey) ? "absent" : "present");
 
         try
         {

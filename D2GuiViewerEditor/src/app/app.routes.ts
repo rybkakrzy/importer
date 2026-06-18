@@ -21,10 +21,12 @@ export const routes: Routes = [
       import('./pages/pdf-viewer/pdf-viewer').then((m) => m.PdfViewerComponent),
   },
   {
-    path: 'access-denied',
+    path: 'brak-uprawnien',
     loadComponent: () =>
-      import('./pages/document-access-denied/document-access-denied').then((m) => m.DocumentAccessDeniedComponent),
+      import('./pages/access-forbidden/access-forbidden').then((m) => m.AccessForbiddenComponent),
   },
+  // Backward-compatible alias for the previous document-specific route.
+  { path: 'access-denied', redirectTo: 'brak-uprawnien', pathMatch: 'full' },
   { path: 'pdf-maintenance', component: PdfMaintenanceComponent, canActivate: [authGuard] },
   {
     path: 'admin',

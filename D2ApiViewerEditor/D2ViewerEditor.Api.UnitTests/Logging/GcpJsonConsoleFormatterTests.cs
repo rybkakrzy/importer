@@ -3,25 +3,28 @@ using D2ViewerEditor.Api.Logging;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NUnit.Framework;
 
 namespace D2ViewerEditor.Api.UnitTests.Logging;
 
 /// <summary>
-/// Formatter logów do Google Cloud Logging: mapowanie LogLevel → `severity` (kluczowe, bo bez tego
-/// pola Cloud Logging pokazuje wszystko jako INFO, także wyjątki).
+/// Structured JSON log formatter (ELK + GCP): LogLevel → `severity` (GCP) and `level`, plus
+/// service/environment enrichment and scope key/values (correlationId, business context).
 /// </summary>
 [TestFixture]
 public class GcpJsonConsoleFormatterTests
 {
+    private static GcpJsonConsoleFormatter Formatter(string service = "TestSvc", string env = "TST") =>
+        new(Options.Create(new StructuredLogFormatterOptions { Service = service, Environment = env }));
+
     private static JsonDocument WriteAndParse(LogLevel level, string message, Exception? ex = null)
     {
-        var formatter = new GcpJsonConsoleFormatter();
         var entry = new Microsoft.Extensions.Logging.Abstractions.LogEntry<string>(
             level, "Test.Category", new EventId(0), message, ex, (s, _) => s);
 
         using var sw = new StringWriter();
-        formatter.Write(in entry, scopeProvider: null, sw);
+        Formatter().Write(in entry, scopeProvider: null, sw);
         return JsonDocument.Parse(sw.ToString());
     }
 
@@ -54,13 +57,44 @@ public class GcpJsonConsoleFormatterTests
     [Test]
     public void Write_EmitsSingleJsonLine()
     {
-        var formatter = new GcpJsonConsoleFormatter();
         var entry = new Microsoft.Extensions.Logging.Abstractions.LogEntry<string>(
             LogLevel.Information, "Cat", new EventId(0), "linia", null, (s, _) => s);
 
         using var sw = new StringWriter();
-        formatter.Write(in entry, null, sw);
+        Formatter().Write(in entry, null, sw);
 
-        sw.ToString().TrimEnd('\r', '\n').Should().NotContain("\n"); // jedna linia = jeden wpis w Cloud Logging
+        sw.ToString().TrimEnd('\r', '\n').Should().NotContain("\n"); // jedna linia = jeden wpis
+    }
+
+    [Test]
+    public void Write_EnrichesWithServiceEnvironmentAndLevel()
+    {
+        using var doc = WriteAndParse(LogLevel.Information, "ping");
+
+        doc.RootElement.GetProperty("service").GetString().Should().Be("TestSvc");
+        doc.RootElement.GetProperty("environment").GetString().Should().Be("TST");
+        doc.RootElement.GetProperty("level").GetString().Should().Be("Information");
+        doc.RootElement.GetProperty("timestamp").GetString().Should().NotBeNullOrEmpty();
+    }
+
+    [Test]
+    public void Write_SerializesScopeKeyValues_ForCorrelation()
+    {
+        var scopeProvider = new LoggerExternalScopeProvider();
+        using var _ = scopeProvider.Push(new Dictionary<string, object>
+        {
+            ["correlationId"] = "corr-123",
+            ["masterId"] = "m-1"
+        });
+
+        var entry = new Microsoft.Extensions.Logging.Abstractions.LogEntry<string>(
+            LogLevel.Information, "Cat", new EventId(0), "msg", null, (s, _) => s);
+
+        using var sw = new StringWriter();
+        Formatter().Write(in entry, scopeProvider, sw);
+        using var doc = JsonDocument.Parse(sw.ToString());
+
+        doc.RootElement.GetProperty("correlationId").GetString().Should().Be("corr-123");
+        doc.RootElement.GetProperty("masterId").GetString().Should().Be("m-1");
     }
 }

@@ -23,7 +23,8 @@ public class DocumentDelivery
         string recipientUrl,
         string createdBy,
         Guid correlationId,
-        TimeSpan retentionWindow)
+        TimeSpan retentionWindow,
+        string? corporateKey = null)
     {
         if (string.IsNullOrWhiteSpace(snapshotObjectName))
             throw new ArgumentException("Snapshot object name nie może być pusty", nameof(snapshotObjectName));
@@ -55,7 +56,8 @@ public class DocumentDelivery
             NextAttemptAt = now,
             DeadlineAt = now.Add(retentionWindow),
             CorrelationId = correlationId,
-            CreatedBy = createdBy
+            CreatedBy = createdBy,
+            CorporateKey = string.IsNullOrWhiteSpace(corporateKey) ? null : corporateKey.Trim()
         };
     }
 
@@ -90,6 +92,10 @@ public class DocumentDelivery
     public string? LastError { get; private set; }
     public Guid CorrelationId { get; private set; }
     public string CreatedBy { get; private set; } = string.Empty;
+
+    /// <summary>CorporateKey of the user who finished the document; sent to the recipient as an
+    /// identifying field. Null when the finishing user had no CorporateKey claim.</summary>
+    public string? CorporateKey { get; private set; }
 
     /// <summary>Czy zadanie jest w stanie końcowym (nie podlega dalszemu przetwarzaniu).</summary>
     public bool IsTerminal =>

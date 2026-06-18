@@ -48,6 +48,7 @@ Preferowane zasady:
 | `DATABASE.md` | Przy modelu danych, migracjach i zapytaniach |
 | `TESTING_QUALITY.md` | Przy testach, buildzie, CI i jakości |
 | `SECURITY.md` | Przy auth, sekretach, danych, walidacji |
+| `OBSERVABILITY.md` | Przy logowaniu, ELK/Kibana, correlationId, diagnostyce |
 | `DEVOPS_DEPLOYMENT.md` | Przy Dockerze, CI/CD, GCP, środowiskach |
 | `AI_AGENT_WORKFLOW.md` | Gdy agent nie wie, jak zacząć lub zakończyć pracę |
 | `RISKS_ASSUMPTIONS.md` | Gdy pojawia się niepewność lub ryzyko |

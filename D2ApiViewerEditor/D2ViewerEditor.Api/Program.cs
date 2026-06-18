@@ -175,7 +175,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Middleware pipeline — order matters
+// Middleware pipeline — order matters. Observability is outermost so its correlation-id scope wraps
+// every log (including exceptions) and the access log captures the final status code.
+app.UseRequestObservability();
 app.UseExceptionHandlingMiddleware();
 
 // CORS musi być przed MapControllers

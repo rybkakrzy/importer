@@ -96,6 +96,10 @@ public class DocumentDeliveryConfiguration : IEntityTypeConfiguration<DocumentDe
             .HasMaxLength(255)
             .IsRequired();
 
+        builder.Property(d => d.CorporateKey)
+            .HasColumnName("corporate_key")
+            .HasMaxLength(255);
+
         builder.HasIndex(d => d.NextAttemptAt);
         builder.HasIndex(d => d.Status);
         builder.HasIndex(d => d.DocumentId);

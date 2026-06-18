@@ -42,7 +42,8 @@ public class DeliveryAttemptRunner
         using var scope = _logger.BeginScope(new Dictionary<string, object>
         {
             ["deliveryId"] = delivery.Id,
-            ["documentId"] = delivery.DocumentId,
+            ["masterId"] = delivery.DocumentId,
+            ["versionId"] = delivery.SourceVersionId,
             ["correlationId"] = delivery.CorrelationId,
             ["attempt"] = delivery.AttemptCount
         });
@@ -50,7 +51,14 @@ public class DeliveryAttemptRunner
         try
         {
             var bytes = await _storage.DownloadAsync(delivery.SnapshotObjectName, cancellationToken);
-            var dispatch = new DeliveryDispatch(delivery.Id, delivery.RecipientUrl, bytes, delivery.SnapshotSha256);
+            var dispatch = new DeliveryDispatch(
+                delivery.Id,
+                delivery.RecipientUrl,
+                bytes,
+                delivery.SnapshotSha256,
+                delivery.DocumentId,
+                delivery.SourceVersionId,
+                delivery.CorporateKey);
             var result = await _sender.SendAsync(dispatch, cancellationToken);
 
             switch (result.Outcome)

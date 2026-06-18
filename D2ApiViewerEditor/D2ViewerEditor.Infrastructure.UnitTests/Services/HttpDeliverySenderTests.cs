@@ -13,8 +13,12 @@ namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
 [TestFixture]
 public class HttpDeliverySenderTests
 {
-    private static DeliveryDispatch Dispatch() =>
-        new(Guid.NewGuid(), "https://recipient.example.com/inbox", new byte[] { 1, 2, 3, 4 }, "ABC123");
+    private static readonly Guid MasterId = Guid.NewGuid();
+    private static readonly Guid VersionId = Guid.NewGuid();
+
+    private static DeliveryDispatch Dispatch(string? corporateKey = "ACME-42") =>
+        new(Guid.NewGuid(), "https://recipient.example.com/inbox", new byte[] { 1, 2, 3, 4 }, "ABC123",
+            MasterId, VersionId, corporateKey);
 
     [Test]
     public async Task SendAsync_PostsMultipartFormData_WithFileFieldAndHeaders()
@@ -36,6 +40,36 @@ public class HttpDeliverySenderTests
         handler.RequestHeaders["Idempotency-Key"].Should().Be(dispatch.DeliveryId.ToString());
         handler.RequestHeaders.Should().ContainKey("X-Content-SHA256");
         handler.RequestHeaders["X-Content-SHA256"].Should().Be("ABC123");
+    }
+
+    [Test]
+    public async Task SendAsync_IncludesIdentifyingFields_MasterVersionCorporateKey()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK);
+        var sender = new HttpDeliverySender(new HttpClient(handler), NullLogger<HttpDeliverySender>.Instance);
+        var dispatch = Dispatch("ACME-42");
+
+        await sender.SendAsync(dispatch);
+
+        handler.Body.Should().Contain("name=masterId");
+        handler.Body.Should().Contain(dispatch.MasterId.ToString());
+        handler.Body.Should().Contain("name=versionId");
+        handler.Body.Should().Contain(dispatch.VersionId.ToString());
+        handler.Body.Should().Contain("name=corporateKey");
+        handler.Body.Should().Contain("ACME-42");
+        // File part is unchanged (backward compatible).
+        handler.Body.Should().Contain("name=file");
+    }
+
+    [Test]
+    public async Task SendAsync_WithoutCorporateKey_StillSendsEmptyField()
+    {
+        var handler = new CapturingHandler(HttpStatusCode.OK);
+        var sender = new HttpDeliverySender(new HttpClient(handler), NullLogger<HttpDeliverySender>.Instance);
+
+        await sender.SendAsync(Dispatch(corporateKey: null));
+
+        handler.Body.Should().Contain("name=corporateKey");
     }
 
     [Test]

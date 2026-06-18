@@ -13,6 +13,17 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-17 — 3 zgłoszenia: payload wysyłki (master/version/corporateKey), widok „Brak uprawnień", observability ELK
+### Changed
+- **Z1 (wysyłka):** `HttpDeliverySender` (multipart) dokłada obok `file` pola `masterId`/`versionId`/`corporateKey` + log techniczny (bez treści, corporateKey jako flaga). `DeliveryDispatch` +`MasterId`/`VersionId`/`CorporateKey`; `DeliveryAttemptRunner` wypełnia z encji. `DocumentDelivery` +`CorporateKey` (kolumna `corporate_key`, SQL `009`, EF map), `FinishAndSendDocumentCommandHandler` czyta `ICurrentUserProvider.CorporateKey`. Backward compatible (pole `file` bez zmian).
+- **Z2 (frontend):** nowy generyczny widok `AccessForbiddenComponent` „Brak uprawnień" (`/brak-uprawnien`); `resourceGuard`+`documentAccessGuard`+interceptor (403) kierują tu; `/access-denied` → redirect. Usunięto `document-access-denied`. 403 nie mylone z 401/404/500.
+- **Z3 (ELK):** `GcpJsonConsoleFormatter` wzbogacony (scope'y→pola, `service`/`environment`/`traceId`/`spanId`/`level`); nowy `RequestObservabilityMiddleware` (correlationId z `X-Correlation-ID` + access-log method/path/status/elapsed/userId, scope na cały request); `correlationId` w ProblemDetails. Dokumentacja `.ai/OBSERVABILITY.md` (pola + KQL Kibana + zasady nie-logowania danych wrażliwych).
+### Verified
+- Backend: `dotnet build` 0 błędów; unit testy **577** (Api 71, Application 267, Infrastructure 166, Domain 73) — w tym naprawiony wcześniej istniejący `GetDocumentVersionContentQueryHandlerTests`. GUI: `tsc` czysto; `ng test` **261**.
+### Notes
+- corporateKey = claim `ck` użytkownika kończącego (async wysyłka → utrwalony na delivery); brak → puste pole (bez błędu).
+- Integration testy delivery na realnym Postgres niezweryfikowane lokalnie (jak dotąd, R-06).
+
 ## 2026-06-17 — Konsumpcja proxy Entra: `AzureAd:Proxy:Url` → JwtBearer backchannel (D2WebCore pattern)
 ### Changed
 - Nowy `EntraBackchannel.CreateProxy(AzureAdOptions)` — buduje `WebProxy` z `AzureAd:Proxy:Url` (bypass `storage.googleapis.com`, `UseDefaultCredentials=true`) lub `null` gdy brak URL. `Program.cs` (gałąź Entra): gdy proxy ustawione → `HttpClient.DefaultProxy = proxy` oraz `JwtBearerOptions.BackchannelHttpHandler` (pobieranie OpenID metadata/JWKS zza korpo-proxy). Brak URL / lokalnie → bez zmian (direct).
