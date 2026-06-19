@@ -157,6 +157,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   userDownload = signal<boolean>(false);
   readonly canUserDownload = computed(() => this.userDownload());
+
+  /**
+   * Mirror of documents.metadata.showSaveState (inverse-default true). When false, the
+   * source app asked to hide the editor's save-state UI: the autosave switch + footer
+   * status AND the manual "Zapisz" button. Missing metadata ⇒ true (unchanged behavior).
+   */
+  showSaveState = signal<boolean>(true);
   private finishCountdownSub?: Subscription;
   /** Subskrypcja łańcucha save→finishAndSend — anulowana przy destroy, by nie pisać po zniszczeniu. */
   private finishSendSub?: Subscription;
@@ -699,6 +706,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.documentMasterId.set(masterId);
     this.returnUrl.set(null);
     this.userDownload.set(false);
+    this.showSaveState.set(true);
 
     this.documentStorageService.getDocumentMetadata(masterId).pipe(
       switchMap(meta => {
@@ -710,6 +718,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.returnUrl.set(meta.returnUrl ?? null);
         // Drives "Pobierz dokument" menu visibility — backend also enforces.
         this.userDownload.set(meta.userDownload === true);
+        // Inverse-default: hide save-state UI only when the source app sent explicit false.
+        this.showSaveState.set(meta.showSaveState !== false);
 
         // PDF: edytor DOCX nie renderuje PDF — kieruj do PDFViewer (tryb podglądu).
         if (mime === DocumentEditorComponent.PDF_MIME) {

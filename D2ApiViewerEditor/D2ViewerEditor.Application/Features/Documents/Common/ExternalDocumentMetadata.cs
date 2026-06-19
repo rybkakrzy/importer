@@ -10,11 +10,15 @@ namespace D2ViewerEditor.Application.Features.Documents.Common;
 ///
 /// <para><c>UserDownload</c> follows the domain rule: missing / null / non-true ⇒ false.
 /// Only an explicit <c>true</c> enables the user-facing "download to disk" action.</para>
+///
+/// <para><c>ShowSaveState</c> is the inverse-default flag: missing / null / non-false ⇒ visible.
+/// Only an explicit <c>false</c> hides the editor's save-state UI (autosave + manual "Zapisz").</para>
 /// </summary>
 public sealed record ExternalDocumentMetadata(
     string? ReturnUrl,
     string? Classification,
-    bool? UserDownload)
+    bool? UserDownload,
+    bool? ShowSaveState = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -43,4 +47,10 @@ public sealed record ExternalDocumentMetadata(
     /// Domain rule: download is only allowed when <c>UserDownload</c> is explicitly true.
     /// </summary>
     public bool IsUserDownloadAllowed => UserDownload == true;
+
+    /// <summary>
+    /// Inverse-default rule: the save-state UI stays visible unless <c>ShowSaveState</c> is
+    /// explicitly false. Missing / null ⇒ visible (backward compatible with old metadata).
+    /// </summary>
+    public bool IsSaveStateVisible => ShowSaveState != false;
 }

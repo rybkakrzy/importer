@@ -543,6 +543,35 @@ describe('DocumentEditorComponent — userDownload (widoczność „Pobierz doku
   });
 });
 
+describe('DocumentEditorComponent — showSaveState (widoczność autozapisu + przycisku „Zapisz")', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: { buildNumber: () => '1', environment: () => 'TEST' } },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('default ⇒ showSaveState=true (oba elementy widoczne)', () => {
+    expect(component.showSaveState()).toBe(true);
+  });
+
+  it('showSaveState=false ⇒ sygnał false (ukrywa autozapis i „Zapisz")', () => {
+    component.showSaveState.set(false);
+    expect(component.showSaveState()).toBe(false);
+  });
+});
+
 /**
  * Etap 4 (front): rozmiar/orientacja strony round-tripują — wczytany `pageSize`
  * trafia z powrotem do requestu zapisu, więc landscape/niestandardowy rozmiar nie

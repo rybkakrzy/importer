@@ -68,7 +68,10 @@ public class DocumentController : ControllerBase
         {
             returnUrl = string.IsNullOrWhiteSpace(request.ReturnUrl) ? null : request.ReturnUrl,
             classification = classification?.ToString(),
-            userDownload = request.UserDownload == true ? (bool?)true : null
+            userDownload = request.UserDownload == true ? (bool?)true : null,
+            // Inverse-default flag: zapisujemy TYLKO jawne false (ukrycie UI zapisu w edytorze).
+            // Brak / true → null → edytor pokazuje autosave i przycisk „Zapisz" jak dotąd.
+            showSaveState = request.ShowSaveState == false ? (bool?)false : null
         });
 
         var createdBy = Request.Headers.TryGetValue("X-Created-By", out var headerValue)
@@ -232,6 +235,13 @@ public class CreateDocumentRequest
     /// użytkownika to dwa odrębne mechanizmy.</para>
     /// </summary>
     public bool? UserDownload { get; set; }
+
+    /// <summary>
+    /// Czy w edytorze ma być widoczny stan zapisu (sekcja autozapisu + osobny przycisk „Zapisz").
+    /// Domyślnie <c>true</c>. Tylko jawne <c>false</c> ukrywa oba elementy. Brak pola / <c>null</c>
+    /// / <c>true</c> → zachowanie jak dotychczas (oba widoczne).
+    /// </summary>
+    public bool? ShowSaveState { get; set; }
 }
 
 /// <summary>

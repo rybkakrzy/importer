@@ -43,7 +43,8 @@ public class GetDocumentMetadataQueryHandler
             MimeType: document.MimeType,
             ReturnUrl: meta.ReturnUrl,
             Classification: meta.Classification,
-            UserDownload: meta.IsUserDownloadAllowed
+            UserDownload: meta.IsUserDownloadAllowed,
+            ShowSaveState: meta.IsSaveStateVisible
         ));
     }
 }

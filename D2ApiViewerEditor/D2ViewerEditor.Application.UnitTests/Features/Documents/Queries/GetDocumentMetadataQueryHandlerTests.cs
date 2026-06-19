@@ -125,4 +125,21 @@ public class GetDocumentMetadataQueryHandlerTests
         dto.UserDownload.Should().BeTrue();
         dto.Classification.Should().Be("C2");
     }
+
+    [Test]
+    public async Task Handle_ShowSaveStateExplicitFalse_ReturnsFalse()
+    {
+        (await HandleWithMetadataAsync("{\"showSaveState\":false}")).ShowSaveState.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task Handle_ShowSaveStateAbsentOrTrueOrNull_DefaultsToTrue()
+    {
+        (await HandleWithMetadataAsync(null)).ShowSaveState.Should().BeTrue();
+        (await HandleWithMetadataAsync("{}")).ShowSaveState.Should().BeTrue();
+        (await HandleWithMetadataAsync("{\"showSaveState\":true}")).ShowSaveState.Should().BeTrue();
+        (await HandleWithMetadataAsync("{\"showSaveState\":null}")).ShowSaveState.Should().BeTrue();
+        // Malformed metadata must never hide the save UI either.
+        (await HandleWithMetadataAsync("{ broken json")).ShowSaveState.Should().BeTrue();
+    }
 }

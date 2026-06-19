@@ -13,6 +13,16 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-19 — `showSaveState` (ingest) — ukrywanie UI zapisu w edytorze
+### Changed
+- **D2Services** `DocumentController.CreateDocument`: nowe opcjonalne pole `ShowSaveState: bool?` w `CreateDocumentRequest`; zapisywane do `documents.metadata` jako `showSaveState` **tylko gdy jawne `false`** (inverse-default — brak/`true` → `null` → widoczne).
+- **Application**: `ExternalDocumentMetadata` +`ShowSaveState` (pozycyjny param z domyślnym `null`, nie łamie istniejących wywołań) + computed `IsSaveStateVisible => ShowSaveState != false`. `DocumentMetadataDto` +`ShowSaveState`; `GetDocumentMetadataQueryHandler` mapuje `IsSaveStateVisible`.
+- **GUI** `document-editor`: sygnał `showSaveState` (domyślnie `true`), ustawiany z `meta.showSaveState !== false`. Szablon ukrywa switch Autozapis, status autozapisu w stopce i przycisk „Zapisz" gdy `false`. `DocumentMetadataDto` (service) +`showSaveState`.
+### Verified
+- `dotnet build` D2Api + D2Services: 0 błędów. Testy Application: 31/31 (metadata). GUI Vitest: 263/263 (w tym 2 nowe testy `showSaveState`).
+### Notes
+- Decyzja: `showSaveState=false` ukrywa **tylko UI** — autozapis dalej działa w tle (brak utraty danych), a „Zakończ i wyślij" pozostaje. Reguła prezentacyjna, nie zabezpieczenie.
+
 ## 2026-06-19 — Kestrel: globalny limit body 150 MB (duże dokumenty) + AddServerHeader=false
 ### Changed
 - `Program.cs` `ConfigureKestrel`: `MaxRequestBodySize` konfigurowalny (`Kestrel:MaxRequestBodySizeBytes`, domyślnie 150 MB), `MinRequestBodyDataRate`/`MinResponseDataRate=null`, `AddServerHeader=false`. Powód: endpointy `DocumentStorageController` (upload/save/finish, base64) nie miały limitu → domyślny ~30 MB Kestrel groził **413** dla dużych dokumentów. Per-action `[RequestSizeLimit]` (DocumentController) dalej obowiązuje gdzie ostrzejszy.

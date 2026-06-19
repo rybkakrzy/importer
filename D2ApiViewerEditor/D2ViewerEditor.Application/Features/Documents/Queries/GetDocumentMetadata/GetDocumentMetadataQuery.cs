@@ -20,5 +20,9 @@ public record DocumentMetadataDto(
     // Per domain rule: only an explicit `true` allows the user-facing download action.
     // Missing field / non-true value ⇒ false. Surfaced to the GUI so the menu item can
     // be hidden; backend enforcement lives in the dedicated download command.
-    bool UserDownload
+    bool UserDownload,
+    // Inverse-default: visible unless the source app sent an explicit `false`. Missing
+    // metadata ⇒ true (backward compatible). Drives visibility of the editor's save-state
+    // UI (autosave section + manual "Zapisz" button).
+    bool ShowSaveState
 );

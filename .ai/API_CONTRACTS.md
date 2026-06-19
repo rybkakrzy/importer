@@ -89,7 +89,7 @@ Standardowe health checki.
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, obligatoryjna), **opcjonalnie `UserDownload: bool?`** (domyślnie `false`; tylko jawne `true` zezwala użytkownikowi na pobranie edytowanego pliku — patrz reguła `userDownload` poniżej). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
+| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, obligatoryjna), **opcjonalnie `UserDownload: bool?`** (domyślnie `false`; tylko jawne `true` zezwala użytkownikowi na pobranie edytowanego pliku — patrz reguła `userDownload` poniżej), **opcjonalnie `ShowSaveState: bool?`** (domyślnie `true`; tylko jawne `false` ukrywa w edytorze autozapis + przycisk „Zapisz" — patrz reguła `showSaveState` poniżej). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
 | GET | `/api/v1/document/{documentId}` | Placeholder (read flow niezaimplementowany) |
 | **PUT** | `/api/v1/document/{masterId}/callback-url` | **Aktualizacja URL do wysyłki po „Zakończ"**. Body: `{ "url": "https://..." }`. Walidacja przez `DocumentDelivery.IsValidRecipientUrl` (absolutny http/https, ≤ 2048 znaków). Zapisuje w `documents.metadata.returnUrl` (zachowuje `classification`). Idempotentny. Blokowany w stanach `Sending`/`Sent`/`DeliveryFailed`. → 204 / 400 / 404 / 409 |
 | **POST** | `/api/v1/document/{masterId}/unlock` | **Odblokowanie dokumentu**. Body opcjonalne: `{ "reason": "..." }` (logowane). W tej domenie `DocumentStatus.Editing` = „trzymany przez edytora", więc unlock = `Editing → Saved` (dodano `Document.MarkSaved()`). Idempotentny: `Saved` → 200 z `Changed=false`. Blokowany dla stanów wysyłki (409). → 200 `UnlockDocumentResult { masterId, changed }` / 404 / 409 |
@@ -105,7 +105,7 @@ Wszystkie trzy używają **wyłącznie `masterGuid`** — uzasadnienie:
 | `POST .../unlock` | `masterGuid` | Brak osobnego user-locka w domenie. „Lock" = `Document.Status == Editing` (frontend pokazuje to jako `lockedByOther`). Status na poziomie master → `versionGuid` nic nie wnosi. Worker-lease `LockedUntil`/`LockedBy` na `DocumentDelivery` to inny mechanizm i nie powinien być odblokowywany z zewnątrz. |
 | `GET .../status` | `masterGuid` | Status jest atrybutem master; wersje nie mają własnego statusu. Odpowiedź niesie `activeVersionId` + `latestDelivery` dla pełnego obrazu cyklu życia. |
 
-Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2", "userDownload": true | null }`.
+Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2", "userDownload": true | null, "showSaveState": false | null }`.
 
 ### Reguła domenowa: `userDownload` (kontrola pobierania pliku)
 
@@ -130,6 +130,19 @@ Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classifi
 - `userDownload` → ręczne pobranie edytowanego pliku przez użytkownika
 
 Dokument może mieć: tylko `returnUrl` (zewnętrzny, bez pobrania), tylko `userDownload=true` (lokalny upload), albo oba.
+
+### Reguła domenowa: `showSaveState` (widoczność UI zapisu w edytorze)
+
+`showSaveState` jest opcjonalnym polem metadanych o **odwróconym domyślnym** (w przeciwieństwie do `userDownload`): brak/`null` ⇒ **widoczne**. Tylko jawne `false` ukrywa w edytorze sekcję autozapisu (switch + status w stopce) ORAZ osobny przycisk „Zapisz".
+
+| Stan w metadanych | `IsSaveStateVisible` | Autozapis + przycisk „Zapisz" |
+|---|---|---|
+| brak pola | `true` | widoczne |
+| `null` | `true` | widoczne |
+| `true` | `true` | widoczne |
+| `false` | `false` | ukryte |
+
+**External ingest** (`POST /api/v1/document`) — aplikacja źródłowa przekazuje `ShowSaveState: bool?` w form-data; zapisywane do metadanych tylko gdy jawne `false`. **Lokalny upload** nie ustawia pola → domyślnie widoczne. Front czyta `DocumentMetadataDto.showSaveState` (mapowane z `ExternalDocumentMetadata.IsSaveStateVisible`) i ukrywa elementy gdy `false`. To reguła **prezentacyjna** (UX), nie zabezpieczenie — utrwalanie treści dalej działa (autozapis w tle + „Zakończ i wyślij").
 
 ## Checklist przed zmianą API
 

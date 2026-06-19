@@ -73,6 +73,31 @@ public class ExternalDocumentMetadataTests
         metadata.IsUserDownloadAllowed.Should().Be(expected);
     }
 
+    [TestCase(true, true, TestName = "explicit true keeps save-state visible")]
+    [TestCase(null, true, TestName = "missing flag keeps save-state visible (default)")]
+    [TestCase(false, false, TestName = "explicit false hides save-state")]
+    public void IsSaveStateVisible_HiddenOnlyOnExplicitFalse(bool? flag, bool expected)
+    {
+        var metadata = new ExternalDocumentMetadata(null, null, null, flag);
+
+        metadata.IsSaveStateVisible.Should().Be(expected);
+    }
+
+    [Test]
+    public void Parse_ShowSaveStateFalse_IsParsedAndHidesSaveState()
+    {
+        var result = ExternalDocumentMetadata.Parse("{\"showSaveState\":false}");
+
+        result.ShowSaveState.Should().BeFalse();
+        result.IsSaveStateVisible.Should().BeFalse();
+    }
+
+    [Test]
+    public void Parse_ShowSaveStateAbsent_DefaultsToVisible()
+    {
+        ExternalDocumentMetadata.Parse("{\"classification\":\"C2\"}").IsSaveStateVisible.Should().BeTrue();
+    }
+
     [Test]
     public void Empty_HasAllNullFieldsAndForbidsDownload()
     {
@@ -80,6 +105,8 @@ public class ExternalDocumentMetadataTests
         ExternalDocumentMetadata.Empty.Classification.Should().BeNull();
         ExternalDocumentMetadata.Empty.UserDownload.Should().BeNull();
         ExternalDocumentMetadata.Empty.IsUserDownloadAllowed.Should().BeFalse();
+        ExternalDocumentMetadata.Empty.ShowSaveState.Should().BeNull();
+        ExternalDocumentMetadata.Empty.IsSaveStateVisible.Should().BeTrue("missing flag defaults to visible");
     }
 
     [Test]

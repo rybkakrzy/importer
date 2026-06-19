@@ -54,6 +54,9 @@ export interface DocumentMetadataDto {
   // Domain rule: missing field / non-true ⇒ false. Drives visibility of the
   // "Pobierz dokument" menu item — backend additionally enforces on /user-download.
   userDownload: boolean;
+  // Inverse-default: visible unless the source app sent explicit false. Missing ⇒ true.
+  // Drives visibility of the save-state UI (autosave switch/status + manual "Zapisz" button).
+  showSaveState: boolean;
 }
 
 export interface DocumentVersionDto {
