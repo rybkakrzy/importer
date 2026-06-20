@@ -6,6 +6,9 @@ import { DocumentEditorComponent } from './document-editor';
 import { DocumentService, OpenDocumentError } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { MsalService } from '@azure/msal-angular';
+
+const msalStub = { instance: { getActiveAccount: () => null, getAllAccounts: () => [] } };
 
 /**
  * Testy reguły: ESC zamyka aktywny boczny panel (Wyszukiwanie / właściwości tabeli)
@@ -29,6 +32,7 @@ describe('DocumentEditorComponent — ESC zamyka boczny panel', () => {
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -111,6 +115,7 @@ describe('DocumentEditorComponent — przełączanie doku tabela ↔ wyszukiwani
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -171,6 +176,7 @@ describe('DocumentEditorComponent — widoczność przycisku „Zakończ" (canFi
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -216,6 +222,7 @@ describe('DocumentEditorComponent — ESC zamyka edycję nagłówka/stopki', () 
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -288,6 +295,7 @@ describe('DocumentEditorComponent — koordynacja panelu Nagłówek/Stopka z Fin
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -361,6 +369,7 @@ describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () =>
             buildNumber: () => '1.0.0',
             environment: () => 'TEST',
         } },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -460,6 +469,7 @@ describe('DocumentEditorComponent — dialog hasła: anulowanie (Problem 1)', ()
         { provide: Router, useValue: { navigate: navigateSpy } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -508,6 +518,7 @@ describe('DocumentEditorComponent — userDownload (widoczność „Pobierz doku
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: { buildNumber: () => '1', environment: () => 'TEST' } },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -556,6 +567,7 @@ describe('DocumentEditorComponent — showSaveState (widoczność autozapisu + p
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: { buildNumber: () => '1', environment: () => 'TEST' } },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -590,6 +602,7 @@ describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () 
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -633,6 +646,7 @@ describe('DocumentEditorComponent — „Ustaw jako domyślne" akapitu (Qutas-PA
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -697,6 +711,7 @@ describe('DocumentEditorComponent — pozycja menu kontekstowego (Qutas-UI-006)'
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -787,6 +802,7 @@ describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + za
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -947,6 +963,7 @@ describe('DocumentEditorComponent — dialog hasła', () => {
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);
@@ -1009,6 +1026,7 @@ describe('DocumentEditorComponent — dialog hasła wyzwalany przy konwersji', (
         { provide: Router, useValue: { navigate: () => {} } },
         { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
         { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
       ],
     }).compileComponents();
     fixture = TestBed.createComponent(DocumentEditorComponent);

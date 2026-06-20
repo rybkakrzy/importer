@@ -526,6 +526,16 @@
             <span>Zapisz</span>
           </button>
         }
+        @if (currentUserName()) {
+          <span class="current-user" [title]="currentUserName()">
+            @if (avatarUrl()) {
+              <img class="current-user-avatar" [src]="avatarUrl()" alt="" />
+            } @else {
+              <span class="current-user-avatar current-user-avatar--initials" aria-hidden="true">{{ initials() }}</span>
+            }
+            <span class="current-user-name">Witaj, {{ firstName() || currentUserName() }}!</span>
+          </span>
+        }
         @if (canFinish()) {
           <button class="header-btn" (click)="finishDocument()" [disabled]="isFinishing()" title="Zakończ">
             <span>Zakończ</span>

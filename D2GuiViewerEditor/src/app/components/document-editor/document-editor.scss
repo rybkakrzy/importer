@@ -324,6 +324,47 @@
   font-weight: 600;
 }
 
+// Informacja o zalogowanym użytkowniku (obok „Zapisz")
+.current-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 10px;
+  background: #eef1f5;
+  color: #444;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+
+  .current-user-avatar {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: #d6dbe3;
+  }
+
+  .current-user-avatar--initials {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #3a3f47;
+    text-transform: uppercase;
+  }
+
+  .current-user-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 // Przełącznik Autozapis w nagłówku (switch po lewej, etykieta po prawej)
 $autosave-accent: #f57c00; // orange accent — matches the app's active-state highlight
 

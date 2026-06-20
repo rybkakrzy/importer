@@ -55,7 +55,8 @@ export function msalGuardConfigFactory(auth: AppAuthConfig): MsalGuardConfigurat
 export function msalInterceptorConfigFactory(auth: AppAuthConfig): MsalInterceptorConfiguration {
   const protectedResourceMap = new Map<string, Array<string>>();
   if (auth.enabled !== false) {
-    protectedResourceMap.set(environment.apiUrl, apiScopesFor(auth));
+    const apiBase = new URL(environment.apiUrl, window.location.origin).toString();
+    protectedResourceMap.set(apiBase, apiScopesFor(auth));
   }
 
   return {

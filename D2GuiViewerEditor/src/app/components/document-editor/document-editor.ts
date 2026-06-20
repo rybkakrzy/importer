@@ -14,6 +14,8 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { switchMap, map, filter, distinctUntilChanged } from 'rxjs/operators';
 import { from, Observable, Subscription, timer } from 'rxjs';
+import { MsalService } from '@azure/msal-angular';
+import { AccountInfo } from '@azure/msal-browser';
 import { environment } from '../../../environments/environment';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
@@ -88,6 +90,19 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   readonly buildInfo = inject(BuildInfoService);
+  private readonly msal = inject(MsalService);
+
+  /** Pełna nazwa zalogowanego użytkownika (MSAL active account). Pusta w trybie bez auth
+   *  (dev bypass) → powitanie ukrywane w szablonie. */
+  readonly currentUserName = signal<string>('');
+  /** Imię do powitania „Witaj, <imię>!" — z claimu `given_name`, fallback z pełnej nazwy. */
+  readonly firstName = signal<string>('');
+  /** Inicjały — fallback awatara, gdy brak zdjęcia z Graph. */
+  readonly initials = signal<string>('');
+  /** URL awatara z Microsoft Graph (object URL). Null → pokazujemy inicjały. */
+  readonly avatarUrl = signal<string | null>(null);
+  /** Object URL awatara do zwolnienia przy destroy (uniknięcie wycieku pamięci). */
+  private avatarObjectUrl: string | null = null;
 
   // Stan dokumentu
   documentContent = signal<string>('<p></p>');
@@ -594,6 +609,23 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.loadFromStorage(masterId!, versionId ?? null);
     });
 
+    // Zalogowany użytkownik z MSAL (konto aktywne ustawiane w App po zakończeniu interakcji).
+    const account = this.msal.instance.getActiveAccount() ?? this.msal.instance.getAllAccounts()[0] ?? null;
+    const fullName = account?.name?.trim() || account?.username || '';
+    this.currentUserName.set(fullName);
+
+    const givenName = (account?.idTokenClaims as Record<string, unknown> | undefined)?.['given_name'];
+    const first = typeof givenName === 'string' && givenName.trim()
+      ? givenName.trim()
+      : this.deriveFirstName(fullName);
+    this.firstName.set(first);
+    this.initials.set(this.deriveInitials(fullName || first));
+
+    // Awatar z Microsoft Graph — best-effort: brak zgody/zdjęcia → zostają inicjały.
+    if (account) {
+      void this.loadAvatar(account);
+    }
+
     this.startAutoSave();
   }
 
@@ -603,6 +635,51 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.finishSendSub?.unsubscribe();
     this.vRulerResizeObserver?.disconnect();
     clearTimeout(this.tabCloseHintTimer);
+    if (this.avatarObjectUrl) {
+      URL.revokeObjectURL(this.avatarObjectUrl);
+      this.avatarObjectUrl = null;
+    }
+  }
+
+  /**
+   * Pobiera awatar użytkownika z Microsoft Graph (`/me/photo/$value`). Świadomie OMIJA
+   * Angular HttpClient (acquireTokenSilent + fetch), żeby nie odpalać `httpErrorInterceptor`
+   * (toast/redirect) przy 404 „brak zdjęcia" lub braku zgody na Graph. Każdy błąd → cicho
+   * zostają inicjały. Nie wymusza interakcji (brak popupu logowania dla samego awatara).
+   */
+  private async loadAvatar(account: AccountInfo): Promise<void> {
+    try {
+      const result = await this.msal.instance.acquireTokenSilent({ scopes: ['User.Read'], account });
+      const response = await fetch('https://graph.microsoft.com/v1.0/me/photo/$value', {
+        headers: { Authorization: `Bearer ${result.accessToken}` },
+      });
+      if (!response.ok) return; // brak zdjęcia (404) / brak dostępu → fallback na inicjały
+      const blob = await response.blob();
+      this.avatarObjectUrl = URL.createObjectURL(blob);
+      this.avatarUrl.set(this.avatarObjectUrl);
+    } catch {
+      // interaction_required / brak zgody / sieć → zostają inicjały
+    }
+  }
+
+  /** Imię z pełnej nazwy: obsługuje „Nazwisko, Imię" i „Imię Nazwisko"; fallback z e-maila. */
+  private deriveFirstName(fullName: string): string {
+    if (!fullName) return '';
+    if (fullName.includes(',')) {
+      return fullName.split(',')[1]?.trim().split(/\s+/)[0] ?? '';
+    }
+    if (fullName.includes('@')) {
+      return fullName.split('@')[0];
+    }
+    return fullName.split(/\s+/)[0];
+  }
+
+  /** Inicjały (max 2 znaki) do awatara zastępczego. */
+  private deriveInitials(name: string): string {
+    const parts = name.replace(',', ' ').split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
   /**

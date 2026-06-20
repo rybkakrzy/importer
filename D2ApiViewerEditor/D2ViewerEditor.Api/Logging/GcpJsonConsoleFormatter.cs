@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Console;
@@ -34,7 +35,11 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        // System.Text.Json refuses to serialize Type/RuntimeType (deserialization-gadget guard) and
+        // throws NotSupportedException. Log payloads can carry Type values anywhere in the object graph
+        // (e.g. a destructured {@Request} with a Type property) — emit them as their name instead.
+        Converters = { new TypeJsonConverter() }
     };
 
     private static readonly HashSet<string> ReservedKeys = new(StringComparer.Ordinal)
@@ -91,7 +96,42 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
         // Structured arguments of the message template (e.g. StatusCode, ElapsedMs) as their own fields.
         AppendPairs(logEntry.State, payload);
 
-        textWriter.WriteLine(JsonSerializer.Serialize(payload, JsonOptions));
+        string line;
+        try
+        {
+            line = JsonSerializer.Serialize(payload, JsonOptions);
+        }
+        catch (Exception ex)
+        {
+            // A logger must never throw. If a value in the payload cannot be serialized, fall back to a
+            // minimal line that still carries the message so the original log is not lost.
+            line = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["timestamp"] = payload["timestamp"],
+                ["severity"] = payload["severity"],
+                ["level"] = payload["level"],
+                ["message"] = fullMessage,
+                ["category"] = logEntry.Category,
+                ["serializationError"] = ex.Message
+            }, JsonOptions);
+        }
+
+        textWriter.WriteLine(line);
+    }
+
+    /// <summary>
+    /// Serializes <see cref="Type"/> (and its runtime subtype <c>System.RuntimeType</c>) as its full
+    /// name, since <see cref="JsonSerializer"/> otherwise throws <see cref="NotSupportedException"/>.
+    /// </summary>
+    private sealed class TypeJsonConverter : JsonConverter<Type>
+    {
+        public override bool CanConvert(Type typeToConvert) => typeof(Type).IsAssignableFrom(typeToConvert);
+
+        public override Type Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, Type value, JsonSerializerOptions options)
+            => writer.WriteStringValue(value.FullName ?? value.Name);
     }
 
     private static void AppendPairs(object? source, Dictionary<string, object?> payload)
