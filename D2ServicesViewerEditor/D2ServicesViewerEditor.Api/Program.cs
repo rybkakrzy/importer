@@ -28,7 +28,9 @@ try
         var useGcp = context.Configuration.GetValue<bool?>("Logging:UseGcpFormat")
                      ?? !context.HostingEnvironment.IsDevelopment();
         if (useGcp)
-            configuration.WriteTo.Console(new GcpJsonSerilogFormatter());
+            configuration.WriteTo.Console(new GcpJsonSerilogFormatter(
+                context.HostingEnvironment.ApplicationName,
+                context.HostingEnvironment.EnvironmentName));
         else
             configuration.WriteTo.Console();
     });
@@ -149,7 +151,24 @@ try
 
     var app = builder.Build();
 
-    app.UseSerilogRequestLogging();
+    app.UseRequestObservability();
+    app.UseSerilogRequestLogging(options =>
+    {
+        options.EnrichDiagnosticContext = (diagnostics, context) =>
+        {
+            diagnostics.Set("httpMethod", context.Request.Method);
+            diagnostics.Set("httpPath", context.Request.Path.Value ?? string.Empty);
+            diagnostics.Set("statusCode", context.Response.StatusCode);
+            diagnostics.Set("requestId", context.TraceIdentifier);
+
+            if (context.Items.TryGetValue(D2ServicesViewerEditor.Api.Middleware.RequestObservabilityMiddleware.CorrelationIdItemKey, out var id)
+                && id is string correlationId)
+            {
+                diagnostics.Set("correlationId", correlationId);
+            }
+        };
+    });
+    app.UseExceptionHandlingMiddleware();
 
     var swaggerEnabled = builder.Configuration.GetValue<bool>("Swagger:Enabled", true);
 

@@ -13,6 +13,50 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-22 — D2Services observability: middleware + correlation id + JSON payload parity
+### Changed
+- `D2ServicesViewerEditor.Api/Program.cs`:
+  - dodano `UseRequestObservability()` i `UseExceptionHandlingMiddleware()` do pipeline,
+  - rozszerzono `UseSerilogRequestLogging` o `EnrichDiagnosticContext` (`httpMethod`, `httpPath`, `statusCode`, `requestId`, `correlationId`).
+- Dodano `D2ServicesViewerEditor.Api/Middleware/RequestObservabilityMiddleware.cs`:
+  - nagłówek `X-Correlation-ID` (echo/generowanie),
+  - `HttpContext.Items[CorrelationId]`,
+  - scope (`correlationId`, `requestId`) i Serilog `LogContext` dla pełnej korelacji.
+- `D2ServicesViewerEditor.Api/Middleware/ExceptionHandlingMiddleware.cs`:
+  - `correlationId` w `ProblemDetails.Extensions`,
+  - serializacja `ProblemDetails` po typie runtime (zachowanie `errors` dla `ValidationProblemDetails`).
+- `D2ServicesViewerEditor.Api/Logging/GcpJsonSerilogFormatter.cs`:
+  - ujednolicony payload do standardu D2Api: `severity`, `level`, `timestamp`, `message`, `category`, `service`, `environment`, `traceId`, `spanId`, `exceptionType`, plus spłaszczone właściwości eventu/scope.
+### Verified
+- `dotnet test D2ServicesViewerEditor/D2ServicesViewerEditor.Api.UnitTests/D2ServicesViewerEditor.Api.UnitTests.csproj` → **28/28** pass.
+### Notes
+- Zmiana usuwa wcześniejsze luki: brak globalnego middleware wyjątków i brak korelacji requestów w D2Services.
+
+## 2026-06-21 — D2Services: testy HealthController + MiddlewareExtensions
+### Changed
+- Dodano `HealthControllerTests` w `D2ServicesViewerEditor.Api.UnitTests`:
+  - `Get_ReturnsOk_WithExpectedPayloadShape`,
+  - `GetDetailed_ReturnsOk_WithDependenciesSection`.
+- Dodano `MiddlewareExtensionsTests`:
+  - `UseExceptionHandlingMiddleware_ReturnsSameBuilderInstance`.
+### Verified
+- `dotnet test D2ServicesViewerEditor/D2ServicesViewerEditor.Api.UnitTests/D2ServicesViewerEditor.Api.UnitTests.csproj` → **22/22** pass.
+### Notes
+- Rozszerzenie domyka podstawowe klasy API po wcześniejszym dodaniu testów dla kontrolera dokumentów, middleware wyjątków i formattera logów.
+
+## 2026-06-21 — Zwiększenie liczby testów jednostkowych (D2Api + D2Services)
+### Changed
+- **D2ServicesViewerEditor:** utworzono nowy projekt `D2ServicesViewerEditor.Api.UnitTests` (dodany do `D2ServicesViewerEditor.sln`) z testami:
+  - `DocumentControllerTests` (walidacja wejścia, wymagany `ReturnUrl` dla DOCX, rozpoznanie MIME po rozszerzeniu, mapowanie odpowiedzi statusu),
+  - `ExceptionHandlingMiddlewareTests` (mapowania wyjątków 400/401/500 + pass-through),
+  - `GcpJsonSerilogFormatterTests` (mapowanie `LogEventLevel`→`severity`, `category` z `SourceContext`, serializacja wyjątków).
+- **D2ApiViewerEditor:** rozszerzono `RequestObservabilityMiddlewareTests` o przypadki brzegowe `X-Correlation-ID` (whitespace, zbyt długi >128); rozszerzono `ExceptionHandlingMiddlewareTests` o propagację `correlationId` do `ProblemDetails.Extensions`.
+### Verified
+- `dotnet test D2ServicesViewerEditor/D2ServicesViewerEditor.Api.UnitTests/D2ServicesViewerEditor.Api.UnitTests.csproj` → **19/19** pass.
+- `dotnet test D2ApiViewerEditor/D2ViewerEditor.Api.UnitTests/D2ViewerEditor.Api.UnitTests.csproj` → **76/76** pass.
+### Notes
+- W projekcie testowym D2Services wersja pakietu `Serilog` ustawiona na `4.0.0`, aby uniknąć NU1605 (downgrade względem `Serilog.Sinks.Console`).
+
 ## 2026-06-21 — „Zakończ" sync + statusy, „Pobierz oryginał", ukrycie „Ostatnia modyfikacja"
 ### Changed
 - **DocumentStatus** +`Queued` („Zlecono do wysyłki"), +`SendAborted` („UzytkownikPrzerwałWysyłkę"); `Document.MarkQueued/MarkSendAborted`.

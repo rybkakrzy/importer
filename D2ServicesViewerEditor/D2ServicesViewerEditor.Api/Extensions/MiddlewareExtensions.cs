@@ -6,4 +6,9 @@ public static class MiddlewareExtensions
     {
         return app.UseMiddleware<Middleware.ExceptionHandlingMiddleware>();
     }
+
+    public static IApplicationBuilder UseRequestObservability(this IApplicationBuilder app)
+    {
+        return app.UseMiddleware<Middleware.RequestObservabilityMiddleware>();
+    }
 }

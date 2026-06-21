@@ -2,6 +2,25 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-06-21)
+
+## Ostatnia aktualizacja (2026-06-22)
+
+- D2Services observability domknięte do standardu:
+   - pipeline zawiera `UseRequestObservability()` + `UseExceptionHandlingMiddleware()`,
+   - `X-Correlation-ID` propagowany i logowany (scope + LogContext),
+   - `ProblemDetails` zawiera `correlationId`, a błędy walidacji serializują `errors`,
+   - formatter JSON rozszerzony o pola `level/service/environment/traceId/spanId` i właściwości scope/eventu.
+- Testy D2Services unit: **28/28 pass** (`RequestObservabilityMiddlewareTests`, rozszerzone formatter/middleware/extensions tests).
+
+- Zwiększono liczbę testów jednostkowych w obu backendach:
+   - **D2ApiViewerEditor**: +3 testy middleware (`RequestObservabilityMiddleware`, `ExceptionHandlingMiddleware`),
+   - **D2ServicesViewerEditor**: nowy projekt `D2ServicesViewerEditor.Api.UnitTests`, rozszerzony do 22 testów (`DocumentController`, `ExceptionHandlingMiddleware`, `GcpJsonSerilogFormatter`, `HealthController`, `MiddlewareExtensions`).
+- `D2ServicesViewerEditor.sln` zawiera teraz projekt testowy `D2ServicesViewerEditor.Api.UnitTests`.
+- Weryfikacja wykonana:
+   - `dotnet test D2ApiViewerEditor/D2ViewerEditor.Api.UnitTests/D2ViewerEditor.Api.UnitTests.csproj` → 76/76 pass,
+   - `dotnet test D2ServicesViewerEditor/D2ServicesViewerEditor.Api.UnitTests/D2ServicesViewerEditor.Api.UnitTests.csproj` → 22/22 pass.
+
 ## Aktualne zadanie
 
 Dokończyć przepływ Krok 1–3 dla D2 ViewerEditor: ingest (gotowy), płaski zapis + auto-save (gotowy), tryb podglądu (Krok 2, w toku), funkcja „Zakończ" (planowana).

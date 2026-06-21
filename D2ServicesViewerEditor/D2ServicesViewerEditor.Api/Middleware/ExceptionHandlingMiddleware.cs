@@ -42,11 +42,18 @@ public class ExceptionHandlingMiddleware
 
         _logger.LogError(exception, "Wystąpił wyjątek: {Message}", exception.Message);
 
+        if (context.Items.TryGetValue(RequestObservabilityMiddleware.CorrelationIdItemKey, out var correlationId)
+            && correlationId is string id)
+        {
+            problemDetails.Extensions["correlationId"] = id;
+        }
+
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/problem+json";
 
         var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        await context.Response.WriteAsync(JsonSerializer.Serialize(problemDetails, options));
+        await context.Response.WriteAsync(
+            JsonSerializer.Serialize(problemDetails, problemDetails.GetType(), options));
     }
 
     private static (int, ProblemDetails) HandleValidationException(ValidationException exception)

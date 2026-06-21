@@ -38,4 +38,33 @@ public class RequestObservabilityMiddlewareTests
             .Should().Be("corr-abc");
         context.Items[RequestObservabilityMiddleware.CorrelationIdItemKey].Should().Be("corr-abc");
     }
+
+    [Test]
+    public async Task Ignores_whitespace_correlation_id_and_generates_new_one()
+    {
+        var context = new DefaultHttpContext();
+        context.Request.Headers[RequestObservabilityMiddleware.CorrelationIdHeader] = "   ";
+        var middleware = Build(_ => Task.CompletedTask);
+
+        await middleware.InvokeAsync(context);
+
+        var resolved = context.Response.Headers[RequestObservabilityMiddleware.CorrelationIdHeader].ToString();
+        resolved.Should().NotBeNullOrWhiteSpace();
+        resolved.Should().NotBe("   ");
+    }
+
+    [Test]
+    public async Task Ignores_too_long_correlation_id_and_generates_new_one()
+    {
+        var tooLong = new string('a', 129);
+        var context = new DefaultHttpContext();
+        context.Request.Headers[RequestObservabilityMiddleware.CorrelationIdHeader] = tooLong;
+        var middleware = Build(_ => Task.CompletedTask);
+
+        await middleware.InvokeAsync(context);
+
+        var resolved = context.Response.Headers[RequestObservabilityMiddleware.CorrelationIdHeader].ToString();
+        resolved.Should().NotBeNullOrWhiteSpace();
+        resolved.Should().NotBe(tooLong);
+    }
 }

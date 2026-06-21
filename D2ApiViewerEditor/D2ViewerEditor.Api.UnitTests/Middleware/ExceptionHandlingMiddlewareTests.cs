@@ -17,11 +17,13 @@ namespace D2ViewerEditor.Api.UnitTests.Middleware;
 [TestFixture]
 public class ExceptionHandlingMiddlewareTests
 {
-    private static async Task<(int statusCode, string contentType, JsonDocument body)> InvokeWith(Exception toThrow)
+    private static async Task<(int statusCode, string contentType, JsonDocument body)> InvokeWith(Exception toThrow, string? correlationId = null)
     {
         var context = new DefaultHttpContext();
         var responseBody = new MemoryStream();
         context.Response.Body = responseBody;
+        if (correlationId is not null)
+            context.Items[RequestObservabilityMiddleware.CorrelationIdItemKey] = correlationId;
 
         RequestDelegate next = _ => throw toThrow;
         var middleware = new ExceptionHandlingMiddleware(
@@ -136,5 +138,13 @@ public class ExceptionHandlingMiddlewareTests
         // ProblemDetails are written with CamelCase naming policy.
         body.RootElement.TryGetProperty("title", out _).Should().BeTrue();
         body.RootElement.TryGetProperty("status", out _).Should().BeTrue();
+    }
+
+    [Test]
+    public async Task InvokeAsync_WhenCorrelationIdInContext_IncludesItInProblemDetailsExtensions()
+    {
+        var (_, _, body) = await InvokeWith(new ArgumentException("x"), correlationId: "corr-42");
+
+        body.RootElement.GetProperty("correlationId").GetString().Should().Be("corr-42");
     }
 }
