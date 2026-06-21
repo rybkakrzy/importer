@@ -102,6 +102,41 @@ public class DocumentDelivery
         Status is DeliveryStatus.Sent or DeliveryStatus.FailedPermanently
                or DeliveryStatus.DeadLettered or DeliveryStatus.Cancelled;
 
+    /// <summary>
+    /// Rozpoczyna SYNCHRONICZNĄ pierwszą próbę wysyłki wywołaną przez „Zakończ" (poza workerem).
+    /// Przestawia zadanie w Sending, liczy próbę i zapisuje czas — bez technicznego lease, bo
+    /// próba biegnie inline w obrębie żądania, a nie w batchu workera.
+    /// </summary>
+    public void BeginInlineAttempt()
+    {
+        if (Status is not (DeliveryStatus.Pending or DeliveryStatus.RetryScheduled))
+            throw new InvalidOperationException(
+                "Pierwszą próbę inline można wykonać tylko dla zadania oczekującego lub zaplanowanego");
+
+        var now = DateTime.UtcNow;
+        Status = DeliveryStatus.Sending;
+        AttemptCount++;
+        FirstAttemptAt ??= now;
+        LastAttemptAt = now;
+        ClearLease();
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Wstrzymuje zadanie po nieudanej próbie inline, czekając na decyzję użytkownika
+    /// („Przerwij" albo „Kontynuuj wysyłkę w tle"). Pozostaje w RetryScheduled, ale z
+    /// <see cref="NextAttemptAt"/> = <see cref="DeadlineAt"/>, więc worker NIE przejmie go
+    /// przedwcześnie — dopiero „Kontynuuj" (Requeue) ustawi natychmiastową próbę.
+    /// </summary>
+    public void HoldAfterFailedInlineAttempt(string error)
+    {
+        Status = DeliveryStatus.RetryScheduled;
+        NextAttemptAt = DeadlineAt;
+        ClearLease();
+        LastError = Truncate(error);
+        UpdatedAt = DateTime.UtcNow;
+    }
+
     public void MarkSent()
     {
         Status = DeliveryStatus.Sent;

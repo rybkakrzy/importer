@@ -764,23 +764,30 @@ describe('DocumentEditorComponent — pozycja menu kontekstowego (Qutas-UI-006)'
 });
 
 /**
- * Flow „Zakończ" → modal „Trwa wysyłanie pliku" + odliczanie 30 s + próba zamknięcia karty.
+ * Flow „Zakończ" → synchroniczna pierwsza próba wysyłki: komunikat „Trwa wysyłanie dokumentu ...",
+ * a następnie sukces (zamknięcie karty) albo modal „Wystąpiły problemy..." z wyborem
+ * „Przerwij" / „Kontynuuj wysyłkę w tle".
  *
- * Nie wołamy detectChanges()/ngOnInit (jak inne testy tego pliku), więc nie startuje auto-save
- * ani route-load. Eksperymentalny runner (Vitest) nie wspiera `fakeAsync`, więc odliczanie
- * testujemy deterministycznie wołając wydzielony `onFinishCountdownTick(n)` (zamiast czekać na
- * realny timer), a łańcuch save→finish (microtask) domykamy `vi.waitFor`. blobToBase64
- * (FileReader) jest stubowane na Promise.resolve. afterEach woła ngOnDestroy → sprząta timer.
+ * Nie wołamy detectChanges()/ngOnInit, więc nie startuje auto-save ani route-load. Łańcuch
+ * save→finish (microtask) domykamy `vi.waitFor`. blobToBase64 (FileReader) jest stubowane.
  */
-describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + zamknięcie karty)', () => {
+describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)', () => {
   let fixture: ComponentFixture<DocumentEditorComponent>;
   let component: DocumentEditorComponent;
   let finishCalls: number;
   let finishResult: { next?: unknown; error?: unknown };
+  let abortCalls: number;
+  let continueCalls: number;
+  let originalWindowClose: typeof window.close;
+
+  const deliveredOk = { deliveryId: 'd-1', status: 'Sent', documentStatus: 'Sent', delivered: true, error: null };
+  const deliveryFailed = { deliveryId: 'd-1', status: 'RetryScheduled', documentStatus: 'DeliveryFailed', delivered: false, error: 'boom' };
 
   beforeEach(async () => {
     finishCalls = 0;
-    finishResult = { next: { deliveryId: 'd-1', status: 'Pending', statusUrl: '/x' } };
+    abortCalls = 0;
+    continueCalls = 0;
+    finishResult = { next: deliveredOk };
 
     const storageMock = {
       finishAndSend: () => {
@@ -789,6 +796,8 @@ describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + za
           ? throwError(() => finishResult.error)
           : of(finishResult.next);
       },
+      abortSend: () => { abortCalls++; return of({ masterId: 'm-1', documentStatus: 'SendAborted', deliveryStatus: 'Cancelled' }); },
+      continueDelivery: () => { continueCalls++; return of({ masterId: 'm-1', documentStatus: 'Queued', deliveryId: 'd-1', deliveryStatus: 'Pending' }); },
     };
 
     await TestBed.configureTestingModule({
@@ -813,107 +822,108 @@ describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + za
     component.documentVersionId.set('v-1');
     component.returnUrl.set('https://app.example.com/return');
     (component as any).blobToBase64 = () => Promise.resolve('PHA+PC9wPg==');
+
+    // Domyślnie neutralizujemy window.close — realny jsdom close zamyka okno i psuje kolejne testy.
+    // Testy liczące próby zamknięcia nadpisują to lokalnie i przywracają w finally.
+    originalWindowClose = window.close;
+    (window as any).close = () => { /* no-op */ };
   });
 
   afterEach(() => {
-    // Sprzątnij realny timer odliczania uruchomiony przez finishDocument() (brak wycieku setInterval).
+    (window as any).close = originalWindowClose;
     component.ngOnDestroy();
   });
 
-  /** Zatrzymuje realny timer i steruje odliczaniem ręcznie (deterministycznie, bez fake-timerów). */
-  const stopRealCountdownTimer = () => (component as any).finishCountdownSub?.unsubscribe();
-  const tickCountdown = (n: number) => (component as any).onFinishCountdownTick(n);
-
-  it('kliknięcie „Zakończ" pokazuje modal z tekstem i odliczaniem od 30', () => {
+  it('kliknięcie „Zakończ" pokazuje komunikat „Trwa wysyłanie dokumentu ..."', () => {
     component.finishDocument();
 
-    expect(component.showFinishModal()).toBe(true);
-    expect(component.finishCountdown()).toBe(30);
+    expect(component.showSendingModal()).toBe(true);
+    expect(component.showSendErrorModal()).toBe(false);
     expect(component.isFinishing()).toBe(true);
   });
 
-  it('odliczanie maleje co sekundę (30 → 29 → 28 ...)', () => {
-    component.finishDocument();
-    stopRealCountdownTimer();
-    expect(component.finishCountdown()).toBe(30);
-
-    tickCountdown(0);
-    expect(component.finishCountdown()).toBe(29);
-    tickCountdown(1);
-    expect(component.finishCountdown()).toBe(28);
-  });
-
-  it('po dojściu odliczania do 0 modal się zamyka i próbuje zamknąć kartę', () => {
+  it('udana pierwsza próba → status „Sent", zamknięcie karty i stan końcowy', async () => {
     const origClose = window.close;
     let closeAttempts = 0;
     (window as any).close = () => { closeAttempts++; };
-
-    try {
-      component.finishDocument();
-      stopRealCountdownTimer();
-
-      // 30. tyk (indeks 29) → remaining = 0 → ta sama akcja co przycisk „Zamknij".
-      tickCountdown(29);
-
-      expect(component.showFinishModal()).toBe(false);
-      expect(component.finishCountdown()).toBe(0);
-      expect(closeAttempts).toBe(1);
-    } finally {
-      (window as any).close = origClose;
-    }
-  });
-
-  it('kliknięcie „Zamknij" przed końcem odliczania robi to samo: zamyka modal + próbuje zamknąć kartę', () => {
-    const origClose = window.close;
-    let closeAttempts = 0;
-    (window as any).close = () => { closeAttempts++; };
-
-    try {
-      component.finishDocument();
-
-      component.closeFinishModalAndExit();
-
-      expect(component.showFinishModal()).toBe(false);
-      expect(closeAttempts).toBe(1);
-      expect(component.isFinishing()).toBe(false);
-      // Subskrypcja odliczania została zatrzymana (brak wycieku).
-      expect((component as any).finishCountdownSub).toBeUndefined();
-    } finally {
-      (window as any).close = origClose;
-    }
-  });
-
-  it('po „Zamknij" wchodzi w stan końcowy (workFinished) i wyłącza auto-save — brak powrotu do edycji', () => {
-    const origClose = window.close;
-    // Symulacja przeglądarki, która NIE zamyka karty (typowe dla kart nieotwartych skryptem).
-    (window as any).close = () => { /* brak efektu — karta zostaje */ };
 
     try {
       component.autoSaveEnabled.set(true);
       component.finishDocument();
 
-      component.closeFinishModalAndExit();
+      await vi.waitFor(() => expect(component.workFinished()).toBe(true));
 
-      expect(component.workFinished()).toBe(true);     // blokujący ekran końcowy
-      expect(component.autoSaveEnabled()).toBe(false);  // auto-save zatrzymany
-      expect(component.showFinishModal()).toBe(false);
+      expect(component.deliveryStatus()).toBe('Sent');
+      expect(component.showSendingModal()).toBe(false);
+      expect(component.showSendErrorModal()).toBe(false);
+      expect(component.autoSaveEnabled()).toBe(false);
+      expect(closeAttempts).toBe(1);
     } finally {
       (window as any).close = origClose;
     }
   });
 
-  it('błąd natychmiastowej wysyłki pokazuje komunikat o ponowieniu w tle, a modal zostaje otwarty', async () => {
-    finishResult = { error: new Error('network') };
-    // mockImplementation, bo realny showError planuje setTimeout(5 s) na wyczyszczenie toasta —
-    // wyciekłby poza teardown testu. Asercja sprawdza dokładny komunikat.
-    const errSpy = vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+  it('nieudana pierwsza próba → modal „Wystąpiły problemy..." z wyborem', async () => {
+    finishResult = { next: deliveryFailed };
 
     component.finishDocument();
 
-    await vi.waitFor(() =>
-      expect(errSpy).toHaveBeenCalledWith('Nie udało się natychmiast wysłać pliku. Ponowimy próbę wysłania w tle.'),
-    );
-    expect(component.showFinishModal()).toBe(true); // nie blokujemy — użytkownik może zamknąć
+    await vi.waitFor(() => expect(component.showSendErrorModal()).toBe(true));
+    expect(component.showSendingModal()).toBe(false);
+    expect(component.workFinished()).toBe(false); // nie zamykamy karty — czekamy na decyzję
+  });
+
+  it('błąd HTTP pierwszej próby też pokazuje modal problemu', async () => {
+    finishResult = { error: new Error('network') };
+
+    component.finishDocument();
+
+    await vi.waitFor(() => expect(component.showSendErrorModal()).toBe(true));
+    expect(component.showSendingModal()).toBe(false);
+  });
+
+  it('„Przerwij" anuluje wysyłkę i cofa do edytora (bez zamknięcia karty)', async () => {
+    const origClose = window.close;
+    let closeAttempts = 0;
+    (window as any).close = () => { closeAttempts++; };
+    vi.spyOn(component as any, 'showSuccess').mockImplementation(() => {});
+
+    try {
+      finishResult = { next: deliveryFailed };
+      component.finishDocument();
+      await vi.waitFor(() => expect(component.showSendErrorModal()).toBe(true));
+
+      component.abortSend();
+
+      expect(abortCalls).toBe(1);
+      expect(component.showSendErrorModal()).toBe(false);
+      expect(component.isFinishing()).toBe(false); // znów można edytować / kliknąć „Zakończ"
+      expect(component.workFinished()).toBe(false);
+      expect(closeAttempts).toBe(0);
+    } finally {
+      (window as any).close = origClose;
+    }
+  });
+
+  it('„Kontynuuj wysyłkę w tle" zamyka kartę i wchodzi w stan końcowy', async () => {
+    const origClose = window.close;
+    let closeAttempts = 0;
+    (window as any).close = () => { closeAttempts++; };
+
+    try {
+      finishResult = { next: deliveryFailed };
+      component.finishDocument();
+      await vi.waitFor(() => expect(component.showSendErrorModal()).toBe(true));
+
+      component.continueSendInBackground();
+
+      expect(continueCalls).toBe(1);
+      expect(component.showSendErrorModal()).toBe(false);
+      expect(component.workFinished()).toBe(true);
+      expect(closeAttempts).toBe(1);
+    } finally {
+      (window as any).close = origClose;
+    }
   });
 
   it('wielokrotne kliknięcie „Zakończ" nie tworzy wielu równoległych flow', async () => {
@@ -924,26 +934,86 @@ describe('DocumentEditorComponent — flow „Zakończ" (modal + odliczanie + za
     await vi.waitFor(() => expect(finishCalls).toBe(1));
   });
 
-  it('gdy window.close() rzuci wyjątek, aplikacja nie crashuje (best-effort)', () => {
-    const origClose = window.close;
-    (window as any).close = () => { throw new Error('blocked by browser'); };
-
-    try {
-      component.finishDocument();
-      expect(() => component.closeFinishModalAndExit()).not.toThrow();
-      expect(component.showFinishModal()).toBe(false);
-    } finally {
-      (window as any).close = origClose;
-    }
-  });
-
-  it('w trybie podglądu (readOnly) „Zakończ" nie otwiera modala', () => {
+  it('w trybie podglądu (readOnly) „Zakończ" nie pokazuje żadnego modala', () => {
     component.readOnly.set(true);
 
     component.finishDocument();
 
-    expect(component.showFinishModal()).toBe(false);
+    expect(component.showSendingModal()).toBe(false);
+    expect(component.showSendErrorModal()).toBe(false);
     expect(component.isFinishing()).toBe(false);
+  });
+});
+
+/**
+ * Task 1: „Pobierz oryginał dokumentu" — widoczność (disk OR userDownload) + pobranie oryginału.
+ */
+describe('DocumentEditorComponent — „Pobierz oryginał dokumentu"', () => {
+  let component: DocumentEditorComponent;
+  let baseVersionCalls: number;
+
+  beforeEach(async () => {
+    baseVersionCalls = 0;
+    const storageMock = {
+      downloadBaseVersion: () => { baseVersionCalls++; return of(new Blob(['orig'], { type: 'application/octet-stream' })); },
+    };
+
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: storageMock },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
+      ],
+    }).compileComponents();
+    component = TestBed.createComponent(DocumentEditorComponent).componentInstance;
+  });
+
+  it('plik wczytany z dysku → opcja dostępna', () => {
+    component.loadedFromDisk.set(true);
+    component.userDownload.set(false);
+    expect(component.canDownloadOriginal()).toBe(true);
+  });
+
+  it('dokument z aplikacji zewn. z userDownload=true → opcja dostępna', () => {
+    component.loadedFromDisk.set(false);
+    component.userDownload.set(true);
+    expect(component.canDownloadOriginal()).toBe(true);
+  });
+
+  it('dokument z aplikacji zewn. bez userDownload → opcja niedostępna', () => {
+    component.loadedFromDisk.set(false);
+    component.userDownload.set(false);
+    expect(component.canDownloadOriginal()).toBe(false);
+  });
+
+  it('pobranie oryginału z dysku oddaje wczytany plik (bez wołania API)', () => {
+    const saveSpy = vi.spyOn(component as any, 'saveBlobToDisk').mockImplementation(() => {});
+    vi.spyOn(component as any, 'showSuccess').mockImplementation(() => {});
+    const file = new File(['orig'], 'oryginal.docx');
+    component.loadedFromDisk.set(true);
+    (component as any).diskOriginalFile = file;
+
+    component.downloadOriginalDocument();
+
+    expect(saveSpy).toHaveBeenCalledWith(file, 'oryginal.docx');
+    expect(baseVersionCalls).toBe(0);
+  });
+
+  it('pobranie oryginału z aplikacji zewn. pobiera wersję bazową (v1) z API', () => {
+    const saveSpy = vi.spyOn(component as any, 'saveBlobToDisk').mockImplementation(() => {});
+    vi.spyOn(component as any, 'showSuccess').mockImplementation(() => {});
+    component.loadedFromDisk.set(false);
+    component.userDownload.set(true);
+    component.documentMasterId.set('m-1');
+
+    component.downloadOriginalDocument();
+
+    expect(baseVersionCalls).toBe(1);
+    expect(saveSpy).toHaveBeenCalled();
   });
 });
 

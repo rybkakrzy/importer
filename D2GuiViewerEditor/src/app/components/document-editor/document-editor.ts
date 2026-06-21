@@ -136,18 +136,18 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   // Klasyfikacja dokumentu z metadanych (prezentacyjna; C1..C4 lub wartość spoza słownika)
   documentClassification = signal<string | null>(null);
 
-  // Zakończ i wyślij (asynchroniczna wysyłka na returnUrl — backend ma worker z retry/backoff)
+  // Zakończ i wyślij: synchroniczna pierwsza próba wysyłki na returnUrl. Sukces → „Wysłano";
+  // błąd → wybór „Przerwij" / „Kontynuuj wysyłkę w tle" (worker dokańcza z retry/backoff).
   isFinishing = signal<boolean>(false);
   deliveryStatus = signal<DeliveryStatus | null>(null);
   deliveryId = signal<string | null>(null);
+  /** Modal „Trwa wysyłanie dokumentu ..." — widoczny w trakcie pierwszej próby wysyłki. */
+  showSendingModal = signal<boolean>(false);
   /**
-   * Modal „Trwa wysyłanie pliku" pokazywany po kliknięciu „Zakończ". Przycisk „Zamknij"
-   * odlicza do 0 i próbuje zamknąć kartę; nie blokujemy użytkownika oczekiwaniem na
-   * pełne powodzenie wysyłki (dostarcza ją worker w tle).
+   * Modal „Wystąpiły problemy z dostarczeniem dokumentu" — pokazywany po nieudanej pierwszej
+   * próbie. Daje wybór: „Przerwij" (powrót do edytora) lub „Kontynuuj wysyłkę w tle".
    */
-  showFinishModal = signal<boolean>(false);
-  /** Inicjalnie = FINISH_COUNTDOWN_SECONDS; ustawiane ponownie przy każdym otwarciu modala. */
-  finishCountdown = signal<number>(30);
+  showSendErrorModal = signal<boolean>(false);
   /**
    * Praca nad dokumentem zakończona (po „Zamknij"/odliczaniu). Gdy przeglądarka nie pozwoli
    * zamknąć karty (window.close() działa tylko dla okien otwartych skryptem), wyświetlamy
@@ -174,16 +174,28 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   readonly canUserDownload = computed(() => this.userDownload());
 
   /**
+   * True when the current document was opened from the local disk ("Plik → Otwórz").
+   * Together with userDownload it drives the "Pobierz oryginał dokumentu" menu item.
+   */
+  loadedFromDisk = signal<boolean>(false);
+  /** Original file kept in memory for disk-loaded documents, so we can hand back the untouched original. */
+  private diskOriginalFile: File | null = null;
+
+  /**
+   * "Pobierz oryginał dokumentu" is available when the file was loaded from disk OR the source
+   * app explicitly allowed downloads (userDownload === true). Always returns the original (v1),
+   * never the edited working copy.
+   */
+  readonly canDownloadOriginal = computed(() => this.loadedFromDisk() || this.userDownload());
+
+  /**
    * Mirror of documents.metadata.showSaveState (inverse-default true). When false, the
    * source app asked to hide the editor's save-state UI: the autosave switch + footer
    * status AND the manual "Zapisz" button. Missing metadata ⇒ true (unchanged behavior).
    */
   showSaveState = signal<boolean>(true);
-  private finishCountdownSub?: Subscription;
   /** Subskrypcja łańcucha save→finishAndSend — anulowana przy destroy, by nie pisać po zniszczeniu. */
   private finishSendSub?: Subscription;
-  /** Czas (w sekundach) odliczania na przycisku „Zamknij" przed automatycznym zamknięciem karty. */
-  private static readonly FINISH_COUNTDOWN_SECONDS = 30;
   documentMetadata = signal<DocumentMetadata>({
     title: 'Nowy dokument',
     created: new Date().toISOString(),
@@ -631,7 +643,6 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopAutoSave();
-    this.finishCountdownSub?.unsubscribe();
     this.finishSendSub?.unsubscribe();
     this.vRulerResizeObserver?.disconnect();
     clearTimeout(this.tabCloseHintTimer);
@@ -784,6 +795,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.returnUrl.set(null);
     this.userDownload.set(false);
     this.showSaveState.set(true);
+    // Loaded from storage (external app / dashboard), not from local disk.
+    this.loadedFromDisk.set(false);
+    this.diskOriginalFile = null;
 
     this.documentStorageService.getDocumentMetadata(masterId).pipe(
       switchMap(meta => {
@@ -969,6 +983,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   /** Ładuje dokument z pliku z dysku ("Plik → Otwórz"). */
   private loadDocument(file: File, password?: string): void {
+    // Keep the untouched original so "Pobierz oryginał dokumentu" can hand it back verbatim.
+    this.diskOriginalFile = file;
+    this.loadedFromDisk.set(true);
     this._convertAndLoad(file, file.name, password, true);
   }
 
@@ -1185,14 +1202,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.showMenu.set(false);
     this.documentStorageService.downloadEditedDocument(masterId, request).subscribe({
       next: (blob) => {
-        const objectUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = objectUrl;
-        a.download = fileName.endsWith('.docx') ? fileName : `${fileName}.docx`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(objectUrl);
+        this.saveBlobToDisk(blob, fileName.endsWith('.docx') ? fileName : `${fileName}.docx`);
         this.showSuccess('Pobrano dokument');
         this.isLoading.set(false);
       },
@@ -1208,6 +1218,60 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.showError('Nie udało się pobrać dokumentu.');
       }
     });
+  }
+
+  /**
+   * "Pobierz oryginał dokumentu": zawsze zwraca nietknięty oryginał (v1), nigdy edytowanej
+   * kopii roboczej. Dokument z dysku → plik wczytany lokalnie; dokument z aplikacji zewnętrznej
+   * → wersja bazowa (v1) ze storage. Widoczność pozycji menu steruje `canDownloadOriginal()`.
+   */
+  downloadOriginalDocument(): void {
+    this.showMenu.set(false);
+
+    if (!this.canDownloadOriginal()) {
+      // Defensive: the menu item is hidden when canDownloadOriginal() is false.
+      this.showError('Pobieranie oryginału nie jest dostępne dla tego dokumentu.');
+      return;
+    }
+
+    // Wczytany z dysku — oddaj dokładnie ten plik, który użytkownik otworzył.
+    if (this.loadedFromDisk() && this.diskOriginalFile) {
+      this.saveBlobToDisk(this.diskOriginalFile, this.diskOriginalFile.name);
+      this.showSuccess('Pobrano oryginał dokumentu');
+      return;
+    }
+
+    const masterId = this.documentMasterId();
+    if (!masterId) {
+      this.showError('Dokument nie jest powiązany z bazą — brak oryginału do pobrania.');
+      return;
+    }
+
+    this.isLoading.set(true);
+    this.documentStorageService.downloadBaseVersion(masterId).subscribe({
+      next: (blob) => {
+        const fileName = this.originalFileName() || `${this.documentMetadata().title || 'dokument'}.docx`;
+        this.saveBlobToDisk(blob, fileName);
+        this.showSuccess('Pobrano oryginał dokumentu');
+        this.isLoading.set(false);
+      },
+      error: () => {
+        this.isLoading.set(false);
+        this.showError('Nie udało się pobrać oryginału dokumentu.');
+      }
+    });
+  }
+
+  /** Zapisuje Blob jako plik na dysku użytkownika (wspólne dla „Pobierz dokument"/„Pobierz oryginał"). */
+  private saveBlobToDisk(blob: Blob, fileName: string): void {
+    const objectUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(objectUrl);
   }
 
   /**
@@ -1902,11 +1966,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * "Zakończ i wyślij": utrwala stan edytora, zleca asynchroniczną wysyłkę na returnUrl i od razu
-   * pokazuje modal „Trwa wysyłanie pliku" z odliczaniem (po którym próbujemy zamknąć kartę).
-   * NIE czekamy na pełne powodzenie dostarczenia — zadanie żyje w bazie, a worker dokańcza wysyłkę
-   * z retry/backoff (do 24h) nawet po zamknięciu strony. Guard `isFinishing` + idempotentny backend
-   * chronią przed wieloma równoległymi flow.
+   * "Zakończ": utrwala stan edytora i wykonuje SYNCHRONICZNĄ pierwszą próbę wysyłki na returnUrl,
+   * pokazując komunikat „Trwa wysyłanie dokumentu ...". Sukces → status „Wysłano" + standardowe
+   * zakończenie (zamknięcie karty). Błąd → modal „Wystąpiły problemy z dostarczeniem dokumentu"
+   * z wyborem „Przerwij" / „Kontynuuj wysyłkę w tle". Guard `isFinishing` chroni przed dublami.
    */
   finishDocument(): void {
     this.showMenu.set(false);
@@ -1923,18 +1986,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Zabezpieczenie przed wielokrotnym kliknięciem — w danej chwili tylko jeden flow
-    // zakończenia (backendowy `finish` jest dodatkowo idempotentny: zwraca to samo zadanie).
     if (this.isFinishing()) {
       return;
     }
 
     this.isFinishing.set(true);
-    this.deliveryStatus.set('Pending');
-
-    // Pokaż modal i uruchom odliczanie OD RAZU — wysyłka biegnie w tle (worker z retry/backoff
-    // do 24h), więc nie blokujemy użytkownika oczekiwaniem na pełne powodzenie dostarczenia.
-    this.openFinishModal();
+    this.deliveryStatus.set('Sending');
+    this.showSendErrorModal.set(false);
+    this.showSendingModal.set(true); // „Trwa wysyłanie dokumentu ..."
 
     this.finishSendSub?.unsubscribe();
     this.finishSendSub = this.documentService.saveDocument(this.buildSaveRequest()).pipe(
@@ -1942,58 +2001,74 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       switchMap(base64 => this.documentStorageService.finishAndSend(masterId, versionId, { content: base64 }))
     ).subscribe({
       next: result => {
-        // Zadanie wysyłki utrwalone — od tej chwili worker dostarcza plik na returnUrl.
         this.deliveryId.set(result.deliveryId);
         this.deliveryStatus.set(result.status);
+        this.showSendingModal.set(false);
+
+        if (result.delivered) {
+          // „Wysłano" — kończymy jak dotychczas (zamknięcie karty / ekran końcowy).
+          this.enterFinishedAndCloseTab();
+        } else {
+          // „Błąd wysyłki" — poproś użytkownika o decyzję.
+          this.showSendErrorModal.set(true);
+        }
       },
       error: () => {
-        // Natychmiastowe zakolejkowanie nie powiodło się. Nie blokujemy użytkownika ani nie
-        // zamykamy modala — informujemy, że spróbujemy ponowić w tle (worker / ręczny retry
-        // admina). Odliczanie i przycisk „Zamknij" działają dalej.
+        // Pierwsza próba nie powiodła się (sieć / błąd serwera) — ta sama ścieżka co błąd wysyłki.
+        this.showSendingModal.set(false);
         this.deliveryStatus.set('RetryScheduled');
-        this.showError('Nie udało się natychmiast wysłać pliku. Ponowimy próbę wysłania w tle.');
+        this.showSendErrorModal.set(true);
       }
     });
   }
 
   /**
-   * Otwiera modal „Trwa wysyłanie pliku" i startuje odliczanie 30 → 0 na przycisku „Zamknij".
-   * Po dojściu do 0 wykonuje tę samą akcję co kliknięcie „Zamknij" (zamknięcie modala + próba
-   * zamknięcia karty).
+   * „Przerwij" (po nieudanej pierwszej próbie): anuluje zadanie wysyłki (status ANULOWANY),
+   * ustawia dokument na „UzytkownikPrzerwałWysyłkę" i COFA użytkownika do edytora. Nie zamyka
+   * karty i nie kontynuuje wysyłki w tle.
    */
-  private openFinishModal(): void {
-    this.finishCountdownSub?.unsubscribe();
-    this.finishCountdown.set(DocumentEditorComponent.FINISH_COUNTDOWN_SECONDS);
-    this.showFinishModal.set(true);
+  abortSend(): void {
+    const masterId = this.documentMasterId();
+    if (!masterId) return;
 
-    // timer(1000, 1000) emituje 0 po 1 s, 1 po 2 s, ... → odliczamy od 30 w dół.
-    this.finishCountdownSub = timer(1000, 1000).subscribe(tick => this.onFinishCountdownTick(tick));
+    this.documentStorageService.abortSend(masterId).subscribe({
+      next: () => {
+        this.showSendErrorModal.set(false);
+        this.isFinishing.set(false); // powrót do edytora — „Zakończ" znów dostępne
+        this.showSuccess('Wysyłka przerwana. Możesz dalej edytować dokument.');
+      },
+      error: () => {
+        this.showError('Nie udało się przerwać wysyłki.');
+      }
+    });
   }
 
   /**
-   * Pojedynczy „tyk" odliczania (wydzielony, by był deterministycznie testowalny bez fake-timerów).
-   * `tick` to indeks emisji timera (0 = po 1 s). Po dojściu do 0 sekund wykonuje akcję zamknięcia.
+   * „Kontynuuj wysyłkę w tle" (po nieudanej pierwszej próbie): przekazuje zadanie do workera
+   * (status „Zlecono do wysyłki"), zamyka kartę jak dotychczasowe zakończenie i NIE cofa do edytora.
    */
-  private onFinishCountdownTick(tick: number): void {
-    const remaining = DocumentEditorComponent.FINISH_COUNTDOWN_SECONDS - (tick + 1);
-    this.finishCountdown.set(Math.max(0, remaining));
-    if (remaining <= 0) {
-      this.closeFinishModalAndExit();
-    }
+  continueSendInBackground(): void {
+    const masterId = this.documentMasterId();
+    if (!masterId) return;
+
+    this.documentStorageService.continueDelivery(masterId).subscribe({
+      next: result => {
+        this.deliveryStatus.set(result.deliveryStatus);
+        this.showSendErrorModal.set(false);
+        this.enterFinishedAndCloseTab();
+      },
+      error: () => {
+        this.showError('Nie udało się przekazać wysyłki do realizacji w tle.');
+      }
+    });
   }
 
   /**
-   * Wspólna akcja dla końca odliczania ORAZ kliknięcia „Zamknij": zatrzymuje odliczanie i auto-save,
-   * zamyka modal i próbuje zamknąć kartę przeglądarki. Praca jest zakończona — gdy przeglądarka NIE
-   * pozwoli zamknąć karty (typowe dla kart nieotwartych skryptem), pokazujemy blokujący ekran końcowy,
-   * żeby użytkownik nie wrócił do edycji zakończonego dokumentu (bug: „znika tylko informacja").
+   * Wspólne zakończenie pracy (sukces wysyłki / kontynuacja w tle): zatrzymuje auto-save, wchodzi
+   * w blokujący stan końcowy (żeby nie wrócić do edycji zakończonego dokumentu) i próbuje zamknąć
+   * kartę. Gdy przeglądarka odmówi (karta nieotwarta skryptem) — pokazujemy ekran z instrukcją.
    */
-  closeFinishModalAndExit(): void {
-    this.finishCountdownSub?.unsubscribe();
-    this.finishCountdownSub = undefined;
-    this.showFinishModal.set(false);
-
-    // Zakończ sesję edycji: stop auto-save i wejście w stan końcowy (blokuje dalszą pracę).
+  private enterFinishedAndCloseTab(): void {
     this.isFinishing.set(false);
     this.stopAutoSave();
     this.autoSaveEnabled.set(false);

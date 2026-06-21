@@ -48,6 +48,60 @@ public class DocumentDeliveryTests
     }
 
     [Test]
+    public void BeginInlineAttempt_ShouldMoveToSendingAndCountAttempt()
+    {
+        var delivery = CreateValid();
+
+        delivery.BeginInlineAttempt();
+
+        delivery.Status.Should().Be(DeliveryStatus.Sending);
+        delivery.AttemptCount.Should().Be(1);
+        delivery.FirstAttemptAt.Should().NotBeNull();
+        delivery.LastAttemptAt.Should().NotBeNull();
+        delivery.LockedUntil.Should().BeNull(); // inline — no worker lease
+    }
+
+    [Test]
+    public void HoldAfterFailedInlineAttempt_ShouldPauseUntilDeadline()
+    {
+        var delivery = CreateValid();
+        delivery.BeginInlineAttempt();
+
+        delivery.HoldAfterFailedInlineAttempt("recipient down");
+
+        // RetryScheduled but parked at the deadline → the worker won't claim it before the user decides.
+        delivery.Status.Should().Be(DeliveryStatus.RetryScheduled);
+        delivery.NextAttemptAt.Should().Be(delivery.DeadlineAt);
+        delivery.LastError.Should().Be("recipient down");
+        delivery.IsTerminal.Should().BeFalse();
+    }
+
+    [Test]
+    public void HeldJob_CanBeCancelled_ToSupportPrzerwij()
+    {
+        var delivery = CreateValid();
+        delivery.BeginInlineAttempt();
+        delivery.HoldAfterFailedInlineAttempt("boom");
+
+        delivery.Cancel();
+
+        delivery.Status.Should().Be(DeliveryStatus.Cancelled);
+    }
+
+    [Test]
+    public void HeldJob_CanBeRequeued_ToSupportKontynuujWTle()
+    {
+        var delivery = CreateValid();
+        delivery.BeginInlineAttempt();
+        delivery.HoldAfterFailedInlineAttempt("boom");
+
+        delivery.Requeue(TimeSpan.FromHours(24));
+
+        delivery.Status.Should().Be(DeliveryStatus.Pending);
+        delivery.NextAttemptAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [Test]
     public void MarkSent_ShouldClearLeaseAndError()
     {
         var delivery = CreateValid();

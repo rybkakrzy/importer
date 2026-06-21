@@ -85,7 +85,22 @@ export type DeliveryStatus =
 export interface FinishAndSendResult {
   deliveryId: string;
   status: DeliveryStatus;
-  statusUrl: string;
+  documentStatus: string;
+  delivered: boolean;
+  error: string | null;
+}
+
+export interface AbortSendResult {
+  masterId: string;
+  documentStatus: string;
+  deliveryStatus: string | null;
+}
+
+export interface ContinueDeliveryResult {
+  masterId: string;
+  documentStatus: string;
+  deliveryId: string;
+  deliveryStatus: DeliveryStatus;
 }
 
 export interface DeliveryStatusDto {
@@ -254,6 +269,24 @@ export class DocumentStorageService {
       `${this.apiUrl}/${masterId}/versions/${versionId}/finish`,
       request
     );
+  }
+
+  /**
+   * „Przerwij" po nieudanej pierwszej próbie: anuluje zadanie wysyłki i ustawia dokument
+   * na „UzytkownikPrzerwałWysyłkę". Dokument zostaje edytowalny.
+   * @param masterId - GUID mastera dokumentu
+   */
+  abortSend(masterId: string): Observable<AbortSendResult> {
+    return this.http.post<AbortSendResult>(`${this.apiUrl}/${masterId}/abort-send`, {});
+  }
+
+  /**
+   * „Kontynuuj wysyłkę w tle" po nieudanej pierwszej próbie: przywraca zadanie do kolejki
+   * i ustawia dokument na „Zlecono do wysyłki". Dalej wysyła worker w tle.
+   * @param masterId - GUID mastera dokumentu
+   */
+  continueDelivery(masterId: string): Observable<ContinueDeliveryResult> {
+    return this.http.post<ContinueDeliveryResult>(`${this.apiUrl}/${masterId}/continue-delivery`, {});
   }
 
   /**

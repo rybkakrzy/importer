@@ -71,8 +71,16 @@ public class Document
     /// <summary>Marks the document as being edited (save/auto-save from the editor).</summary>
     public void MarkEditing() => Status = DocumentStatus.Editing;
 
-    /// <summary>Marks that the file is being sent back to the source app.</summary>
+    /// <summary>Marks delivery as requested ("Zlecono do wysyłki") — queued, not yet transferring.
+    /// Set when the user presses "Zakończ" and when continuing delivery in the background.</summary>
+    public void MarkQueued() => Status = DocumentStatus.Queued;
+
+    /// <summary>Marks that the file is being sent back to the source app ("W trakcie wysyłki").</summary>
     public void MarkSending() => Status = DocumentStatus.Sending;
+
+    /// <summary>Marks that the user aborted delivery after a failed first attempt
+    /// ("UzytkownikPrzerwałWysyłkę"). The document remains editable.</summary>
+    public void MarkSendAborted() => Status = DocumentStatus.SendAborted;
 
     /// <summary>Marks that the file has been sent.</summary>
     public void MarkSent() => Status = DocumentStatus.Sent;

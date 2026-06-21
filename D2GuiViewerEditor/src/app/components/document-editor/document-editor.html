@@ -45,6 +45,14 @@
                   Pobierz dokument
                 </button>
               }
+              @if (canDownloadOriginal()) {
+                <button class="dropdown-item" (click)="downloadOriginalDocument()">
+                  <svg viewBox="0 0 24 24" width="18" height="18">
+                    <path fill="currentColor" d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                  </svg>
+                  Pobierz oryginał dokumentu
+                </button>
+              }
               @if (!editingDisabled()) {
                 <div class="dropdown-separator"></div>
                 <button class="dropdown-item" (click)="openPageSetup(); closeAllMenus()">
@@ -841,7 +849,8 @@
         </span>
         <span class="status-separator">|</span>
       }
-      @if (documentMetadata().modified) {
+      <!-- Ostatnia modyfikacja ukrywana razem z UI zapisu, gdy showSaveState=false (aplikacja zewn.). -->
+      @if (showSaveState() && documentMetadata().modified) {
         <span class="status-item status-modified">
           Ostatnia modyfikacja: {{ documentMetadata().modified | date:'HH:mm:ss' }}
         </span>
@@ -940,21 +949,27 @@
     </div>
   }
 
-  <!-- Dialog: trwa wysyłanie pliku po kliknięciu „Zakończ" -->
-  @if (showFinishModal()) {
-    <!-- Brak (click) na overlay — modal zamyka WYŁĄCZNIE przycisk „Zamknij", żeby nie dało się
-         go przypadkowo zamknąć ani ponownie wywołać flow zakończenia. -->
+  <!-- Dialog: trwa pierwsza próba wysyłki po kliknięciu „Zakończ" -->
+  @if (showSendingModal()) {
+    <!-- Brak (click) na overlay — to stan przejściowy (trwa wysyłka), nie da się go zamknąć ręcznie. -->
     <div class="dialog-overlay finish-dialog-overlay">
       <div class="dialog leave-dialog finish-dialog" role="dialog" aria-modal="true"
-           aria-labelledby="finish-dialog-title">
-        <!-- Spójny wygląd z ekranem ładowania („Przetwarzanie…"): ten sam spinner (.loading-spinner)
-             zamiast osobnej ikony (Problem 3). -->
+           aria-labelledby="sending-dialog-title">
         <div class="loading-spinner finish-dialog-spinner"></div>
-        <h3 class="leave-dialog-title" id="finish-dialog-title">Trwa wysyłanie pliku do Twojej aplikacji</h3>
+        <h3 class="leave-dialog-title" id="sending-dialog-title">Trwa wysyłanie dokumentu ...</h3>
+      </div>
+    </div>
+  }
+
+  <!-- Dialog: problem z dostarczeniem po nieudanej pierwszej próbie — wybór dalszego działania -->
+  @if (showSendErrorModal()) {
+    <div class="dialog-overlay finish-dialog-overlay">
+      <div class="dialog leave-dialog finish-dialog" role="dialog" aria-modal="true"
+           aria-labelledby="send-error-dialog-title">
+        <h3 class="leave-dialog-title" id="send-error-dialog-title">Wystąpiły problemy z dostarczeniem dokumentu</h3>
         <div class="leave-dialog-actions finish-dialog-actions">
-          <button class="leave-btn-confirm finish-close-btn" (click)="closeFinishModalAndExit()">
-            Zamknij ({{ finishCountdown() }})
-          </button>
+          <button class="leave-btn-cancel" (click)="abortSend()">Przerwij</button>
+          <button class="leave-btn-confirm" (click)="continueSendInBackground()">Kontynuuj wysyłkę w tle</button>
         </div>
       </div>
     </div>

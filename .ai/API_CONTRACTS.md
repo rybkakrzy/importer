@@ -41,7 +41,9 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 | GET | `/{masterId}/download` | Bajty wersji bazowej (v1, sort po VersionNumber) | plik |
 | GET | `/{masterId}/versions/{versionId}/download` | Bajty konkretnej wersji | plik |
 | POST | `/{masterId}/restore/{versionId}` | Przywróć wersję jako aktywną | `{ message, versionId }` |
-| **POST** | `/{masterId}/versions/{versionId}/finish` | **„Zakończ i wyślij"**: utrwala stan edytora, zamraża snapshot, tworzy zadanie wysyłki. Idempotentne (zwraca istniejące aktywne zadanie). Brak/zły returnUrl → 400 | **202 Accepted** `{ deliveryId, status, statusUrl }` |
+| **POST** | `/{masterId}/versions/{versionId}/finish` | **„Zakończ"**: utrwala stan edytora, zamraża snapshot, tworzy zadanie wysyłki i wykonuje **synchroniczną pierwszą próbę** dostarczenia. Statusy dokumentu: `Queued` → `Sending` → `Sent` (sukces) / `DeliveryFailed` (błąd; zadanie wstrzymane na decyzję). Brak/zły returnUrl → 400 | **200 OK** `{ deliveryId, status, documentStatus, delivered, error? }` |
+| **POST** | `/{masterId}/abort-send` | **„Przerwij"** po nieudanej 1. próbie: anuluje zadanie (delivery `Cancelled`) + dokument `SendAborted`; dokument zostaje edytowalny | **200 OK** `{ masterId, documentStatus, deliveryStatus? }` / 404 / 400 |
+| **POST** | `/{masterId}/continue-delivery` | **„Kontynuuj wysyłkę w tle"** po nieudanej 1. próbie: Requeue (delivery `Pending`) + dokument `Queued`; dalej dostarcza worker | **200 OK** `{ masterId, documentStatus, deliveryId, deliveryStatus }` / 404 / 400 |
 | **POST** | `/{masterId}/user-download` | **„Pobierz dokument"** — konwertuje aktualny stan edytora (HTML+header/footer/margins) na DOCX dla użytkownika. Egzekwuje regułę domenową: tylko gdy `documents.metadata.userDownload == true`. Body: `SaveDocumentRequest`. → 200 plik DOCX / 403 (gate) / 404 / 400 |
 | GET | `/deliveries/{deliveryId}` | Status zadania wysyłki (polling z GUI) | `DeliveryStatusDto { deliveryId, documentId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, lastError?, updatedAt }` |
 | GET | `/deliveries?status=&skip=&take=` | Lista zadań w danym statusie (monitoring/admin; domyślnie `DeadLettered`; widok GUI `/admin/deliveries`) | `DeliveryListItemDto[] { deliveryId, documentId, status, attemptCount, createdAt, lastAttemptAt?, nextAttemptAt?, deadlineAt, lastError?, lockedUntil?, lockedBy }` |
@@ -133,9 +135,9 @@ Dokument może mieć: tylko `returnUrl` (zewnętrzny, bez pobrania), tylko `user
 
 ### Reguła domenowa: `showSaveState` (widoczność UI zapisu w edytorze)
 
-`showSaveState` jest opcjonalnym polem metadanych o **odwróconym domyślnym** (w przeciwieństwie do `userDownload`): brak/`null` ⇒ **widoczne**. Tylko jawne `false` ukrywa w edytorze sekcję autozapisu (switch + status w stopce) ORAZ osobny przycisk „Zapisz".
+`showSaveState` jest opcjonalnym polem metadanych o **odwróconym domyślnym** (w przeciwieństwie do `userDownload`): brak/`null` ⇒ **widoczne**. Tylko jawne `false` ukrywa w edytorze sekcję autozapisu (switch + status w stopce), osobny przycisk „Zapisz" ORAZ informację „Ostatnia modyfikacja" w stopce.
 
-| Stan w metadanych | `IsSaveStateVisible` | Autozapis + przycisk „Zapisz" |
+| Stan w metadanych | `IsSaveStateVisible` | Autozapis + „Zapisz" + „Ostatnia modyfikacja" |
 |---|---|---|
 | brak pola | `true` | widoczne |
 | `null` | `true` | widoczne |

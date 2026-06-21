@@ -18,17 +18,20 @@ public class FinishAndSendDocumentCommandHandler
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentDeliveryRepository _deliveryRepository;
     private readonly IDocumentStorageService _storage;
+    private readonly IDeliverySender _sender;
     private readonly ICurrentUserProvider _currentUser;
 
     public FinishAndSendDocumentCommandHandler(
         IDocumentRepository documentRepository,
         IDocumentDeliveryRepository deliveryRepository,
         IDocumentStorageService storage,
+        IDeliverySender sender,
         ICurrentUserProvider currentUser)
     {
         _documentRepository = documentRepository;
         _deliveryRepository = deliveryRepository;
         _storage = storage;
+        _sender = sender;
         _currentUser = currentUser;
     }
 
@@ -53,53 +56,24 @@ public class FinishAndSendDocumentCommandHandler
                 return Result<FinishAndSendResult>.Failure(
                     "Brak poprawnego adresu odbiorcy (returnUrl) w metadanych dokumentu");
 
-            // Idempotencja wielokrotnego kliknięcia: jeśli jest aktywne zadanie — zwróć je.
+            // Idempotencja: jeśli zadanie jest właśnie wysyłane (np. równoległy worker), nie dubluj próby.
             var active = await _deliveryRepository.GetActiveByDocumentIdAsync(document.Id, cancellationToken);
-            if (active != null)
-                return Result<FinishAndSendResult>.Success(new FinishAndSendResult(active.Id, active.Status.ToString()));
+            if (active is { Status: DeliveryStatus.Sending })
+                return Result<FinishAndSendResult>.Success(new FinishAndSendResult(
+                    active.Id, active.Status.ToString(), document.Status.ToString(), Delivered: false));
 
-            // 1. Utrwal stan edytora (nadpisanie wersji edytowalnej w miejscu — domena pilnuje v1-immutable).
+            // Utrwal stan edytora (nadpisanie wersji edytowalnej w miejscu — domena pilnuje v1-immutable).
             await _storage.UploadAsync(version.Id, request.Content, document.MimeType, cancellationToken);
             document.UpdateVersion(version.Id, request.Content.Length);
 
-            // 2. Zamroź niezmienny snapshot finalnego pliku w GCS.
-            var deliveryId = Guid.NewGuid();
-            var snapshotObjectName = $"deliveries/{deliveryId}";
-            var sha256 = Convert.ToHexString(SHA256.HashData(request.Content));
-            await _storage.UploadRawAsync(snapshotObjectName, request.Content, document.MimeType, cancellationToken);
+            // Reuse a held job (tracked load — GetActive... is no-tracking), else create a fresh one.
+            var delivery = active is null
+                ? await CreateQueuedDeliveryAsync(document, version, request, recipientUrl!, cancellationToken)
+                : await _deliveryRepository.GetByIdAsync(active.Id, cancellationToken);
+            if (delivery is null)
+                return Result<FinishAndSendResult>.Failure("Nie znaleziono zadania wysyłki do ponowienia");
 
-            // 3. Status dokumentu + zadanie wysyłki — atomowo (jeden SaveChanges, ten sam DbContext).
-            document.MarkSending();
-            var delivery = DocumentDelivery.Create(
-                id: deliveryId,
-                documentId: document.Id,
-                sourceVersionId: version.Id,
-                snapshotObjectName: snapshotObjectName,
-                snapshotSizeBytes: request.Content.Length,
-                snapshotSha256: sha256,
-                recipientUrl: recipientUrl!,
-                createdBy: request.CreatedBy ?? document.CreatedBy,
-                correlationId: Guid.NewGuid(),
-                retentionWindow: RetentionWindow,
-                corporateKey: _currentUser.CorporateKey);
-
-            await _deliveryRepository.AddAsync(delivery, cancellationToken);
-
-            try
-            {
-                await _deliveryRepository.SaveChangesAsync(cancellationToken);
-            }
-            catch (Exception)
-            {
-                // Wyścig: równoległe drugie kliknięcie mogło wygrać unique index
-                // (jedno aktywne zadanie na dokument). Jeśli zwycięzca istnieje — zwróć go; inaczej propaguj.
-                var winner = await _deliveryRepository.GetActiveByDocumentIdAsync(document.Id, cancellationToken);
-                if (winner != null)
-                    return Result<FinishAndSendResult>.Success(new FinishAndSendResult(winner.Id, winner.Status.ToString()));
-                throw;
-            }
-
-            return Result<FinishAndSendResult>.Success(new FinishAndSendResult(delivery.Id, delivery.Status.ToString()));
+            return await AttemptInlineDeliveryAsync(document, delivery, request.Content, cancellationToken);
         }
         catch (InvalidOperationException ex)
         {
@@ -108,12 +82,91 @@ public class FinishAndSendDocumentCommandHandler
         }
         catch (Exception ex)
         {
-            var details = ex.Message;
-            for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
-                details += $" -> {inner.Message}";
-
-            return Result<FinishAndSendResult>.Failure($"Błąd podczas kończenia i wysyłki dokumentu: {details}");
+            return Result<FinishAndSendResult>.Failure($"Błąd podczas kończenia i wysyłki dokumentu: {Flatten(ex)}");
         }
+    }
+
+    /// <summary>
+    /// Zamraża snapshot finalnego pliku, tworzy zadanie wysyłki i ustawia status dokumentu na
+    /// "Zlecono do wysyłki" (Queued). Snapshot jest potrzebny także do ewentualnej wysyłki w tle.
+    /// </summary>
+    private async Task<DocumentDelivery> CreateQueuedDeliveryAsync(
+        Document document, DocumentVersion version, FinishAndSendDocumentCommand request,
+        string recipientUrl, CancellationToken cancellationToken)
+    {
+        var deliveryId = Guid.NewGuid();
+        var snapshotObjectName = $"deliveries/{deliveryId}";
+        var sha256 = Convert.ToHexString(SHA256.HashData(request.Content));
+        await _storage.UploadRawAsync(snapshotObjectName, request.Content, document.MimeType, cancellationToken);
+
+        document.MarkQueued();
+        var delivery = DocumentDelivery.Create(
+            id: deliveryId,
+            documentId: document.Id,
+            sourceVersionId: version.Id,
+            snapshotObjectName: snapshotObjectName,
+            snapshotSizeBytes: request.Content.Length,
+            snapshotSha256: sha256,
+            recipientUrl: recipientUrl,
+            createdBy: request.CreatedBy ?? document.CreatedBy,
+            correlationId: Guid.NewGuid(),
+            retentionWindow: RetentionWindow,
+            corporateKey: _currentUser.CorporateKey);
+
+        await _deliveryRepository.AddAsync(delivery, cancellationToken);
+        await _deliveryRepository.SaveChangesAsync(cancellationToken);
+        return delivery;
+    }
+
+    /// <summary>
+    /// Wykonuje pojedynczą synchroniczną próbę dostarczenia. Statusy są utrwalane w odpowiednich
+    /// momentach: "W trakcie wysyłki" przed próbą, a potem "Wysłano" lub "Błąd wysyłki".
+    /// Po błędzie zadanie czeka (wstrzymane) na decyzję użytkownika — worker go nie przejmie.
+    /// </summary>
+    private async Task<Result<FinishAndSendResult>> AttemptInlineDeliveryAsync(
+        Document document, DocumentDelivery delivery, byte[] content, CancellationToken cancellationToken)
+    {
+        delivery.BeginInlineAttempt();
+        document.MarkSending();
+        await _deliveryRepository.SaveChangesAsync(cancellationToken);
+
+        var dispatch = new DeliveryDispatch(
+            delivery.Id, delivery.RecipientUrl, content, delivery.SnapshotSha256,
+            delivery.DocumentId, delivery.SourceVersionId, delivery.CorporateKey);
+
+        DeliveryResult result;
+        try
+        {
+            result = await _sender.SendAsync(dispatch, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            result = DeliveryResult.Retryable(Flatten(ex));
+        }
+
+        if (result.Outcome == DeliveryOutcome.Succeeded)
+        {
+            delivery.MarkSent();
+            document.MarkSent();
+            await _deliveryRepository.SaveChangesAsync(cancellationToken);
+            return Result<FinishAndSendResult>.Success(new FinishAndSendResult(
+                delivery.Id, delivery.Status.ToString(), document.Status.ToString(), Delivered: true));
+        }
+
+        var error = result.Error ?? "Nie udało się dostarczyć dokumentu";
+        delivery.HoldAfterFailedInlineAttempt(error);
+        document.MarkDeliveryFailed();
+        await _deliveryRepository.SaveChangesAsync(cancellationToken);
+        return Result<FinishAndSendResult>.Success(new FinishAndSendResult(
+            delivery.Id, delivery.Status.ToString(), document.Status.ToString(), Delivered: false, Error: error));
+    }
+
+    private static string Flatten(Exception ex)
+    {
+        var details = ex.Message;
+        for (var inner = ex.InnerException; inner != null; inner = inner.InnerException)
+            details += $" -> {inner.Message}";
+        return details;
     }
 
     private static string? ReadReturnUrl(string? metadata)

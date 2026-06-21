@@ -13,6 +13,21 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-21 — „Zakończ" sync + statusy, „Pobierz oryginał", ukrycie „Ostatnia modyfikacja"
+### Changed
+- **DocumentStatus** +`Queued` („Zlecono do wysyłki"), +`SendAborted` („UzytkownikPrzerwałWysyłkę"); `Document.MarkQueued/MarkSendAborted`.
+- **DocumentDelivery** +`BeginInlineAttempt()` (Pending/RetryScheduled→Sending, inline, bez lease) +`HoldAfterFailedInlineAttempt()` (RetryScheduled zaparkowane na DeadlineAt — worker nie przejmie).
+- **FinishAndSendDocumentCommandHandler** — synchroniczna pierwsza próba przez `IDeliverySender`; wynik `{DeliveryId,Status,DocumentStatus,Delivered,Error?}`. Endpoint `finish` → 200 (było 202).
+- Nowe komendy/endpointy: `POST /{masterId}/abort-send` (Przerwij → delivery `Cancelled` + doc `SendAborted`), `POST /{masterId}/continue-delivery` (Kontynuuj w tle → `Requeue` + doc `Queued`).
+- **GUI** `document-editor`: nowa pozycja „Plik → Pobierz oryginał dokumentu" (`canDownloadOriginal = loadedFromDisk || userDownload`, zwraca v1); flow „Zakończ" = „Trwa wysyłanie dokumentu ..." → sukces zamyka kartę / błąd: modal „Wystąpiły problemy..." + Przerwij/Kontynuuj; „Ostatnia modyfikacja" w stopce gated `showSaveState()`.
+- `infra/sql/010_extend_document_status.sql` (COMMENT only — kolumna bez CHECK).
+### Verified
+- `dotnet build` D2Api + D2Services: 0 błędów. Domain 77, Application 282 zielone. GUI Vitest 267 zielone.
+- `ng build` AOT kompiluje; błąd tylko z pre-existing budżetu bundla (nietknięte pliki).
+### Notes
+- Decyzje potwierdzone z użytkownikiem: synchroniczna pierwsza próba (nowy endpoint) + angielski PascalCase enuma (etykiety PL tylko w UI).
+- „Pobierz oryginał" z aplikacji zewn. używa `GET {masterId}/download` (view-gated, jak podgląd Krok 2) — oryginał był już pobieralny dla każdego z dostępem do podglądu; `userDownload` bramkuje tylko pobranie EDYTOWANEJ kopii.
+
 ## 2026-06-19 — `showSaveState` (ingest) — ukrywanie UI zapisu w edytorze
 ### Changed
 - **D2Services** `DocumentController.CreateDocument`: nowe opcjonalne pole `ShowSaveState: bool?` w `CreateDocumentRequest`; zapisywane do `documents.metadata` jako `showSaveState` **tylko gdy jawne `false`** (inverse-default — brak/`true` → `null` → widoczne).

@@ -4,8 +4,10 @@ using MediatR;
 namespace D2ViewerEditor.Application.Features.Documents.Commands.FinishAndSendDocument;
 
 /// <summary>
-/// Komenda "zakończ i wyślij": utrwala stan edytora, zamraża snapshot finalnego pliku
-/// i tworzy zadanie asynchronicznej wysyłki na returnUrl z metadanych dokumentu.
+/// Komenda "zakończ i wyślij": utrwala stan edytora, zamraża snapshot finalnego pliku, tworzy
+/// zadanie wysyłki i wykonuje SYNCHRONICZNĄ pierwszą próbę dostarczenia na returnUrl. Wynik tej
+/// próby (sukces/błąd) jest zwracany od razu, by GUI mogło pokazać "Wysłano" albo zaproponować
+/// „Przerwij" / „Kontynuuj wysyłkę w tle".
 /// </summary>
 public record FinishAndSendDocumentCommand(
     Guid MasterId,
@@ -15,9 +17,13 @@ public record FinishAndSendDocumentCommand(
 ) : IRequest<Result<FinishAndSendResult>>;
 
 /// <summary>
-/// Wynik utworzenia (lub odnalezienia istniejącego) zadania wysyłki.
+/// Wynik kończenia dokumentu: identyfikator zadania, status zadania wysyłki, status dokumentu
+/// po pierwszej próbie oraz flaga, czy dokument został dostarczony za pierwszym razem.
 /// </summary>
 public record FinishAndSendResult(
     Guid DeliveryId,
-    string Status
+    string Status,
+    string DocumentStatus,
+    bool Delivered,
+    string? Error = null
 );

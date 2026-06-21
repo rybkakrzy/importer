@@ -1,6 +1,8 @@
 using D2ViewerEditor.Api.Controllers;
 using D2ViewerEditor.Application.Features.Documents.Commands.DownloadEditedDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.FinishAndSendDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.AbortSend;
+using D2ViewerEditor.Application.Features.Documents.Commands.ContinueDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.CancelDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.RequeueDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.UpdateDeliveryRecipientUrl;
@@ -305,15 +307,16 @@ public class DocumentStorageController : BaseApiController
     }
 
     /// <summary>
-    /// "Zakończ i wyślij": utrwala stan edytora, zamraża snapshot finalnego pliku
-    /// i tworzy zadanie asynchronicznej wysyłki na returnUrl z metadanych.
-    /// Wielokrotne kliknięcie jest idempotentne — zwraca to samo zadanie.
+    /// "Zakończ i wyślij": utrwala stan edytora, zamraża snapshot finalnego pliku, ustawia status
+    /// "Zlecono do wysyłki" i wykonuje SYNCHRONICZNĄ pierwszą próbę dostarczenia na returnUrl.
+    /// Sukces → "Wysłano"; błąd → "Błąd wysyłki" + zadanie czeka na decyzję użytkownika
+    /// ("Przerwij" / "Kontynuuj wysyłkę w tle"). Wielokrotne kliknięcie jest idempotentne.
     /// </summary>
     /// <param name="masterId">GUID mastera dokumentu</param>
     /// <param name="versionId">GUID wersji edytowalnej do sfinalizowania</param>
     /// <param name="request">Aktualna zawartość edytora</param>
     [HttpPost("{masterId:guid}/versions/{versionId:guid}/finish")]
-    [ProducesResponseType(typeof(FinishAndSendResult), StatusCodes.Status202Accepted)]
+    [ProducesResponseType(typeof(FinishAndSendResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> FinishAndSend(
@@ -332,10 +335,47 @@ public class DocumentStorageController : BaseApiController
         if (result.IsFailure)
             return BadRequest(new { error = result.Error });
 
-        var value = result.Value!;
-        return Accepted(
-            $"/api/documentstorage/deliveries/{value.DeliveryId}",
-            new { value.DeliveryId, value.Status, StatusUrl = $"/api/documentstorage/deliveries/{value.DeliveryId}" });
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// "Przerwij" po nieudanej pierwszej próbie wysyłki: anuluje zadanie (Cancelled) i ustawia
+    /// dokument na "UzytkownikPrzerwałWysyłkę". Dokument zostaje edytowalny, nic nie idzie w tle.
+    /// </summary>
+    /// <param name="masterId">GUID mastera dokumentu</param>
+    [HttpPost("{masterId:guid}/abort-send")]
+    [ProducesResponseType(typeof(AbortSendResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> AbortSend(Guid masterId)
+    {
+        var result = await Mediator.Send(new AbortSendCommand(masterId));
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
+    }
+
+    /// <summary>
+    /// "Kontynuuj wysyłkę w tle" po nieudanej pierwszej próbie: przywraca zadanie do kolejki
+    /// i ustawia dokument na "Zlecono do wysyłki". Dalej dostarcza je worker w tle.
+    /// </summary>
+    /// <param name="masterId">GUID mastera dokumentu</param>
+    [HttpPost("{masterId:guid}/continue-delivery")]
+    [ProducesResponseType(typeof(ContinueDeliveryResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ContinueDelivery(Guid masterId)
+    {
+        var result = await Mediator.Send(new ContinueDeliveryCommand(masterId));
+
+        return result.IsSuccess
+            ? Ok(result.Value)
+            : result.IsNotFound
+                ? NotFound(new { error = result.Error })
+                : BadRequest(new { error = result.Error });
     }
 
     /// <summary>
