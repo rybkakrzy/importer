@@ -13,6 +13,17 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-22 — Pokrycie testami jednostkowymi ≥60% (wszystkie assembly)
+### Changed
+- `DocumentStorageControllerTests` (+~40 testów): pełne pokrycie endpointów (UpdateDocumentVersion, GetDocumentMetadata 403/404, user-download 200/403/404/400, finish, abort-send, continue-delivery, delivery status/list/retry/cancel/recipient-url).
+- D2Services `DocumentControllerTests` (+~10): UpdateCallbackUrl (NoContent/404/Conflict/BadRequest), UnlockDocument (Ok/404/Conflict), CreateDocument (DOCX z flagami, unsupported mime, ingest fail), rekordy request.
+- Nowe `DeliveryAttemptRunnerTests` (Sent/PermanentError/Retry/no-op/storage-throw), `ConverterRoundTripCoverageTests` (bogaty HTML→DOCX→HTML), `DeliveryOptionsTests`.
+### Verified
+- Coverage (coverlet + ReportGenerator, merge 5 projektów): line **64.3% → 72.1%**. Per-assembly: Domain 92.2%, Application 94.2%, Infrastructure 57.3%→**67.3%**, D2ViewerEditor.Api 49.4%→**61.5%**, D2ServicesViewerEditor.Api 53.9%→**60.2%** — wszystkie ≥60%.
+- Testy zielone: Domain 77, Application 282, Infrastructure 178, D2Api.UnitTests 110, D2Services.UnitTests 39.
+### Notes
+- Pozostałe luki to świadomie infra/seam/startup (GCS client, EF DbContext/repozytoria, `Program.cs`, `DocumentDeliveryWorker`) — pokrywane testami integracyjnymi, nie jednostkowymi.
+
 ## 2026-06-22 — D2Services observability: middleware + correlation id + JSON payload parity
 ### Changed
 - `D2ServicesViewerEditor.Api/Program.cs`:

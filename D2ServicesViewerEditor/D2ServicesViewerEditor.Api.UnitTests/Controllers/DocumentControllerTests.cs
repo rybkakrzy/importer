@@ -1,6 +1,8 @@
 using System.Text;
 using D2ServicesViewerEditor.Api.Controllers;
 using D2ViewerEditor.Application.Features.Documents.Commands.IngestExternalDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.UnlockDocument;
+using D2ViewerEditor.Application.Features.Documents.Commands.UpdateCallbackUrl;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetDocumentStatus;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
@@ -117,6 +119,153 @@ public class DocumentControllerTests
         var response = ok.Value.Should().BeOfType<DocumentStatusResponse>().Subject;
         response.MasterId.Should().Be(masterId);
         response.Status.Should().Be(DocumentStatus.Saved);
+    }
+
+    [Test]
+    public async Task CreateDocument_WhenDocxWithReturnUrlAndFlags_ReturnsCreatedWithVersionId()
+    {
+        var masterId = Guid.NewGuid();
+        var versionId = Guid.NewGuid();
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile("doc.docx", IngestExternalDocumentCommandHandler.DocxMimeType, "abc"),
+            ReturnUrl = "https://app.example.com/cb",
+            Classification = "C3",
+            UserDownload = true,
+            ShowSaveState = false
+        };
+        _mediator.Send(Arg.Any<IngestExternalDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IngestExternalDocumentResult>.Success(
+                new IngestExternalDocumentResult(masterId, versionId, "doc.docx", DateTime.UtcNow)));
+
+        var result = await _controller.CreateDocument(request, CancellationToken.None);
+
+        var obj = result.Should().BeOfType<ObjectResult>().Subject;
+        obj.StatusCode.Should().Be(StatusCodes.Status201Created);
+        obj.Value.Should().BeOfType<CreateDocumentResponse>()
+            .Which.VersionId.Should().Be(versionId);
+        // Metadata JSON should carry the explicit flags onward to the ingest command.
+        await _mediator.Received(1).Send(
+            Arg.Is<IngestExternalDocumentCommand>(c =>
+                c.Metadata.Contains("\"userDownload\":true") && c.Metadata.Contains("\"showSaveState\":false")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CreateDocument_WhenUnsupportedMime_ReturnsBadRequest()
+    {
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile("doc.txt", "text/plain", "abc")
+        };
+
+        var result = await _controller.CreateDocument(request, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Test]
+    public async Task CreateDocument_WhenIngestFails_ReturnsBadRequest()
+    {
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile("doc.pdf", "application/pdf", "abc")
+        };
+        _mediator.Send(Arg.Any<IngestExternalDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IngestExternalDocumentResult>.Failure("ingest error"));
+
+        var result = await _controller.CreateDocument(request, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Test]
+    public async Task UpdateCallbackUrl_WhenSuccess_ReturnsNoContent()
+    {
+        _mediator.Send(Arg.Any<UpdateCallbackUrlCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Success());
+
+        var result = await _controller.UpdateCallbackUrl(
+            Guid.NewGuid(), new UpdateCallbackUrlRequest("https://new"), CancellationToken.None);
+
+        result.Should().BeOfType<NoContentResult>();
+    }
+
+    [Test]
+    public async Task UpdateCallbackUrl_WhenNotFound_ReturnsNotFound()
+    {
+        _mediator.Send(Arg.Any<UpdateCallbackUrlCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result.NotFound());
+
+        var result = await _controller.UpdateCallbackUrl(
+            Guid.NewGuid(), new UpdateCallbackUrlRequest("https://new"), CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Test]
+    public async Task UpdateCallbackUrl_WhenConflict_ReturnsConflict()
+    {
+        _mediator.Send(Arg.Any<UpdateCallbackUrlCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Failure("Nie można zaktualizować callback URL dla dokumentu w trakcie wysyłki"));
+
+        var result = await _controller.UpdateCallbackUrl(
+            Guid.NewGuid(), new UpdateCallbackUrlRequest("https://new"), CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+    }
+
+    [Test]
+    public async Task UpdateCallbackUrl_WhenOtherFailure_ReturnsBadRequest()
+    {
+        _mediator.Send(Arg.Any<UpdateCallbackUrlCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Failure("zły url"));
+
+        var result = await _controller.UpdateCallbackUrl(
+            Guid.NewGuid(), new UpdateCallbackUrlRequest("bad"), CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+    }
+
+    [Test]
+    public async Task UnlockDocument_WhenSuccess_ReturnsOk()
+    {
+        var masterId = Guid.NewGuid();
+        _mediator.Send(Arg.Any<UnlockDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<UnlockDocumentResult>.Success(new UnlockDocumentResult(masterId, true)));
+
+        var result = await _controller.UnlockDocument(masterId, new UnlockDocumentRequest("audit"), CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    [Test]
+    public async Task UnlockDocument_WhenNotFound_ReturnsNotFound()
+    {
+        _mediator.Send(Arg.Any<UnlockDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<UnlockDocumentResult>.NotFound());
+
+        var result = await _controller.UnlockDocument(Guid.NewGuid(), null, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Test]
+    public async Task UnlockDocument_WhenConflict_ReturnsConflict()
+    {
+        _mediator.Send(Arg.Any<UnlockDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<UnlockDocumentResult>.Failure("dokument w trakcie wysyłki"));
+
+        var result = await _controller.UnlockDocument(Guid.NewGuid(), null, CancellationToken.None);
+
+        result.Should().BeOfType<ConflictObjectResult>();
+    }
+
+    [Test]
+    public void RequestRecords_AreConstructible()
+    {
+        new UpdateCallbackUrlRequest("https://x").Url.Should().Be("https://x");
+        new UnlockDocumentRequest("why").Reason.Should().Be("why");
     }
 
     private static IFormFile BuildFormFile(string fileName, string contentType, string content)
