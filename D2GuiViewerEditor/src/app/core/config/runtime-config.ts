@@ -14,6 +14,10 @@ export interface AppAuthConfig {
   enabled?: boolean;
 }
 
+type RuntimeAuthConfigInput = Partial<AppAuthConfig> & {
+  redirectUrl?: string;
+};
+
 /**
  * Structural fallback only — used when `config.json` is missing/invalid and in tests. The real
  * per-environment values (clientId, authority, apiScopes) live in `config.json`, NOT here.
@@ -41,14 +45,19 @@ export const MSAL_CUSTOM_CONFIG = new InjectionToken<AppAuthConfig>('MSAL_CUSTOM
 });
 
 /** Merges a partial runtime config over the build-time defaults (missing fields keep defaults). */
-export function mergeAuthConfig(raw: Partial<AppAuthConfig> | undefined | null): AppAuthConfig {
+export function mergeAuthConfig(raw: RuntimeAuthConfigInput | undefined | null): AppAuthConfig {
   const a = raw ?? {};
+  const runtimeScopes = Array.isArray(a.apiScopes)
+    ? a.apiScopes.filter((scope): scope is string => typeof scope === 'string').map((scope) => scope.trim()).filter(Boolean)
+    : undefined;
+
   return {
     clientId: a.clientId ?? DEFAULT_AUTH_CONFIG.clientId,
     authority: a.authority ?? DEFAULT_AUTH_CONFIG.authority,
-    redirectUri: a.redirectUri ?? DEFAULT_AUTH_CONFIG.redirectUri,
+    // Backward-compatible alias from older runtime config templates.
+    redirectUri: a.redirectUri ?? a.redirectUrl ?? DEFAULT_AUTH_CONFIG.redirectUri,
     postLogoutRedirectUri: a.postLogoutRedirectUri ?? DEFAULT_AUTH_CONFIG.postLogoutRedirectUri,
-    apiScopes: a.apiScopes ?? DEFAULT_AUTH_CONFIG.apiScopes,
+    apiScopes: runtimeScopes ?? DEFAULT_AUTH_CONFIG.apiScopes,
     enabled: a.enabled ?? DEFAULT_AUTH_CONFIG.enabled ?? true,
   };
 }

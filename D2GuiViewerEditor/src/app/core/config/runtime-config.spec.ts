@@ -31,6 +31,16 @@ describe('mergeAuthConfig', () => {
     expect(mergeAuthConfig({}).apiScopes).toEqual(DEFAULT_AUTH_CONFIG.apiScopes);
   });
 
+  it('accepts legacy redirectUrl as redirectUri alias', () => {
+    const merged = mergeAuthConfig({ redirectUrl: 'https://viewer.example.com' });
+    expect(merged.redirectUri).toBe('https://viewer.example.com');
+  });
+
+  it('normalizes apiScopes by trimming and removing empty values', () => {
+    const merged = mergeAuthConfig({ apiScopes: [' User.Read ', '   ', 'api://x/access_as_user'] });
+    expect(merged.apiScopes).toEqual(['User.Read', 'api://x/access_as_user']);
+  });
+
   it('does not mutate the defaults object', () => {
     const snapshot = JSON.stringify(DEFAULT_AUTH_CONFIG);
     mergeAuthConfig({ clientId: 'x', apiScopes: ['y'] });

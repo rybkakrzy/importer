@@ -51,8 +51,19 @@ export const appConfig: ApplicationConfig = {
     MsalGuard,
     MsalBroadcastService,
 
-    // MSAL v3+ must be initialized before use.
-    provideAppInitializer(() => inject(MsalService).instance.initialize()),
+    // MSAL v3+ must be initialized before use. We also set the active account as early as
+    // possible so first API calls can acquire a token immediately.
+    provideAppInitializer(async () => {
+      const msal = inject(MsalService);
+      await msal.instance.initialize();
+
+      if (!msal.instance.getActiveAccount()) {
+        const firstAccount = msal.instance.getAllAccounts()[0] ?? null;
+        if (firstAccount) {
+          msal.instance.setActiveAccount(firstAccount);
+        }
+      }
+    }),
 
     { provide: ErrorHandler, useClass: GlobalErrorHandler },
 
