@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Commands.IngestExternalDocument;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
 using FluentAssertions;
@@ -15,6 +16,8 @@ public class IngestExternalDocumentCommandHandlerTests
 
     private IDocumentRepository _repo = null!;
     private IDocumentStorageService _storage = null!;
+    private IFileUploadSecurityService _uploadSecurityService = null!;
+    private IReturnUrlValidator _returnUrlValidator = null!;
     private IngestExternalDocumentCommandHandler _handler = null!;
 
     [SetUp]
@@ -22,15 +25,30 @@ public class IngestExternalDocumentCommandHandlerTests
     {
         _repo = Substitute.For<IDocumentRepository>();
         _storage = Substitute.For<IDocumentStorageService>();
+        _uploadSecurityService = Substitute.For<IFileUploadSecurityService>();
+        _returnUrlValidator = Substitute.For<IReturnUrlValidator>();
         _storage.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci => $"documents/{ci.ArgAt<Guid>(0)}");
-        _handler = new IngestExternalDocumentCommandHandler(_repo, _storage);
+        _uploadSecurityService.ValidateDocumentAsync(
+                Arg.Any<byte[]>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(UploadValidationResult.Success(DocxMime));
+        _returnUrlValidator.Validate(Arg.Any<string>())
+            .Returns(ci => ReturnUrlValidationResult.Success(ci.Arg<string>()));
+        _handler = new IngestExternalDocumentCommandHandler(_repo, _storage, _uploadSecurityService, _returnUrlValidator);
     }
 
     [Test]
     public async Task Handle_Docx_CreatesOriginalPlusEditableVersion_AndReturnsVersionId()
     {
-        var cmd = new IngestExternalDocumentCommand(new byte[] { 1, 2, 3 }, "ext.docx", DocxMime, "ExternalApp");
+        var cmd = new IngestExternalDocumentCommand(
+            new byte[] { 1, 2, 3 },
+            "ext.docx",
+            DocxMime,
+            "ExternalApp",
+            "{\"returnUrl\":\"https://example.com/cb\"}");
 
         var result = await _handler.Handle(cmd, CancellationToken.None);
 
@@ -92,5 +110,16 @@ public class IngestExternalDocumentCommandHandlerTests
 
         result.IsFailure.Should().BeTrue();
         result.Error.Should().Contain("db error");
+    }
+
+    [Test]
+    public async Task Handle_DocxWithoutReturnUrl_ReturnsFailure()
+    {
+        var result = await _handler.Handle(
+            new IngestExternalDocumentCommand(new byte[] { 1, 2, 3 }, "ext.docx", DocxMime, "ExternalApp"),
+            CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Contain("returnUrl");
     }
 }

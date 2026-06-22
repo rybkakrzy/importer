@@ -1,6 +1,8 @@
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
+using D2ViewerEditor.Application.Common.Security;
+using D2ViewerEditor.Application.Features.Documents.Common;
 using MediatR;
 
 namespace D2ViewerEditor.Application.Features.Documents.Commands.IngestExternalDocument;
@@ -13,13 +15,19 @@ public class IngestExternalDocumentCommandHandler
 
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentStorageService _storageService;
+    private readonly IFileUploadSecurityService _uploadSecurityService;
+    private readonly IReturnUrlValidator _returnUrlValidator;
 
     public IngestExternalDocumentCommandHandler(
         IDocumentRepository documentRepository,
-        IDocumentStorageService storageService)
+        IDocumentStorageService storageService,
+        IFileUploadSecurityService uploadSecurityService,
+        IReturnUrlValidator returnUrlValidator)
     {
         _documentRepository = documentRepository;
         _storageService = storageService;
+        _uploadSecurityService = uploadSecurityService;
+        _returnUrlValidator = returnUrlValidator;
     }
 
     public async Task<Result<IngestExternalDocumentResult>> Handle(
@@ -37,6 +45,27 @@ public class IngestExternalDocumentCommandHandler
             if (!isDocx && !isPdf)
                 return Result<IngestExternalDocumentResult>.Failure(
                     $"Nieobsługiwany typ pliku: {request.MimeType}. Wspierane: DOCX, PDF.");
+
+            var uploadValidation = await _uploadSecurityService.ValidateDocumentAsync(
+                request.Content,
+                request.FileName,
+                request.MimeType,
+                cancellationToken);
+
+            if (!uploadValidation.IsValid)
+                return Result<IngestExternalDocumentResult>.Failure(
+                    $"Upload odrzucony ({uploadValidation.Code}): {uploadValidation.Error}");
+
+            var metadata = ExternalDocumentMetadata.Parse(request.Metadata);
+            if (isDocx && string.IsNullOrWhiteSpace(metadata.ReturnUrl))
+                return Result<IngestExternalDocumentResult>.Failure("Brak poprawnego adresu odbiorcy (returnUrl) w metadanych dokumentu");
+
+            if (!string.IsNullOrWhiteSpace(metadata.ReturnUrl))
+            {
+                var returnUrlValidation = _returnUrlValidator.Validate(metadata.ReturnUrl);
+                if (!returnUrlValidation.IsValid)
+                    return Result<IngestExternalDocumentResult>.Failure(returnUrlValidation.Error!);
+            }
 
             var document = new Document(
                 id: Guid.NewGuid(),

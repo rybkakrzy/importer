@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Common;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -9,17 +10,13 @@ namespace D2ViewerEditor.Application.Features.Documents.Commands.UpdateCallbackU
 public class UpdateCallbackUrlCommandHandler
     : IRequestHandler<UpdateCallbackUrlCommand, Result>
 {
-    /// <summary>
-    /// Belt-and-suspenders cap (real-world callback URLs sit well below this; longer values
-    /// usually mean an embedded token we should not be storing).
-    /// </summary>
-    private const int MaxUrlLength = 2048;
-
     private readonly IDocumentRepository _documentRepository;
+    private readonly IReturnUrlValidator _returnUrlValidator;
 
-    public UpdateCallbackUrlCommandHandler(IDocumentRepository documentRepository)
+    public UpdateCallbackUrlCommandHandler(IDocumentRepository documentRepository, IReturnUrlValidator returnUrlValidator)
     {
         _documentRepository = documentRepository;
+        _returnUrlValidator = returnUrlValidator;
     }
 
     public async Task<Result> Handle(UpdateCallbackUrlCommand request, CancellationToken cancellationToken)
@@ -27,12 +24,9 @@ public class UpdateCallbackUrlCommandHandler
         if (string.IsNullOrWhiteSpace(request.CallbackUrl))
             return Result.Failure("Callback URL jest wymagany.");
 
-        var url = request.CallbackUrl.Trim();
-        if (url.Length > MaxUrlLength)
-            return Result.Failure($"Callback URL nie może być dłuższy niż {MaxUrlLength} znaków.");
-
-        if (!DocumentDelivery.IsValidRecipientUrl(url))
-            return Result.Failure("Callback URL musi być absolutnym adresem http(s).");
+        var urlValidation = _returnUrlValidator.Validate(request.CallbackUrl);
+        if (!urlValidation.IsValid)
+            return Result.Failure(urlValidation.Error!);
 
         var document = await _documentRepository.GetByIdAsync(request.MasterId, cancellationToken);
         if (document == null)
@@ -44,7 +38,7 @@ public class UpdateCallbackUrlCommandHandler
 
         // Preserve every other field on the metadata blob — we only own ReturnUrl here.
         var existing = ExternalDocumentMetadata.Parse(document.Metadata);
-        var newMetadata = (existing with { ReturnUrl = url }).Serialize();
+        var newMetadata = (existing with { ReturnUrl = urlValidation.NormalizedUrl }).Serialize();
 
         document.UpdateMetadata(newMetadata);
         await _documentRepository.SaveChangesAsync(cancellationToken);

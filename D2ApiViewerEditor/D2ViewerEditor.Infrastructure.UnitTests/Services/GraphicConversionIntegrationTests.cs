@@ -32,9 +32,31 @@ public class GraphicConversionIntegrationTests
         // Renderowany `src` NIE może być surowym EMF (przeglądarka go nie wyświetli). Oryginalny
         // EMF wolno nieść w `data-original-src` (do round-tripu przez writer) — to nie jest `src`.
         content.Html.Should().NotContain(" src=\"data:image/x-emf");
-        // Placeholder SVG (brak osadzonego rastra w syntetyku) oznaczony atrybutem diagnostycznym.
+        // Przezroczysty blank SVG (brak osadzonego rastra w syntetyku) oznaczony atrybutem diagnostycznym.
         content.Html.Should().Contain("data:image/svg+xml;base64,");
-        content.Html.Should().Contain("data-legacy-graphic=\"placeholder\"");
+        content.Html.Should().Contain("data-legacy-graphic=\"blank\"");
+
+        // Regresja: ZADEN widoczny placeholder w wygenerowanym HTML/SVG (req 1).
+        AssertNoVisiblePlaceholder(content.Html);
+    }
+
+    /// <summary>
+    /// Skanuje wygenerowane assety: dekoduje wszystkie data:image/svg+xml z HTML i sprawdza, że żaden
+    /// nie zawiera szarego tła / ramki / tekstu „requires conversion"/„podgląd w Word". Blank fallback
+    /// EMF/WMF musi być całkowicie przezroczysty (brak udawanej treści).
+    /// </summary>
+    private static void AssertNoVisiblePlaceholder(string html)
+    {
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                     html, "data:image/svg\\+xml;base64,([A-Za-z0-9+/=]+)"))
+        {
+            var svg = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(m.Groups[1].Value));
+            if (svg.Contains("data-legacy-graphic")) continue; // (attr nie trafia do treści SVG; defensywnie)
+            svg.Should().NotContain("<text");
+            foreach (var banned in new[] { "requires conversion", "podgląd w word", "konwersj" })
+                svg.ToLowerInvariant().Should().NotContain(banned);
+        }
+        html.ToLowerInvariant().Should().NotContain("requires conversion");
     }
 
     /// <summary>
@@ -69,6 +91,116 @@ public class GraphicConversionIntegrationTests
         var imageParts = outDoc.MainDocumentPart!.ImageParts.ToList();
         imageParts.Should().Contain(p => p.ContentType == "image/x-emf");
         imageParts.Should().NotContain(p => p.ContentType == "image/svg+xml");
+    }
+
+    [Test]
+    public void DocxWithWmfImage_RendersRenderableDataUrl_NotRawWmf_NoPlaceholder()
+    {
+        var docx = BuildDocxWithImages((ImagePartType.Wmf, BuildPlaceableWmf(0, 0, 1440, 720, 1440)));
+        var content = new DocxToHtmlConverter().Convert(new MemoryStream(docx));
+
+        content.Html.Should().Contain("<img");
+        content.Html.Should().NotContain(" src=\"data:image/x-wmf");
+        content.Html.Should().Contain("data-legacy-graphic=\"blank\"");
+        AssertNoVisiblePlaceholder(content.Html);
+    }
+
+    [Test]
+    public void DocxWithMixedNativeAndNonNativeImages_RendersBothRenderably()
+    {
+        var docx = BuildDocxWithImages(
+            (ImagePartType.Png, MinimalPng(20, 20)),
+            (ImagePartType.Emf, BuildEmf(10000, 5000)));
+        var content = new DocxToHtmlConverter().Convert(new MemoryStream(docx));
+
+        // Web-native PNG przechodzi bez zmian; EMF → przezroczysty blank (renderowalny), bez raw x-emf w src.
+        content.Html.Should().Contain("data:image/png;base64,");
+        content.Html.Should().Contain("data:image/svg+xml;base64,");
+        content.Html.Should().NotContain(" src=\"data:image/x-emf");
+        AssertNoVisiblePlaceholder(content.Html);
+    }
+
+    [Test]
+    public void DocxWithDuplicatedEmf_RendersConsistently_AndDeduplicates()
+    {
+        var emf = BuildEmf(10000, 5000);
+        var docx = BuildDocxWithImages((ImagePartType.Emf, emf), (ImagePartType.Emf, (byte[])emf.Clone()));
+        var content = new DocxToHtmlConverter().Convert(new MemoryStream(docx));
+
+        // Oba wystąpienia renderują się jako blank SVG (identyczna konwersja, deduplikowana w cache).
+        System.Text.RegularExpressions.Regex.Matches(content.Html, "data-legacy-graphic=\"blank\"")
+            .Count.Should().Be(2);
+        content.Html.Should().NotContain(" src=\"data:image/x-emf");
+        AssertNoVisiblePlaceholder(content.Html);
+    }
+
+    private static byte[] BuildDocxWithImages(params (PartTypeInfo type, byte[] data)[] images)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var body = new Body();
+            uint id = 1;
+            foreach (var (type, data) in images)
+            {
+                var part = main.AddImagePart(type);
+                using (var s = new MemoryStream(data)) part.FeedData(s);
+                var relId = main.GetIdOfPart(part);
+                body.AppendChild(new Paragraph(new Run(BuildInlineDrawing(relId, id++))));
+            }
+            main.Document = new Document(body);
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static Drawing BuildInlineDrawing(string relId, uint id) =>
+        new(new DW.Inline(
+            new DW.Extent { Cx = 990000L, Cy = 495000L },
+            new DW.DocProperties { Id = id, Name = $"img{id}" },
+            new A.Graphic(
+                new A.GraphicData(
+                    new PIC.Picture(
+                        new PIC.NonVisualPictureProperties(
+                            new PIC.NonVisualDrawingProperties { Id = 0U, Name = $"img{id}" },
+                            new PIC.NonVisualPictureDrawingProperties()),
+                        new PIC.BlipFill(
+                            new A.Blip { Embed = relId },
+                            new A.Stretch(new A.FillRectangle())),
+                        new PIC.ShapeProperties(
+                            new A.Transform2D(
+                                new A.Offset { X = 0L, Y = 0L },
+                                new A.Extents { Cx = 990000L, Cy = 495000L }),
+                            new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle })))
+                { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" })));
+
+    private static byte[] BuildPlaceableWmf(short left, short top, short right, short bottom, ushort inch)
+    {
+        var d = new byte[40];
+        BinaryPrimitives.WriteUInt32LittleEndian(d, 0x9AC6CDD7);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(6), left);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(8), top);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(10), right);
+        BinaryPrimitives.WriteInt16LittleEndian(d.AsSpan(12), bottom);
+        BinaryPrimitives.WriteUInt16LittleEndian(d.AsSpan(14), inch);
+        return d;
+    }
+
+    private static byte[] MinimalPng(int w, int h)
+    {
+        var bytes = new List<byte> { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var ihdr = new byte[25];
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr, 13);
+        System.Text.Encoding.ASCII.GetBytes("IHDR").CopyTo(ihdr, 4);
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(8), (uint)w);
+        BinaryPrimitives.WriteUInt32BigEndian(ihdr.AsSpan(12), (uint)h);
+        ihdr[16] = 8; ihdr[17] = 2;
+        bytes.AddRange(ihdr);
+        var iend = new byte[12];
+        System.Text.Encoding.ASCII.GetBytes("IEND").CopyTo(iend, 4);
+        bytes.AddRange(iend);
+        return bytes.ToArray();
     }
 
     private static byte[] BuildDocxWithEmf()

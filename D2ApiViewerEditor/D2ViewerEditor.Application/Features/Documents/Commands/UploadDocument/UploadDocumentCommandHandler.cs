@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Common;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -13,11 +14,16 @@ public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentComman
 {
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentStorageService _storageService;
+    private readonly IFileUploadSecurityService _uploadSecurityService;
 
-    public UploadDocumentCommandHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
+    public UploadDocumentCommandHandler(
+        IDocumentRepository documentRepository,
+        IDocumentStorageService storageService,
+        IFileUploadSecurityService uploadSecurityService)
     {
         _documentRepository = documentRepository;
         _storageService = storageService;
+        _uploadSecurityService = uploadSecurityService;
     }
 
     public async Task<Result<UploadDocumentResult>> Handle(UploadDocumentCommand request, CancellationToken cancellationToken)
@@ -26,6 +32,15 @@ public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentComman
         {
             if (request.Content == null || request.Content.Length == 0)
                 return Result<UploadDocumentResult>.Failure("Zawartość dokumentu nie może być pusta");
+
+            var uploadValidation = await _uploadSecurityService.ValidateDocumentAsync(
+                request.Content,
+                request.FileName,
+                request.MimeType,
+                cancellationToken);
+
+            if (!uploadValidation.IsValid)
+                return Result<UploadDocumentResult>.Failure($"Upload odrzucony ({uploadValidation.Code}): {uploadValidation.Error}");
 
             // Generuj GUID master dla dokumentu
             var masterId = Guid.NewGuid();

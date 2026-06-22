@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Commands.UpdateDeliveryRecipientUrl;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
 using FluentAssertions;
@@ -11,13 +12,17 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
 public class UpdateDeliveryRecipientUrlCommandHandlerTests
 {
     private Mock<IDocumentDeliveryRepository> _deliveryRepo = null!;
+    private Mock<IReturnUrlValidator> _returnUrlValidator = null!;
     private UpdateDeliveryRecipientUrlCommandHandler _handler = null!;
 
     [SetUp]
     public void SetUp()
     {
         _deliveryRepo = new Mock<IDocumentDeliveryRepository>();
-        _handler = new UpdateDeliveryRecipientUrlCommandHandler(_deliveryRepo.Object);
+        _returnUrlValidator = new Mock<IReturnUrlValidator>();
+        _returnUrlValidator.Setup(v => v.Validate(It.IsAny<string>()))
+            .Returns((string url) => ReturnUrlValidationResult.Success(url.Trim()));
+        _handler = new UpdateDeliveryRecipientUrlCommandHandler(_deliveryRepo.Object, _returnUrlValidator.Object);
     }
 
     private static DocumentDelivery PendingDelivery() =>
@@ -48,6 +53,9 @@ public class UpdateDeliveryRecipientUrlCommandHandlerTests
         var delivery = PendingDelivery();
         _deliveryRepo.Setup(r => r.GetByIdAsync(delivery.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(delivery);
+        _returnUrlValidator.Setup(v => v.Validate("not-a-url"))
+            .Returns(ReturnUrlValidationResult.Failure(ReturnUrlRejectionCode.InvalidAbsoluteUri,
+                "Callback URL musi być absolutnym adresem http(s)."));
 
         var result = await _handler.Handle(
             new UpdateDeliveryRecipientUrlCommand(delivery.Id, "not-a-url"), CancellationToken.None);

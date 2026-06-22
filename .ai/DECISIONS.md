@@ -28,6 +28,29 @@ Projekt rozwijany z pomocą agentów AI; potrzebny trwały, jawny kontekst międ
 ### Consequences
 Stały kontekst i handoff; wymaga dyscypliny aktualizacji.
 
+## ADR-0020: Centralne polityki bezpieczeństwa uploadu i callback URL
+
+- Date: 2026-06-22
+- Status: Accepted
+
+### Context
+Walidacja uploadu i `returnUrl` była rozproszona i częściowo oparta na prostych regułach (np. sam schemat http/https), co zwiększało ryzyko SSRF/open-redirect bypassów i przyjęcia złośliwych plików (mismatch MIME/signature, zip abuse).
+
+### Decision
+Wprowadzono centralne serwisy policyjne w warstwie Application:
+- `IReturnUrlValidator` (`ReturnUrlValidator`) — jedna reguła dla callback/recipient URL (normalizacja + kontrola schematu, znaków, hosta, loopback/private IP, allowlisty).
+- `IFileUploadSecurityService` (`FileUploadSecurityService`) — jedna reguła dla uploadów dokumentów/obrazów (extension↔MIME↔magic bytes, DOCX archive hardening).
+- `IFileScanner` — abstrakcja integracji AV, używana przez upload policy; domyślnie `NoOpFileScanner` (wymienialny przez DI).
+Polityki egzekwowane w handlerach upload/callback (`UploadDocument`, `UploadImage`, `IngestExternalDocument`, `UpdateCallbackUrl`, `UpdateDeliveryRecipientUrl`, `FinishAndSendDocument`).
+
+### Consequences
+Spójne zachowanie security w całym backendzie i mniejsze ryzyko regresji przy kolejnych endpointach.
+Koszt: dodatkowe zależności konstruktorów handlerów i nowy kontrakt integracyjny dla produkcyjnego skanera AV.
+
+### Alternatives considered
+Pozostawienie walidacji per-controller/per-handler (odrzucone: dryf reguł).
+Walidacja wyłącznie na API edge (odrzucone: pomija wywołania wewnętrzne i utrudnia testy jednostkowe logiki domenowej).
+
 ## ADR-0002: Metadane aplikacji zewnętrznej jako JSON w jednej kolumnie
 
 - Date: (wcześniejsza praca; potwierdzone 2026-05-23)
@@ -436,3 +459,23 @@ Backend potrafi serwerowy interaktywny login (cookie/OIDC) obok walidacji token�
 
 ### Alternatives considered
 Zostawić tylko WebApi (ADR-0011/0012) — odrzucone decyzją właściciela. Zastąpić WebApi przez WebApp — odrzucone: SPA potrzebuje walidacji JWT dla wywołań API; hybryda zachowuje oba.
+
+## ADR-0020: Brak widocznego placeholdera dla nierenderowalnych grafik — przezroczysty blank + pass-through — 2026-06-22
+
+- Date: 2026-06-22
+- Status: Accepted; **zastępuje** wcześniejsze zachowanie placeholdera SVG (szare tło + „… — podgląd w Word") z GRAPHICS_CONVERSION.md.
+
+### Context
+Konwerter grafik wstawiał dla EMF/WMF bez osadzonego rastra (oraz nieobsługiwanych formatów) widoczny szary placeholder z tekstem. To wprowadza w błąd (udaje treść/komunikat błędu w edytorze). Wymóg: przeglądarka nie może pokazywać żadnego fałszywego placeholdera; realna treść albo nic widocznego + raport wewnętrzny. Stack jest pure-managed (Linux/GCP), bez GDI/System.Drawing/LibreOffice → brak rasteryzera wektora EMF/WMF (ADR/GRAPHICS_CONVERSION §4).
+
+### Decision
+- Łańcuch strategii produkuje **wyłącznie formaty renderowalne**: osadzony raster (PNG/JPEG) → DIB→PNG (SkiaSharp) → dekoder rastra (SkiaSharp dla TIFF/Unknown). 
+- Gdy żadna realna strategia nie zwróci rastra: **przezroczysty, pusty SVG** o wymiarach z layoutu (`IsBlankFallback=true`) — zero widocznej treści (brak rect/fill/stroke/text). **Nigdy** szare tło ani tekst. Niepowodzenie raportowane w `GraphicConversionDiagnostics` (`Status`, `AttemptedStrategies`, `FailureReason`).
+- Oryginalny metafile **pass-through** do DOCX (`data-original-src`) — Word renderuje prawdziwy wektor. Atrybut podglądu `data-legacy-graphic="blank"`.
+- Deduplikacja po SHA-256 treści (cache w obrębie instancji, bounded).
+
+### Consequences
+Edytor pokazuje prawdziwy raster gdy się da, a dla czystego wektora — niewidoczny element zachowujący układ (stabilność layoutu) zamiast mylącego placeholdera; eksport do Word zachowuje pełną wierność. Pełny podgląd wektora EMF/WMF w przeglądarce wymaga rasteryzera out-of-process (sidecar) — roadmapa. Testy: Infrastructure.UnitTests 188, GraphicConversion 35 (w tym regresje no-placeholder).
+
+### Alternatives considered
+(a) `Web=null` i pominięcie elementu — odrzucone: psuje układ i grozi wyemitowaniem surowego `data:image/x-emf` w `src` (przeglądarka nie renderuje → broken image). (b) Rasteryzacja wektora przez GDI/System.Drawing — odrzucone (Windows-only, crash na Linux/GCP). (c) LibreOffice headless — odrzucone (proces zewnętrzny, niestabilny w kontenerze).

@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -12,8 +14,15 @@ using SkiaSharp;
 namespace D2ViewerEditor.Infrastructure.Services;
 
 /// <summary>
-/// Pure-managed konwerter grafik (bez LibreOffice/GDI/System.Drawing → Linux/GCP-safe).
-/// Patrz <see cref="IGraphicConversionService"/> i .ai/GRAPHICS_CONVERSION.md.
+/// Pure-managed konwerter grafik dokumentowych (bez LibreOffice/GDI/System.Drawing → Linux/GCP-safe).
+///
+/// Pipeline: <c>Detect</c> (klasyfikacja) → <c>ConvertForEditor</c> (wybór strategii + łańcuch
+/// fallbacków + cache po hashu treści). Strategie produkują wyłącznie formaty renderowalne w
+/// przeglądarce (PNG/SVG/web-native raster). Gdy żadna realna strategia nie zwróci rastra dla
+/// metafile czysto wektorowego, zwracamy PRZEZROCZYSTĄ grafikę zachowującą układ — NIGDY widoczny
+/// placeholder ("requires conversion"/szare tło). Oryginalny part jedzie do DOCX (pass-through),
+/// więc Word renderuje prawdziwy wektor. Patrz <see cref="IGraphicConversionService"/> i
+/// .ai/GRAPHICS_CONVERSION.md.
 /// </summary>
 public sealed class GraphicConversionService : IGraphicConversionService
 {
@@ -21,8 +30,14 @@ public sealed class GraphicConversionService : IGraphicConversionService
     private const double EmfFrameUnitsPerMm = 100.0;    // rclFrame is in 0.01 mm
     private const double MmPerInch = 25.4;
     private const double DefaultDpi = 96.0;
+    private const int MaxCacheEntries = 1024;           // ograniczenie pamięci cache (bounded)
 
     private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+
+    // Cache deduplikujący identyczne assety w obrębie instancji (np. ten sam obraz wstawiony N razy
+    // w dokumencie). Klucz = hash treści + parametry wpływające na wynik. ConcurrentDictionary →
+    // bez globalnego locka. Wynik konwersji jest niezmienny (immutable), więc współdzielenie bezpieczne.
+    private readonly ConcurrentDictionary<string, GraphicConversionResult> _cache = new();
 
     public GraphicKind Detect(ReadOnlySpan<byte> data, string? contentType = null)
     {
@@ -30,7 +45,10 @@ public sealed class GraphicConversionService : IGraphicConversionService
         if (data.Length >= 8 && data[..8].SequenceEqual(PngSignature)) return GraphicKind.Png;
         if (data.Length >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF) return GraphicKind.Jpeg;
         if (data.Length >= 6 && data[0] == (byte)'G' && data[1] == (byte)'I' && data[2] == (byte)'F') return GraphicKind.Gif;
+        if (IsWebp(data)) return GraphicKind.Webp;
         if (data.Length >= 2 && data[0] == (byte)'B' && data[1] == (byte)'M') return GraphicKind.Bmp;
+        if (IsIco(data)) return GraphicKind.Ico;
+        if (IsTiff(data)) return GraphicKind.Tiff;
         if (IsEmf(data)) return GraphicKind.Emf;
         if (IsWmf(data)) return GraphicKind.Wmf;
         if (LooksLikeSvg(data)) return GraphicKind.Svg;
@@ -42,106 +60,193 @@ public sealed class GraphicConversionService : IGraphicConversionService
         if (ct.Contains("svg")) return GraphicKind.Svg;
         if (ct.Contains("png")) return GraphicKind.Png;
         if (ct.Contains("jpeg") || ct.Contains("jpg")) return GraphicKind.Jpeg;
+        if (ct.Contains("gif")) return GraphicKind.Gif;
+        if (ct.Contains("webp")) return GraphicKind.Webp;
+        if (ct.Contains("tiff") || ct.Contains("tif")) return GraphicKind.Tiff;
+        if (ct.Contains("icon")) return GraphicKind.Ico;
+        if (ct.Contains("bmp")) return GraphicKind.Bmp;
         return GraphicKind.Unknown;
     }
+
+    /// <summary>Formaty renderowalne natywnie przez aktualne przeglądarki w &lt;img&gt; (bez konwersji).</summary>
+    private static bool IsBrowserNativeRaster(GraphicKind kind) => kind is
+        GraphicKind.Png or GraphicKind.Jpeg or GraphicKind.Gif or GraphicKind.Bmp
+        or GraphicKind.Webp or GraphicKind.Ico;
 
     public GraphicConversionResult ConvertForEditor(
         GraphicSource source, GraphicConversionOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= GraphicConversionOptions.Default;
         var sw = Stopwatch.StartNew();
-        var warnings = new List<string>();
-        var lost = new List<string>();
 
         if (source.Data == null || source.Data.Length == 0)
-            return Rejected(GraphicKind.Unknown, sw, "Puste dane grafiki.");
+            return Rejected(GraphicKind.Unknown, source, string.Empty, sw, "Puste dane grafiki.");
         if (source.Data.Length > options.MaxInputBytes)
-            return Rejected(GraphicKind.Unknown, sw, $"Przekroczono limit {options.MaxInputBytes} B.");
+            return Rejected(GraphicKind.Unknown, source, string.Empty, sw, $"Przekroczono limit {options.MaxInputBytes} B.");
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var cacheKey = BuildCacheKey(source, options);
+        if (_cache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var result = Execute(source, options, cacheKey, sw, cancellationToken);
+
+        // Bounded cache: przestajemy dokładać po osiągnięciu limitu (zapobiega nieograniczonemu
+        // wzrostowi pamięci na dokumentach z setkami unikalnych grafik).
+        if (_cache.Count < MaxCacheEntries)
+            _cache.TryAdd(cacheKey, result);
+        return result;
+    }
+
+    private GraphicConversionResult Execute(
+        GraphicSource source, GraphicConversionOptions options, string cacheKey, Stopwatch sw, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(options.Timeout);
 
+        var attempted = new List<string>();
+        var warnings = new List<string>();
+        var lost = new List<string>();
         var kind = Detect(source.Data, source.ContentType);
+
         try
         {
+            if (IsBrowserNativeRaster(kind))
+            {
+                var (w, h) = ReadRasterSize(kind, source.Data);
+                return PassThroughWeb(kind, MimeFor(kind), source.Data, w, h, source, cacheKey, sw);
+            }
+
             switch (kind)
             {
-                case GraphicKind.Png:
-                case GraphicKind.Jpeg:
-                case GraphicKind.Gif:
-                case GraphicKind.Bmp:
-                {
-                    var (w, h) = ReadRasterSize(kind, source.Data);
-                    return PassThroughWeb(kind, MimeFor(kind), source.Data, w, h, sw);
-                }
                 case GraphicKind.Svg:
-                {
-                    var svg = SanitizeSvg(Encoding.UTF8.GetString(source.Data));
-                    if (svg == null) return Fallback(kind, source, options, sw, warnings, lost, "SVG nieparsowalny/niebezpieczny.");
-                    var bytes = Encoding.UTF8.GetBytes(svg);
-                    var (w, h) = ReadSvgSize(svg, source);
-                    return new GraphicConversionResult
-                    {
-                        Web = new WebGraphicRepresentation { MimeType = "image/svg+xml", Data = bytes, WidthPx = w, HeightPx = h },
-                        PreserveOriginalPart = false,
-                        Diagnostics = Diag(kind, "image/svg+xml", GraphicConversionStatus.Converted, GraphicFidelity.Lossless, sw, warnings, lost)
-                    };
-                }
+                    return ConvertSvg(source, cacheKey, sw, attempted, warnings, lost);
+
+                case GraphicKind.Tiff:
+                    return ConvertRasterNonNative(GraphicKind.Tiff, source, options, cacheKey, sw, attempted, warnings, lost);
+
                 case GraphicKind.Emf:
                 case GraphicKind.Wmf:
-                {
-                    var (w, h) = kind == GraphicKind.Emf ? ReadEmfSize(source.Data) : ReadWmfSize(source.Data);
-                    (w, h) = ResolveDims(w, h, source, options);
+                    return ConvertMetafile(kind, source, options, cacheKey, sw, attempted, warnings, lost);
 
-                    // 1) Niektóre EMF/EMF+ opakowują gotowy PNG/JPEG — pokaż ten raster wprost.
-                    var embedded = TryExtractEmbeddedRaster(source.Data);
-                    if (embedded != null)
-                    {
-                        var ek = Detect(embedded);
-                        var (ew, eh) = ReadRasterSize(ek, embedded);
-                        warnings.Add($"{kind}: pokazano osadzony {ek} z metafile.");
-                        lost.Add("Wektorowe elementy metafile poza osadzonym rastrem.");
-                        return MetafileRaster(kind, MimeFor(ek), embedded, ew > 0 ? ew : w, eh > 0 ? eh : h, source, sw, warnings, lost);
-                    }
-
-                    // 2) Najczęstszy realny przypadek: EMF/WMF z osadzoną bitmapą (StretchDIBits itp.).
-                    //    Wydobywamy DIB z rekordów i dekodujemy przez SkiaSharp → realny PNG do podglądu
-                    //    (pure-managed, cross-platform — bez GDI/System.Drawing/LibreOffice).
-                    var png = TryRasterizeMetafileToPng(source.Data, kind);
-                    if (png != null)
-                    {
-                        var (pw, ph) = ReadPngSize(png);
-                        warnings.Add($"{kind}: zrasteryzowano osadzoną bitmapę do PNG (SkiaSharp).");
-                        lost.Add("Elementy wektorowe metafile poza zrasteryzowaną bitmapą.");
-                        return MetafileRaster(kind, "image/png", png, pw > 0 ? pw : w, ph > 0 ? ph : h, source, sw, warnings, lost);
-                    }
-
-                    // 3) Czysto wektorowy metafile bez osadzonego rastra — brak pure-managed rasteryzera
-                    //    wektora → placeholder TYLKO jako ostateczność; oryginał EMF/WMF zachowany do
-                    //    eksportu (Word renderuje wektor z `data-original-src`).
-                    warnings.Add($"{kind}: brak osadzonego rastra do rasteryzacji — placeholder; oryginał zachowany w DOCX (Word renderuje wektorowo).");
-                    lost.Add("Podgląd wektorowego metafile (renderowany w Word z zachowanego oryginału).");
-                    var placeholder = BuildPlaceholderSvg(kind, w, h);
-                    return new GraphicConversionResult
-                    {
-                        Web = new WebGraphicRepresentation { MimeType = "image/svg+xml", Data = placeholder, WidthPx = w, HeightPx = h, IsPlaceholder = true },
-                        PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart,
-                        Diagnostics = Diag(kind, "image/svg+xml", GraphicConversionStatus.Fallback, GraphicFidelity.Fallback, sw, warnings, lost)
-                    };
-                }
                 default:
-                    return Fallback(kind, source, options, sw, warnings, lost, "Nieznany/nieobsługiwany format grafiki.");
+                    // Nieznany media part: ostatnia próba przez dekoder rastra (Skia) — pokrywa
+                    // formaty, których nie wykryto po sygnaturze, a Skia potrafi je odczytać.
+                    return ConvertRasterNonNative(GraphicKind.Unknown, source, options, cacheKey, sw, attempted, warnings, lost);
             }
         }
         catch (OperationCanceledException)
         {
-            return Rejected(kind, sw, "Przekroczono limit czasu konwersji.");
+            return Rejected(kind, source, cacheKey, sw, "Przekroczono limit czasu konwersji.");
         }
         catch (Exception ex)
         {
-            // Niezaufane wejście nie może wywrócić importu — mapujemy na fallback.
-            return Fallback(kind, source, options, sw, warnings, lost, $"Błąd konwersji: {ex.GetType().Name}.");
+            // Niezaufane wejście nie może wywrócić importu — mapujemy na przezroczysty fallback
+            // i zachowujemy szczegóły w diagnostyce (bez logowania pełnych danych dokumentu).
+            attempted.Add("exception");
+            return BlankFallback(kind, source, options, cacheKey, sw, attempted, warnings, lost,
+                GraphicConversionStatus.Unsupported, $"{ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    // ---- per-format strategies ----------------------------------------------------
+
+    private GraphicConversionResult ConvertSvg(
+        GraphicSource source, string cacheKey, Stopwatch sw,
+        List<string> attempted, List<string> warnings, List<string> lost)
+    {
+        attempted.Add("svg-sanitize");
+        var svg = SanitizeSvg(Encoding.UTF8.GetString(source.Data));
+        if (svg == null)
+            return BlankFallback(GraphicKind.Svg, source, GraphicConversionOptions.Default, cacheKey, sw,
+                attempted, warnings, lost, GraphicConversionStatus.Unsupported, "SVG nieparsowalny/niebezpieczny.");
+
+        var bytes = Encoding.UTF8.GetBytes(svg);
+        var (w, h) = ReadSvgSize(svg, source);
+        return new GraphicConversionResult
+        {
+            Web = new WebGraphicRepresentation { MimeType = "image/svg+xml", Data = bytes, WidthPx = w, HeightPx = h },
+            PreserveOriginalPart = false,
+            Diagnostics = Diag(GraphicKind.Svg, "image/svg+xml", GraphicConversionStatus.Converted,
+                GraphicFidelity.Lossless, source, cacheKey, sw, attempted, null, warnings, lost)
+        };
+    }
+
+    /// <summary>
+    /// Raster nie-natywny dla przeglądarki (TIFF) lub nieznany: dekodujemy przez SkiaSharp do PNG.
+    /// Gdy Skia nie ma kodeka (np. TIFF bez libtiff w obrazie kontenera) → przezroczysty fallback,
+    /// oryginał zachowany do DOCX. Bez widocznego placeholdera.
+    /// </summary>
+    private GraphicConversionResult ConvertRasterNonNative(
+        GraphicKind kind, GraphicSource source, GraphicConversionOptions options, string cacheKey, Stopwatch sw,
+        List<string> attempted, List<string> warnings, List<string> lost)
+    {
+        attempted.Add("skia-decode");
+        var png = TryDecodeRasterToPng(source.Data);
+        if (png != null)
+        {
+            var (w, h) = ReadPngSize(png);
+            if (kind == GraphicKind.Tiff) lost.Add("Wielostronicowość/CMYK TIFF poza pierwszą klatką.");
+            warnings.Add($"{kind}: zdekodowano do PNG (SkiaSharp).");
+            return new GraphicConversionResult
+            {
+                Web = new WebGraphicRepresentation { MimeType = "image/png", Data = png, WidthPx = w, HeightPx = h },
+                PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart && kind != GraphicKind.Unknown,
+                Diagnostics = Diag(kind, "image/png", GraphicConversionStatus.Converted, GraphicFidelity.Lossy,
+                    source, cacheKey, sw, attempted, null, warnings, lost)
+            };
+        }
+
+        var reason = kind == GraphicKind.Tiff
+            ? "Brak kodeka TIFF w SkiaSharp na tej platformie."
+            : "Nierozpoznany/nieobsługiwany format media partu.";
+        return BlankFallback(kind, source, options, cacheKey, sw, attempted, warnings, lost,
+            GraphicConversionStatus.Unsupported, reason);
+    }
+
+    /// <summary>
+    /// Łańcuch strategii dla metafile EMF/WMF (od najwierniejszej):
+    /// 1) osadzony gotowy raster (PNG/JPEG) → pokaż wprost,
+    /// 2) osadzony DIB (StretchDIBits itp.) → DIB→BMP→SkiaSharp→PNG,
+    /// 3) brak rastra (czysty wektor) → przezroczysty fallback (NIE placeholder); oryginał do DOCX.
+    /// Brak pure-managed rasteryzera wektora EMF/WMF bez GDI — patrz .ai/GRAPHICS_CONVERSION.md.
+    /// </summary>
+    private GraphicConversionResult ConvertMetafile(
+        GraphicKind kind, GraphicSource source, GraphicConversionOptions options, string cacheKey, Stopwatch sw,
+        List<string> attempted, List<string> warnings, List<string> lost)
+    {
+        var (w, h) = kind == GraphicKind.Emf ? ReadEmfSize(source.Data) : ReadWmfSize(source.Data);
+        (w, h) = ResolveDims(w, h, source, options);
+
+        attempted.Add("embedded-raster");
+        var embedded = TryExtractEmbeddedRaster(source.Data);
+        if (embedded != null)
+        {
+            var ek = Detect(embedded);
+            var (ew, eh) = ReadRasterSize(ek, embedded);
+            warnings.Add($"{kind}: pokazano osadzony {ek} z metafile.");
+            lost.Add("Wektorowe elementy metafile poza osadzonym rastrem.");
+            return MetafileRaster(kind, MimeFor(ek), embedded, ew > 0 ? ew : w, eh > 0 ? eh : h,
+                source, cacheKey, sw, attempted, warnings, lost);
+        }
+
+        attempted.Add("dib-rasterize");
+        var png = TryRasterizeMetafileToPng(source.Data, kind);
+        if (png != null)
+        {
+            var (pw, ph) = ReadPngSize(png);
+            warnings.Add($"{kind}: zrasteryzowano osadzoną bitmapę do PNG (SkiaSharp).");
+            lost.Add("Elementy wektorowe metafile poza zrasteryzowaną bitmapą.");
+            return MetafileRaster(kind, "image/png", png, pw > 0 ? pw : w, ph > 0 ? ph : h,
+                source, cacheKey, sw, attempted, warnings, lost);
+        }
+
+        // Brak osadzonego rastra → przezroczysty, niewidoczny element zachowujący wymiary/układ.
+        // Oryginalny metafile zachowany do eksportu (Word renderuje wektor z data-original-src).
+        lost.Add("Podgląd wektorowego metafile (renderowany w Word z zachowanego oryginału).");
+        return BlankFallback(kind, source, options, cacheKey, sw, attempted, warnings, lost,
+            GraphicConversionStatus.Fallback,
+            $"{kind} czysto wektorowy bez osadzonego rastra — brak pure-managed rasteryzera wektora.",
+            preComputedDims: (w, h));
     }
 
     public GraphicConversionResult? ConvertVmlShapeForEditor(
@@ -180,7 +285,7 @@ public sealed class GraphicConversionService : IGraphicConversionService
             "line" => $"<line x1='0' y1='0' x2='{w}' y2='{h}' stroke='{stroke}' stroke-width='{strokeW}'/>",
             _ => null
         };
-        if (shape == null) return null; // nieobsługiwany kształt → caller użyje placeholdera
+        if (shape == null) return null; // nieobsługiwany kształt → caller rozwiąże inaczej
 
         var svg = $"<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}' viewBox='0 0 {w} {h}'>{shape}</svg>";
         var bytes = Encoding.UTF8.GetBytes(svg);
@@ -188,7 +293,10 @@ public sealed class GraphicConversionService : IGraphicConversionService
         {
             Web = new WebGraphicRepresentation { MimeType = "image/svg+xml", Data = bytes, WidthPx = w, HeightPx = h },
             PreserveOriginalPart = true, // VML zachowujemy w DOCX przez pass-through, póki nieedytowany
-            Diagnostics = Diag(GraphicKind.Vml, "image/svg+xml", GraphicConversionStatus.Converted, GraphicFidelity.Lossy, sw,
+            Diagnostics = Diag(GraphicKind.Vml, "image/svg+xml", GraphicConversionStatus.Converted, GraphicFidelity.Lossy,
+                null, string.Empty, sw,
+                new[] { "vml-shape" },
+                null,
                 new[] { "Odwzorowano bezpieczny podzbiór VML (kształt + fill/stroke)." },
                 new[] { "Gradienty/cienie/ścieżki/tekst VML." })
         };
@@ -229,6 +337,19 @@ public sealed class GraphicConversionService : IGraphicConversionService
         return string.IsNullOrWhiteSpace(result) ? null : result;
     }
 
+    // ---- cache key ----------------------------------------------------------------
+
+    /// <summary>
+    /// Klucz cache = SHA-256(treść) + parametry wpływające na wynik (content-type, origin, wymiary
+    /// docelowe, limity). Deterministyczny: identyczny asset → identyczny wynik → deduplikacja.
+    /// </summary>
+    private static string BuildCacheKey(GraphicSource source, GraphicConversionOptions o)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(source.Data));
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{hash}|ct={source.ContentType}|o={(int)source.Origin}|tw={source.TargetWidthEmu}|th={source.TargetHeightEmu}|mw={o.MaxPlaceholderWidthPx}|mh={o.MaxPlaceholderHeightPx}|mb={o.MaxInputBytes}");
+    }
+
     // ---- format detection helpers -------------------------------------------------
 
     private static bool IsEmf(ReadOnlySpan<byte> d)
@@ -250,6 +371,24 @@ public sealed class GraphicConversionService : IGraphicConversionService
         return (type == 1 || type == 2) && headerWords == 9;
     }
 
+    private static bool IsWebp(ReadOnlySpan<byte> d) =>
+        d.Length >= 12 && d[0] == (byte)'R' && d[1] == (byte)'I' && d[2] == (byte)'F' && d[3] == (byte)'F'
+        && d[8] == (byte)'W' && d[9] == (byte)'E' && d[10] == (byte)'B' && d[11] == (byte)'P';
+
+    private static bool IsIco(ReadOnlySpan<byte> d) =>
+        // ICONDIR: reserved=0, type=1 (icon) or 2 (cursor), count>=1.
+        d.Length >= 6 && d[0] == 0 && d[1] == 0 && (d[2] == 1 || d[2] == 2) && d[3] == 0
+        && BinaryPrimitives.ReadUInt16LittleEndian(d[4..]) >= 1;
+
+    private static bool IsTiff(ReadOnlySpan<byte> d)
+    {
+        if (d.Length < 4) return false;
+        // "II" 0x2A00 (little-endian) lub "MM" 0x002A (big-endian).
+        if (d[0] == 0x49 && d[1] == 0x49 && d[2] == 0x2A && d[3] == 0x00) return true;
+        if (d[0] == 0x4D && d[1] == 0x4D && d[2] == 0x00 && d[3] == 0x2A) return true;
+        return false;
+    }
+
     private static bool LooksLikeSvg(ReadOnlySpan<byte> d)
     {
         var n = Math.Min(d.Length, 512);
@@ -266,6 +405,7 @@ public sealed class GraphicConversionService : IGraphicConversionService
         GraphicKind.Gif => (BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(6)), BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(8))),
         GraphicKind.Bmp => d.Length >= 26 ? (BinaryPrimitives.ReadInt32LittleEndian(d.AsSpan(18)), Math.Abs(BinaryPrimitives.ReadInt32LittleEndian(d.AsSpan(22)))) : (0, 0),
         GraphicKind.Jpeg => ReadJpegSize(d),
+        GraphicKind.Webp or GraphicKind.Ico or GraphicKind.Tiff => TrySkiaDims(d),
         _ => (0, 0)
     };
 
@@ -292,6 +432,19 @@ public sealed class GraphicConversionService : IGraphicConversionService
             int len = BinaryPrimitives.ReadUInt16BigEndian(d.AsSpan(i + 2));
             i += 2 + len;
         }
+        return (0, 0);
+    }
+
+    /// <summary>Tani odczyt wymiarów rastra przez nagłówek kodeka SkiaSharp (bez pełnego dekodowania).</summary>
+    private static (int w, int h) TrySkiaDims(byte[] d)
+    {
+        try
+        {
+            using var codec = SKCodec.Create(new MemoryStream(d, writable: false));
+            if (codec != null && codec.Info.Width > 0 && codec.Info.Height > 0)
+                return (codec.Info.Width, codec.Info.Height);
+        }
+        catch { /* nieobsługiwany kodek → wymiary z layoutu DOCX */ }
         return (0, 0);
     }
 
@@ -379,17 +532,32 @@ public sealed class GraphicConversionService : IGraphicConversionService
     }
 
     /// <summary>Buduje wynik dla metafile pokazanego jako realny raster (nie placeholder).</summary>
-    private static GraphicConversionResult MetafileRaster(
-        GraphicKind kind, string mime, byte[] raster, int w, int h, GraphicSource source,
-        Stopwatch sw, List<string> warnings, List<string> lost) => new()
+    private GraphicConversionResult MetafileRaster(
+        GraphicKind kind, string mime, byte[] raster, int w, int h, GraphicSource source, string cacheKey,
+        Stopwatch sw, List<string> attempted, List<string> warnings, List<string> lost) => new()
     {
-        Web = new WebGraphicRepresentation { MimeType = mime, Data = raster, WidthPx = w, HeightPx = h, IsPlaceholder = false },
+        Web = new WebGraphicRepresentation { MimeType = mime, Data = raster, WidthPx = w, HeightPx = h, IsBlankFallback = false },
         // Oryginalny metafile jedzie do DOCX (pass-through) — Word renderuje wektor; PNG to tylko podgląd.
         PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart,
-        Diagnostics = Diag(kind, mime, GraphicConversionStatus.Converted, GraphicFidelity.Lossy, sw, warnings, lost)
+        Diagnostics = Diag(kind, mime, GraphicConversionStatus.Converted, GraphicFidelity.Lossy,
+            source, cacheKey, sw, attempted, null, warnings, lost)
     };
 
     // ---- metafile rasterization (pure-managed via SkiaSharp) ----------------------
+
+    /// <summary>Dekoduje dowolny raster znany SkiaSharp i re-enkoduje do PNG (TIFF/Unknown rescue).</summary>
+    private static byte[]? TryDecodeRasterToPng(byte[] data)
+    {
+        try
+        {
+            using var skbmp = SKBitmap.Decode(data);
+            if (skbmp == null || skbmp.Width <= 0 || skbmp.Height <= 0) return null;
+            using var image = SKImage.FromBitmap(skbmp);
+            using var encoded = image.Encode(SKEncodedImageFormat.Png, 100);
+            return encoded?.ToArray();
+        }
+        catch { return null; }
+    }
 
     /// <summary>
     /// Rasteryzuje metafile do PNG, wydobywając osadzony DIB (device-independent bitmap) z rekordów
@@ -534,17 +702,20 @@ public sealed class GraphicConversionService : IGraphicConversionService
         return encoded?.ToArray();
     }
 
-    // ---- placeholder + parsing helpers -------------------------------------------
+    // ---- transparent fallback + parsing helpers ----------------------------------
 
-    private static byte[] BuildPlaceholderSvg(GraphicKind kind, int w, int h)
+    /// <summary>
+    /// Niewidoczna, w pełni przezroczysta grafika SVG o wymiarach z layoutu DOCX. Zachowuje miejsce
+    /// w układzie BEZ rysowania jakiejkolwiek widocznej treści (brak szarego tła, ramki, tekstu
+    /// „requires conversion"). To honest internal-failure state — realny wektor jest w oryginalnym
+    /// part (pass-through do DOCX), a tu nie udajemy treści, której nie potrafimy zrenderować w web.
+    /// </summary>
+    private static byte[] BuildTransparentSvg(int w, int h)
     {
-        var label = kind == GraphicKind.Emf ? "EMF" : kind == GraphicKind.Wmf ? "WMF" : "grafika";
-        // Bez script/zewnętrznych zasobów. Tekst neutralny, ramka przerywana.
-        var svg =
-            $"<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}' viewBox='0 0 {w} {h}'>" +
-            $"<rect x='0.5' y='0.5' width='{w - 1}' height='{h - 1}' fill='#f3f4f6' stroke='#9ca3af' stroke-width='1' stroke-dasharray='6 4'/>" +
-            $"<text x='{w / 2}' y='{h / 2}' font-family='sans-serif' font-size='14' fill='#6b7280' text-anchor='middle' dominant-baseline='middle'>{label} — podgląd w Word</text>" +
-            "</svg>";
+        if (w <= 0) w = 1;
+        if (h <= 0) h = 1;
+        var svg = $"<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}' " +
+                  $"viewBox='0 0 {w} {h}' aria-hidden='true'></svg>";
         return Encoding.UTF8.GetBytes(svg);
     }
 
@@ -597,55 +768,73 @@ public sealed class GraphicConversionService : IGraphicConversionService
         GraphicKind.Jpeg => "image/jpeg",
         GraphicKind.Gif => "image/gif",
         GraphicKind.Bmp => "image/bmp",
+        GraphicKind.Webp => "image/webp",
+        GraphicKind.Ico => "image/x-icon",
+        GraphicKind.Tiff => "image/tiff",
         GraphicKind.Svg => "image/svg+xml",
         _ => "application/octet-stream"
     };
 
     // ---- result factories ---------------------------------------------------------
 
-    private static GraphicConversionResult PassThroughWeb(GraphicKind kind, string mime, byte[] data, int w, int h, Stopwatch sw) =>
+    private GraphicConversionResult PassThroughWeb(
+        GraphicKind kind, string mime, byte[] data, int w, int h, GraphicSource source, string cacheKey, Stopwatch sw) =>
         new()
         {
             Web = new WebGraphicRepresentation { MimeType = mime, Data = data, WidthPx = w, HeightPx = h },
             PreserveOriginalPart = false,
-            Diagnostics = Diag(kind, mime, GraphicConversionStatus.PassThrough, GraphicFidelity.Lossless, sw,
-                Array.Empty<string>(), Array.Empty<string>())
+            Diagnostics = Diag(kind, mime, GraphicConversionStatus.PassThrough, GraphicFidelity.Lossless,
+                source, cacheKey, sw, new[] { "pass-through" }, null, Array.Empty<string>(), Array.Empty<string>())
         };
 
-    private GraphicConversionResult Fallback(GraphicKind kind, GraphicSource source, GraphicConversionOptions o,
-        Stopwatch sw, List<string> warnings, List<string> lost, string warning)
+    /// <summary>
+    /// Przezroczysty (niewidoczny) fallback — gdy żadna realna strategia nie zwróciła rastra.
+    /// NIGDY nie produkuje widocznego placeholdera. Diagnostyka niesie powód i listę prób.
+    /// </summary>
+    private GraphicConversionResult BlankFallback(
+        GraphicKind kind, GraphicSource source, GraphicConversionOptions o, string cacheKey, Stopwatch sw,
+        List<string> attempted, List<string> warnings, List<string> lost,
+        GraphicConversionStatus status, string failureReason, (int w, int h)? preComputedDims = null)
     {
-        warnings.Add(warning);
-        var (w, h) = ResolveDims(0, 0, source, o);
-        var placeholder = BuildPlaceholderSvg(kind, w, h);
+        warnings.Add(failureReason);
+        var (w, h) = preComputedDims ?? ResolveDims(0, 0, source, o);
+        var blank = BuildTransparentSvg(w, h);
+        var fidelity = status == GraphicConversionStatus.Fallback ? GraphicFidelity.Fallback : GraphicFidelity.Unsupported;
         return new GraphicConversionResult
         {
-            Web = new WebGraphicRepresentation { MimeType = "image/svg+xml", Data = placeholder, WidthPx = w, HeightPx = h, IsPlaceholder = true },
+            Web = new WebGraphicRepresentation { MimeType = "image/svg+xml", Data = blank, WidthPx = w, HeightPx = h, IsBlankFallback = true },
             PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart,
-            Diagnostics = Diag(kind, "image/svg+xml", GraphicConversionStatus.Unsupported, GraphicFidelity.Unsupported, sw, warnings, lost)
+            Diagnostics = Diag(kind, "image/svg+xml", status, fidelity, source, cacheKey, sw, attempted, failureReason, warnings, lost)
         };
     }
 
-    private static GraphicConversionResult Rejected(GraphicKind kind, Stopwatch sw, string reason) =>
+    private GraphicConversionResult Rejected(GraphicKind kind, GraphicSource source, string cacheKey, Stopwatch sw, string reason) =>
         new()
         {
             Web = null,
             PreserveOriginalPart = false,
-            Diagnostics = Diag(kind, string.Empty, GraphicConversionStatus.Rejected, GraphicFidelity.Unsupported, sw,
-                new[] { reason }, Array.Empty<string>())
+            Diagnostics = Diag(kind, string.Empty, GraphicConversionStatus.Rejected, GraphicFidelity.Unsupported,
+                source, cacheKey, sw, new[] { "reject" }, reason, new[] { reason }, Array.Empty<string>())
         };
 
-    private static GraphicConversionDiagnostics Diag(GraphicKind kind, string mime, GraphicConversionStatus status,
-        GraphicFidelity fidelity, Stopwatch sw, IReadOnlyList<string> warnings, IReadOnlyList<string> lost)
+    private static GraphicConversionDiagnostics Diag(
+        GraphicKind kind, string mime, GraphicConversionStatus status, GraphicFidelity fidelity,
+        GraphicSource? source, string cacheKey, Stopwatch sw,
+        IReadOnlyList<string> attempted, string? failureReason,
+        IReadOnlyList<string> warnings, IReadOnlyList<string> lost)
     {
         sw.Stop();
         return new GraphicConversionDiagnostics
         {
             InputKind = kind,
+            SourcePath = source?.SourcePath,
             OutputMimeType = mime,
             Status = status,
             Fidelity = fidelity,
             ElapsedMs = sw.ElapsedMilliseconds,
+            CacheKey = cacheKey,
+            AttemptedStrategies = attempted,
+            FailureReason = failureReason,
             Warnings = warnings,
             LostProperties = lost
         };

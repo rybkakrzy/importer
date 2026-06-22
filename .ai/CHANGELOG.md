@@ -13,6 +13,40 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-22 — Grafiki: usunięcie widocznego placeholdera + cache + TIFF/ICO/WEBP
+### Changed
+- `GraphicConversionService` przepisany na czytelny łańcuch strategii (`Execute` → per-format) z raportowaniem strukturalnym. **Usunięto widoczny placeholder** (szare tło + tekst „… — podgląd w Word"): metafile EMF/WMF bez osadzonego rastra zwraca teraz **przezroczysty, pusty SVG** (`IsBlankFallback`), zachowujący wymiary z layoutu — zero udawanej treści. Oryginalny part nadal jedzie do DOCX (pass-through), więc Word renderuje wektor.
+- Dodano **deduplikację po hashu treści** (SHA-256 + parametry → `ConcurrentDictionary`, bounded 1024) — identyczne assety konwertowane raz.
+- Rozszerzono detekcję i obsługę: **TIFF** (→ PNG przez SkiaSharp, inaczej blank), **WEBP/ICO** (web-native passthrough), final raster-rescue dla nieznanych media partów przez SkiaSharp.
+- `GraphicConversionModels`: `GraphicKind` +Webp/Ico/Tiff; `WebGraphicRepresentation.IsPlaceholder`→`IsBlankFallback`; `GraphicSource.SourcePath`; diagnostyka +`SourcePath/CacheKey/AttemptedStrategies/FailureReason`.
+- `DocxToHtmlConverter`: `WebGraphicForLegacy` obejmuje też TIFF; atrybut `data-legacy-graphic="placeholder"`→`"blank"`; `IsMetafileContentType`→`IsNonBrowserNativeContentType` (+TIFF). Round-trip `data-original-src` bez zmian.
+### Verified
+- `dotnet test Infrastructure.UnitTests --filter GraphicConversion` → **35/35** (było 25). Pełny Infrastructure.UnitTests → **188/188**. `dotnet build D2ViewerEditor.sln` → 0 błędów.
+- Nowe testy: detekcja TIFF/WEBP/ICO, no-placeholder (skan SVG/HTML: brak `<text`/`fill`/„requires conversion"/„podgląd w Word"), dedup po hashu, cache-key, TIFF→blank, integracyjne DOCX WMF / mixed native+EMF / duplicated EMF.
+### Notes
+- **Ograniczenie**: czysto wektorowy EMF/WMF (bez osadzonego rastra) nadal nie jest rasteryzowany w przeglądarce (brak pure-managed rasteryzera wektora bez GDI/LibreOffice — patrz ADR-0020) → przezroczysty blank w podglądzie + pełny render w Word z zachowanego oryginału. Rasteryzacja wektora = sidecar (roadmapa).
+
+## 2026-06-22 — Security hardening: upload pipeline + returnUrl validation
+### Changed
+- Dodano centralne serwisy bezpieczeństwa w `D2ViewerEditor.Application/Common/Security`:
+  - `IReturnUrlValidator` + `ReturnUrlValidator` + `ReturnUrlSecurityOptions` (normalizacja i walidacja callback URL: kontrola znaków, schematu, hosta, loopback/private IP, allowlista hostów),
+  - `IFileUploadSecurityService` + `FileUploadSecurityService` + `UploadSecurityOptions` (extension↔MIME↔signature, inspekcja DOCX ZIP: zip-slip, limity entry/uncompressed/compression ratio, wymagane part-y OOXML, blokada makr VBA),
+  - `IFileScanner` (`FileScanRequest/Result`) + `NoOpFileScanner` jako domyślna implementacja abstrakcji skanera.
+- Reguły podpięte do krytycznych flow:
+  - uploady: `UploadDocumentCommandHandler`, `UploadImageCommandHandler`, `IngestExternalDocumentCommandHandler`,
+  - returnUrl/callback: `UpdateCallbackUrlCommandHandler`, `UpdateDeliveryRecipientUrlCommandHandler`, `FinishAndSendDocumentCommandHandler`.
+- Hosty (`D2Api`/`D2Services`) bindują konfigurację: `Security:Upload` i `Security:ReturnUrl`.
+- Zaktualizowano testy handlerów pod nowe zależności i dodano nowe testy security:
+  - `ReturnUrlValidatorTests`,
+  - `FileUploadSecurityServiceTests`.
+### Verified
+- `dotnet test D2ApiViewerEditor/D2ViewerEditor.Application.UnitTests/D2ViewerEditor.Application.UnitTests.csproj` → **295/295** pass.
+- `dotnet test D2ApiViewerEditor/D2ViewerEditor.Api.UnitTests/D2ViewerEditor.Api.UnitTests.csproj` → **110/110** pass.
+- `dotnet test D2ServicesViewerEditor/D2ServicesViewerEditor.Api.UnitTests/D2ServicesViewerEditor.Api.UnitTests.csproj` → **39/39** pass.
+### Notes
+- Zastosowano fail-fast na upload i callback URL jeszcze przed utrwaleniem danych.
+- `NoOpFileScanner` jest punktem integracji; produkcyjny silnik AV należy podmienić przez DI bez zmiany kontraktu handlerów.
+
 ## 2026-06-22 — Pokrycie testami jednostkowymi ≥60% (wszystkie assembly)
 ### Changed
 - `DocumentStorageControllerTests` (+~40 testów): pełne pokrycie endpointów (UpdateDocumentVersion, GetDocumentMetadata 403/404, user-download 200/403/404/400, finish, abort-send, continue-delivery, delivery status/list/retry/cancel/recipient-url).

@@ -1,5 +1,7 @@
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadImage;
+using D2ViewerEditor.Application.Common.Security;
 using FluentAssertions;
+using NSubstitute;
 using NUnit.Framework;
 
 namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
@@ -7,12 +9,28 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
 [TestFixture]
 public class UploadImageCommandHandlerTests
 {
+    private IFileUploadSecurityService _uploadSecurityService;
     private UploadImageCommandHandler _handler;
 
     [SetUp]
     public void SetUp()
     {
-        _handler = new UploadImageCommandHandler();
+        _uploadSecurityService = Substitute.For<IFileUploadSecurityService>();
+        _uploadSecurityService.ValidateImageAsync(
+                Arg.Any<byte[]>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var fileName = ci.ArgAt<string>(1);
+                var contentType = ci.ArgAt<string>(2);
+                var extension = Path.GetExtension(fileName).ToLowerInvariant();
+                return extension is ".jpg" or ".jpeg" or ".png" or ".gif" or ".bmp" or ".webp"
+                    ? UploadValidationResult.Success(contentType)
+                    : UploadValidationResult.Failure(UploadRejectionCode.UnsupportedExtension, "Niedozwolony format obrazu.");
+            });
+        _handler = new UploadImageCommandHandler(_uploadSecurityService);
     }
 
     [Test]
@@ -105,7 +123,7 @@ public class UploadImageCommandHandlerTests
 
         // Assert
         result.IsFailure.Should().BeTrue();
-        result.Error.Should().Be("Niedozwolony format obrazu");
+        result.Error.Should().Contain("Upload odrzucony");
     }
 
     [Test]

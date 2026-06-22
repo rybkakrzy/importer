@@ -58,25 +58,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Gdy media part jest legacy metafile (EMF/WMF), zwraca data:URL renderowalny w przeglądarce
-    /// (osadzony raster albo placeholder SVG) zamiast nierenderowalnego data:image/x-emf. Dla
-    /// formatów web-native zwraca null (zostaje dotychczasowa ścieżka). Oryginalny part nie jest
-    /// usuwany — pass-through zapewnia wierność w Word przy zapisie.
+    /// Gdy media part jest formatem nie-renderowalnym natywnie (EMF/WMF/TIFF), zwraca data:URL
+    /// renderowalny w przeglądarce (osadzony/zdekodowany raster albo PRZEZROCZYSTY blank — nigdy
+    /// widoczny placeholder) zamiast nierenderowalnego data:image/x-emf. Dla formatów web-native
+    /// zwraca null (zostaje dotychczasowa ścieżka). Oryginalny part nie jest usuwany — pass-through
+    /// zapewnia wierność w Word przy zapisie.
     /// </summary>
-    private (string dataUrl, bool isPlaceholder)? WebGraphicForLegacy(byte[] bytes, string? contentType, long widthEmu, long heightEmu)
+    private (string dataUrl, bool isBlank)? WebGraphicForLegacy(byte[] bytes, string? contentType, long widthEmu, long heightEmu, string? sourcePath = null)
     {
         var kind = _graphics.Detect(bytes, contentType);
-        if (kind != GraphicKind.Emf && kind != GraphicKind.Wmf)
+        if (kind is not (GraphicKind.Emf or GraphicKind.Wmf or GraphicKind.Tiff))
             return null; // web-native → zostaje dotychczasowa ścieżka
         var result = _graphics.ConvertForEditor(new GraphicSource
         {
             Data = bytes,
             ContentType = contentType,
+            SourcePath = sourcePath,
             Origin = GraphicOrigin.LegacyDocxPart,
             TargetWidthEmu = widthEmu > 0 ? widthEmu : null,
             TargetHeightEmu = heightEmu > 0 ? heightEmu : null
         });
-        return result.Web != null ? (result.Web.ToDataUrl(), result.Web.IsPlaceholder) : null;
+        return result.Web != null ? (result.Web.ToDataUrl(), result.Web.IsBlankFallback) : null;
     }
 
 
@@ -1150,21 +1152,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var rawBytes = memoryStream.ToArray();
         var contentType = imagePart.ContentType;
 
-        // EMF/WMF: konwersja pure-managed (bez LibreOffice/System.Drawing → identyczne zachowanie
-        // na Windows i Linux/GCP). Gdy metafile zawiera osadzony raster — wyciągamy go; w innym
-        // wypadku zostaje oryginał, a renderer (WebGraphicForLegacy) pokaże placeholder. Oryginalny
-        // part i tak jedzie do DOCX przez pass-through, więc Word renderuje prawdziwą grafikę.
-        if (IsMetafileContentType(contentType))
+        // Nie-natywne formaty (EMF/WMF/TIFF): konwersja pure-managed (bez LibreOffice/System.Drawing
+        // → identyczne zachowanie na Windows i Linux/GCP). Gdy metafile zawiera osadzony/odczytywalny
+        // raster — wyciągamy go (PNG); w innym wypadku zostaje oryginał, a renderer (WebGraphicForLegacy)
+        // pokaże przezroczysty blank. Oryginalny part i tak jedzie do DOCX przez pass-through.
+        if (IsNonBrowserNativeContentType(contentType))
         {
             var converted = _graphics.ConvertForEditor(new GraphicSource
             {
                 Data = rawBytes,
                 ContentType = contentType,
+                SourcePath = imagePart.Uri?.ToString(),
                 Origin = GraphicOrigin.LegacyDocxPart
             });
-            if (converted.Web is { IsPlaceholder: false } w && w.MimeType != "image/svg+xml")
+            if (converted.Web is { IsBlankFallback: false } w && w.MimeType != "image/svg+xml")
             {
-                rawBytes = w.Data;       // osadzony raster (PNG/JPEG)
+                rawBytes = w.Data;       // osadzony/zdekodowany raster (PNG/JPEG)
                 contentType = w.MimeType;
             }
         }
@@ -1177,11 +1180,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         };
     }
 
-    private static bool IsMetafileContentType(string? contentType)
+    private static bool IsNonBrowserNativeContentType(string? contentType)
     {
         if (string.IsNullOrEmpty(contentType)) return false;
         var ct = contentType.ToLowerInvariant();
-        return ct.Contains("emf") || ct.Contains("wmf") || ct.Contains("metafile");
+        return ct.Contains("emf") || ct.Contains("wmf") || ct.Contains("metafile")
+            || ct.Contains("tiff") || ct.Contains("tif");
     }
 
     /// <summary>
@@ -1232,7 +1236,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     stream.CopyTo(ms);
                     var bytes = ms.ToArray();
                     var contentType = imagePart.ContentType;
-                    if (IsMetafileContentType(contentType))
+                    if (IsNonBrowserNativeContentType(contentType))
                     {
                         // Pure-managed (bez LibreOffice/System.Drawing). Osadzony raster → użyj go;
                         // inaczej placeholder SVG jako punktator (bez crasha na Linux/GCP).
@@ -2492,11 +2496,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var alt = docPr?.Description?.Value ?? docPr?.Title?.Value;
         var altAttr = !string.IsNullOrEmpty(alt) ? $" alt=\"{EscapeHtml(alt)}\"" : string.Empty;
 
-        var legacyAttr = legacySrc?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
-        // Dla KAŻDEGO legacy metafile (EMF/WMF) — niezależnie czy w `src` jest placeholder SVG czy
-        // zrasteryzowany PNG — niesiemy ORYGINALNY metafile w `data-original-src`. Dzięki temu writer
-        // zapisuje do DOCX prawdziwy wektorowy EMF/WMF (Word renderuje natywnie), a PNG/placeholder
-        // służy tylko do podglądu w przeglądarce. `legacySrc != null` ⇔ part był EMF/WMF.
+        var legacyAttr = legacySrc?.isBlank == true ? " data-legacy-graphic=\"blank\"" : string.Empty;
+        // Dla KAŻDEGO legacy metafile (EMF/WMF) — niezależnie czy w `src` jest przezroczysty blank SVG
+        // czy zrasteryzowany PNG — niesiemy ORYGINALNY metafile w `data-original-src`. Dzięki temu writer
+        // zapisuje do DOCX prawdziwy wektorowy EMF/WMF (Word renderuje natywnie), a PNG/blank
+        // służy tylko do podglądu w przeglądarce. `legacySrc != null` ⇔ part był EMF/WMF/TIFF.
         var originalAttr = legacySrc != null
             ? $" data-original-src=\"data:{contentType};base64,{base64Data}\""
             : string.Empty;
@@ -2563,7 +2567,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             System.Convert.FromBase64String(base64Data), contentType,
             (long)(vmlWidth * 9525.0), (long)(vmlHeight * 9525.0));
         var vmlSrc = legacyVml?.dataUrl ?? $"data:{contentType};base64,{base64Data}";
-        var vmlLegacyAttr = legacyVml?.isPlaceholder == true ? " data-legacy-graphic=\"placeholder\"" : string.Empty;
+        var vmlLegacyAttr = legacyVml?.isBlank == true ? " data-legacy-graphic=\"blank\"" : string.Empty;
         // Jak wyżej: oryginalny EMF/WMF do round-tripu zapisu zawsze, gdy part był metafile.
         var vmlOriginalAttr = legacyVml != null
             ? $" data-original-src=\"data:{contentType};base64,{base64Data}\""

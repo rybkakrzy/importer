@@ -20,19 +20,22 @@ public class FinishAndSendDocumentCommandHandler
     private readonly IDocumentStorageService _storage;
     private readonly IDeliverySender _sender;
     private readonly ICurrentUserProvider _currentUser;
+    private readonly IReturnUrlValidator _returnUrlValidator;
 
     public FinishAndSendDocumentCommandHandler(
         IDocumentRepository documentRepository,
         IDocumentDeliveryRepository deliveryRepository,
         IDocumentStorageService storage,
         IDeliverySender sender,
-        ICurrentUserProvider currentUser)
+        ICurrentUserProvider currentUser,
+        IReturnUrlValidator returnUrlValidator)
     {
         _documentRepository = documentRepository;
         _deliveryRepository = deliveryRepository;
         _storage = storage;
         _sender = sender;
         _currentUser = currentUser;
+        _returnUrlValidator = returnUrlValidator;
     }
 
     public async Task<Result<FinishAndSendResult>> Handle(
@@ -52,7 +55,8 @@ public class FinishAndSendDocumentCommandHandler
                 return Result<FinishAndSendResult>.NotFound();
 
             var recipientUrl = ReadReturnUrl(document.Metadata);
-            if (!DocumentDelivery.IsValidRecipientUrl(recipientUrl))
+            var returnUrlValidation = _returnUrlValidator.Validate(recipientUrl);
+            if (!returnUrlValidation.IsValid)
                 return Result<FinishAndSendResult>.Failure(
                     "Brak poprawnego adresu odbiorcy (returnUrl) w metadanych dokumentu");
 
@@ -68,7 +72,7 @@ public class FinishAndSendDocumentCommandHandler
 
             // Reuse a held job (tracked load — GetActive... is no-tracking), else create a fresh one.
             var delivery = active is null
-                ? await CreateQueuedDeliveryAsync(document, version, request, recipientUrl!, cancellationToken)
+                ? await CreateQueuedDeliveryAsync(document, version, request, returnUrlValidation.NormalizedUrl!, cancellationToken)
                 : await _deliveryRepository.GetByIdAsync(active.Id, cancellationToken);
             if (delivery is null)
                 return Result<FinishAndSendResult>.Failure("Nie znaleziono zadania wysyłki do ponowienia");

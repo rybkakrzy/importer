@@ -27,6 +27,13 @@ public static class DependencyInjection
         // supplied by the host (Api) — see HttpHeaderCurrentUserProvider.
         services.AddScoped<IDocumentAccessGuard, DocumentAccessGuard>();
 
+        // Centralized security policies used by upload and callback-url flows.
+        services.AddOptions<UploadSecurityOptions>();
+        services.AddOptions<ReturnUrlSecurityOptions>();
+        services.AddSingleton<IFileScanner, NoOpFileScanner>();
+        services.AddSingleton<IFileUploadSecurityService, FileUploadSecurityService>();
+        services.AddSingleton<IReturnUrlValidator, ReturnUrlValidator>();
+
         return services;
     }
 }

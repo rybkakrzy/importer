@@ -50,7 +50,7 @@ public class GraphicConversionBenchmarks
     }
 
     [Benchmark]
-    public int Emf_Placeholder()
+    public int Emf_BlankFallback()
     {
         int n = 0;
         for (int i = 0; i < GraphicCount; i++)

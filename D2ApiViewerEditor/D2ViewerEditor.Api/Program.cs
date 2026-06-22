@@ -1,6 +1,7 @@
 ﻿using D2ViewerEditor.Api.Extensions;
 using D2ViewerEditor.Api.Security;
 using D2ViewerEditor.Application;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Infrastructure;
 using Microsoft.OpenApi.Models;
 using System.Reflection;
@@ -34,6 +35,10 @@ builder.AddEntraSecretFromGcp();
 // Add Architecture layers
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.Configure<UploadSecurityOptions>(
+    builder.Configuration.GetSection(UploadSecurityOptions.SectionName));
+builder.Services.Configure<ReturnUrlSecurityOptions>(
+    builder.Configuration.GetSection(ReturnUrlSecurityOptions.SectionName));
 
 // ── Authentication & authorization ──────────────────────────────────────────
 // LOKALNY DEV: gdy `Auth:DevBypass=true` (i NIE Production) — pomijamy całkowicie Entra i używamy

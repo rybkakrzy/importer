@@ -39,6 +39,19 @@ public class GraphicConversionServiceTests
     }
 
     [Test]
+    public void Detect_Tiff_Webp_Ico_FromMagicBytes()
+    {
+        _svc.Detect(new byte[] { 0x49, 0x49, 0x2A, 0x00, 0, 0 }).Should().Be(GraphicKind.Tiff);   // little-endian TIFF
+        _svc.Detect(new byte[] { 0x4D, 0x4D, 0x00, 0x2A, 0, 0 }).Should().Be(GraphicKind.Tiff);   // big-endian TIFF
+        _svc.Detect(BuildWebpHeader()).Should().Be(GraphicKind.Webp);
+        _svc.Detect(new byte[] { 0x00, 0x00, 0x01, 0x00, 0x01, 0x00 }).Should().Be(GraphicKind.Ico);
+    }
+
+    [Test]
+    public void Detect_UnknownMedia_IsUnknown()
+        => _svc.Detect(new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44 }, "application/octet-stream").Should().Be(GraphicKind.Unknown);
+
+    [Test]
     public void Detect_FallsBackToContentTypeHint_WhenMagicUnknown()
     {
         _svc.Detect(new byte[] { 1, 2, 3 }, "image/x-emf").Should().Be(GraphicKind.Emf);
@@ -58,13 +71,13 @@ public class GraphicConversionServiceTests
         result.Web!.MimeType.Should().Be("image/png");
         result.Web.WidthPx.Should().Be(64);
         result.Web.HeightPx.Should().Be(48);
-        result.Web.IsPlaceholder.Should().BeFalse();
+        result.Web.IsBlankFallback.Should().BeFalse();
     }
 
     // ---- EMF/WMF ------------------------------------------------------------
 
     [Test]
-    public void Emf_WithoutEmbeddedRaster_GivesPlaceholderSvg_AndPreservesOriginal()
+    public void Emf_WithoutEmbeddedRaster_GivesTransparentBlank_NotVisiblePlaceholder()
     {
         // rclFrame 10000 x 5000 (0.01mm) = 100mm x 50mm ≈ 378 x 189 px @96dpi.
         var result = _svc.ConvertForEditor(new GraphicSource { Data = BuildEmf(10000, 5000), ContentType = "image/x-emf" });
@@ -73,11 +86,41 @@ public class GraphicConversionServiceTests
         result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Fallback);
         result.Diagnostics.Fidelity.Should().Be(GraphicFidelity.Fallback);
         result.Web!.MimeType.Should().Be("image/svg+xml");
-        result.Web.IsPlaceholder.Should().BeTrue();
-        result.Web.WidthPx.Should().Be(378);
+        result.Web.IsBlankFallback.Should().BeTrue();
+        result.Web.WidthPx.Should().Be(378);     // wymiary z layoutu zachowane (stabilność układu)
         result.Web.HeightPx.Should().Be(189);
         result.PreserveOriginalPart.Should().BeTrue(); // legacy part rides along to DOCX
-        result.Diagnostics.Warnings.Should().NotBeEmpty();
+        // Strukturalne raportowanie błędu (req 8): powód + lista prób strategii.
+        result.Diagnostics.FailureReason.Should().NotBeNullOrEmpty();
+        result.Diagnostics.AttemptedStrategies.Should().Contain("embedded-raster").And.Contain("dib-rasterize");
+
+        AssertTransparentNoPlaceholder(result.Web.Data);
+    }
+
+    /// <summary>
+    /// Regresja realnego buga: NIGDY szare tło / tekst „requires conversion" / „podgląd w Word"
+    /// dla EMF/WMF bez rastra. Wynik to przezroczysty, pusty SVG (zero widocznej treści).
+    /// </summary>
+    [Test]
+    public void EmfAndWmf_BlankFallback_ContainsNoPlaceholderTextOrFill()
+    {
+        var emf = _svc.ConvertForEditor(new GraphicSource { Data = BuildEmf(10000, 5000), ContentType = "image/x-emf" });
+        var wmf = _svc.ConvertForEditor(new GraphicSource { Data = BuildPlaceableWmf(0, 0, 1440, 720, 1440), ContentType = "image/x-wmf" });
+
+        AssertTransparentNoPlaceholder(emf.Web!.Data);
+        AssertTransparentNoPlaceholder(wmf.Web!.Data);
+    }
+
+    private static void AssertTransparentNoPlaceholder(byte[] svgBytes)
+    {
+        var svg = Encoding.UTF8.GetString(svgBytes);
+        svg.Should().StartWith("<svg").And.EndWith("</svg>");
+        svg.Should().NotContain("<text");                 // brak jakiegokolwiek tekstu
+        svg.Should().NotContain("<rect");                 // brak rysowanego tła/ramki
+        svg.Should().NotContain("fill=");                 // brak wypełnienia (szare tło)
+        svg.Should().NotContain("stroke");                // brak ramki
+        foreach (var banned in new[] { "requires conversion", "podgląd w Word", "placeholder", "EMF —", "WMF —", "konwersj" })
+            svg.ToLowerInvariant().Should().NotContain(banned.ToLowerInvariant());
     }
 
     [Test]
@@ -107,7 +150,7 @@ public class GraphicConversionServiceTests
         result.Diagnostics.InputKind.Should().Be(GraphicKind.Emf);
         result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Converted);
         result.Web!.MimeType.Should().Be("image/png");
-        result.Web.IsPlaceholder.Should().BeFalse();        // KLUCZOWE: brak placeholdera „EMF — podgląd w Word"
+        result.Web.IsBlankFallback.Should().BeFalse();      // KLUCZOWE: realny raster, nie blank
         result.Web.WidthPx.Should().Be(2);
         result.Web.HeightPx.Should().Be(2);
         result.PreserveOriginalPart.Should().BeTrue();      // oryginał EMF nadal jedzie do DOCX (eksport wektorowy)
@@ -125,7 +168,7 @@ public class GraphicConversionServiceTests
 
         result.Diagnostics.InputKind.Should().Be(GraphicKind.Wmf);
         result.Web!.MimeType.Should().Be("image/png");
-        result.Web.IsPlaceholder.Should().BeFalse();
+        result.Web.IsBlankFallback.Should().BeFalse();
     }
 
     [Test]
@@ -138,22 +181,24 @@ public class GraphicConversionServiceTests
         var result = _svc.ConvertForEditor(new GraphicSource { Data = emf, ContentType = "image/x-emf" });
 
         result.Diagnostics.InputKind.Should().Be(GraphicKind.Emf);
-        result.Web!.IsPlaceholder.Should().BeTrue();
+        result.Web!.IsBlankFallback.Should().BeTrue();
         result.Web.MimeType.Should().Be("image/svg+xml");
         result.PreserveOriginalPart.Should().BeTrue();
+        AssertTransparentNoPlaceholder(result.Web.Data);
     }
 
     [Test]
-    public void Wmf_Placeable_GivesPlaceholderWithDimensions()
+    public void Wmf_Placeable_GivesTransparentBlank_WithDimensions()
     {
         // bbox 0,0,1440,720 with 1440 units/inch = 1in x 0.5in = 96 x 48 px.
         var result = _svc.ConvertForEditor(new GraphicSource { Data = BuildPlaceableWmf(0, 0, 1440, 720, 1440) });
 
         result.Diagnostics.InputKind.Should().Be(GraphicKind.Wmf);
-        result.Web!.IsPlaceholder.Should().BeTrue();
+        result.Web!.IsBlankFallback.Should().BeTrue();
         result.Web.WidthPx.Should().Be(96);
         result.Web.HeightPx.Should().Be(48);
         result.PreserveOriginalPart.Should().BeTrue();
+        AssertTransparentNoPlaceholder(result.Web.Data);
     }
 
     // ---- VML shapes ---------------------------------------------------------
@@ -211,6 +256,59 @@ public class GraphicConversionServiceTests
         result.Diagnostics.Status.Should().Be(GraphicConversionStatus.Rejected);
     }
 
+    // ---- caching / deduplication --------------------------------------------
+
+    [Test]
+    public void IdenticalInput_IsDeduplicated_FromContentHashCache()
+    {
+        var emf = BuildEmf(10000, 5000);
+        var first = _svc.ConvertForEditor(new GraphicSource { Data = (byte[])emf.Clone(), ContentType = "image/x-emf" });
+        var second = _svc.ConvertForEditor(new GraphicSource { Data = (byte[])emf.Clone(), ContentType = "image/x-emf" });
+
+        // Drugi przebieg trafia w cache po hashu treści → ten sam (zdeduplikowany) obiekt wyniku.
+        ReferenceEquals(first, second).Should().BeTrue();
+        ReferenceEquals(first.Web, second.Web).Should().BeTrue();
+    }
+
+    [Test]
+    public void Diagnostics_ExposesCacheKey_AndAttemptedStrategies()
+    {
+        var result = _svc.ConvertForEditor(new GraphicSource
+        {
+            Data = MinimalPng(8, 8), SourcePath = "/word/media/image1.png"
+        });
+
+        result.Diagnostics.CacheKey.Should().NotBeNullOrEmpty();
+        result.Diagnostics.AttemptedStrategies.Should().NotBeEmpty();
+        result.Diagnostics.SourcePath.Should().Be("/word/media/image1.png");
+    }
+
+    [Test]
+    public void DifferentContent_ProducesDifferentCacheKeys()
+    {
+        var a = _svc.ConvertForEditor(new GraphicSource { Data = MinimalPng(8, 8) });
+        var b = _svc.ConvertForEditor(new GraphicSource { Data = MinimalPng(16, 16) });
+        a.Diagnostics.CacheKey.Should().NotBe(b.Diagnostics.CacheKey);
+    }
+
+    // ---- TIFF (non-browser-native raster) -----------------------------------
+
+    [Test]
+    public void Tiff_WithoutDecodableData_GivesTransparentBlank_NotPlaceholder()
+    {
+        // Goły nagłówek TIFF bez ciała → Skia nie zdekoduje → przezroczysty blank (bez placeholdera),
+        // oryginał zachowany do DOCX. NIGDY surowy image/tiff w `src`.
+        var tiff = new byte[] { 0x49, 0x49, 0x2A, 0x00, 0x08, 0, 0, 0 };
+        var result = _svc.ConvertForEditor(new GraphicSource { Data = tiff, ContentType = "image/tiff" });
+
+        result.Diagnostics.InputKind.Should().Be(GraphicKind.Tiff);
+        result.Web!.MimeType.Should().Be("image/svg+xml");
+        result.Web.IsBlankFallback.Should().BeTrue();
+        result.PreserveOriginalPart.Should().BeTrue();
+        result.Diagnostics.FailureReason.Should().NotBeNullOrEmpty();
+        AssertTransparentNoPlaceholder(result.Web.Data);
+    }
+
     // ---- synthetic graphic builders ----------------------------------------
 
     private static byte[] MinimalPng(int w, int h)
@@ -227,6 +325,15 @@ public class GraphicConversionServiceTests
         Encoding.ASCII.GetBytes("IEND").CopyTo(iend, 4);
         bytes.AddRange(iend);
         return bytes.ToArray();
+    }
+
+    /// <summary>Minimalny nagłówek RIFF/WEBP (12 B) — wystarczy do detekcji po sygnaturze.</summary>
+    private static byte[] BuildWebpHeader()
+    {
+        var d = new byte[12];
+        Encoding.ASCII.GetBytes("RIFF").CopyTo(d, 0);
+        Encoding.ASCII.GetBytes("WEBP").CopyTo(d, 8);
+        return d;
     }
 
     private static byte[] BuildEmf(int frameRight, int frameBottom)

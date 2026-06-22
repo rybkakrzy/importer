@@ -1,6 +1,7 @@
 using D2ServicesViewerEditor.Api.Extensions;
 using D2ServicesViewerEditor.Api.Logging;
 using D2ViewerEditor.Application;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Infrastructure;
 using Microsoft.OpenApi.Models;
 using Serilog;
@@ -43,6 +44,10 @@ try
 
     builder.Services.AddApplication();
     builder.Services.AddInfrastructure(builder.Configuration);
+    builder.Services.Configure<UploadSecurityOptions>(
+        builder.Configuration.GetSection(UploadSecurityOptions.SectionName));
+    builder.Services.Configure<ReturnUrlSecurityOptions>(
+        builder.Configuration.GetSection(ReturnUrlSecurityOptions.SectionName));
 
     // External API authenticates app-to-app (not per user). The shared Application layer
     // registers IDocumentAccessGuard (→ ICurrentUserProvider); provide a no-user system

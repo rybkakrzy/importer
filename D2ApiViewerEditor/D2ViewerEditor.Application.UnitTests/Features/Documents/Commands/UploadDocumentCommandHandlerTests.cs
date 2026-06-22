@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
 using FluentAssertions;
@@ -12,6 +13,7 @@ public class UploadDocumentCommandHandlerTests
 {
     private IDocumentRepository _documentRepository;
     private IDocumentStorageService _storageService;
+    private IFileUploadSecurityService _uploadSecurityService;
     private UploadDocumentCommandHandler _handler;
 
     [SetUp]
@@ -19,9 +21,16 @@ public class UploadDocumentCommandHandlerTests
     {
         _documentRepository = Substitute.For<IDocumentRepository>();
         _storageService = Substitute.For<IDocumentStorageService>();
+        _uploadSecurityService = Substitute.For<IFileUploadSecurityService>();
         _storageService.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci => $"documents/{ci.ArgAt<Guid>(0)}");
-        _handler = new UploadDocumentCommandHandler(_documentRepository, _storageService);
+        _uploadSecurityService.ValidateDocumentAsync(
+                Arg.Any<byte[]>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>())
+            .Returns(UploadValidationResult.Success("application/pdf"));
+        _handler = new UploadDocumentCommandHandler(_documentRepository, _storageService, _uploadSecurityService);
     }
 
     [Test]

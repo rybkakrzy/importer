@@ -18,6 +18,7 @@ public class FinishAndSendDocumentCommandHandlerTests
     private Mock<IDocumentStorageService> _storage = null!;
     private Mock<IDeliverySender> _sender = null!;
     private Mock<ICurrentUserProvider> _currentUser = null!;
+    private Mock<IReturnUrlValidator> _returnUrlValidator = null!;
     private FinishAndSendDocumentCommandHandler _handler = null!;
 
     [SetUp]
@@ -28,8 +29,18 @@ public class FinishAndSendDocumentCommandHandlerTests
         _storage = new Mock<IDocumentStorageService>();
         _sender = new Mock<IDeliverySender>();
         _currentUser = new Mock<ICurrentUserProvider>();
+        _returnUrlValidator = new Mock<IReturnUrlValidator>();
+        _returnUrlValidator.Setup(v => v.Validate(It.IsAny<string?>()))
+            .Returns((string? url) => string.IsNullOrWhiteSpace(url)
+                ? ReturnUrlValidationResult.Failure(ReturnUrlRejectionCode.Empty, "Callback URL jest wymagany.")
+                : ReturnUrlValidationResult.Success(url!));
         _handler = new FinishAndSendDocumentCommandHandler(
-            _documentRepo.Object, _deliveryRepo.Object, _storage.Object, _sender.Object, _currentUser.Object);
+            _documentRepo.Object,
+            _deliveryRepo.Object,
+            _storage.Object,
+            _sender.Object,
+            _currentUser.Object,
+            _returnUrlValidator.Object);
     }
 
     private static Document BuildDocumentWithEditableVersion(out Guid versionId, string? metadata)

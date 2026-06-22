@@ -6,6 +6,24 @@
 
 ## Ostatnia aktualizacja (2026-06-22)
 
+- Wdrożono centralne security policies dla uploadu i callback URL:
+   - `IReturnUrlValidator` + `ReturnUrlValidator` (kontrola: schemat, znaki, protocol-relative, user-info, loopback/private IP, allowlista hostów, normalizacja URL),
+   - `IFileUploadSecurityService` + `FileUploadSecurityService` (spójność extension↔MIME↔signature, inspekcja DOCX ZIP: zip-slip, limity, wymagane part-y OOXML, blokada VBA),
+   - `IFileScanner` (abstrakcja AV) + `NoOpFileScanner` (domyślny adapter).
+- Podpięto egzekwowanie polityk w handlerach:
+   - uploady: `UploadDocument`, `UploadImage`, `IngestExternalDocument`,
+   - callback/recipient: `UpdateCallbackUrl`, `UpdateDeliveryRecipientUrl`, `FinishAndSendDocument`.
+- Hosty (`D2Api`, `D2Services`) bindują sekcje konfiguracyjne:
+   - `Security:Upload`,
+   - `Security:ReturnUrl`.
+- Testy po zmianach:
+   - Application.UnitTests **295/295**,
+   - D2Api.Api.UnitTests **110/110**,
+   - D2Services.Api.UnitTests **39/39**.
+- Dodane nowe testy security:
+   - `ReturnUrlValidatorTests`,
+   - `FileUploadSecurityServiceTests`.
+
 - D2Services observability domknięte do standardu:
    - pipeline zawiera `UseRequestObservability()` + `UseExceptionHandlingMiddleware()`,
    - `X-Correlation-ID` propagowany i logowany (scope + LogContext),
@@ -50,7 +68,9 @@ System przyjmuje dokumenty od aplikacji zewnętrznej (External API), edytuje/ogl
 
 ## Następne sugerowane kroki
 
-1. Krok 2 (podgląd): w GUI dla `?masterId=` ładować v1 przez `GET .../{masterId}/download` zamiast aktywnej wersji; routing PDFViewer vs DocxEditor po `mimeType` z `GET .../{masterId}/metadata` lub `/{masterId}`.
+1. Podpiąć produkcyjny silnik AV pod `IFileScanner` (ICAP/ClamAV/API) oraz spiąć alerting dla `MalwareDetected`/`MalwareScanUnavailable`.
+2. Wymusić i udokumentować politykę host allowlist (`Security:ReturnUrl:AllowedHosts`) na środowiskach prod/UAT.
+3. Krok 2 (podgląd): w GUI dla `?masterId=` ładować v1 przez `GET .../{masterId}/download` zamiast aktywnej wersji; routing PDFViewer vs DocxEditor po `mimeType` z `GET .../{masterId}/metadata` lub `/{masterId}`.
 2. (Zrobione 2026-05-25) `finishDocument()` — async wysyłka na returnUrl: kolejka `document_deliveries` + worker `DocumentDeliveryWorker` + snapshot GCS `deliveries/{id}` + retry/backoff 24h. Endpointy `finish`/`deliveries`. Patrz ADR-0005.
    - (Zrobione 2026-05-25) Panel admina `/admin/deliveries` (lista + filtry + retry + `locked_by`).
    - Pozostało: dodać DB integration testy claimu (`FOR UPDATE SKIP LOCKED` / reclaim po crashu) na realnym Postgresie (R-06); rozważyć ochronę SSRF dla `RecipientUrl` (R-07).

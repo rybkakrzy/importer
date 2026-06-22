@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Commands.UpdateCallbackUrl;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
 using FluentAssertions;
@@ -13,13 +14,17 @@ public class UpdateCallbackUrlCommandHandlerTests
     private const string DocxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
     private Mock<IDocumentRepository> _documentRepo = null!;
+    private Mock<IReturnUrlValidator> _returnUrlValidator = null!;
     private UpdateCallbackUrlCommandHandler _handler = null!;
 
     [SetUp]
     public void SetUp()
     {
         _documentRepo = new Mock<IDocumentRepository>();
-        _handler = new UpdateCallbackUrlCommandHandler(_documentRepo.Object);
+        _returnUrlValidator = new Mock<IReturnUrlValidator>();
+        _returnUrlValidator.Setup(v => v.Validate(It.IsAny<string>()))
+            .Returns((string url) => ReturnUrlValidationResult.Success(url.Trim()));
+        _handler = new UpdateCallbackUrlCommandHandler(_documentRepo.Object, _returnUrlValidator.Object);
     }
 
     private static Document NewDoc(string? metadata) =>
@@ -61,6 +66,10 @@ public class UpdateCallbackUrlCommandHandlerTests
     [TestCase("javascript:alert(1)", TestName = "javascript: scheme")]
     public async Task Handle_InvalidUrl_ReturnsFailureWithoutHittingRepo(string url)
     {
+        _returnUrlValidator.Setup(v => v.Validate(url))
+            .Returns(ReturnUrlValidationResult.Failure(ReturnUrlRejectionCode.InvalidAbsoluteUri,
+                "Callback URL musi być absolutnym adresem http(s)."));
+
         var result = await _handler.Handle(
             new UpdateCallbackUrlCommand(Guid.NewGuid(), url),
             CancellationToken.None);
@@ -69,19 +78,6 @@ public class UpdateCallbackUrlCommandHandlerTests
         result.IsNotFound.Should().BeFalse();
         _documentRepo.Verify(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
         _documentRepo.Verify(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
-    }
-
-    [Test]
-    public async Task Handle_UrlTooLong_ReturnsFailure()
-    {
-        var tooLong = "https://example.com/" + new string('a', 2100);
-
-        var result = await _handler.Handle(
-            new UpdateCallbackUrlCommand(Guid.NewGuid(), tooLong),
-            CancellationToken.None);
-
-        result.IsSuccess.Should().BeFalse();
-        result.Error.Should().Contain("2048");
     }
 
     [TestCase(DocumentStatus.Sending)]
