@@ -1,0 +1,48 @@
+
+# =============================================================================
+
+# ---- 1. Poprawny echo (wstaw zamiast obecnej linii 242 w deployment.yaml) ----
+
+echo "{\"auth\":{\"enabled\":{{ .Values.entra.enabled }},\"clientId\":\"{{ .Values.entra.clientId }}\",\"authority\":\"{{ .Values.entra.authority }}\",\"redirectUri\":\"{{ .Values.entra.redirectUri }}\",\"apiScopes\":[{{- range $i, $s := .Values.entra.apiScopes }}{{ if $i }},{{ end }}\"{{ $s }}\"{{- end }}]}}" > /frontend-config/config.json;
+
+
+# ---- 2. Odpowiadający blok w values.yaml --------------------------------------
+
+# entra:
+#   enabled: true
+#   clientId: kutasek
+#   authority: https://login.microsoftonline.com/cipucha/v2.0
+#   redirectUri: https://viewer.doc2.d.c01.cip.cip
+#   apiScopes:
+#     - User.Read
+
+
+# ---- 3. Wynikowy config.json (po wyrenderowaniu) -----------------------------
+
+# {
+#   "auth": {
+#     "enabled": true,
+#     "clientId": "kutasek",
+#     "authority": "https://login.microsoftonline.com/cipucha/v2.0",
+#     "redirectUri": "https://viewer.doc2.d.c01.cip.cip",
+#     "apiScopes": ["User.Read"]
+#   }
+# }
+
+
+# =============================================================================
+# OSTRZEŻENIE merytoryczne dot. apiScopes = ["User.Read"]
+# =============================================================================
+# "User.Read" to scope Microsoft Graph. Token wydany pod ten scope ma
+#   aud = https://graph.microsoft.com (a nie Twoje API).
+# Jeśli backend (D2ApiViewerEditor) waliduje audience swojego API
+#   (AzureAd:ClientId / api://<API_CLIENT_ID>), taki token zostanie ODRZUCONY => 401,
+#   mimo że logowanie się powiedzie i token będzie w localStorage.
+#
+# Do wołania WŁASNEGO backendu użyj scope'a swojego API, np.:
+#   apiScopes:
+#     - api://<API_CLIENT_ID>/access_as_user
+#
+# "User.Read" zostaw tylko jeśli faktycznie wołasz Grapha (np. profil/zdjęcie),
+# a backend nie sprawdza audience swojego API.
+# =============================================================================
