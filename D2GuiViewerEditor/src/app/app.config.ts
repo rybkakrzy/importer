@@ -9,20 +9,17 @@ import { provideRouter } from '@angular/router';
 import {
   provideHttpClient,
   withInterceptors,
-  withInterceptorsFromDi,
-  HTTP_INTERCEPTORS,
 } from '@angular/common/http';
 import {
   MSAL_INSTANCE,
   MSAL_GUARD_CONFIG,
-  MSAL_INTERCEPTOR_CONFIG,
   MsalService,
   MsalGuard,
   MsalBroadcastService,
-  MsalInterceptor,
 } from '@azure/msal-angular';
 
 import { routes } from './app.routes';
+import { apiTokenInterceptor } from './core/interceptors/api-token.interceptor';
 import { httpErrorInterceptor } from './core/interceptors/http-error.interceptor';
 import { GlobalErrorHandler } from './core/error-handling/global-error-handler';
 import { ConnectionStatusService } from './core/services/connection-status.service';
@@ -30,7 +27,6 @@ import { MSAL_CUSTOM_CONFIG } from './core/config/runtime-config';
 import {
   msalInstanceFactory,
   msalGuardConfigFactory,
-  msalInterceptorConfigFactory,
 } from './core/auth/msal.config';
 
 export const appConfig: ApplicationConfig = {
@@ -38,15 +34,13 @@ export const appConfig: ApplicationConfig = {
     provideBrowserGlobalErrorListeners(),
     provideRouter(routes),
 
-    // MsalInterceptor (DI-based) attaches the access token; httpError (functional) handles errors.
-    provideHttpClient(withInterceptorsFromDi(), withInterceptors([httpErrorInterceptor])),
-    { provide: HTTP_INTERCEPTORS, useClass: MsalInterceptor, multi: true },
+    // apiToken (functional) attaches the ID token to API calls; httpError handles errors.
+    provideHttpClient(withInterceptors([apiTokenInterceptor, httpErrorInterceptor])),
 
     // MSAL (Entra ID) — auth config comes from MSAL_CUSTOM_CONFIG (Qutas runtime config.json),
     // provided at bootstrap in main.ts with build-time environment fallback.
     { provide: MSAL_INSTANCE, useFactory: msalInstanceFactory, deps: [MSAL_CUSTOM_CONFIG] },
     { provide: MSAL_GUARD_CONFIG, useFactory: msalGuardConfigFactory, deps: [MSAL_CUSTOM_CONFIG] },
-    { provide: MSAL_INTERCEPTOR_CONFIG, useFactory: msalInterceptorConfigFactory, deps: [MSAL_CUSTOM_CONFIG] },
     MsalService,
     MsalGuard,
     MsalBroadcastService,
