@@ -10,6 +10,9 @@ const apiBase = new URL(environment.apiUrl, window.location.origin).toString();
 const apiBaseWithSlash = apiBase.endsWith('/') ? apiBase : `${apiBase}/`;
 const healthUrl = `${apiBaseWithSlash}health`;
 
+/** localStorage key under which the bearer token sent to the API is cached. */
+export const API_ACCESS_TOKEN_KEY = 'api_access_token';
+
 /** True for backend API calls that must carry a token — excludes the anonymous health endpoint. */
 function isProtectedApiRequest(url: string): boolean {
   const absolute = new URL(url, window.location.origin).toString();
@@ -53,8 +56,13 @@ export const apiTokenInterceptor: HttpInterceptorFn = (req, next) => {
     // here (no `next(req)` inside catchError), so a 401 never silently retries.
     catchError(() => of(null)),
     switchMap((result) => {
-      const authedReq = result?.idToken
-        ? req.clone({ setHeaders: { Authorization: `Bearer ${result.idToken}` } })
+      const token = result?.idToken ?? null;
+      // Persist the token we send to the API so other parts of the app (and debugging) can read it.
+      if (token) {
+        localStorage.setItem(API_ACCESS_TOKEN_KEY, token);
+      }
+      const authedReq = token
+        ? req.clone({ setHeaders: { Authorization: `Bearer ${token}` } })
         : req;
       return next(authedReq);
     }),
