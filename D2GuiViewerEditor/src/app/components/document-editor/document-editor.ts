@@ -95,7 +95,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   /** Pełna nazwa zalogowanego użytkownika (MSAL active account). Pusta w trybie bez auth
    *  (dev bypass) → powitanie ukrywane w szablonie. */
   readonly currentUserName = signal<string>('');
-  /** Imię do powitania „Witaj, <imię>!" — z claimu `given_name`, fallback z pełnej nazwy. */
+  /** Imię do powitania „Witaj, <imię>!" — nawias z `name` („… (Imię)"), potem `given_name`, fallback. */
   readonly firstName = signal<string>('');
   /** Inicjały — fallback awatara, gdy brak zdjęcia z Graph. */
   readonly initials = signal<string>('');
@@ -626,10 +626,16 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const fullName = account?.name?.trim() || account?.username || '';
     this.currentUserName.set(fullName);
 
+    // Imię ustalamy tak samo jak na Dashboardzie: `name` ma format „Nazwisko, X. (Imię)" —
+    // najpierw bierzemy tekst z nawiasów; gdy go brak, claim `given_name`; w ostateczności fallback
+    // z pełnej nazwy (ING `given_name` bywa samym inicjałem, dlatego nawias ma priorytet).
+    const parenthesized = fullName.match(/\(([^)]+)\)/)?.[1]?.trim();
     const givenName = (account?.idTokenClaims as Record<string, unknown> | undefined)?.['given_name'];
-    const first = typeof givenName === 'string' && givenName.trim()
-      ? givenName.trim()
-      : this.deriveFirstName(fullName);
+    const first = parenthesized
+      ? parenthesized
+      : typeof givenName === 'string' && givenName.trim()
+        ? givenName.trim()
+        : this.deriveFirstName(fullName);
     this.firstName.set(first);
     this.initials.set(this.deriveInitials(fullName || first));
 
