@@ -173,17 +173,21 @@ export class DashboardComponent {
     });
   }
 
-  // Imię pobieramy z konta MSAL (Entra ID): preferujemy claim `given_name`, w razie jego
-  // braku bierzemy pierwszy człon pełnej nazwy. Aktywne konto ustawia App po zalogowaniu.
+  // Imię pobieramy z konta MSAL (Entra ID). `name` ma format "Nazwisko, X. (Imię)" — bierzemy
+  // tekst z nawiasów; gdy go brak, korzystamy z claimu `given_name`, a w ostateczności z pierwszego
+  // członu nazwy. Aktywne konto ustawia App po zalogowaniu.
   private resolveFirstName(): string {
     const account: AccountInfo | null =
       this.msal.instance.getActiveAccount() ?? this.msal.instance.getAllAccounts()[0] ?? null;
     if (!account) return '';
 
+    const fullName = account.name?.trim() ?? '';
+    const parenthesized = fullName.match(/\(([^)]+)\)/)?.[1]?.trim();
+    if (parenthesized) return parenthesized;
+
     const givenName = (account.idTokenClaims as { given_name?: unknown } | undefined)?.given_name;
     if (typeof givenName === 'string' && givenName.trim()) return givenName.trim();
 
-    const fullName = account.name?.trim();
     return fullName ? fullName.split(' ')[0] : '';
   }
 }
