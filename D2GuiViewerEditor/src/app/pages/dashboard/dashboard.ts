@@ -1,6 +1,8 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { switchMap, map, from, Subscription } from 'rxjs';
+import { MsalService } from '@azure/msal-angular';
+import type { AccountInfo } from '@azure/msal-browser';
 import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { DocumentNavigationService } from '../../core/services/document-navigation.service';
@@ -16,12 +18,21 @@ export class DashboardComponent {
   private documentService = inject(DocumentService);
   private documentStorageService = inject(DocumentStorageService);
   private documentNavigation = inject(DocumentNavigationService);
+  private readonly msal = inject(MsalService);
 
   isLoading = signal(false);
   errorMessage = signal<string | null>(null);
   readonly currentYear = new Date().getFullYear();
 
+  // Imię zalogowanego użytkownika (Entra ID) — powitanie na pulpicie.
+  readonly userFirstName = signal<string>(this.resolveFirstName());
+  readonly greeting = computed(() => {
+    const name = this.userFirstName();
+    return name ? `Witaj ${name} w Doc2` : 'Witaj w Doc2';
+  });
+
   private activeSubscription: Subscription | null = null;
+
 
   newDocument(): void {
     this.isLoading.set(true);
@@ -161,4 +172,19 @@ export class DashboardComponent {
       reader.onerror = reject;
     });
   }
+
+  // Imię pobieramy z konta MSAL (Entra ID): preferujemy claim `given_name`, w razie jego
+  // braku bierzemy pierwszy człon pełnej nazwy. Aktywne konto ustawia App po zalogowaniu.
+  private resolveFirstName(): string {
+    const account: AccountInfo | null =
+      this.msal.instance.getActiveAccount() ?? this.msal.instance.getAllAccounts()[0] ?? null;
+    if (!account) return '';
+
+    const givenName = (account.idTokenClaims as { given_name?: unknown } | undefined)?.given_name;
+    if (typeof givenName === 'string' && givenName.trim()) return givenName.trim();
+
+    const fullName = account.name?.trim();
+    return fullName ? fullName.split(' ')[0] : '';
+  }
 }
+
