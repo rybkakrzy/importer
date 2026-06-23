@@ -25,8 +25,9 @@ function isProtectedApiRequest(url: string): boolean {
  * The SPA and the API share a single Entra app registration (clientId == AzureAd:ClientId) and the
  * tenant does not expose a custom API scope. So instead of a Microsoft Graph access token (scope
  * `User.Read`), whose signature this API cannot validate ("The signature is invalid"), we attach the
- * ID token: its `aud` equals the clientId, which `AddMicrosoftIdentityWebApi` accepts. Requesting the
- * app's own clientId as the scope is the MSAL way to obtain/renew that ID token silently.
+ * ID token: its `aud` equals the clientId, which `AddMicrosoftIdentityWebApi` accepts. We acquire a
+ * token silently for the SAME scopes used at login (already consented and cached, so no /token 400)
+ * and use the `idToken` from that result — the Graph access token in the same result is ignored.
  */
 export const apiTokenInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(MSAL_CUSTOM_CONFIG);
@@ -42,7 +43,11 @@ export const apiTokenInterceptor: HttpInterceptorFn = (req, next) => {
     return next(req);
   }
 
-  return from(msal.instance.acquireTokenSilent({ account, scopes: [auth.clientId] })).pipe(
+  // Same scopes as the MSAL login request (the runtime-config apiScopes, e.g. User.Read) so the
+  // silent call hits the cache instead of failing at the token endpoint.
+  const loginScopes = auth.apiScopes?.length ? auth.apiScopes : ['openid', 'profile'];
+
+  return from(msal.instance.acquireTokenSilent({ account, scopes: loginScopes })).pipe(
     // Token acquisition failed (e.g. interaction required) → send without header; the backend
     // returns 401 and the global error handling kicks in. Downstream HTTP errors are NOT caught
     // here (no `next(req)` inside catchError), so a 401 never silently retries.
