@@ -98,12 +98,18 @@ export function msalGuardConfigFactory(auth: AppAuthConfig): MsalGuardConfigurat
  * Attaches access tokens (with the API scope) to requests hitting the backend API.
  */
 export function msalInterceptorConfigFactory(auth: AppAuthConfig): MsalInterceptorConfiguration {
-  const protectedResourceMap = new Map<string, Array<string>>();
+  const protectedResourceMap = new Map<string, Array<string> | null>();
   if (isAuthEnabled(auth)) {
     validateAuthConfig(auth);
     const scopes = apiScopesFor(auth);
     const apiBase = new URL(environment.apiUrl, window.location.origin).toString();
     const apiBaseWithSlash = apiBase.endsWith('/') ? apiBase : `${apiBase}/`;
+    // The health endpoint is anonymous (backend HealthController has no [Authorize]) and is polled
+    // at bootstrap + every 30s by ConnectionStatusService. It must NOT trigger interactive token
+    // acquisition — a background poll before login would otherwise start a redirect loop to
+    // /authorize. null = explicitly unprotected; listed before the broad base so the more specific
+    // entry wins.
+    protectedResourceMap.set(`${apiBaseWithSlash}health`, null);
     protectedResourceMap.set(apiBase, scopes);
     protectedResourceMap.set(apiBaseWithSlash, scopes);
   }

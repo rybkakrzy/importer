@@ -97,4 +97,70 @@ public class GcpJsonConsoleFormatterTests
         doc.RootElement.GetProperty("correlationId").GetString().Should().Be("corr-123");
         doc.RootElement.GetProperty("masterId").GetString().Should().Be("m-1");
     }
+
+    [Test]
+    public void Write_TypeValueInScope_SerializesAsName_WithoutFallback()
+    {
+        var scopeProvider = new LoggerExternalScopeProvider();
+        using var scope = scopeProvider.Push(new Dictionary<string, object>
+        {
+            ["requestType"] = typeof(GcpJsonConsoleFormatterTests) // boxed System.RuntimeType
+        });
+
+        var entry = new Microsoft.Extensions.Logging.Abstractions.LogEntry<string>(
+            LogLevel.Information, "Cat", new EventId(0), "msg", null, (s, _) => s);
+
+        using var sw = new StringWriter();
+        Formatter().Write(in entry, scopeProvider, sw);
+        using var doc = JsonDocument.Parse(sw.ToString());
+
+        doc.RootElement.TryGetProperty("serializationError", out _).Should().BeFalse();
+        doc.RootElement.GetProperty("requestType").GetString()
+            .Should().Be(typeof(GcpJsonConsoleFormatterTests).FullName);
+    }
+
+    [Test]
+    public void Write_NestedTypeValue_SerializesAsName_WithoutFallback()
+    {
+        var scopeProvider = new LoggerExternalScopeProvider();
+        using var scope = scopeProvider.Push(new Dictionary<string, object>
+        {
+            ["request"] = new { Handler = typeof(GcpJsonConsoleFormatterTests), Name = "x" }
+        });
+
+        var entry = new Microsoft.Extensions.Logging.Abstractions.LogEntry<string>(
+            LogLevel.Information, "Cat", new EventId(0), "msg", null, (s, _) => s);
+
+        using var sw = new StringWriter();
+        Formatter().Write(in entry, scopeProvider, sw);
+        using var doc = JsonDocument.Parse(sw.ToString());
+
+        doc.RootElement.TryGetProperty("serializationError", out _).Should().BeFalse();
+        doc.RootElement.GetProperty("request").GetProperty("Handler").GetString()
+            .Should().Be(typeof(GcpJsonConsoleFormatterTests).FullName);
+    }
+
+    [Test]
+    public void Write_ExceptionObjectInScope_SerializesWithoutFallback()
+    {
+        Exception caught;
+        try { throw new InvalidOperationException("boom"); }
+        catch (Exception e) { caught = e; } // populated TargetSite (MethodBase), StackTrace …
+
+        var scopeProvider = new LoggerExternalScopeProvider();
+        using var scope = scopeProvider.Push(new Dictionary<string, object>
+        {
+            ["failure"] = caught
+        });
+
+        var entry = new Microsoft.Extensions.Logging.Abstractions.LogEntry<string>(
+            LogLevel.Information, "Cat", new EventId(0), "msg", null, (s, _) => s);
+
+        using var sw = new StringWriter();
+        Formatter().Write(in entry, scopeProvider, sw);
+        using var doc = JsonDocument.Parse(sw.ToString());
+
+        doc.RootElement.TryGetProperty("serializationError", out _).Should().BeFalse();
+        doc.RootElement.GetProperty("failure").GetProperty("Message").GetString().Should().Be("boom");
+    }
 }

@@ -36,10 +36,11 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        // System.Text.Json refuses to serialize Type/RuntimeType (deserialization-gadget guard) and
-        // throws NotSupportedException. Log payloads can carry Type values anywhere in the object graph
-        // (e.g. a destructured {@Request} with a Type property) — emit them as their name instead.
-        Converters = { new TypeJsonConverter() }
+        // System.Text.Json refuses to serialize reflection metadata (Type/RuntimeType, MethodBase,
+        // Assembly, …) as a deserialization-gadget guard and throws NotSupportedException. Log payloads
+        // can carry such values anywhere in the object graph (e.g. a destructured {@Request} with a Type
+        // property, or an Exception object whose TargetSite is a MethodBase) — emit them as text instead.
+        Converters = { new TypeJsonConverter(), new ReflectionMetadataJsonConverterFactory() }
     };
 
     private static readonly HashSet<string> ReservedKeys = new(StringComparer.Ordinal)
@@ -132,6 +133,38 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
 
         public override void Write(Utf8JsonWriter writer, Type value, JsonSerializerOptions options)
             => writer.WriteStringValue(value.FullName ?? value.Name);
+    }
+
+    /// <summary>
+    /// Serializes the remaining reflection metadata types (<see cref="System.Reflection.MemberInfo"/>
+    /// such as <c>MethodBase</c>/<c>PropertyInfo</c>, <see cref="System.Reflection.Assembly"/>,
+    /// <see cref="System.Reflection.Module"/>, <see cref="System.Reflection.ParameterInfo"/>) as text.
+    /// These also throw <see cref="NotSupportedException"/> in <see cref="JsonSerializer"/> and surface
+    /// when objects like an <see cref="Exception"/> (whose <c>TargetSite</c> is a <c>MethodBase</c>) are
+    /// logged as structured values. <see cref="Type"/> is excluded — <see cref="TypeJsonConverter"/>
+    /// handles it with its full name.
+    /// </summary>
+    private sealed class ReflectionMetadataJsonConverterFactory : JsonConverterFactory
+    {
+        public override bool CanConvert(Type typeToConvert) =>
+            !typeof(Type).IsAssignableFrom(typeToConvert) &&
+            (typeof(System.Reflection.MemberInfo).IsAssignableFrom(typeToConvert) ||
+             typeof(System.Reflection.Assembly).IsAssignableFrom(typeToConvert) ||
+             typeof(System.Reflection.Module).IsAssignableFrom(typeToConvert) ||
+             typeof(System.Reflection.ParameterInfo).IsAssignableFrom(typeToConvert));
+
+        public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>
+            (JsonConverter)Activator.CreateInstance(
+                typeof(ToStringConverter<>).MakeGenericType(typeToConvert))!;
+
+        private sealed class ToStringConverter<T> : JsonConverter<T>
+        {
+            public override T Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+                => throw new NotSupportedException();
+
+            public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
+                => writer.WriteStringValue(value?.ToString());
+        }
     }
 
     private static void AppendPairs(object? source, Dictionary<string, object?> payload)

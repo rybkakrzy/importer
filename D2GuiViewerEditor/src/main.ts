@@ -11,7 +11,7 @@ import { AppAuthConfig, MSAL_CUSTOM_CONFIG, mergeAuthConfig } from './app/core/c
  * rebuild). config.json is the source of auth values; a missing/invalid file falls back to the
  * structural defaults in runtime-config.ts (DEFAULT_AUTH_CONFIG).
  */
-fetch('assets/configs/config.json')
+fetch('assets/configs/config.json', { cache: 'no-store' })
   .then((response) => (response.ok ? response.json() : {}))
   .catch(() => ({}))
   .then((config: { auth?: Partial<AppAuthConfig> } | null) => {
