@@ -328,21 +328,19 @@
 .current-user {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   max-width: 220px;
-  height: 32px;
-  padding: 0 10px;
-  background: #eef1f5;
+  padding: 0;
+  background: transparent;
   color: #444;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+  border: none;
   font-size: 13px;
   font-weight: 600;
 
   .current-user-avatar {
     flex: 0 0 auto;
-    width: 22px;
-    height: 22px;
+    width: 28px;
+    height: 28px;
     border-radius: 50%;
     object-fit: cover;
     background: #d6dbe3;
@@ -352,13 +350,30 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: #3a3f47;
     text-transform: uppercase;
   }
 
   .current-user-name {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    line-height: 1.1;
+  }
+
+  .current-user-greeting {
+    font-size: 11px;
+    font-weight: 400;
+    color: #6b7280;
+  }
+
+  .current-user-firstname {
+    font-size: 15px;
+    font-weight: 700;
+    color: #222;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

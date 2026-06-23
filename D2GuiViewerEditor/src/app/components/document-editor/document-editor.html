@@ -541,7 +541,10 @@
             } @else {
               <span class="current-user-avatar current-user-avatar--initials" aria-hidden="true">{{ initials() }}</span>
             }
-            <span class="current-user-name">Witaj, {{ firstName() || currentUserName() }}!</span>
+            <span class="current-user-name">
+              <span class="current-user-greeting">Witaj,</span>
+              <span class="current-user-firstname">{{ firstName() || currentUserName() }}!</span>
+            </span>
           </span>
         }
         @if (canFinish()) {
