@@ -13,6 +13,19 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-24 — corpKey z tokenu Entra ID + kolumna „Kto modyfikował" w administracji
+### Changed
+- **GUI → API**: edytor odczytuje claim `corpKey` z `idTokenClaims` aktywnego konta MSAL (`document-editor.ts`, sygnał `corporateKey`) i przekazuje go w body przy każdym zapisie z edytora: `saveDocumentVersion`, `updateDocumentVersion` (auto-save + nowy dokument) oraz `finishAndSend`. Interfejs `SaveDocumentVersionRequest` rozszerzony o opcjonalne `corporateKey`.
+- **API**: `SaveDocumentVersionRequest` (controller DTO) +`CorporateKey` (opcjonalne); komendy `SaveDocumentVersion`/`UpdateDocumentVersion`/`FinishAndSendDocument` +`CorporateKey` (opcjonalne, fallback do claimu `_currentUser.CorporateKey`).
+- **Domena**: `Document.LastModifiedBy` (+`SetLastModifiedBy`) — ustawiane przez handlery zapisu/aktualizacji/finish. Kolumna `documents.last_modified_by` (migracja `infra/sql/011_add_document_last_modified_by.sql`), mapowanie EF w `DocumentConfiguration`.
+- **Listy admina**: `GetDocumentsQuery.DocumentListItemDto` +`LastModifiedBy`; `GetDeliveriesByStatusQuery.DeliveryListItemDto` +`CorporateKey` (reużycie istniejącego `DocumentDelivery.CorporateKey`). Dodano kolumnę „Kto modyfikował" (z filtrem) w `admin-files` (pokazuje `lastModifiedBy`) i `admin-deliveries` (pokazuje `corporateKey`).
+### Verified
+- `dotnet build D2ViewerEditor.sln` → 0 błędów. `D2Api.Api.UnitTests` **113/113**, `Application.UnitTests` **295/295**.
+- `npm run build` (GUI) → OK. `ng test --watch=false` → **268/269** (jedyny fail: `spec-layout-shell.spec` — pre-existing, `NG0201 MsalService` w `DashboardComponent`, potwierdzony także bez zmian z tej sesji; niezwiązany).
+### Notes
+- Transport corporateKey = request body (decyzja agenta). Serwer rozwiązuje `request.CorporateKey ?? _currentUser.CorporateKey`, więc returnUrl callback nadal otrzymuje identyfikator nadawcy gdy GUI nie poda claimu.
+- `SetLastModifiedBy` aktualizuje tylko jedną kolumnę na śledzonej encji (jak `MarkEditing`), omijając znany problem pełnego UPDATE z `created_at` Kind=Unspecified.
+
 ## 2026-06-22 — Grafiki: usunięcie widocznego placeholdera + cache + TIFF/ICO/WEBP
 ### Changed
 - `GraphicConversionService` przepisany na czytelny łańcuch strategii (`Execute` → per-format) z raportowaniem strukturalnym. **Usunięto widoczny placeholder** (szare tło + tekst „… — podgląd w Word"): metafile EMF/WMF bez osadzonego rastra zwraca teraz **przezroczysty, pusty SVG** (`IsBlankFallback`), zachowujący wymiary z layoutu — zero udawanej treści. Oryginalny part nadal jedzie do DOCX (pass-through), więc Word renderuje wektor.

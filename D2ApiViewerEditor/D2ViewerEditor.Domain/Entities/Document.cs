@@ -68,6 +68,23 @@ public class Document
     /// </summary>
     public DocumentStatus Status { get; private set; }
 
+    /// <summary>
+    /// CorporateKey of the user who last modified the document from the editor (carried by the
+    /// Entra ID token `corpKey` claim and forwarded by the GUI on save/auto-save/finish). Null until
+    /// the first editor save. Displayed to administrators as "who last modified the file".
+    /// </summary>
+    public string? LastModifiedBy { get; private set; }
+
+    /// <summary>
+    /// Records the CorporateKey of the user who just modified the document. Blank/null is ignored
+    /// so a save without a CorporateKey (e.g. local dev bypass) does not erase the previous value.
+    /// </summary>
+    public void SetLastModifiedBy(string? corporateKey)
+    {
+        if (!string.IsNullOrWhiteSpace(corporateKey))
+            LastModifiedBy = corporateKey.Trim();
+    }
+
     /// <summary>Marks the document as being edited (save/auto-save from the editor).</summary>
     public void MarkEditing() => Status = DocumentStatus.Editing;
 

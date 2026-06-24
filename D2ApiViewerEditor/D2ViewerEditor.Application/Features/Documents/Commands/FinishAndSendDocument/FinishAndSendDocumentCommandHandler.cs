@@ -70,9 +70,17 @@ public class FinishAndSendDocumentCommandHandler
             await _storage.UploadAsync(version.Id, request.Content, document.MimeType, cancellationToken);
             document.UpdateVersion(version.Id, request.Content.Length);
 
+            // CorporateKey z claimu `corpKey` (przekazany przez GUI) ma pierwszeństwo nad odczytem z
+            // tokenu po stronie API. Utrwalamy go jako ostatniego modyfikującego oraz jako pole
+            // identyfikujące w wysyłce na returnUrl (obligatoryjne w aplikacjach zewnętrznych).
+            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
+                ? _currentUser.CorporateKey
+                : request.CorporateKey;
+            document.SetLastModifiedBy(corporateKey);
+
             // Reuse a held job (tracked load — GetActive... is no-tracking), else create a fresh one.
             var delivery = active is null
-                ? await CreateQueuedDeliveryAsync(document, version, request, returnUrlValidation.NormalizedUrl!, cancellationToken)
+                ? await CreateQueuedDeliveryAsync(document, version, request, returnUrlValidation.NormalizedUrl!, corporateKey, cancellationToken)
                 : await _deliveryRepository.GetByIdAsync(active.Id, cancellationToken);
             if (delivery is null)
                 return Result<FinishAndSendResult>.Failure("Nie znaleziono zadania wysyłki do ponowienia");
@@ -96,7 +104,7 @@ public class FinishAndSendDocumentCommandHandler
     /// </summary>
     private async Task<DocumentDelivery> CreateQueuedDeliveryAsync(
         Document document, DocumentVersion version, FinishAndSendDocumentCommand request,
-        string recipientUrl, CancellationToken cancellationToken)
+        string recipientUrl, string? corporateKey, CancellationToken cancellationToken)
     {
         var deliveryId = Guid.NewGuid();
         var snapshotObjectName = $"deliveries/{deliveryId}";
@@ -115,7 +123,7 @@ public class FinishAndSendDocumentCommandHandler
             createdBy: request.CreatedBy ?? document.CreatedBy,
             correlationId: Guid.NewGuid(),
             retentionWindow: RetentionWindow,
-            corporateKey: _currentUser.CorporateKey);
+            corporateKey: corporateKey);
 
         await _deliveryRepository.AddAsync(delivery, cancellationToken);
         await _deliveryRepository.SaveChangesAsync(cancellationToken);

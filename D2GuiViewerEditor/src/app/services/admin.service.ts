@@ -12,6 +12,8 @@ export interface DocumentListItem {
   versionNumber: number;
   /** Lifecycle status: Saved | Editing | Sending | DeliveryFailed | Sent */
   status: string;
+  /** CorporateKey of the user who last modified the file (Entra ID `corpKey` claim); null until first editor save. */
+  lastModifiedBy?: string | null;
 }
 
 export interface DocumentVersionListItem {

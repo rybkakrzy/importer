@@ -40,6 +40,9 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
                 createdBy: request.CreatedBy
             );
 
+            // Zapis z edytora → utrwal CorporateKey ostatniego modyfikującego (z claimu `corpKey`).
+            document.SetLastModifiedBy(request.CorporateKey);
+
             // Encja jest śledzona — SaveChanges utrwala nową wersję. Nie wołamy _context.Update na całym
             // agregacie, bo wymusiłby pełny UPDATE documents (created_at jako Kind=Unspecified → błąd Npgsql).
             await _documentRepository.SaveChangesAsync(cancellationToken);

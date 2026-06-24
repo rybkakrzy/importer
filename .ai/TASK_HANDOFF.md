@@ -2,6 +2,15 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-06-24)
+
+- corpKey z tokenu Entra ID przekazywany przy zapisach z edytora; kolumna „Kto modyfikował" w obu listach admina.
+   - GUI: `document-editor.ts` czyta claim `corpKey` i wysyła `corporateKey` w body (`save`/`update`/`finish`).
+   - API: DTO/komendy +`CorporateKey` (opcjonalne, fallback do claimu); `Document.LastModifiedBy` + migracja `infra/sql/011_add_document_last_modified_by.sql` (uruchomić na bazach).
+   - Listy: `DocumentListItemDto.LastModifiedBy`, `DeliveryListItemDto.CorporateKey`; kolumny + filtry w `admin-files` i `admin-deliveries`.
+- Weryfikacja: backend build 0 błędów; `D2Api.Api.UnitTests` 113/113; `Application.UnitTests` 295/295; GUI build OK; `ng test` 268/269 (jeden pre-existing fail `spec-layout-shell.spec`, niezwiązany).
+- TODO przy deployu: zastosować migrację SQL `011` na środowiskach (brak EF migrations w tym repo — raw SQL w `infra/sql/`).
+
 ## Ostatnia aktualizacja (2026-06-21)
 
 ## Ostatnia aktualizacja (2026-06-22)

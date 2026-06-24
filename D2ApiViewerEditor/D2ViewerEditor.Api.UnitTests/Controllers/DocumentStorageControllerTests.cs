@@ -316,7 +316,7 @@ public class DocumentStorageControllerTests
     {
         var docs = new List<DocumentListItemDto>
         {
-            new(Guid.NewGuid(), "a.docx", "mime", DateTime.UtcNow, Guid.NewGuid(), 1, "Saved")
+            new(Guid.NewGuid(), "a.docx", "mime", DateTime.UtcNow, Guid.NewGuid(), 1, "Saved", "ACME-42")
         };
         _mediator.Send(Arg.Any<GetDocumentsQuery>(), Arg.Any<CancellationToken>())
             .Returns(Result<List<DocumentListItemDto>>.Success(docs));

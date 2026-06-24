@@ -26,8 +26,9 @@
           <tr class="col-headers">
             <th class="col-id">ID pliku</th>
             <th class="col-type">Typ</th>
-              <th class="col-date">Data utworzenia</th>
+            <th class="col-date">Data utworzenia</th>
             <th class="col-status">Status</th>
+            <th class="col-modified">Kto modyfikował</th>
             <th class="col-action"></th>
           </tr>
           <tr class="col-filters">
@@ -47,12 +48,16 @@
               <input class="col-filter-input" type="text" placeholder="Filtruj status…"
                      [ngModel]="filterStatus()" (ngModelChange)="setFilter('status', $event)" />
             </th>
+            <th class="col-modified">
+              <input class="col-filter-input" type="text" placeholder="Filtruj…"
+                     [ngModel]="filterModifiedBy()" (ngModelChange)="setFilter('modifiedBy', $event)" />
+            </th>
             <th class="col-action"></th>
           </tr>
         </thead>
         <tbody>
           @if (documents().length === 0) {
-            <tr><td colspan="5">
+            <tr><td colspan="6">
               <div class="empty-state">
                 <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#d1d5db" stroke-width="1.5">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -80,6 +85,7 @@
                 <td class="col-status">
                   <span class="status-badge" [class]="statusClass(doc.status)">{{ statusLabel(doc.status) }}</span>
                 </td>
+                <td class="col-modified">{{ doc.lastModifiedBy || '—' }}</td>
                 <td class="col-action"></td>
               </tr>
 
@@ -96,6 +102,7 @@
                     <td class="col-type"></td>
                     <td class="col-date">{{ formatDate(ver.createdAt) }}</td>
                     <td class="col-status">{{ formatBytes(ver.sizeInBytes) }}</td>
+                    <td class="col-modified"></td>
                     <td class="col-action">
                       <button class="dl-btn dl-btn-sm"
                               [class.loading]="downloadingId() === doc.masterId + '_' + ver.versionId"

@@ -15,5 +15,6 @@ public record DocumentListItemDto(
     DateTime CreatedAt,
     Guid ActiveVersionId,
     int VersionNumber,
-    string Status
+    string Status,
+    string? LastModifiedBy
 );

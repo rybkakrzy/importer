@@ -47,6 +47,9 @@ public class UpdateDocumentVersionCommandHandler
             // Domena pilnuje, że v1 (oryginał) jest nietykalna.
             document.UpdateVersion(request.VersionId, request.Content.Length);
 
+            // Auto-save z edytora → utrwal CorporateKey ostatniego modyfikującego (z claimu `corpKey`).
+            document.SetLastModifiedBy(request.CorporateKey);
+
             // Zapis/auto-save z edytora → dokument jest „W trakcie edycji".
             // (Zmieniamy tylko Status + pola wersji; EF zaktualizuje wyłącznie te kolumny,
             //  więc created_at nie jest przepisywane — brak problemu z Kind=Unspecified.)

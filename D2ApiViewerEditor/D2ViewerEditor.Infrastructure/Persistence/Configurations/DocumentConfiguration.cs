@@ -47,6 +47,10 @@ public class DocumentConfiguration : IEntityTypeConfiguration<Document>
             .HasColumnName("metadata")
             .HasColumnType("text");
 
+        builder.Property(d => d.LastModifiedBy)
+            .HasColumnName("last_modified_by")
+            .HasMaxLength(255);
+
         builder.Property(d => d.Status)
             .HasColumnName("status")
             .HasConversion<string>()

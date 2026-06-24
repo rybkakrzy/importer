@@ -37,6 +37,7 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   filterAtt      = signal('');
   filterCreated  = signal('');
   filterLock     = signal('');
+  filterModifiedBy = signal('');
   currentPage = signal(0);
   readonly pageSize = 10;
 
@@ -62,12 +63,14 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
     const att      = this.filterAtt().toLowerCase().trim();
     const created  = this.filterCreated().toLowerCase().trim();
     const lock     = this.filterLock().toLowerCase().trim();
+    const modifiedBy = this.filterModifiedBy().toLowerCase().trim();
     return this.allDeliveries().filter(d => {
       if (id       && !d.deliveryId.toLowerCase().includes(id))                          return false;
       if (doc      && !d.documentId.toLowerCase().includes(doc))                         return false;
       if (att      && !String(d.attemptCount).includes(att))                             return false;
       if (created  && !this.formatDate(d.createdAt).toLowerCase().includes(created))     return false;
       if (lock     && !(d.lockedBy ?? '').toLowerCase().includes(lock))                  return false;
+      if (modifiedBy && !(d.corporateKey ?? '').toLowerCase().includes(modifiedBy))      return false;
       return true;
     });
   });
@@ -143,7 +146,7 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
   }
 
   setFilter(
-    field: 'id' | 'doc' | 'att' | 'created' | 'lock',
+    field: 'id' | 'doc' | 'att' | 'created' | 'lock' | 'modifiedBy',
     value: string
   ): void {
     if (field === 'id')       this.filterId.set(value);
@@ -151,6 +154,7 @@ export class AdminDeliveriesComponent implements OnInit, OnDestroy {
     if (field === 'att')      this.filterAtt.set(value);
     if (field === 'created')  this.filterCreated.set(value);
     if (field === 'lock')     this.filterLock.set(value);
+    if (field === 'modifiedBy') this.filterModifiedBy.set(value);
     this.currentPage.set(0);
   }
 

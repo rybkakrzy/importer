@@ -25,7 +25,8 @@ public record DeliveryListItemDto(
     DateTime? LockedUntil,
     string? LockedBy,
     Guid SourceVersionId,
-    string RecipientUrl);
+    string RecipientUrl,
+    string? CorporateKey);
 
 public class GetDeliveriesByStatusQueryHandler
     : IRequestHandler<GetDeliveriesByStatusQuery, Result<IReadOnlyList<DeliveryListItemDto>>>
@@ -65,7 +66,7 @@ public class GetDeliveriesByStatusQueryHandler
             .Select(d => new DeliveryListItemDto(
                 d.Id, d.DocumentId, d.Status.ToString(), d.AttemptCount,
                 d.CreatedAt, d.LastAttemptAt, d.NextAttemptAt, d.DeadlineAt, d.LastError,
-                d.LockedUntil, d.LockedBy, d.SourceVersionId, d.RecipientUrl))
+                d.LockedUntil, d.LockedBy, d.SourceVersionId, d.RecipientUrl, d.CorporateKey))
             .ToList();
 
         return Result<IReadOnlyList<DeliveryListItemDto>>.Success(dtos);

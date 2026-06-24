@@ -18,6 +18,7 @@ export class AdminFilesComponent implements OnInit {
   filterType   = signal('');
   filterDate   = signal('');
   filterStatus = signal('');
+  filterModifiedBy = signal('');
   currentPage = signal(0);
   readonly pageSize = 10;
   isLoading = signal(true);
@@ -30,11 +31,13 @@ export class AdminFilesComponent implements OnInit {
     const type   = this.filterType().toLowerCase().trim();
     const date   = this.filterDate().toLowerCase().trim();
     const status = this.filterStatus().toLowerCase().trim();
+    const modifiedBy = this.filterModifiedBy().toLowerCase().trim();
     return this.allDocuments().filter(d => {
       if (id     && !d.masterId.toLowerCase().includes(id))                       return false;
       if (type   && !d.mimeType.toLowerCase().includes(type))                     return false;
       if (date   && !this.formatDate(d.createdAt).toLowerCase().includes(date))   return false;
       if (status && !this.statusLabel(d.status).toLowerCase().includes(status))   return false;
+      if (modifiedBy && !(d.lastModifiedBy ?? '').toLowerCase().includes(modifiedBy)) return false;
       return true;
     });
   });
@@ -47,11 +50,12 @@ export class AdminFilesComponent implements OnInit {
     return this.filteredDocuments().slice(start, start + this.pageSize);
   });
 
-  setFilter(field: 'id' | 'type' | 'date' | 'status', value: string): void {
+  setFilter(field: 'id' | 'type' | 'date' | 'status' | 'modifiedBy', value: string): void {
     if (field === 'id')     this.filterId.set(value);
     if (field === 'type')   this.filterType.set(value);
     if (field === 'date')   this.filterDate.set(value);
     if (field === 'status') this.filterStatus.set(value);
+    if (field === 'modifiedBy') this.filterModifiedBy.set(value);
     this.currentPage.set(0);
   }
 

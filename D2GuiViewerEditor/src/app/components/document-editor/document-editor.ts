@@ -97,6 +97,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   readonly currentUserName = signal<string>('');
   /** Imię do powitania „Witaj, <imię>!" — nawias z `name` („… (Imię)"), potem `given_name`, fallback. */
   readonly firstName = signal<string>('');
+  /** CorporateKey z claimu `corpKey` tokenu Entra ID — przekazywany przy zapisach z edytora,
+   *  by backend zapisał kto ostatnio modyfikował plik i zidentyfikował nadawcę przy callbacku returnUrl. */
+  readonly corporateKey = signal<string | null>(null);
   /** Inicjały — fallback awatara, gdy brak zdjęcia z Graph. */
   readonly initials = signal<string>('');
   /** URL awatara z Microsoft Graph (object URL). Null → pokazujemy inicjały. */
@@ -639,6 +642,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.firstName.set(first);
     this.initials.set(this.deriveInitials(fullName || first));
 
+    // CorporateKey z tokenu Entra ID (claim `corpKey`) — przekazywany do API przy zapisach z edytora.
+    const corpKey = (account?.idTokenClaims as Record<string, unknown> | undefined)?.['corpKey'];
+    this.corporateKey.set(typeof corpKey === 'string' && corpKey.trim() ? corpKey.trim() : null);
+
     // Awatar z Microsoft Graph — best-effort: brak zgody/zdjęcia → zostają inicjały.
     if (account) {
       void this.loadAvatar(account);
@@ -754,11 +761,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   private persistDocument(): Observable<unknown> {
     const masterId = this.documentMasterId()!;
     const versionId = this.documentVersionId();
+    const corporateKey = this.corporateKey() ?? undefined;
     return this.documentService.saveDocument(this.buildSaveRequest()).pipe(
       switchMap(blob => from(this.blobToBase64(blob))),
       switchMap(base64 => versionId
-        ? this.documentStorageService.updateDocumentVersion(masterId, versionId, { content: base64 })
-        : this.documentStorageService.saveDocumentVersion(masterId, { content: base64 })
+        ? this.documentStorageService.updateDocumentVersion(masterId, versionId, { content: base64, corporateKey })
+        : this.documentStorageService.saveDocumentVersion(masterId, { content: base64, corporateKey })
       )
     );
   }
@@ -928,7 +936,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
                 }).pipe(
                   // Nowy dokument = zamiar edycji → twórz wersję edytowalną (v2).
                   switchMap(result =>
-                    this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
+                    this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64, corporateKey: this.corporateKey() ?? undefined }).pipe(
                       map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
                     )
                   )
@@ -2004,7 +2012,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.finishSendSub?.unsubscribe();
     this.finishSendSub = this.documentService.saveDocument(this.buildSaveRequest()).pipe(
       switchMap(blob => from(this.blobToBase64(blob))),
-      switchMap(base64 => this.documentStorageService.finishAndSend(masterId, versionId, { content: base64 }))
+      switchMap(base64 => this.documentStorageService.finishAndSend(masterId, versionId, { content: base64, corporateKey: this.corporateKey() ?? undefined }))
     ).subscribe({
       next: result => {
         this.deliveryId.set(result.deliveryId);

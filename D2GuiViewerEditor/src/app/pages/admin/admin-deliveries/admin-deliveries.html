@@ -45,6 +45,7 @@
             <th class="col-att">Próby</th>
             <th class="col-date">Utworzono</th>
             <th class="col-lock">locked_by</th>
+            <th class="col-modified">Kto modyfikował</th>
           </tr>
           <tr class="col-filters">
             <th class="col-id">
@@ -75,11 +76,15 @@
               <input class="col-filter-input" type="text" placeholder="Filtruj…"
                      [ngModel]="filterLock()" (ngModelChange)="setFilter('lock', $event)" />
             </th>
+            <th class="col-modified">
+              <input class="col-filter-input" type="text" placeholder="Filtruj…"
+                     [ngModel]="filterModifiedBy()" (ngModelChange)="setFilter('modifiedBy', $event)" />
+            </th>
           </tr>
         </thead>
         <tbody>
           @if (deliveries().length === 0) {
-            <tr><td colspan="6">
+            <tr><td colspan="7">
               <div class="empty-state">
                 <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="#d1d5db" stroke-width="1.5">
                   <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
@@ -109,10 +114,11 @@
                     <span class="lock-off">—</span>
                   }
                 </td>
+                <td class="col-modified">{{ d.corporateKey || '—' }}</td>
               </tr>
               @if (isExpanded(d.deliveryId)) {
                 <tr class="detail-row">
-                  <td colspan="6">
+                  <td colspan="7">
                     <div class="delivery-details">
                       <!-- Wiersz nagłówka: label „Szczegóły" (1. kolumna) + wszystkie akcje (2. kolumna, 70%). -->
                       <div class="detail-item detail-wide detail-header-row">

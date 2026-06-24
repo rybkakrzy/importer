@@ -11,6 +11,7 @@ function item(status: DeliveryStatus, id = 'd1'): DeliveryListItem {
     createdAt: new Date().toISOString(), lastAttemptAt: null, nextAttemptAt: null,
     deadlineAt: new Date().toISOString(), lastError: null, lockedUntil: null,
     lockedBy: null, sourceVersionId: 'v1', recipientUrl: 'https://x',
+    corporateKey: null,
   };
 }
 
