@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using D2ViewerEditor.Application.Common.Security;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Api.Security;
@@ -14,11 +15,16 @@ public sealed class ClaimsCurrentUserProvider : ICurrentUserProvider
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly AzureAdOptions _options;
+    private readonly ILogger<ClaimsCurrentUserProvider> _logger;
 
-    public ClaimsCurrentUserProvider(IHttpContextAccessor httpContextAccessor, IOptions<AzureAdOptions> options)
+    public ClaimsCurrentUserProvider(
+        IHttpContextAccessor httpContextAccessor,
+        IOptions<AzureAdOptions> options,
+        ILogger<ClaimsCurrentUserProvider> logger)
     {
         _httpContextAccessor = httpContextAccessor;
         _options = options.Value;
+        _logger = logger;
     }
 
     private ClaimsPrincipal? User => _httpContextAccessor.HttpContext?.User;
@@ -27,8 +33,23 @@ public sealed class ClaimsCurrentUserProvider : ICurrentUserProvider
     {
         get
         {
-            var value = User?.FindFirst(_options.CorporateKeyClaim)?.Value;
-            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            var user = User;
+            var value = user?.FindFirst(_options.CorporateKeyClaim)?.Value;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                // DIAGNOSTYKA (tymczasowe): gdy oczekiwanego claimu brak, wypisujemy NAZWY claimów
+                // obecnych w tokenie (bez wartości — bez PII), by ustalić właściwą nazwę i ustawić
+                // AzureAd:CorporateKeyClaim. Po znalezieniu nazwy ten log można usunąć.
+                var claimTypes = user?.Claims.Select(c => c.Type).Distinct() ?? [];
+                _logger.LogWarning(
+                    "CorporateKey claim '{ExpectedClaim}' nieobecny lub pusty. IsAuthenticated={IsAuth}. Dostępne typy claimów: {ClaimTypes}",
+                    _options.CorporateKeyClaim,
+                    user?.Identity?.IsAuthenticated ?? false,
+                    string.Join(", ", claimTypes));
+                return null;
+            }
+
+            return value.Trim();
         }
     }
 
