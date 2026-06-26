@@ -2,7 +2,7 @@ import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { AdminService, DocumentWithVersions } from '../../../services/admin.service';
+import { AdminService, DocumentWithVersions, DocumentVersionListItem } from '../../../services/admin.service';
 
 @Component({
   selector: 'd2-admin-files',
@@ -127,17 +127,48 @@ export class AdminFilesComponent implements OnInit {
   }
 
   /**
-   * „Kopiuj link" — buduje pełny link do edycji aktywnej wersji dokumentu
-   * (`masterId` + `versionId`=activeVersionId) i kopiuje go do schowka. Spójne z listą wysyłek.
+   * „Kopiuj link" — buduje pełny link do edycji WERSJI EDYTOWALNEJ dokumentu
+   * (`masterId` + `versionId`=najnowsza wersja > v1) i kopiuje go do schowka. NIE używamy
+   * `activeVersionId`, bo aktywną wersją bywa nietykalny oryginał v1 (np. po „Przywróć") —
+   * link prowadziłby wtedy do wersji zablokowanej do edycji. Wersje doładowujemy na żądanie,
+   * gdy wiersz nie był rozwinięty.
    */
   copyEditLink(doc: DocumentWithVersions, event: Event): void {
     event.stopPropagation();
+    this.notice.set(null);
+
+    if (doc.versions.length > 0) {
+      this.buildAndCopyEditLink(doc, doc.versions);
+      return;
+    }
+
+    this.adminService.getDocumentVersions(doc.masterId).subscribe({
+      next: (versions) => {
+        this.updateDoc(doc.masterId, { versions }); // cache, by kolejne akcje nie pobierały ponownie
+        this.buildAndCopyEditLink(doc, versions);
+      },
+      error: () => this.notice.set('Nie udało się ustalić wersji edytowalnej dokumentu.')
+    });
+  }
+
+  /**
+   * Wersja edytowalna = najnowsza wersja, która NIE jest oryginałem (v1 jest nietykalny).
+   * Fallback do `activeVersionId`, gdy dokument ma tylko oryginał (np. PDF bez kopii edytowalnej).
+   */
+  private editableVersionId(doc: DocumentWithVersions, versions: DocumentVersionListItem[]): string {
+    const editable = versions
+      .filter(v => v.versionNumber > 1)
+      .sort((a, b) => b.versionNumber - a.versionNumber)[0];
+    return editable?.versionId ?? doc.activeVersionId;
+  }
+
+  private buildAndCopyEditLink(doc: DocumentWithVersions, versions: DocumentVersionListItem[]): void {
+    const versionId = this.editableVersionId(doc, versions);
     const tree = this.router.createUrlTree(['/editor'], {
-      queryParams: { masterId: doc.masterId, versionId: doc.activeVersionId }
+      queryParams: { masterId: doc.masterId, versionId }
     });
     const url = `${window.location.origin}${this.router.serializeUrl(tree)}`;
 
-    this.notice.set(null);
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(url).then(
         () => this.notice.set('Skopiowano link do edycji do schowka.'),
