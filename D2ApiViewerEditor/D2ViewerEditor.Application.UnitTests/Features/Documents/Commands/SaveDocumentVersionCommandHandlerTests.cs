@@ -68,6 +68,26 @@ public class SaveDocumentVersionCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_NoCorporateKey_ShouldFail_WithoutTouchingStorageOrRepo()
+    {
+        // Token bez claimu corpKey → CorporateKey == null. To reguła biznesowa (brak tożsamości
+        // edytującego), więc handler zwraca Failure (kontroler → 400) — nie wolno tego mylić z 401,
+        // które powstaje wcześniej w pipeline uwierzytelniania przy braku/nieważnym tokenie.
+        _currentUser.CorporateKey.Returns((string?)null);
+
+        var command = new SaveDocumentVersionCommand(Guid.NewGuid(), new byte[] { 1, 2, 3 }, "User");
+
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Contain("CorporateKey");
+        await _storageService.DidNotReceive()
+            .UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _documentRepository.DidNotReceive()
+            .GetByIdWithVersionsAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task Handle_DocumentNotFound_ShouldReturnFailure()
     {
         // Arrange

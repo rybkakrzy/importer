@@ -69,6 +69,24 @@ public class UpdateDocumentVersionCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_NoCorporateKey_ReturnsFailure_WithoutTouchingStorageOrRepo()
+    {
+        // Token bez claimu corpKey → CorporateKey == null. Auto-save bez ustalonej tożsamości
+        // edytującego = Failure (kontroler → 400), świadomie oddzielone od 401 (brak/nieważny token).
+        _currentUser.CorporateKey.Returns((string?)null);
+
+        var result = await _handler.Handle(
+            new UpdateDocumentVersionCommand(Guid.NewGuid(), Guid.NewGuid(), new byte[] { 1, 2, 3 }),
+            CancellationToken.None);
+
+        result.IsFailure.Should().BeTrue();
+        result.Error.Should().Contain("CorporateKey");
+        await _storage.DidNotReceive()
+            .UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _repo.DidNotReceive().GetByIdWithVersionsAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task Handle_DocumentNotFound_ReturnsNotFound()
     {
         _repo.GetByIdWithVersionsAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
