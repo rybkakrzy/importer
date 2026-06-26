@@ -12,6 +12,10 @@ public sealed class HttpHeaderCurrentUserProvider : ICurrentUserProvider
     public const string HeaderName = "X-Corporate-Key";
     public const string AdminHeaderName = "X-App-Admin";
 
+    /// <summary>Fallback CorporateKey for local dev when no <see cref="HeaderName"/> is supplied, so the
+    /// editor identity (last-modified-by / delivery sender) is never null in the dev bypass flow.</summary>
+    public const string DefaultDevCorporateKey = "DEV-LOCAL";
+
     private readonly IHttpContextAccessor _httpContextAccessor;
 
     public HttpHeaderCurrentUserProvider(IHttpContextAccessor httpContextAccessor)
@@ -24,7 +28,7 @@ public sealed class HttpHeaderCurrentUserProvider : ICurrentUserProvider
         get
         {
             var value = _httpContextAccessor.HttpContext?.Request.Headers[HeaderName].ToString();
-            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            return string.IsNullOrWhiteSpace(value) ? DefaultDevCorporateKey : value.Trim();
         }
     }
 

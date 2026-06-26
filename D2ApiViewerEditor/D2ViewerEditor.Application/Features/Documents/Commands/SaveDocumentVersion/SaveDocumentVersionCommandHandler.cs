@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Interfaces;
 using MediatR;
@@ -11,17 +12,31 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
 {
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentStorageService _storageService;
+    private readonly ICurrentUserProvider _currentUser;
 
-    public SaveDocumentVersionCommandHandler(IDocumentRepository documentRepository, IDocumentStorageService storageService)
+    public SaveDocumentVersionCommandHandler(
+        IDocumentRepository documentRepository,
+        IDocumentStorageService storageService,
+        ICurrentUserProvider currentUser)
     {
         _documentRepository = documentRepository;
         _storageService = storageService;
+        _currentUser = currentUser;
     }
 
     public async Task<Result<SaveDocumentVersionResult>> Handle(SaveDocumentVersionCommand request, CancellationToken cancellationToken)
     {
         try
         {
+            // Tożsamość edytującego: wartość przesłana z GUI (claim `corpKey` z idToken) ma pierwszeństwo,
+            // a gdy jej brak — odczyt z tokenu po stronie API. Brak możliwości ustalenia = błąd (nie NULL).
+            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
+                ? _currentUser.CorporateKey
+                : request.CorporateKey;
+            if (string.IsNullOrWhiteSpace(corporateKey))
+                return Result<SaveDocumentVersionResult>.Failure(
+                    "Nie można ustalić użytkownika edytującego dokument (brak CorporateKey).");
+
             // Pobierz dokument z wersjami
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
@@ -40,8 +55,8 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
                 createdBy: request.CreatedBy
             );
 
-            // Zapis z edytora → utrwal CorporateKey ostatniego modyfikującego (z claimu `corpKey`).
-            document.SetLastModifiedBy(request.CorporateKey);
+            // Zapis z edytora → utrwal CorporateKey ostatniego modyfikującego.
+            document.SetLastModifiedBy(corporateKey);
 
             // Encja jest śledzona — SaveChanges utrwala nową wersję. Nie wołamy _context.Update na całym
             // agregacie, bo wymusiłby pełny UPDATE documents (created_at jako Kind=Unspecified → błąd Npgsql).

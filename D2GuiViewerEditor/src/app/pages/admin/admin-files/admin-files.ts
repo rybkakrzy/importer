@@ -1,6 +1,7 @@
 import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { AdminService, DocumentWithVersions } from '../../../services/admin.service';
 
 @Component({
@@ -12,6 +13,7 @@ import { AdminService, DocumentWithVersions } from '../../../services/admin.serv
 })
 export class AdminFilesComponent implements OnInit {
   private adminService = inject(AdminService);
+  private router = inject(Router);
 
   private allDocuments = signal<DocumentWithVersions[]>([]);
   filterId     = signal('');
@@ -25,6 +27,7 @@ export class AdminFilesComponent implements OnInit {
   error = signal<string | null>(null);
   loadingVersionsFor = signal<string | null>(null);
   downloadingId = signal<string | null>(null);
+  notice = signal<string | null>(null);
 
   private filteredDocuments = computed(() => {
     const id     = this.filterId().toLowerCase().trim();
@@ -120,6 +123,28 @@ export class AdminFilesComponent implements OnInit {
       });
     } else {
       this.updateDoc(doc.masterId, { expanded: !current.expanded });
+    }
+  }
+
+  /**
+   * „Kopiuj link" — buduje pełny link do edycji aktywnej wersji dokumentu
+   * (`masterId` + `versionId`=activeVersionId) i kopiuje go do schowka. Spójne z listą wysyłek.
+   */
+  copyEditLink(doc: DocumentWithVersions, event: Event): void {
+    event.stopPropagation();
+    const tree = this.router.createUrlTree(['/editor'], {
+      queryParams: { masterId: doc.masterId, versionId: doc.activeVersionId }
+    });
+    const url = `${window.location.origin}${this.router.serializeUrl(tree)}`;
+
+    this.notice.set(null);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(
+        () => this.notice.set('Skopiowano link do edycji do schowka.'),
+        () => this.notice.set(`Nie udało się skopiować linku. Skopiuj ręcznie: ${url}`)
+      );
+    } else {
+      this.notice.set(`Kopiowanie niedostępne w tej przeglądarce. Link do edycji: ${url}`);
     }
   }
 

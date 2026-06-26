@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Interfaces;
 using MediatR;
@@ -13,13 +14,16 @@ public class UpdateDocumentVersionCommandHandler
 {
     private readonly IDocumentRepository _documentRepository;
     private readonly IDocumentStorageService _storageService;
+    private readonly ICurrentUserProvider _currentUser;
 
     public UpdateDocumentVersionCommandHandler(
         IDocumentRepository documentRepository,
-        IDocumentStorageService storageService)
+        IDocumentStorageService storageService,
+        ICurrentUserProvider currentUser)
     {
         _documentRepository = documentRepository;
         _storageService = storageService;
+        _currentUser = currentUser;
     }
 
     public async Task<Result<UpdateDocumentVersionResult>> Handle(
@@ -30,6 +34,14 @@ public class UpdateDocumentVersionCommandHandler
         {
             if (request.Content == null || request.Content.Length == 0)
                 return Result<UpdateDocumentVersionResult>.Failure("Zawartość dokumentu nie może być pusta");
+
+            // Tożsamość edytującego: wartość z GUI (claim `corpKey`) ma pierwszeństwo, w razie braku — z tokenu.
+            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
+                ? _currentUser.CorporateKey
+                : request.CorporateKey;
+            if (string.IsNullOrWhiteSpace(corporateKey))
+                return Result<UpdateDocumentVersionResult>.Failure(
+                    "Nie można ustalić użytkownika edytującego dokument (brak CorporateKey).");
 
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
@@ -47,8 +59,8 @@ public class UpdateDocumentVersionCommandHandler
             // Domena pilnuje, że v1 (oryginał) jest nietykalna.
             document.UpdateVersion(request.VersionId, request.Content.Length);
 
-            // Auto-save z edytora → utrwal CorporateKey ostatniego modyfikującego (z claimu `corpKey`).
-            document.SetLastModifiedBy(request.CorporateKey);
+            // Auto-save z edytora → utrwal CorporateKey ostatniego modyfikującego.
+            document.SetLastModifiedBy(corporateKey);
 
             // Zapis/auto-save z edytora → dokument jest „W trakcie edycji".
             // (Zmieniamy tylko Status + pola wersji; EF zaktualizuje wyłącznie te kolumny,

@@ -46,6 +46,16 @@ public class FinishAndSendDocumentCommandHandler
             if (request.Content == null || request.Content.Length == 0)
                 return Result<FinishAndSendResult>.Failure("Zawartość dokumentu nie może być pusta");
 
+            // Tożsamość edytującego: wartość przesłana z GUI (claim `corpKey` z idToken) ma pierwszeństwo,
+            // a gdy jej brak — odczyt z tokenu po stronie API. Jest obowiązkowym polem identyfikującym
+            // w wysyłce na returnUrl, więc brak możliwości jej ustalenia = błąd.
+            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
+                ? _currentUser.CorporateKey
+                : request.CorporateKey;
+            if (string.IsNullOrWhiteSpace(corporateKey))
+                return Result<FinishAndSendResult>.Failure(
+                    "Nie można ustalić użytkownika kończącego dokument (brak CorporateKey).");
+
             var document = await _documentRepository.GetByIdWithVersionsAsync(request.MasterId, cancellationToken);
             if (document == null)
                 return Result<FinishAndSendResult>.NotFound();
@@ -70,12 +80,7 @@ public class FinishAndSendDocumentCommandHandler
             await _storage.UploadAsync(version.Id, request.Content, document.MimeType, cancellationToken);
             document.UpdateVersion(version.Id, request.Content.Length);
 
-            // CorporateKey z claimu `corpKey` (przekazany przez GUI) ma pierwszeństwo nad odczytem z
-            // tokenu po stronie API. Utrwalamy go jako ostatniego modyfikującego oraz jako pole
-            // identyfikujące w wysyłce na returnUrl (obligatoryjne w aplikacjach zewnętrznych).
-            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
-                ? _currentUser.CorporateKey
-                : request.CorporateKey;
+            // Utrwalamy CorporateKey ostatniego modyfikującego oraz jako pole identyfikujące w wysyłce na returnUrl.
             document.SetLastModifiedBy(corporateKey);
 
             // Reuse a held job (tracked load — GetActive... is no-tracking), else create a fresh one.

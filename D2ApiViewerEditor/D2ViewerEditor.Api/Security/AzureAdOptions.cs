@@ -26,7 +26,7 @@ public sealed class AzureAdOptions
     public string ClientSecret { get; set; } = string.Empty;
 
     /// <summary>Claim type carrying the user's CorporateKey in the access token (configurable).</summary>
-    public string CorporateKeyClaim { get; set; } = "ck";
+    public string CorporateKeyClaim { get; set; } = "corpKey";
 
     /// <summary>App role value for a standard application user.</summary>
     public string OperatorRole { get; set; } = "Operator";

@@ -7,6 +7,10 @@
     </div>
   </div>
 
+  @if (notice()) {
+    <div class="notice-banner">{{ notice() }}</div>
+  }
+
   @if (isLoading()) {
     <div class="loading-state">
       <span class="spinner"></span>
@@ -90,6 +94,27 @@
               </tr>
 
               @if (doc.expanded) {
+                <tr class="ver-row detail-actions-row">
+                  <td class="col-id">
+                    <span class="ver-indent"></span>
+                    <span class="detail-actions-label">Szczegóły pozycji</span>
+                  </td>
+                  <td class="col-type"></td>
+                  <td class="col-date"></td>
+                  <td class="col-status"></td>
+                  <td class="col-modified"></td>
+                  <td class="col-action">
+                    <button class="dl-btn dl-btn-sm"
+                            title="Kopiuj link do edycji (Master/Version ID) do schowka"
+                            (click)="copyEditLink(doc, $event)">
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                      </svg>
+                      Kopiuj link
+                    </button>
+                  </td>
+                </tr>
                 @for (ver of doc.versions; track ver.versionId) {
                   <tr class="ver-row" [class.active-ver]="ver.isActive">
                     <td class="col-id">

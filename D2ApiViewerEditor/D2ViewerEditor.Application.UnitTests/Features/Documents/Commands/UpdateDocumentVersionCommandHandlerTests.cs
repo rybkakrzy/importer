@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Commands.UpdateDocumentVersion;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -14,6 +15,7 @@ public class UpdateDocumentVersionCommandHandlerTests
 
     private IDocumentRepository _repo = null!;
     private IDocumentStorageService _storage = null!;
+    private ICurrentUserProvider _currentUser = null!;
     private UpdateDocumentVersionCommandHandler _handler = null!;
 
     [SetUp]
@@ -23,7 +25,9 @@ public class UpdateDocumentVersionCommandHandlerTests
         _storage = Substitute.For<IDocumentStorageService>();
         _storage.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci => $"documents/{ci.ArgAt<Guid>(0)}");
-        _handler = new UpdateDocumentVersionCommandHandler(_repo, _storage);
+        _currentUser = Substitute.For<ICurrentUserProvider>();
+        _currentUser.CorporateKey.Returns("CORP-1");
+        _handler = new UpdateDocumentVersionCommandHandler(_repo, _storage, _currentUser);
     }
 
     private static (Document doc, DocumentVersion v1, DocumentVersion v2) DocWithTwoVersions()

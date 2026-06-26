@@ -13,6 +13,18 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-26 — Naprawa zapisu edytującego (corpKey) + „Kopiuj link" w admin-files
+### Changed
+- API `AzureAdOptions.CorporateKeyClaim`: domyślnie `"ck"` → `"corpKey"` (zgodność z claimem w tokenie Entra).
+- API `HttpHeaderCurrentUserProvider`: fallback `DEV-LOCAL`, gdy brak nagłówka `X-Corporate-Key` (dev bypass nigdy nie zwraca null).
+- API handlery `SaveDocumentVersion`/`UpdateDocumentVersion`: wstrzyknięcie `ICurrentUserProvider`; wszystkie trzy ścieżki zapisu (`Save`/`Update`/`FinishAndSend`) ustalają `corporateKey = request.CorporateKey ?? _currentUser.CorporateKey` i zwracają `Result.Failure`, gdy nie da się ustalić użytkownika.
+- GUI `admin-files`: przycisk „Kopiuj link" w szczegółach pozycji (kopiuje `/editor?masterId&versionId` do schowka, baner `notice`). Brak przycisku na samej liście.
+### Verified
+- backend build 0 błędów; `Application.UnitTests` 295/295; `Api.UnitTests` 113/113; GUI build OK; `ng test` 268/269 (pre-existing `spec-layout-shell.spec`).
+### Notes
+- Decyzja: corpKey wysyła frontend (z `idTokenClaims`); backend traktuje token jako fallback. Poprawka claimu sprawia, że fallback działa też w prod.
+
+
 ## 2026-06-24 — corpKey z tokenu Entra ID + kolumna „Kto modyfikował" w administracji
 ### Changed
 - **GUI → API**: edytor odczytuje claim `corpKey` z `idTokenClaims` aktywnego konta MSAL (`document-editor.ts`, sygnał `corporateKey`) i przekazuje go w body przy każdym zapisie z edytora: `saveDocumentVersion`, `updateDocumentVersion` (auto-save + nowy dokument) oraz `finishAndSend`. Interfejs `SaveDocumentVersionRequest` rozszerzony o opcjonalne `corporateKey`.

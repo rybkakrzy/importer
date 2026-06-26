@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
@@ -12,6 +13,7 @@ public class SaveDocumentVersionCommandHandlerTests
 {
     private IDocumentRepository _documentRepository;
     private IDocumentStorageService _storageService;
+    private ICurrentUserProvider _currentUser;
     private SaveDocumentVersionCommandHandler _handler;
 
     [SetUp]
@@ -21,7 +23,9 @@ public class SaveDocumentVersionCommandHandlerTests
         _storageService = Substitute.For<IDocumentStorageService>();
         _storageService.UploadAsync(Arg.Any<Guid>(), Arg.Any<byte[]>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci => $"documents/{ci.ArgAt<Guid>(0)}");
-        _handler = new SaveDocumentVersionCommandHandler(_documentRepository, _storageService);
+        _currentUser = Substitute.For<ICurrentUserProvider>();
+        _currentUser.CorporateKey.Returns("CORP-1");
+        _handler = new SaveDocumentVersionCommandHandler(_documentRepository, _storageService, _currentUser);
     }
 
     [Test]

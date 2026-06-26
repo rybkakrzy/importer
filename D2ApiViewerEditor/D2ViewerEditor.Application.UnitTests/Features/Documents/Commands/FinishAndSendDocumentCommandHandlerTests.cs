@@ -29,6 +29,7 @@ public class FinishAndSendDocumentCommandHandlerTests
         _storage = new Mock<IDocumentStorageService>();
         _sender = new Mock<IDeliverySender>();
         _currentUser = new Mock<ICurrentUserProvider>();
+        _currentUser.SetupGet(u => u.CorporateKey).Returns("ACME-42");
         _returnUrlValidator = new Mock<IReturnUrlValidator>();
         _returnUrlValidator.Setup(v => v.Validate(It.IsAny<string?>()))
             .Returns((string? url) => string.IsNullOrWhiteSpace(url)

@@ -2,6 +2,15 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-06-26)
+
+- Naprawa zapisu tożsamości edytującego (corpKey był NULL) + przycisk „Kopiuj link" w `admin-files`.
+   - Przyczyna NULL: (1) Entra — `AzureAdOptions.CorporateKeyClaim` domyślnie `"ck"`, a token niesie claim `corpKey`; (2) dev bypass — `HttpHeaderCurrentUserProvider` czytał nagłówek `X-Corporate-Key`, którego GUI nie wysyła.
+   - Kierunek (decyzja użytkownika): **frontend wysyła `corpKey`** (z `idTokenClaims`), backend używa go z fallbackiem do tokenu i twardym błędem, gdy nie da się ustalić użytkownika.
+   - API: `AzureAdOptions.CorporateKeyClaim` `"ck"`→`"corpKey"`; `HttpHeaderCurrentUserProvider` fallback `DEV-LOCAL`; handlery `SaveDocumentVersion`/`UpdateDocumentVersion` wstrzykują `ICurrentUserProvider`, wszystkie trzy (`Save`/`Update`/`FinishAndSend`) liczą `corporateKey = request.CorporateKey ?? _currentUser.CorporateKey` i zwracają `Result.Failure`, gdy brak.
+   - GUI: bez zmian w wysyłce corpKey (już wysyła). `admin-files` — przycisk „Kopiuj link" (kopiuje link `/editor?masterId&versionId` do schowka, baner `notice`), widoczny dopiero w szczegółach pozycji po rozwinięciu.
+   - Weryfikacja: backend build 0 błędów; `Application.UnitTests` 295/295; `Api.UnitTests` 113/113; GUI build OK; `ng test` 268/269 (pre-existing fail `spec-layout-shell.spec`).
+
 ## Ostatnia aktualizacja (2026-06-24)
 
 - corpKey z tokenu Entra ID przekazywany przy zapisach z edytora; kolumna „Kto modyfikował" w obu listach admina.
