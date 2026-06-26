@@ -4,6 +4,14 @@
 
 ## Ostatnia aktualizacja (2026-06-26)
 
+- corpKey ustalany wyłącznie po stronie API z tokenu — usunięty transport z GUI.
+   - Powód: GUI czytało `corpKey` ze statycznego snapshotu `getActiveAccount().idTokenClaims` (często null) → `SaveDocumentVersionCommand.CorporateKey` przychodził null. Token wysyłany do API (ID token) i tak niesie `corpKey`.
+   - API: usunięty parametr `CorporateKey` z komend `SaveDocumentVersion`/`UpdateDocumentVersion`/`FinishAndSendDocument` i z controller DTO `SaveDocumentVersionRequest`; handlery czytają `_currentUser.CorporateKey` (brak → `Result.Failure`).
+   - GUI: usunięty sygnał `corporateKey` + odczyt claimu w `document-editor.ts`; zapisy wysyłają `{ content }`. Listy admina (`corporateKey` z `DocumentDelivery`) bez zmian.
+   - Weryfikacja: backend build 0 błędów; `Application.UnitTests` 295/295; `Api.UnitTests` 113/113; GUI build OK. Decyzja: ADR-0021.
+
+## Ostatnia aktualizacja (2026-06-26)
+
 - Naprawa zapisu tożsamości edytującego (corpKey był NULL) + przycisk „Kopiuj link" w `admin-files`.
    - Przyczyna NULL: (1) Entra — `AzureAdOptions.CorporateKeyClaim` domyślnie `"ck"`, a token niesie claim `corpKey`; (2) dev bypass — `HttpHeaderCurrentUserProvider` czytał nagłówek `X-Corporate-Key`, którego GUI nie wysyła.
    - Kierunek (decyzja użytkownika): **frontend wysyła `corpKey`** (z `idTokenClaims`), backend używa go z fallbackiem do tokenu i twardym błędem, gdy nie da się ustalić użytkownika.

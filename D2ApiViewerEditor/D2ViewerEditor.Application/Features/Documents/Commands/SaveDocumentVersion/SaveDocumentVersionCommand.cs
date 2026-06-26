@@ -10,8 +10,7 @@ namespace D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVer
 public record SaveDocumentVersionCommand(
     Guid MasterId,
     byte[] Content,
-    string CreatedBy,
-    string? CorporateKey = null
+    string CreatedBy
 ) : IRequest<Result<SaveDocumentVersionResult>>;
 
 /// <summary>

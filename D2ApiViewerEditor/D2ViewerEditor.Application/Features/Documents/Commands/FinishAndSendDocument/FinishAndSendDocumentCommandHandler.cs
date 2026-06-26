@@ -46,12 +46,9 @@ public class FinishAndSendDocumentCommandHandler
             if (request.Content == null || request.Content.Length == 0)
                 return Result<FinishAndSendResult>.Failure("Zawartość dokumentu nie może być pusta");
 
-            // Tożsamość edytującego: wartość przesłana z GUI (claim `corpKey` z idToken) ma pierwszeństwo,
-            // a gdy jej brak — odczyt z tokenu po stronie API. Jest obowiązkowym polem identyfikującym
-            // w wysyłce na returnUrl, więc brak możliwości jej ustalenia = błąd.
-            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
-                ? _currentUser.CorporateKey
-                : request.CorporateKey;
+            // Tożsamość edytującego pochodzi wyłącznie ze zweryfikowanego tokenu po stronie API (claim `corpKey`).
+            // Jest obowiązkowym polem identyfikującym w wysyłce na returnUrl, więc brak jej ustalenia = błąd.
+            var corporateKey = _currentUser.CorporateKey;
             if (string.IsNullOrWhiteSpace(corporateKey))
                 return Result<FinishAndSendResult>.Failure(
                     "Nie można ustalić użytkownika kończącego dokument (brak CorporateKey).");

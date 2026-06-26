@@ -21,9 +21,6 @@ export interface UploadDocumentResult {
 export interface SaveDocumentVersionRequest {
   content: string; // Base64 encoded
   createdBy?: string;
-  // CorporateKey from the Entra ID `corpKey` token claim — forwarded on every editor save so the
-  // backend can record who last modified the file and identify the sender on the returnUrl callback.
-  corporateKey?: string;
 }
 
 export interface SaveDocumentVersionResult {

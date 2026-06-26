@@ -11,8 +11,7 @@ namespace D2ViewerEditor.Application.Features.Documents.Commands.UpdateDocumentV
 public record UpdateDocumentVersionCommand(
     Guid MasterId,
     Guid VersionId,
-    byte[] Content,
-    string? CorporateKey = null
+    byte[] Content
 ) : IRequest<Result<UpdateDocumentVersionResult>>;
 
 /// <summary>

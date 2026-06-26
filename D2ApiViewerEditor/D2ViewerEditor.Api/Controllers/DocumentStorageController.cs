@@ -85,8 +85,7 @@ public class DocumentStorageController : BaseApiController
         var command = new SaveDocumentVersionCommand(
             MasterId: masterId,
             Content: request.Content,
-            CreatedBy: request.CreatedBy ?? "System",
-            CorporateKey: request.CorporateKey
+            CreatedBy: request.CreatedBy ?? "System"
         );
 
         var result = await Mediator.Send(command);
@@ -116,8 +115,7 @@ public class DocumentStorageController : BaseApiController
         var command = new UpdateDocumentVersionCommand(
             MasterId: masterId,
             VersionId: versionId,
-            Content: request.Content,
-            CorporateKey: request.CorporateKey
+            Content: request.Content
         );
 
         var result = await Mediator.Send(command);
@@ -328,8 +326,7 @@ public class DocumentStorageController : BaseApiController
             MasterId: masterId,
             VersionId: versionId,
             Content: request.Content,
-            CreatedBy: request.CreatedBy,
-            CorporateKey: request.CorporateKey);
+            CreatedBy: request.CreatedBy);
 
         var result = await Mediator.Send(command);
 
@@ -482,7 +479,5 @@ public class DocumentStorageController : BaseApiController
 
 // Request DTOs
 public record UploadDocumentRequest(string Name, string MimeType, byte[] Content, string? CreatedBy);
-// CorporateKey: forwarded by the GUI from the Entra ID `corpKey` token claim. Persisted as the
-// document's last modifier and used as the delivery's identifying field for the returnUrl callback.
-public record SaveDocumentVersionRequest(byte[] Content, string? CreatedBy, string? CorporateKey = null);
+public record SaveDocumentVersionRequest(byte[] Content, string? CreatedBy);
 public record UpdateDeliveryRecipientUrlRequest(string RecipientUrl);

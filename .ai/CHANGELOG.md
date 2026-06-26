@@ -13,6 +13,15 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## Entries
 
+## 2026-06-26 — corpKey wyłącznie z tokenu po stronie API (usunięcie transportu z GUI)
+### Changed
+- **API**: komendy `SaveDocumentVersionCommand`/`UpdateDocumentVersionCommand`/`FinishAndSendDocumentCommand` — usunięty parametr `CorporateKey`. Handlery ustalają `corporateKey = _currentUser.CorporateKey` (zweryfikowany token; brak → `Result.Failure`). Controller DTO `SaveDocumentVersionRequest` — usunięte pole `CorporateKey`; akcje `save`/`update`/`finish` nie przekazują już tej wartości.
+- **GUI**: usunięty sygnał `corporateKey` i odczyt claimu `corpKey` z `idTokenClaims` w `document-editor.ts`; `saveDocumentVersion`/`updateDocumentVersion`/`finishAndSend` wysyłają już tylko `{ content }`. Interfejs `SaveDocumentVersionRequest` (GUI) — usunięte `corporateKey?`.
+### Verified
+- backend build 0 błędów; `Application.UnitTests` 295/295; `Api.UnitTests` 113/113; GUI `npm run build` OK.
+### Notes
+- Powód: GUI czytało `corpKey` ze statycznego snapshotu `getActiveAccount().idTokenClaims` (często null), przez co `SaveDocumentVersionCommand.CorporateKey` przychodził null. Token wysyłany do API (ID token, `api-token.interceptor.ts`) i tak niesie `corpKey`, więc `_currentUser.CorporateKey` jest niezawodnym, jedynym źródłem. Wyświetlanie `corporateKey` na listach admina (z `DocumentDelivery`) bez zmian. Decyzja: ADR-0021 (zastępuje transport z 2026-06-24).
+
 ## 2026-06-26 — Naprawa zapisu edytującego (corpKey) + „Kopiuj link" w admin-files
 ### Changed
 - API `AzureAdOptions.CorporateKeyClaim`: domyślnie `"ck"` → `"corpKey"` (zgodność z claimem w tokenie Entra).

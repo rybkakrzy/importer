@@ -13,8 +13,7 @@ public record FinishAndSendDocumentCommand(
     Guid MasterId,
     Guid VersionId,
     byte[] Content,
-    string? CreatedBy,
-    string? CorporateKey = null
+    string? CreatedBy
 ) : IRequest<Result<FinishAndSendResult>>;
 
 /// <summary>

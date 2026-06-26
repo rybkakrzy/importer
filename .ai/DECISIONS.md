@@ -28,6 +28,23 @@ Projekt rozwijany z pomocą agentów AI; potrzebny trwały, jawny kontekst międ
 ### Consequences
 Stały kontekst i handoff; wymaga dyscypliny aktualizacji.
 
+## ADR-0021: corpKey ustalany wyłącznie z tokenu po stronie API (bez transportu z GUI) — 2026-06-26
+
+- Date: 2026-06-26
+- Status: Accepted (zastępuje transport corpKey z 2026-06-24)
+
+### Context
+Edytor odczytywał claim `corpKey` ze statycznego snapshotu `getActiveAccount().idTokenClaims` (raz, w konstruktorze) i wysyłał go w body zapisów. Snapshot bywał pusty (claim pojawia się dopiero na cicho odświeżonym tokenie używanym przez `api-token.interceptor.ts`), więc `SaveDocumentVersionCommand.CorporateKey` przychodził null. Token faktycznie wysyłany do API (ID token) niesie `corpKey`, więc backend i tak czytał poprawną wartość przez fallback `_currentUser.CorporateKey`.
+
+### Decision
+Backend jest jedynym źródłem tożsamości edytującego: handlery `SaveDocumentVersion`/`UpdateDocumentVersion`/`FinishAndSendDocument` czytają `_currentUser.CorporateKey` (zweryfikowany token; brak → `Result.Failure`). Usunięto pole `CorporateKey` z komend i z controller DTO `SaveDocumentVersionRequest` oraz cały odczyt/wysyłkę `corpKey` w GUI.
+
+### Consequences
+Niezawodne i spójne pozyskanie corpKey (zawsze z walidowanego tokenu), mniej kruchego kodu i brak mylącego null w komendzie. Wyświetlanie `corporateKey` na listach admina (z `DocumentDelivery`) pozostaje bez zmian.
+
+### Alternatives considered
+Naprawa odczytu w GUI (czytać claim z `acquireTokenSilent()` zamiast snapshotu) — odrzucone: duplikuje logikę, która i tak jest dostępna serwerowo. Pozostawienie fallbacku `request ?? _currentUser` — odrzucone: utrzymuje martwe, mylące pole.
+
 ## ADR-0020: Centralne polityki bezpieczeństwa uploadu i callback URL
 
 - Date: 2026-06-22

@@ -28,11 +28,9 @@ public class SaveDocumentVersionCommandHandler : IRequestHandler<SaveDocumentVer
     {
         try
         {
-            // Tożsamość edytującego: wartość przesłana z GUI (claim `corpKey` z idToken) ma pierwszeństwo,
-            // a gdy jej brak — odczyt z tokenu po stronie API. Brak możliwości ustalenia = błąd (nie NULL).
-            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
-                ? _currentUser.CorporateKey
-                : request.CorporateKey;
+            // Tożsamość edytującego pochodzi wyłącznie ze zweryfikowanego tokenu po stronie API
+            // (claim `corpKey`). Brak możliwości ustalenia = błąd (nie NULL).
+            var corporateKey = _currentUser.CorporateKey;
             if (string.IsNullOrWhiteSpace(corporateKey))
                 return Result<SaveDocumentVersionResult>.Failure(
                     "Nie można ustalić użytkownika edytującego dokument (brak CorporateKey).");

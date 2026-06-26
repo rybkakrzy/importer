@@ -35,10 +35,8 @@ public class UpdateDocumentVersionCommandHandler
             if (request.Content == null || request.Content.Length == 0)
                 return Result<UpdateDocumentVersionResult>.Failure("Zawartość dokumentu nie może być pusta");
 
-            // Tożsamość edytującego: wartość z GUI (claim `corpKey`) ma pierwszeństwo, w razie braku — z tokenu.
-            var corporateKey = string.IsNullOrWhiteSpace(request.CorporateKey)
-                ? _currentUser.CorporateKey
-                : request.CorporateKey;
+            // Tożsamość edytującego pochodzi wyłącznie ze zweryfikowanego tokenu po stronie API (claim `corpKey`).
+            var corporateKey = _currentUser.CorporateKey;
             if (string.IsNullOrWhiteSpace(corporateKey))
                 return Result<UpdateDocumentVersionResult>.Failure(
                     "Nie można ustalić użytkownika edytującego dokument (brak CorporateKey).");
