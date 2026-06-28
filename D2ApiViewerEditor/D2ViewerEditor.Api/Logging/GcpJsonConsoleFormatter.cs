@@ -48,6 +48,7 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
 
     private readonly StructuredLogFormatterOptions _options;
     private readonly IHttpContextAccessor? _httpContextAccessor;
+    private readonly HashSet<string> _redactedKeys;
 
     public GcpJsonConsoleFormatter(
         IOptions<StructuredLogFormatterOptions> options,
@@ -56,6 +57,9 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
     {
         _options = options.Value;
         _httpContextAccessor = httpContextAccessor;
+        // Pre-normalize the redact list once so "access_token", "accessToken" and "access-token" all match.
+        _redactedKeys = new HashSet<string>(
+            _options.RedactedPropertyNames.Select(NormalizeKey), StringComparer.OrdinalIgnoreCase);
     }
 
     public override void Write<TState>(
@@ -396,7 +400,7 @@ public sealed class GcpJsonConsoleFormatter : ConsoleFormatter
         return template;
     }
 
-    private bool IsRedacted(string key) => _options.RedactedPropertyNames.Contains(NormalizeKey(key));
+    private bool IsRedacted(string key) => _redactedKeys.Contains(NormalizeKey(key));
 
     private static string NormalizeKey(string key) => key.Replace("_", string.Empty).Replace("-", string.Empty);
 

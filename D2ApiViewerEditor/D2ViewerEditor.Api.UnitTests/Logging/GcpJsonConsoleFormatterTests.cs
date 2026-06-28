@@ -197,8 +197,8 @@ public class GcpJsonConsoleFormatterTests
         error.GetProperty("stack_trace").GetString().Should().Contain("ArgumentException"); // full ToString()
         error.GetProperty("inner")[0].GetProperty("type").GetString().Should().Be("System.ArgumentException");
         error.GetProperty("inner")[0].GetProperty("message").GetString().Should().Be("inner");
-        // Diagnostic classification so a 500 can be triaged from the log alone.
-        doc.RootElement.GetProperty("event").GetProperty("reason").GetString().Should().Be("validation");
+        // Diagnostic classification so a 500 can be triaged from the log alone (InvalidOperation → code).
+        doc.RootElement.GetProperty("event").GetProperty("reason").GetString().Should().Be("code");
     }
 
     [Test]

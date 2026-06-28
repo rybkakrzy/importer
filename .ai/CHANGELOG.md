@@ -11,6 +11,16 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-06-28 — GcpJsonConsoleFormatter: bogate logi GCP + ECS, structured exceptions, redaction
+### Changed
+- `GcpJsonConsoleFormatter` przepisany na małe funkcje. Dodane: pola GCP (`logging.googleapis.com/trace|spanId|trace_sampled|sourceLocation`, `httpRequest`, `labels`), pola ECS (`@timestamp`, `log.*`, `service.*`, `trace.*`, `span.*`, `transaction.*`, `event.*`, `error.{type,message,stack_trace,inner}`, `http.*`, `url.*`, `user.id`), klasyfikacja błędu (`event.reason`: database/dependency/validation/authorization/cancellation/code), korelacja (`HttpContext.Items`/header/scope/Activity baggage) jako `correlation_id`+`labels.correlation_id`, maskowanie pól wrażliwych ("[REDACTED]", case/separator-insensitive) i query.
+- `StructuredLogFormatterOptions` rozbudowane: ProjectId, ServiceName, ServiceVersion, EnvironmentName, ServiceInstanceId, Include{Scopes,EventId,SourceLocation,HttpRequest,ElasticCommonSchemaFields,GoogleCloudFields}, RedactedPropertyNames.
+- `IHttpContextAccessor` (opcjonalny) wstrzykiwany do formattera; działa też bez HTTP (worker). `LoggingExtensions` wypełnia ProjectId (`GOOGLE_CLOUD_PROJECT`), ServiceVersion, instance id (`K_REVISION`/`HOSTNAME`).
+### Verified
+- `Api.UnitTests` 129/129 (formatter 21, w tym GCP trace, ECS, redaction, http/no-http, special chars, system-field-not-overwritten).
+### Notes
+- BREAKING (opisane): przy ECS ON (default) `service`/`environment` przeniesione do obiektu `service{name,version,environment}` — zmigrowany 1 test. Konflikt GCP/ECS dla `service` rozwiązany hybrydowo: płaskie `severity`+nested `log.level`, płaskie `traceId`+`trace.id`. `event.reason` to celowe odejście od oficjalnego ECS (low-cardinality triage 500).
+
 ## 2026-06-27 — Wysyłka: „w toku" ≠ błąd, zamykanie okna, anulowanie w trakcie
 ### Changed
 - Backend: `DocumentDelivery.CancelByUser()` (anulowanie z edytora obejmuje też próbę INLINE w toku — Sending bez lease; worker-Sending z lease i stany końcowe nadal rzucają). `AbortSendCommandHandler` używa `CancelByUser()`. `FinishAndSendDocumentCommandHandler` łapie `OperationCanceledException` jako anulowanie (propaguje, NIE zamienia na `Result.Failure`/`DeliveryFailed`).

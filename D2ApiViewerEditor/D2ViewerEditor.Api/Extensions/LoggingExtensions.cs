@@ -52,5 +52,4 @@ public static class LoggingExtensions
         System.Environment.GetEnvironmentVariable("K_REVISION")
         ?? System.Environment.GetEnvironmentVariable("HOSTNAME")
         ?? string.Empty;
-    }
 }
