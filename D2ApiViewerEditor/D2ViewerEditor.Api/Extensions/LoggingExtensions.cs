@@ -18,12 +18,39 @@ public static class LoggingExtensions
         if (!useGcp)
             return builder;
 
+        // The formatter reads optional HTTP context (method/path/status) — works without it too.
+        builder.Services.AddHttpContextAccessor();
+
         builder.Logging.AddConsole(options => options.FormatterName = GcpJsonConsoleFormatter.FormatterName);
         builder.Logging.AddConsoleFormatter<GcpJsonConsoleFormatter, StructuredLogFormatterOptions>(options =>
         {
-            options.Service = builder.Environment.ApplicationName;
-            options.Environment = builder.Environment.EnvironmentName;
+            options.ServiceName = builder.Environment.ApplicationName;
+            options.EnvironmentName = builder.Environment.EnvironmentName;
+            options.ServiceVersion = ResolveServiceVersion(builder.Configuration);
+            options.ProjectId = ResolveProjectId(builder.Configuration);
+            options.ServiceInstanceId = ResolveInstanceId();
+            // Back-compat aliases for any consumer still reading the flat fields.
+            options.Service = options.ServiceName;
+            options.Environment = options.EnvironmentName;
         });
         return builder;
+    }
+
+    private static string ResolveServiceVersion(IConfiguration configuration) =>
+        configuration["BuildInfo:Version"]
+        ?? System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString()
+        ?? string.Empty;
+
+    // GCP injects the project id as GOOGLE_CLOUD_PROJECT on Cloud Run/GKE; allow a config override.
+    private static string ResolveProjectId(IConfiguration configuration) =>
+        configuration["Logging:GcpProjectId"]
+        ?? System.Environment.GetEnvironmentVariable("GOOGLE_CLOUD_PROJECT")
+        ?? string.Empty;
+
+    // Cloud Run sets K_REVISION; otherwise fall back to the container hostname.
+    private static string ResolveInstanceId() =>
+        System.Environment.GetEnvironmentVariable("K_REVISION")
+        ?? System.Environment.GetEnvironmentVariable("HOSTNAME")
+        ?? string.Empty;
     }
 }
