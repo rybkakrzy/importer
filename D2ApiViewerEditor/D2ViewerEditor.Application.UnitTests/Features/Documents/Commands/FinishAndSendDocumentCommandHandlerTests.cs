@@ -164,6 +164,30 @@ public class FinishAndSendDocumentCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_WhenSendingCancelled_ShouldPropagateCancellation_NotMarkFailed()
+    {
+        var document = BuildDocumentWithEditableVersion(out var versionId,
+            "{\"returnUrl\":\"https://example.com/cb\"}");
+
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(document.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(document);
+        _deliveryRepo.Setup(r => r.GetActiveByDocumentIdAsync(document.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDelivery?)null);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        _sender.Setup(s => s.SendAsync(It.IsAny<DeliveryDispatch>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        var command = new FinishAndSendDocumentCommand(document.Id, versionId, new byte[] { 1 }, "User");
+        var act = async () => await _handler.Handle(command, cts.Token);
+
+        // Anulowanie propaguje się jako anulowanie — NIE jest zamieniane na Result.Failure ani na błąd wysyłki.
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        document.Status.Should().Be(DocumentStatus.Sending); // nie DeliveryFailed
+    }
+
+    [Test]
     public async Task Handle_WithoutReturnUrl_ShouldFail()
     {
         var document = BuildDocumentWithEditableVersion(out var versionId, metadata: null);

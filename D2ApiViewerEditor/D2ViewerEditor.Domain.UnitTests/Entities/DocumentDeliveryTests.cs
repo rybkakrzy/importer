@@ -89,6 +89,31 @@ public class DocumentDeliveryTests
     }
 
     [Test]
+    public void CancelByUser_FromInlineSending_ShouldBecomeCancelled()
+    {
+        // „Przerwij wysyłkę" w trakcie trwającej próby inline (Sending bez lease) — dozwolone,
+        // bo to ta sama, własna akcja użytkownika, którą właśnie przerywa.
+        var delivery = CreateValid();
+        delivery.BeginInlineAttempt(); // → Sending (inline)
+
+        delivery.CancelByUser();
+
+        delivery.Status.Should().Be(DeliveryStatus.Cancelled);
+    }
+
+    [Test]
+    public void CancelByUser_FromTerminalState_ShouldThrow()
+    {
+        var delivery = CreateValid();
+        delivery.BeginInlineAttempt();
+        delivery.MarkSent(); // → Sent (terminal)
+
+        var act = () => delivery.CancelByUser();
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Test]
     public void HeldJob_CanBeRequeued_ToSupportKontynuujWTle()
     {
         var delivery = CreateValid();

@@ -89,6 +89,13 @@ public class FinishAndSendDocumentCommandHandler
 
             return await AttemptInlineDeliveryAsync(document, delivery, request.Content, cancellationToken);
         }
+        catch (OperationCanceledException)
+        {
+            // Anulowanie operacji (token odwołany / klient przerwał żądanie) NIE jest błędem wysyłki.
+            // Propagujemy jako anulowanie — nie zamieniamy na Result.Failure. Stan domenowy
+            // (Cancelled / UzytkownikPrzerwałWysyłkę) sprząta jawne „Przerwij" (AbortSend).
+            throw;
+        }
         catch (InvalidOperationException ex)
         {
             // np. próba finalizacji na wersji oryginalnej (v1)
@@ -152,6 +159,13 @@ public class FinishAndSendDocumentCommandHandler
         try
         {
             result = await _sender.SendAsync(dispatch, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Anulowanie (klient przerwał żądanie / token odwołany) NIE jest błędem dostarczenia —
+            // nie oznaczamy zadania jako nieudane. Pozostaje w Sending (bez lease), a jawne „Przerwij"
+            // (AbortSend → CancelByUser) ustawia stan końcowy Cancelled.
+            throw;
         }
         catch (Exception ex)
         {

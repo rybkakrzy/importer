@@ -11,6 +11,17 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-06-27 — Wysyłka: „w toku" ≠ błąd, zamykanie okna, anulowanie w trakcie
+### Changed
+- Backend: `DocumentDelivery.CancelByUser()` (anulowanie z edytora obejmuje też próbę INLINE w toku — Sending bez lease; worker-Sending z lease i stany końcowe nadal rzucają). `AbortSendCommandHandler` używa `CancelByUser()`. `FinishAndSendDocumentCommandHandler` łapie `OperationCanceledException` jako anulowanie (propaguje, NIE zamienia na `Result.Failure`/`DeliveryFailed`).
+- Frontend (`document-editor`): `finishDocument()` rozróżnia trzy stany — `delivered` (koniec), `status==='Sending'` (stan przejściowy, **okno informacyjne, nie błąd**), realny błąd (modal problemu). Nowe `cancelSend()` („Przerwij wysyłkę" w trakcie — anuluje request w locie + `abortSend`, stan „Cancelled", bez błędu) i `closeSendingModal()` („Zamknij" — leci dalej w tle, UI odpięte przez guard `sendDetachedFromUi`). Modal wysyłki dostał komunikat + przyciski Przerwij/Zamknij; styl `.finish-dialog-text`.
+### Verified
+- Backend: Domain `DocumentDelivery` 27/27, Application `FinishAndSend`+`AbortSend` 14/14.
+- Frontend: `document-editor.spec` 71/71 (+3: status Sending bez błędu, cancelSend, closeSendingModal+guard).
+### Notes
+- Projekt nie ma i18n — teksty po polsku, spójnie z resztą.
+- Ryzyko/follow-up: przy abort-during-inline-Sending request inline i `abortSend` biegną równolegle; inline po `OperationCanceled` nie zapisuje już stanu, a `abortSend` (CancelByUser) ustawia Cancelled — brak konfliktu zapisu, ale to do potwierdzenia na realnym Postgresie (R-06).
+
 ## Entries
 
 ## 2026-06-26 — corpKey wyłącznie z tokenu po stronie API (usunięcie transportu z GUI)

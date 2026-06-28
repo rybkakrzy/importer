@@ -943,6 +943,49 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
     expect(component.showSendErrorModal()).toBe(false);
     expect(component.isFinishing()).toBe(false);
   });
+
+  // Req 1: „wysyłka w toku" (status Sending) to stan PRZEJŚCIOWY, nie błąd.
+  it('wynik ze statusem „Sending" (delivered=false) NIE pokazuje modalu błędu', async () => {
+    finishResult = { next: { deliveryId: 'd-1', status: 'Sending', documentStatus: 'Sending', delivered: false, error: null } };
+
+    component.finishDocument();
+
+    await vi.waitFor(() => expect(finishCalls).toBe(1));
+    expect(component.showSendErrorModal()).toBe(false);   // NIE traktujemy jako błąd
+    expect(component.showSendingModal()).toBe(true);       // okno informacyjne zostaje
+    expect(component.deliveryStatus()).toBe('Sending');
+    expect(component.workFinished()).toBe(false);
+  });
+
+  // Req 3: użytkownik może przerwać wysyłkę, gdy już trwa — anulowanie, nie błąd.
+  it('„Przerwij wysyłkę" w trakcie wysyłki anuluje (abortSend) i nie pokazuje błędu', async () => {
+    vi.spyOn(component as any, 'showSuccess').mockImplementation(() => {});
+
+    component.finishDocument();
+    expect(component.showSendingModal()).toBe(true);
+
+    component.cancelSend();
+
+    await vi.waitFor(() => expect(abortCalls).toBe(1));
+    expect(component.showSendingModal()).toBe(false);
+    expect(component.showSendErrorModal()).toBe(false);
+    expect(component.deliveryStatus()).toBe('Cancelled');
+    expect(component.isFinishing()).toBe(false);
+  });
+
+  // Req 2: zamknięcie okna w trakcie wysyłki nie jest błędem; późniejszy wynik nie wyskakuje jako modal.
+  it('„Zamknij" w trakcie wysyłki zamyka okno bez błędu, a spóźniony błąd nie wyskakuje', async () => {
+    finishResult = { next: deliveryFailed }; // request zakończy się błędem PO zamknięciu okna
+
+    component.finishDocument();
+    component.closeSendingModal();
+
+    expect(component.showSendingModal()).toBe(false);
+    expect(component.workFinished()).toBe(true);
+
+    await vi.waitFor(() => expect(finishCalls).toBe(1));
+    expect(component.showSendErrorModal()).toBe(false); // zamknięcie ≠ błąd, mimo nieudanego requestu
+  });
 });
 
 /**

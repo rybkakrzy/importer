@@ -32,7 +32,10 @@ public class AbortSendCommandHandler
             if (active is not null)
             {
                 var delivery = await _deliveryRepository.GetByIdAsync(active.Id, cancellationToken);
-                delivery?.Cancel();
+                // CancelByUser obejmuje też próbę inline w toku (Sending bez lease) — użytkownik może
+                // przerwać wysyłkę także wtedy, gdy już trwa. Zadanie przejęte przez workera (z lease)
+                // dalej rzuci InvalidOperationException (łapane niżej).
+                delivery?.CancelByUser();
                 deliveryStatus = delivery?.Status.ToString();
             }
 

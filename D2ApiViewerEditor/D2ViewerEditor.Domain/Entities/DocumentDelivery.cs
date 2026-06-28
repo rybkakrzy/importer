@@ -219,6 +219,28 @@ public class DocumentDelivery
     }
 
     /// <summary>
+    /// Anulowanie zainicjowane przez użytkownika w edytorze ("Przerwij wysyłkę"). W odróżnieniu od
+    /// administracyjnego <see cref="Cancel"/> obejmuje także trwającą próbę INLINE (Sending bez lease),
+    /// bo to ta sama, własna akcja użytkownika, którą właśnie przerywa. NIE dotyka zadania przejętego
+    /// przez workera w tle (Sending z aktywnym lease) ani stanów końcowych — wtedy rzuca wyjątkiem.
+    /// </summary>
+    public void CancelByUser()
+    {
+        if (IsTerminal)
+            throw new InvalidOperationException(
+                "Zadania w stanie końcowym nie można anulować");
+
+        if (Status is DeliveryStatus.Sending && LockedBy is not null)
+            throw new InvalidOperationException(
+                "Zadanie jest wysyłane przez proces w tle — nie można go przerwać");
+
+        Status = DeliveryStatus.Cancelled;
+        ClearLease();
+        LastError = "Anulowano przez użytkownika.";
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
     /// Zmiana adresu odbiorcy ("Edytuj returnUrl") — np. korekta błędnego adresu na zadaniu, które
     /// nie doszło. Dozwolona dla zadań niewysłanych i nieblokowanych przez workera (NIE: Sent/Sending).
     /// Po zmianie zadanie zwykle wymaga „Wznów", by ponowić wysyłkę na nowy adres.

@@ -58,6 +58,32 @@ public class AbortSendCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_WhenInlineAttemptInProgress_ShouldCancelAndMarkAborted()
+    {
+        // „Przerwij wysyłkę" w trakcie trwającej próby inline (Sending bez lease) — użytkownik
+        // może przerwać także wtedy, gdy wysyłka już trwa. CancelByUser → Cancelled (nie błąd).
+        var document = new Document(Guid.NewGuid(), "doc.docx", DocxMime, "User");
+        document.MarkSending();
+        var delivery = DocumentDelivery.Create(Guid.NewGuid(), document.Id, Guid.NewGuid(),
+            "deliveries/x", 10, "h", "https://example.com/cb", "User", Guid.NewGuid(), TimeSpan.FromHours(24));
+        delivery.BeginInlineAttempt(); // → Sending (inline, bez lease)
+
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(document.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(document);
+        _deliveryRepo.Setup(r => r.GetActiveByDocumentIdAsync(document.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(delivery);
+        _deliveryRepo.Setup(r => r.GetByIdAsync(delivery.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(delivery);
+
+        var result = await _handler.Handle(new AbortSendCommand(document.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.DeliveryStatus.Should().Be(nameof(DeliveryStatus.Cancelled));
+        document.Status.Should().Be(DocumentStatus.SendAborted);
+        delivery.Status.Should().Be(DeliveryStatus.Cancelled);
+    }
+
+    [Test]
     public async Task Handle_WithoutActiveDelivery_ShouldStillMarkDocumentAborted()
     {
         var document = new Document(Guid.NewGuid(), "doc.docx", DocxMime, "User");

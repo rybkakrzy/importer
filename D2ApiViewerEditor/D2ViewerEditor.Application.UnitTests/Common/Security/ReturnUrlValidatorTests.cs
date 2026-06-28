@@ -20,6 +20,30 @@ public class ReturnUrlValidatorTests
     }
 
     [Test]
+    public void Validate_WithHttpUrl_IsAcceptedByDefault()
+    {
+        // http jest równoprawny z https — domyślnie NIE wymagamy https (RequireHttps=false).
+        var validator = BuildValidator();
+
+        var result = validator.Validate("http://app.example.com/cb");
+
+        result.IsValid.Should().BeTrue();
+        result.NormalizedUrl.Should().Be("http://app.example.com/cb");
+    }
+
+    [Test]
+    public void Validate_WithHttpUrl_RejectedOnlyWhenRequireHttpsEnabled()
+    {
+        // Środowisko może jawnie wymusić https w appsettings (Security:ReturnUrl:RequireHttps=true).
+        var validator = BuildValidator(new ReturnUrlSecurityOptions { RequireHttps = true });
+
+        var result = validator.Validate("http://app.example.com/cb");
+
+        result.IsValid.Should().BeFalse();
+        result.Code.Should().Be(ReturnUrlRejectionCode.InsecureScheme);
+    }
+
+    [Test]
     public void Validate_WithProtocolRelative_ReturnsFailure()
     {
         var validator = BuildValidator();

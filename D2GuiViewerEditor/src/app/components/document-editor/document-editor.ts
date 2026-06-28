@@ -149,6 +149,16 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   showSendErrorModal = signal<boolean>(false);
   /**
+   * Użytkownik przerwał trwającą wysyłkę („Przerwij wysyłkę"). To anulowanie, NIE błąd —
+   * po przerwaniu requestu jego ewentualny błąd nie może wyskoczyć jako modal/komunikat błędu.
+   */
+  private sendCancelled = signal<boolean>(false);
+  /**
+   * Użytkownik zamknął okno trwającej wysyłki („Zamknij"). Wysyłka biegnie dalej (inline/worker),
+   * a UI jest odpięte — spóźniony wynik lub błąd requestu nie pokazuje już żadnego modalu.
+   */
+  private sendDetachedFromUi = signal<boolean>(false);
+  /**
    * Praca nad dokumentem zakończona (po „Zamknij"/odliczaniu). Gdy przeglądarka nie pozwoli
    * zamknąć karty (window.close() działa tylko dla okien otwartych skryptem), wyświetlamy
    * blokujący ekran końcowy — użytkownik NIE może dalej edytować zakończonego dokumentu.
@@ -1997,9 +2007,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
 
     this.isFinishing.set(true);
+    this.sendCancelled.set(false);
+    this.sendDetachedFromUi.set(false);
     this.deliveryStatus.set('Sending');
     this.showSendErrorModal.set(false);
-    this.showSendingModal.set(true); // „Trwa wysyłanie dokumentu ..."
+    this.showSendingModal.set(true); // „Trwa wysyłka pliku do aplikacji zewnętrznej"
 
     this.finishSendSub?.unsubscribe();
     this.finishSendSub = this.documentService.saveDocument(this.buildSaveRequest()).pipe(
@@ -2007,25 +2019,82 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       switchMap(base64 => this.documentStorageService.finishAndSend(masterId, versionId, { content: base64 }))
     ).subscribe({
       next: result => {
+        // Okno zamknięte przez użytkownika — wysyłka leci w tle, nie dotykamy już UI.
+        if (this.sendDetachedFromUi()) return;
+
         this.deliveryId.set(result.deliveryId);
         this.deliveryStatus.set(result.status);
-        this.showSendingModal.set(false);
 
         if (result.delivered) {
           // „Wysłano" — kończymy jak dotychczas (zamknięcie karty / ekran końcowy).
+          this.showSendingModal.set(false);
           this.enterFinishedAndCloseTab();
-        } else {
-          // „Błąd wysyłki" — poproś użytkownika o decyzję.
-          this.showSendErrorModal.set(true);
+          return;
         }
+
+        if (result.status === 'Sending') {
+          // Wysyłka wciąż trwa (np. równoległa próba w toku) — poprawny stan PRZEJŚCIOWY, nie błąd.
+          // Zostawiamy okno informacyjne; użytkownik może je zamknąć lub przerwać wysyłkę.
+          return;
+        }
+
+        // Rzeczywisty błąd dostarczenia — poproś użytkownika o decyzję (Przerwij / Kontynuuj w tle).
+        this.showSendingModal.set(false);
+        this.showSendErrorModal.set(true);
       },
       error: () => {
+        // Request przerwany przez użytkownika („Przerwij") albo okno zamknięte — to nie jest błąd.
+        if (this.sendCancelled() || this.sendDetachedFromUi()) return;
+
         // Pierwsza próba nie powiodła się (sieć / błąd serwera) — ta sama ścieżka co błąd wysyłki.
         this.showSendingModal.set(false);
         this.deliveryStatus.set('RetryScheduled');
         this.showSendErrorModal.set(true);
       }
     });
+  }
+
+  /**
+   * „Przerwij wysyłkę" w trakcie trwającej wysyłki: przerywa request w locie (HttpClient anuluje XHR
+   * przy unsubscribe) i zgłasza anulowanie do backendu. Anulowanie NIE jest błędem — przechodzimy
+   * w neutralny stan „anulowano" i wracamy do edytora. Działa także, gdy próba już trwa.
+   */
+  cancelSend(): void {
+    this.sendCancelled.set(true);
+    this.finishSendSub?.unsubscribe(); // anuluje request w locie — next/error się nie wywoła
+    this.showSendingModal.set(false);
+
+    const masterId = this.documentMasterId();
+    if (!masterId) {
+      this.afterSendCancelled();
+      return;
+    }
+
+    this.documentStorageService.abortSend(masterId).subscribe({
+      next: () => this.afterSendCancelled(),
+      // Backend mógł nie móc anulować (np. zadanie przejęte przez workera) — dla użytkownika to nadal
+      // anulowanie własnej wysyłki, a nie błąd techniczny. Pokazujemy neutralny stan anulowania.
+      error: () => this.afterSendCancelled()
+    });
+  }
+
+  /** Wspólne domknięcie anulowania: neutralny stan „anulowano", powrót do edytora (bez błędu). */
+  private afterSendCancelled(): void {
+    this.isFinishing.set(false);
+    this.sendCancelled.set(false);
+    this.deliveryStatus.set('Cancelled');
+    this.showSuccess('Wysyłka anulowana. Możesz dalej edytować dokument.');
+  }
+
+  /**
+   * „Zamknij" okno trwającej wysyłki: zamknięcie NIE jest błędem ani anulowaniem. Wysyłka biegnie
+   * dalej (inline kończy się po stronie serwera / dokańcza worker), a UI przechodzi w neutralny stan
+   * końcowy. `sendDetachedFromUi` pilnuje, by spóźniony wynik/błąd requestu nie wyskoczył jako modal.
+   */
+  closeSendingModal(): void {
+    this.sendDetachedFromUi.set(true);
+    this.showSendingModal.set(false);
+    this.enterFinishedAndCloseTab();
   }
 
   /**

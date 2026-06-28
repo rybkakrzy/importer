@@ -952,14 +952,21 @@
     </div>
   }
 
-  <!-- Dialog: trwa pierwsza próba wysyłki po kliknięciu „Zakończ" -->
+  <!-- Dialog: trwa wysyłka pliku do aplikacji zewnętrznej (stan przejściowy, NIE błąd) -->
   @if (showSendingModal()) {
-    <!-- Brak (click) na overlay — to stan przejściowy (trwa wysyłka), nie da się go zamknąć ręcznie. -->
+    <!-- Brak (click) na overlay: zamknięcie tylko jawnym przyciskiem, żeby nie zamknąć przypadkiem. -->
     <div class="dialog-overlay finish-dialog-overlay">
       <div class="dialog leave-dialog finish-dialog" role="dialog" aria-modal="true"
            aria-labelledby="sending-dialog-title">
         <div class="loading-spinner finish-dialog-spinner"></div>
-        <h3 class="leave-dialog-title" id="sending-dialog-title">Trwa wysyłanie dokumentu ...</h3>
+        <h3 class="leave-dialog-title" id="sending-dialog-title">Trwa wysyłka pliku do aplikacji zewnętrznej</h3>
+        <p class="finish-dialog-text">
+          Możesz zamknąć to okno — wysyłka będzie kontynuowana w tle — albo przerwać wysyłkę.
+        </p>
+        <div class="leave-dialog-actions finish-dialog-actions">
+          <button class="leave-btn-cancel" (click)="cancelSend()">Przerwij wysyłkę</button>
+          <button class="leave-btn-confirm" (click)="closeSendingModal()">Zamknij</button>
+        </div>
       </div>
     </div>
   }

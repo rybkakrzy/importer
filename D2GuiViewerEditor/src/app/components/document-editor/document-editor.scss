@@ -1641,6 +1641,15 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   justify-content: center;
 }
 
+/* Tekst informacyjny w dialogu wysyłki („Trwa wysyłka …") — neutralny, nad przyciskami. */
+.finish-dialog-text {
+  margin: 0 0 16px;
+  color: #4b5563;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
 /* Spinner w dialogu kończenia pracy — ten sam wizual co .loading-spinner ekranu ładowania
    („Przetwarzanie…"), z odstępem pod spodem jak .leave-dialog-icon (Problem 3). */
 .finish-dialog-spinner {
