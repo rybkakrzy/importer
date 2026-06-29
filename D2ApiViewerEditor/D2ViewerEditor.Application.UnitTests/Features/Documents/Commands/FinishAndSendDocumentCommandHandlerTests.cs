@@ -88,6 +88,40 @@ public class FinishAndSendDocumentCommandHandlerTests
     }
 
     [Test]
+    public async Task Handle_NewDelivery_IsPersistedAsSending_NeverClaimablePending()
+    {
+        // Race-fix guard: the new delivery must never be committed as Pending (next_attempt_at <= now,
+        // claimable by the background worker) — the very first SaveChanges must already see it as Sending,
+        // so the worker can't pick it up and send a second time.
+        var document = BuildDocumentWithEditableVersion(out var versionId,
+            "{\"returnUrl\":\"https://example.com/cb\"}");
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(document.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(document);
+        _deliveryRepo.Setup(r => r.GetActiveByDocumentIdAsync(document.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DocumentDelivery?)null);
+
+        DocumentDelivery? created = null;
+        _deliveryRepo.Setup(r => r.AddAsync(It.IsAny<DocumentDelivery>(), It.IsAny<CancellationToken>()))
+            .Callback<DocumentDelivery, CancellationToken>((d, _) => created = d);
+
+        var statusAtEachSave = new List<DeliveryStatus>();
+        _deliveryRepo.Setup(r => r.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => { if (created is not null) statusAtEachSave.Add(created.Status); })
+            .ReturnsAsync(1);
+
+        _sender.Setup(s => s.SendAsync(It.IsAny<DeliveryDispatch>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(DeliveryResult.Succeeded());
+
+        var result = await _handler.Handle(
+            new FinishAndSendDocumentCommand(document.Id, versionId, new byte[] { 1 }, "User"), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        statusAtEachSave.Should().NotBeEmpty();
+        statusAtEachSave.Should().NotContain(DeliveryStatus.Pending); // nigdy utrwalony jako claimowalny
+        statusAtEachSave[0].Should().Be(DeliveryStatus.Sending);      // pierwszy commit = już Sending
+    }
+
+    [Test]
     public async Task Handle_WhenFirstAttemptFails_ShouldMarkDeliveryFailedAndHoldJob()
     {
         var document = BuildDocumentWithEditableVersion(out var versionId,

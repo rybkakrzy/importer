@@ -11,6 +11,14 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-06-28 — Fix: okno podwójnej wysyłki w „Zakończ" (Pending-due przed Sending)
+### Changed
+- `FinishAndSendDocumentCommandHandler`: nowy rekord wysyłki nie jest już commitowany jako `Pending` z `next_attempt_at=now()` przed próbą inline. `CreateQueuedDeliveryAsync` robi tylko `AddAsync` (tracked, bez SaveChanges); pierwszy commit następuje w `AttemptInlineDeliveryAsync` po `BeginInlineAttempt()` — INSERT od razu jako `Sending`. Rekord nigdy nie istnieje w bazie jako claimowalny `Pending`, więc worker tła (`ClaimDueBatchAsync`: `Pending/RetryScheduled AND next_attempt_at<=now`) nie przejmie go i nie wyśle drugi raz. Usunięto martwe `document.MarkQueued()`.
+### Verified
+- `Application.UnitTests` 302/302 (FinishAndSend 11, w tym nowy `Handle_NewDelivery_IsPersistedAsSending_NeverClaimablePending`).
+### Notes
+- Kompromis: znika okno podwójnej wysyłki; w zamian crash między uploadem snapshotu a jedynym commitem = osierocony snapshot w GCS + brak rekordu (okno sub-ms; duplikat zewn. wysyłki gorszy niż leak snapshotu). Inline-`Sending` ma `locked_until=NULL` → worker nie reclaimuje w trakcie wolnego `SendAsync`. At-least-once (timeout-on-success + „Kontynuuj"/worker) nadal możliwe — chroni `Idempotency-Key` (odbiorca dedupuje). Powtarzalny dubel u użytkownika prawdopodobnie we wdrożonym `HttpDeliverySender` (OGate/Keycloak, `CreateClient("okapi")`) — poza repo.
+
 ## 2026-06-28 — GcpJsonConsoleFormatter: bogate logi GCP + ECS, structured exceptions, redaction
 ### Changed
 - `GcpJsonConsoleFormatter` przepisany na małe funkcje. Dodane: pola GCP (`logging.googleapis.com/trace|spanId|trace_sampled|sourceLocation`, `httpRequest`, `labels`), pola ECS (`@timestamp`, `log.*`, `service.*`, `trace.*`, `span.*`, `transaction.*`, `event.*`, `error.{type,message,stack_trace,inner}`, `http.*`, `url.*`, `user.id`), klasyfikacja błędu (`event.reason`: database/dependency/validation/authorization/cancellation/code), korelacja (`HttpContext.Items`/header/scope/Activity baggage) jako `correlation_id`+`labels.correlation_id`, maskowanie pól wrażliwych ("[REDACTED]", case/separator-insensitive) i query.

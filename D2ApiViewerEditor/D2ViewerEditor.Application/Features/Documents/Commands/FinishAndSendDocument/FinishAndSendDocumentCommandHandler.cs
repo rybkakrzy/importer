@@ -108,8 +108,11 @@ public class FinishAndSendDocumentCommandHandler
     }
 
     /// <summary>
-    /// Zamraża snapshot finalnego pliku, tworzy zadanie wysyłki i ustawia status dokumentu na
-    /// "Zlecono do wysyłki" (Queued). Snapshot jest potrzebny także do ewentualnej wysyłki w tle.
+    /// Zamraża snapshot finalnego pliku i tworzy (ale jeszcze NIE utrwala) zadanie wysyłki.
+    /// Rekord jest jedynie rejestrowany w kontekście (AddAsync) — pierwszy commit następuje dopiero
+    /// w <see cref="AttemptInlineDeliveryAsync"/>, gdy zadanie jest już w stanie Sending. Dzięki temu
+    /// rekord NIGDY nie istnieje w bazie jako claimowalny Pending (next_attempt_at &lt;= now), co
+    /// zamykało okno na podwójną wysyłkę przez workera tła. Snapshot jest potrzebny do wysyłki w tle.
     /// </summary>
     private async Task<DocumentDelivery> CreateQueuedDeliveryAsync(
         Document document, DocumentVersion version, FinishAndSendDocumentCommand request,
@@ -120,7 +123,6 @@ public class FinishAndSendDocumentCommandHandler
         var sha256 = Convert.ToHexString(SHA256.HashData(request.Content));
         await _storage.UploadRawAsync(snapshotObjectName, request.Content, document.MimeType, cancellationToken);
 
-        document.MarkQueued();
         var delivery = DocumentDelivery.Create(
             id: deliveryId,
             documentId: document.Id,
@@ -134,15 +136,16 @@ public class FinishAndSendDocumentCommandHandler
             retentionWindow: RetentionWindow,
             corporateKey: corporateKey);
 
+        // Tracked-but-not-committed: insert happens in AttemptInlineDeliveryAsync as Sending.
         await _deliveryRepository.AddAsync(delivery, cancellationToken);
-        await _deliveryRepository.SaveChangesAsync(cancellationToken);
         return delivery;
     }
 
     /// <summary>
-    /// Wykonuje pojedynczą synchroniczną próbę dostarczenia. Statusy są utrwalane w odpowiednich
-    /// momentach: "W trakcie wysyłki" przed próbą, a potem "Wysłano" lub "Błąd wysyłki".
-    /// Po błędzie zadanie czeka (wstrzymane) na decyzję użytkownika — worker go nie przejmie.
+    /// Wykonuje pojedynczą synchroniczną próbę dostarczenia. Pierwszy commit utrwala zadanie od razu
+    /// w stanie "W trakcie wysyłki" (dla nowego rekordu = INSERT jako Sending, bez przejścia przez
+    /// claimowalny Pending), a po próbie zapisuje "Wysłano" lub "Błąd wysyłki". Po błędzie zadanie
+    /// czeka (wstrzymane na DeadlineAt) na decyzję użytkownika — worker go nie przejmie.
     /// </summary>
     private async Task<Result<FinishAndSendResult>> AttemptInlineDeliveryAsync(
         Document document, DocumentDelivery delivery, byte[] content, CancellationToken cancellationToken)
