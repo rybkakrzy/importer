@@ -149,3 +149,7 @@ if (swaggerEnabled)
 app.MapControllers();
 
 app.Run();
+
+// Exposed so the integration test host (WebApplicationFactory<Program>) can boot the real pipeline
+// — including the authentication/authorization wiring — to verify endpoint access control.
+public partial class Program;

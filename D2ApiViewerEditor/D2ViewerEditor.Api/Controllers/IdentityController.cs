@@ -41,7 +41,8 @@ public class IdentityController : BaseApiController
     /// <summary>
     /// Resource names (frontend route names) the signed-in user may access, derived from their app
     /// roles. The Angular resource guard calls this and gates navigation by route path. Available to
-    /// any application user (Operator or Administrator); a user with no app role gets an empty list.
+    /// any application user (Operator or Administrator); a user with no app role is denied (403), which
+    /// the frontend surfaces as "brak uprawnień".
     /// </summary>
     [HttpGet("resources")]
     [Authorize(Policy = AuthorizationPolicies.RequireAppOperator)]

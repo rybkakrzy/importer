@@ -23,6 +23,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "D2ViewerEditor.Benchmarks",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "D2ViewerEditor.Infrastructure.IntegrationTests", "D2ViewerEditor.Infrastructure.IntegrationTests\D2ViewerEditor.Infrastructure.IntegrationTests.csproj", "{42A4671B-050A-4B0A-8679-0BBD2869D824}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "D2ViewerEditor.Api.IntegrationTests", "D2ViewerEditor.Api.IntegrationTests\D2ViewerEditor.Api.IntegrationTests.csproj", "{3C251AEA-0800-4305-9178-F96975B9E38D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -153,6 +155,18 @@ Global
 		{42A4671B-050A-4B0A-8679-0BBD2869D824}.Release|x64.Build.0 = Release|Any CPU
 		{42A4671B-050A-4B0A-8679-0BBD2869D824}.Release|x86.ActiveCfg = Release|Any CPU
 		{42A4671B-050A-4B0A-8679-0BBD2869D824}.Release|x86.Build.0 = Release|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Debug|x64.Build.0 = Debug|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Debug|x86.Build.0 = Debug|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Release|x64.ActiveCfg = Release|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Release|x64.Build.0 = Release|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Release|x86.ActiveCfg = Release|Any CPU
+		{3C251AEA-0800-4305-9178-F96975B9E38D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

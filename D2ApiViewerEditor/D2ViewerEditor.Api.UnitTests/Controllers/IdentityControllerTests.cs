@@ -12,7 +12,8 @@ namespace D2ViewerEditor.Api.UnitTests.Controllers;
 
 /// <summary>
 /// Admin Graph user lookup (empty query → 400, no result → 404, found → 200) and the resource
-/// authorization endpoint (roles → allowed frontend resources; admin is a superset).
+/// authorization endpoint (roles → allowed frontend resources; Operator and Administrator are
+/// disjoint areas — see ResourcesProvider access matrix).
 /// </summary>
 [TestFixture]
 public class IdentityControllerTests
@@ -70,24 +71,35 @@ public class IdentityControllerTests
     }
 
     [Test]
-    public void Resources_admin_gets_documents_and_admin()
+    public void Resources_admin_gets_admin_only()
     {
         var result = ControllerWithRoles("Administrator").GetResources();
 
         var resources = result.Should().BeOfType<OkObjectResult>().Which.Value
             .Should().BeAssignableTo<IReadOnlyList<string>>().Subject;
-        resources.Should().BeEquivalentTo("editor", "viewer", "admin");
+        resources.Should().BeEquivalentTo("admin");
+        resources.Should().NotContain(new[] { "dashboard", "editor", "viewer" });
     }
 
     [Test]
-    public void Resources_operator_gets_documents_only()
+    public void Resources_operator_gets_dashboard_editor_viewer_only()
     {
         var result = ControllerWithRoles("Operator").GetResources();
 
         var resources = result.Should().BeOfType<OkObjectResult>().Which.Value
             .Should().BeAssignableTo<IReadOnlyList<string>>().Subject;
-        resources.Should().BeEquivalentTo("editor", "viewer");
+        resources.Should().BeEquivalentTo("dashboard", "editor", "viewer");
         resources.Should().NotContain("admin");
+    }
+
+    [Test]
+    public void Resources_both_roles_gets_union()
+    {
+        var result = ControllerWithRoles("Operator", "Administrator").GetResources();
+
+        var resources = result.Should().BeOfType<OkObjectResult>().Which.Value
+            .Should().BeAssignableTo<IReadOnlyList<string>>().Subject;
+        resources.Should().BeEquivalentTo("dashboard", "editor", "viewer", "admin");
     }
 
     [Test]

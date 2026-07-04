@@ -25,8 +25,12 @@ using Microsoft.AspNetCore.Mvc;
 namespace D2ViewerEditor.Api.Controllers;
 
 /// <summary>
-/// Kontroler do zarządzania dokumentami i wersjami
+/// Kontroler do zarządzania dokumentami i wersjami. Cały cykl życia dokumentu (upload, zapis/nadpisanie
+/// wersji, restore, finish&amp;send, pobrania) wymaga roli aplikacyjnej (Operator lub Administrator) —
+/// samo uwierzytelnienie nie wystarcza. Endpointy administracyjne dokładają <see cref="AuthorizationPolicies.RequireAppAdmin"/>
+/// (kombinacja atrybutów = wymagany Administrator). Backend = źródło prawdy.
 /// </summary>
+[Authorize(Policy = AuthorizationPolicies.RequireAppOperator)]
 public class DocumentStorageController : BaseApiController
 {
     /// <summary>

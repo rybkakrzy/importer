@@ -5,6 +5,8 @@ import { MsalService, MsalBroadcastService } from '@azure/msal-angular';
 import { InteractionStatus } from '@azure/msal-browser';
 import { filter } from 'rxjs';
 import { GlobalBannersComponent } from './components/global-banners/global-banners';
+import { MSAL_CUSTOM_CONFIG } from './core/config/runtime-config';
+import { primeApiToken } from './core/auth/api-token-primer';
 
 @Component({
   selector: 'd2-root',
@@ -29,6 +31,7 @@ export class App implements OnInit {
   private readonly msal = inject(MsalService);
   private readonly broadcast = inject(MsalBroadcastService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly authConfig = inject(MSAL_CUSTOM_CONFIG);
 
   ngOnInit(): void {
     // Redirect completion is handled by MsalRedirectComponent (<app-redirect>), which owns the
@@ -45,6 +48,10 @@ export class App implements OnInit {
         if (accounts.length > 0 && !this.msal.instance.getActiveAccount()) {
           this.msal.instance.setActiveAccount(accounts[0]);
         }
+        // MSAL is idle and (after a fresh redirect login) an account is now selected. Prime the API
+        // token here too, so api_access_token exists immediately after login — not only on reload
+        // (handled by the app initializer) or the first backend call (handled by the interceptor).
+        void primeApiToken(this.msal.instance, this.authConfig);
       });
   }
 }

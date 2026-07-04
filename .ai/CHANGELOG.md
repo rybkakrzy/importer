@@ -11,6 +11,16 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-03 — SECURITY: egzekwowanie roli `Operator` na backendzie edytora (broken access control)
+### Changed
+- **Backend (krytyczne):** `DocumentController` i `DocumentStorageController` dostały klasowy `[Authorize(Policy = RequireAppOperator)]`. Wcześniej dziedziczyły tylko `[Authorize]` (dowolny zalogowany), więc użytkownik **bez roli aplikacyjnej** mógł przez bezpośrednie wywołanie API tworzyć/zapisywać/nadpisywać/przywracać/podpisywać i „Zakończyć i wysłać" dokumenty. Endpointy admina zachowują `RequireAppAdmin` (AND z polityką klasy → wymagany Administrator).
+- **Frontend (defense-in-depth + UX):** pulpit (`dashboard`) bramkuje akcje „Nowy dokument"/„Otwórz plik" sygnałem `canUseEditor` (`ResourceAccessService.hasAccessToResource('editor')`); `newDocument()`/`openFile()` mają twardy `ensureEditorAccess()`. `resourceGuard` rozróżnia stan `loading`/transient (401/0/5xx → retry ×3, 300 ms) od definitywnego `403` (deny → `/brak-uprawnien`) — bez traktowania niegotowego MSAL jako „brak uprawnień".
+### Verified
+- Nowy projekt `D2ViewerEditor.Api.IntegrationTests` (WebApplicationFactory<Program> + `TestAuthHandler`): **9/9** — 401 bez tokenu (editor/save/admin), 403 bez roli i z obcą rolą, 200 dla `Operator`/`Administrator`, 403 `Operator` na endpoint admina.
+- GUI: `resource.guard.spec` 3, `dashboard.spec` 3 (gating), `resource-access.service.spec` 3 — pass. Build API 0 błędów; build GUI OK.
+### Notes
+- Do potwierdzenia w Entra: przypisania App Roles `Operator`/`Administrator`, „Assignment required=Yes", redirect URI (SPA). Decyzja: **ADR-0022**. `main`/interceptor/MSAL bez zmian (kolejność inicjalizacji poza zakresem tej poprawki).
+
 ## 2026-06-28 — Fix: okno podwójnej wysyłki w „Zakończ" (Pending-due przed Sending)
 ### Changed
 - `FinishAndSendDocumentCommandHandler`: nowy rekord wysyłki nie jest już commitowany jako `Pending` z `next_attempt_at=now()` przed próbą inline. `CreateQueuedDeliveryAsync` robi tylko `AddAsync` (tracked, bez SaveChanges); pierwszy commit następuje w `AttemptInlineDeliveryAsync` po `BeginInlineAttempt()` — INSERT od razu jako `Sending`. Rekord nigdy nie istnieje w bazie jako claimowalny `Pending`, więc worker tła (`ClaimDueBatchAsync`: `Pending/RetryScheduled AND next_attempt_at<=now`) nie przejmie go i nie wyśle drugi raz. Usunięto martwe `document.MarkQueued()`.

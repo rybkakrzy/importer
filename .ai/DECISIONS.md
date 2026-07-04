@@ -496,3 +496,22 @@ Edytor pokazuje prawdziwy raster gdy się da, a dla czystego wektora — niewido
 
 ### Alternatives considered
 (a) `Web=null` i pominięcie elementu — odrzucone: psuje układ i grozi wyemitowaniem surowego `data:image/x-emf` w `src` (przeglądarka nie renderuje → broken image). (b) Rasteryzacja wektora przez GDI/System.Drawing — odrzucone (Windows-only, crash na Linux/GCP). (c) LibreOffice headless — odrzucone (proces zewnętrzny, niestabilny w kontenerze).
+
+## ADR-0022: Rola `Operator` egzekwowana na backendzie edytora (klasowy `RequireAppOperator`) — 2026-07-03
+
+- Date: 2026-07-03
+- Status: Accepted; wzmacnia ADR-0011/ADR-0016/ADR-0017 (model resource-based był tylko UX-gate na froncie; backend edytora nie egzekwował roli).
+
+### Context
+Audyt bezpieczeństwa wykazał **broken access control (OWASP A01)**: `DocumentController` (open/save/sign/upload-image/new/templates/verify-signatures) oraz większość `DocumentStorageController` (upload, `{id}/save`, `PUT versions/{id}`, restore, finish&send, download) dziedziczyły wyłącznie `[Authorize]` z `BaseApiController` — czyli **dowolny zalogowany użytkownik, także z pustą listą ról**. `RequireAppOperator` była nałożona tylko na `GET /api/identity/resources` (lista zasobów dla front-guarda) i endpointy admina. W efekcie użytkownik bez roli `Operator`/`Administrator` mógł przez bezpośrednie API (curl/Postman/DevTools) wykonać pełny cykl życia dokumentu. Dodatkowo pulpit (`''`) był chroniony tylko `authGuard` (bez `resourceGuard`) i pokazywał akcje edytora — stąd objaw „user bez roli widział edytor".
+
+### Decision
+- Klasowy `[Authorize(Policy = AuthorizationPolicies.RequireAppOperator)]` na `DocumentController` i `DocumentStorageController`. Endpointy admina zachowują metodowy `RequireAppAdmin` — atrybuty łączą się **AND**, więc wymagają Administratora (który i tak spełnia `RequireAppOperator`).
+- Front (defense-in-depth, nie zabezpieczenie): pulpit bramkuje akcje sygnałem `canUseEditor` (`ResourceAccessService.hasAccessToResource('editor')`) + twardy `ensureEditorAccess()` w `newDocument()`/`openFile()`. `resourceGuard` rozróżnia `loading`/transient (401/0/5xx → retry ×3, 300 ms) od definitywnego `403` (deny → `/brak-uprawnien`), by niegotowy MSAL po deep-linku/reloadzie nie był mylony z brakiem uprawnień.
+- Egzekwowanie backendowe pod testem regresji: `D2ViewerEditor.Api.IntegrationTests` (WebApplicationFactory<Program> + `TestAuthHandler`, schemat testowy jako domyślny; host hermetyczny bez DB/GCS/workera, dummy ClientId/TenantId aby przeszła walidacja Microsoft.Identity.Web).
+
+### Consequences
+Backend jest źródłem prawdy dla dostępu do edytora; ukrycie przycisków to już tylko UX. Użytkownik bez roli aplikacyjnej dostaje **403** na endpointach dokumentu (i **401** bez tokenu), niezależnie od frontu. Weryfikacja: integracyjne **9/9**, GUI `resource.guard`/`dashboard`/`resource-access` **9/9**, build API 0 błędów. Do potwierdzenia poza repo (Entra): przypisania App Roles `Operator`/`Administrator`, „Assignment required=Yes", redirect URI typu SPA.
+
+### Alternatives considered
+(a) Globalna `FallbackPolicy = RequireAppOperator` w `Program.cs` — odrzucone: objęłaby też `HealthController` (anonimowy) i wymagałaby jawnych wyjątków; zmiana szersza niż problem. (b) `[Authorize(Roles="Operator,Administrator")]` na metodach — odrzucone: duplikacja i ryzyko pominięcia nowej akcji; polityka klasowa domyka wszystkie akcje kontrolera. (c) Tylko front-guard/ukrycie przycisków — odrzucone: nie jest autoryzacją (obejście przez bezpośrednie API).

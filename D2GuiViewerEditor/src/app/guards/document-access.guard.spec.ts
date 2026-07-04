@@ -63,4 +63,14 @@ describe('documentAccessGuard', () => {
     const result = await resolve(runGuard(snapshotWith('m')));
     expect(result).toBe(true);
   });
+
+  it('does not retry a definitive 403 (single call, denies)', async () => {
+    storage.getDocumentMetadata.mockReturnValue(
+      throwError(() => new HttpErrorResponse({ status: 403 }))
+    );
+    const result = await resolve(runGuard(snapshotWith('m')));
+    expect(result).toBeInstanceOf(UrlTree);
+    // 403 is a real "no access" — it must not be retried as if it were an MSAL-settling race.
+    expect(storage.getDocumentMetadata).toHaveBeenCalledTimes(1);
+  });
 });

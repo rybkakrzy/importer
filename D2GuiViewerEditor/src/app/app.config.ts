@@ -28,6 +28,7 @@ import {
   msalInstanceFactory,
   msalGuardConfigFactory,
 } from './core/auth/msal.config';
+import { primeApiToken } from './core/auth/api-token-primer';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -49,6 +50,8 @@ export const appConfig: ApplicationConfig = {
     // possible so first API calls can acquire a token immediately.
     provideAppInitializer(async () => {
       const msal = inject(MsalService);
+      // Injected before the first await so the injection context is still active.
+      const authConfig = inject(MSAL_CUSTOM_CONFIG);
       await msal.instance.initialize();
 
       if (!msal.instance.getActiveAccount()) {
@@ -57,6 +60,11 @@ export const appConfig: ApplicationConfig = {
           msal.instance.setActiveAccount(firstAccount);
         }
       }
+
+      // Prime api_access_token as soon as an account is available, so it exists before the first
+      // backend call. Fire-and-forget (not awaited) → never delays bootstrap; best-effort → a
+      // fresh redirect that is still settling is handled later by the interceptor.
+      void primeApiToken(msal.instance, authConfig);
     }),
 
     { provide: ErrorHandler, useClass: GlobalErrorHandler },

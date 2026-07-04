@@ -5,16 +5,20 @@ using D2ViewerEditor.Application.Features.Documents.Queries.GetNewDocument;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetTemplate;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetTemplates;
 using D2ViewerEditor.Application.Features.Documents.Queries.OpenDocument;
+using D2ViewerEditor.Api.Security;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace D2ViewerEditor.Api.Controllers;
 
 /// <summary>
-/// Kontroler API dla edytora dokumentów Word
+/// Kontroler API dla edytora dokumentów Word. Wszystkie operacje edytora wymagają roli aplikacyjnej
+/// (Operator lub Administrator) — samo uwierzytelnienie nie wystarcza. Backend = źródło prawdy.
 /// </summary>
 [Route("api/[controller]")]
+[Authorize(Policy = AuthorizationPolicies.RequireAppOperator)]
 public class DocumentController : BaseApiController
 {
     /// <summary>

@@ -1,4 +1,5 @@
 import { Component, inject, signal, computed } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { CommonModule } from '@angular/common';
 import { switchMap, map, from, Subscription } from 'rxjs';
 import { MsalService } from '@azure/msal-angular';
@@ -6,6 +7,7 @@ import type { AccountInfo } from '@azure/msal-browser';
 import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { DocumentNavigationService } from '../../core/services/document-navigation.service';
+import { ResourceAccessService } from '../../core/services/resource-access.service';
 
 @Component({
   selector: 'd2-dashboard',
@@ -18,11 +20,19 @@ export class DashboardComponent {
   private documentService = inject(DocumentService);
   private documentStorageService = inject(DocumentStorageService);
   private documentNavigation = inject(DocumentNavigationService);
+  private readonly resourceAccess = inject(ResourceAccessService);
   private readonly msal = inject(MsalService);
 
   isLoading = signal(false);
   errorMessage = signal<string | null>(null);
   readonly currentYear = new Date().getFullYear();
+
+  // Editor entry actions ("Nowy dokument" / "Otwórz plik") require the "editor" resource (Operator
+  // or Administrator). This is UX/defense-in-depth only — the backend is the source of truth and
+  // rejects the underlying document endpoints with 403 for anyone without the role.
+  readonly canUseEditor = toSignal(this.resourceAccess.hasAccessToResource('editor'), {
+    initialValue: false,
+  });
 
   // Imię zalogowanego użytkownika (Entra ID) — powitanie na pulpicie.
   readonly userFirstName = signal<string>(this.resolveFirstName());
@@ -34,7 +44,18 @@ export class DashboardComponent {
   private activeSubscription: Subscription | null = null;
 
 
+  private ensureEditorAccess(): boolean {
+    if (this.canUseEditor()) {
+      return true;
+    }
+    this.errorMessage.set('Nie masz uprawnień do edycji dokumentów.');
+    return false;
+  }
+
   newDocument(): void {
+    if (!this.ensureEditorAccess()) {
+      return;
+    }
     this.isLoading.set(true);
     this.errorMessage.set(null);
 
@@ -79,6 +100,9 @@ export class DashboardComponent {
   }
 
   openFile(): void {
+    if (!this.ensureEditorAccess()) {
+      return;
+    }
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.docx,.doc,.pdf';
