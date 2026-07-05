@@ -1,6 +1,8 @@
 # Diagram komunikacji: zewnętrzne API i otwarcie pliku w przeglądarce
 
 > Źródło prawdy: `.ai/` + kod (stan 2026-05-26). Elementy niepotwierdzone oznaczono **[Wymaga potwierdzenia]** / **[Brak w repo]**.
+>
+> **ERRATA (2026-07-05):** od czasu snapshotu zaimplementowano to, co poniżej oznaczono jako „brak warstwy auth": Internal API wymaga tokenu **Entra ID** + roli `Operator`/`Administrator` (401/403, ADR-0011/0012/0022), a `CorporateKey`/`allowedCorporateKeys` **istnieją** i są egzekwowane (BR-014, 403). Zwrot na `ReturnUrl` to potwierdzone **`multipart/form-data`** (części `file`/`masterId`/`versionId`/`corporateKey` + `Idempotency-Key`/`X-Content-SHA256`). Adnotacje „[Wymaga potwierdzenia] brak auth" w diagramach poniżej opisują stan historyczny — aktualny stan: `SECURITY.md`, `API_CONTRACTS.md`.
 
 ## 1. Cel dokumentu
 
@@ -31,10 +33,10 @@ Scenariusze: ingest DOCX/PDF, otwarcie podglądu/edycji, rozdział DOCX/PDF, obs
 - GUI rozmawia wyłącznie z Internal API; system zewnętrzny nie woła Internal API.
 - Klasyfikacja `C1..C4` w `documents.metadata` (JSON), prezentacyjna.
 
-**Wymaga potwierdzenia:**
-- **Autoryzacja/dostęp** — brak warstwy auth w repo (A-05). `CorporateKey`/`allowedCorporateKeys` **nie istnieją w repo**.
-- Read flow External API (`GET /api/v1/document/{id}`) = placeholder.
-- Kształt POST zwrotnego na `ReturnUrl` (poza zakresem otwierania, ale część kontraktu integracji).
+**Wymaga potwierdzenia (stan po erracie 2026-07-05):**
+- ~~Autoryzacja/dostęp — brak warstwy auth~~ **Nieaktualne:** auth Entra ID + role + `allowedCorporateKeys` zaimplementowane (patrz ERRATA wyżej).
+- Read flow External API (`GET /api/v1/document/{id}`) = placeholder — nadal aktualne.
+- ~~Kształt POST zwrotnego na `ReturnUrl`~~ **Potwierdzone:** `multipart/form-data` (patrz ERRATA).
 
 ---
 
@@ -132,7 +134,7 @@ sequenceDiagram
         DB-->>APP: Document(metadata)
         APP-->>API: { mimeType, returnUrl?, classification? }
         API-->>GUI: 200 metadata
-        Note over GUI: [Wymaga potwierdzenia] brak warstwy auth —<br/>dostęp = znajomość masterId; brak CorporateKey
+        Note over GUI: dostęp: token Entra + rola (401/403, ADR-0022)<br/>+ allowedCorporateKeys/CorporateKey (BR-014)
         GUI->>GUI: classification → badge (wspólny komponent)
         GUI->>GUI: routing wg mimeType (DOCX → 5.3a / PDF → 5.3b)
     end
@@ -202,8 +204,9 @@ flowchart TD
     M --> N["GET /{masterId}/metadata"]
     N --> O{"Dokument istnieje?"}
     O -- "nie" --> E404["404 — Nie znaleziono"]
-    O -- "tak" --> ACC{"[Wymaga potwierdzenia]<br/>kontrola dostępu?"}
-    ACC -. "brak warstwy auth w repo" .-> P{"mimeType?"}
+    O -- "tak" --> ACC{"token + rola + allowedCorporateKeys?"}
+    ACC -- "nie" --> E403["401/403 — brak uprawnień"]
+    ACC -- "tak" --> P{"mimeType?"}
     P -- "DOCX" --> Q1["download wersji → /api/document/open → edytor"]
     P -- "PDF" --> Q2["GET /{masterId} → render pdfjs"]
     Q1 --> R{"Plik w GCS?"}
@@ -214,7 +217,7 @@ flowchart TD
     S -- "nie/empty" --> U["render bez badge (fallback)"]
 ```
 
-**Objaśnienie:** flowchart łączy fazę ingest (walidacja, typ pliku) z fazą otwarcia (istnienie, dostęp [niepotwierdzony], typ, plik w GCS, klasyfikacja). Brak klasyfikacji i brak warstwy auth są pokazane jako warianty zgodne ze stanem faktycznym.
+**Objaśnienie:** flowchart łączy fazę ingest (walidacja, typ pliku) z fazą otwarcia (istnienie, dostęp — token Entra + rola + `allowedCorporateKeys`, typ, plik w GCS, klasyfikacja). Brak klasyfikacji jest pokazany jako wariant zgodny ze stanem faktycznym (pole opcjonalne).
 
 ---
 
@@ -225,10 +228,10 @@ flowchart TD
 3. **Otwarcie linku:** integrator składa URL GUI z identyfikatorów (`/editor?masterId=&versionId=`, `/editor?masterId=`, `/viewer?masterId=`).
 4. **Start frontendu:** nginx serwuje SPA; Angular odczytuje `masterId`/`versionId` z URL.
 5. **Pobranie metadanych:** `GET /{masterId}/metadata` → `{ mimeType, returnUrl?, classification? }`; 404 gdy brak.
-6. **Sprawdzenie dostępu:** **[Wymaga potwierdzenia]** — brak warstwy auth; obecnie kontrola = istnienie zasobu.
+6. **Sprawdzenie dostępu:** token Entra ID (401 bez tokenu) + rola `Operator`/`Administrator` (403, ADR-0022) + `allowedCorporateKeys` na endpointach treści/metadanych (403, BR-014).
 7. **Render DOCX:** download wersji z GCS → `POST /api/document/open` (DOCX→HTML) → edytor.
 8. **Render PDF:** `GET /{masterId}` (content base64) → pdfjs.
-9. **Błędy:** 400/422 (walidacja ingestu), 404 (dokument/plik), 5xx (GCS/techniczne). 403 — **[Wymaga potwierdzenia]** brak mechanizmu.
+9. **Błędy:** 400/422 (walidacja ingestu), 401 (brak tokenu), 403 (rola/dostęp), 404 (dokument/plik), 5xx (GCS/techniczne).
 
 ---
 
@@ -252,9 +255,9 @@ flowchart TD
 
 | Element | Status |
 |---|---|
-| Dokładny kształt body POST zwrotnego na `ReturnUrl` (octet-stream vs multipart) | Wymaga potwierdzenia (kod `HttpDeliverySender`) |
-| Autoryzacja External/Internal API (token/nagłówek?) | Wymaga potwierdzenia — brak w repo |
-| `allowedCorporateKeys` / `CorporateKey` | **Brak w repo** — nie zakładać |
+| Dokładny kształt body POST zwrotnego na `ReturnUrl` | **Potwierdzone (2026-06-11/17):** `multipart/form-data` — `file`/`masterId`/`versionId`/`corporateKey` (`HttpDeliverySender`) |
+| Autoryzacja External/Internal API | **Zaimplementowane:** Internal = Entra ID (token + role, ADR-0022); External = app-to-app (patrz `SECURITY.md`) |
+| `allowedCorporateKeys` / `CorporateKey` | **Zaimplementowane** (BR-014, ADR-0011/0021) — egzekwowane backendowo (403) |
 | Read flow `GET /api/v1/document/{id}` | Placeholder — niezaimplementowany |
 
 ---
@@ -278,8 +281,8 @@ flowchart TD
 | Kod / sytuacja | Gdzie powstaje | Co widzi integrator | Co widzi użytkownik | Co sprawdzić w logach | Ponowienie |
 |---|---|---|---|---|---|
 | 400 / invalid request | External API (walidacja ingestu) | `400 { error }` | — | komunikat walidacji (MIME/rozmiar/Classification/ReturnUrl) | tak, po korekcie |
-| 401 / unauthorized | **[Wymaga potwierdzenia]** | — | — | — | — |
-| 403 / forbidden | **[Wymaga potwierdzenia]** brak warstwy auth | — | — | — | — |
+| 401 / unauthorized | Internal API (brak/nieważny token Entra) | — | przekierowanie do logowania MSAL | JwtBearer w logach | tak, po zalogowaniu |
+| 403 / forbidden | Internal API (brak roli `Operator`/`Administrator` — ADR-0022; albo `allowedCorporateKeys` bez dopasowania — BR-014) | — | „Brak uprawnień" (`/brak-uprawnien`) | policy/`DocumentAccessGuard` w logach | po nadaniu roli/uprawnień |
 | 404 / document not found | Internal API (`/metadata`, `/{masterId}`) | — | „Nie znaleziono dokumentu" | brak rekordu w `documents` | tak, z poprawnym masterId |
 | 404 / file not found | Internal API (download z GCS) | — | komunikat błędu pobrania | brak obiektu `documents/{versionId}` | zależnie od przyczyny |
 | 409 / conflict | **[Brak w repo]** dla ingestu/otwarcia | — | — | — | — |
@@ -292,10 +295,10 @@ flowchart TD
 ## 11. Uwagi dla integratorów
 
 - **Jak się zintegrować:** (1) `POST /api/v1/document` z plikiem + `Classification` (+ `ReturnUrl` dla DOCX); (2) z odpowiedzi zbuduj URL do GUI (`?masterId=[&versionId=]`).
-- **Czego nie zakładać:** nie wołać Internal API bezpośrednio; **nie polegać na `CorporateKey`/`allowedCorporateKeys` (nie istnieją)**; nie zakładać natychmiastowej wysyłki zwrotnej (asynchroniczna, retry do 24 h).
-- **Jak testować:** Swagger External API (`/swagger`, dev/local), weryfikacja `201` + złożenie URL i otwarcie w przeglądarce.
-- **Ważne metadane:** `Classification` (C1..C4, obligatoryjne) i `ReturnUrl` (dla DOCX); trafiają do `documents.metadata`.
-- **`allowedCorporateKeys`:** **[Brak w repo]** — mechanizm nie istnieje; nie używać.
+- **Czego nie zakładać:** nie wołać Internal API bezpośrednio; nie zakładać, że pierwsza próba wysyłki zwrotnej jest jedyną („Zakończ" robi synchroniczną 1. próbę, kontynuacja/retry w tle do 24 h — at-least-once, deduplikacja po `Idempotency-Key`).
+- **Jak testować:** Swagger External API (`/swagger`, dev/local), weryfikacja `201` + złożenie URL i otwarcie w przeglądarce; przykład end-to-end: `D2ExampleExternalApp` (port 15120).
+- **Ważne metadane:** `Classification` (opcjonalna, C1..C4) i `ReturnUrl` (wymagany dla DOCX); opcjonalnie `UserDownload`/`ShowSaveState`; trafiają do `documents.metadata`.
+- **`allowedCorporateKeys`:** zaimplementowane — opcjonalna lista w metadanych ogranicza podgląd do użytkowników z pasującym `CorporateKey` (403; admin omija — BR-014).
 - **`classification`:** prezentacyjna (badge w GUI); nie ogranicza obecnie dostępu.
 - **DOCX vs PDF:** DOCX → `versionId` w odpowiedzi + edytor; PDF → brak `versionId`, tylko podgląd.
 - **Debug:** błąd ingestu → treść `{ error }`; brak dokumentu → 404 (zły masterId); brak klasyfikacji w GUI → sprawdź `Classification` przy ingeście.
@@ -306,10 +309,10 @@ flowchart TD
 
 | # | Element | Status |
 |---|---|---|
-| 1 | Autoryzacja/dostęp (External i Internal API) | Wymaga potwierdzenia — brak w repo |
-| 2 | `CorporateKey` / `allowedCorporateKeys` | **Brak w repo** (z promptu; nie zaimplementowane) |
-| 3 | Kształt POST zwrotnego na `ReturnUrl` | Wymaga potwierdzenia (`HttpDeliverySender`) |
+| 1 | Autoryzacja/dostęp (External i Internal API) | **Rozstrzygnięte:** Entra ID + role (Internal), app-to-app (External) — `SECURITY.md` |
+| 2 | `CorporateKey` / `allowedCorporateKeys` | **Rozstrzygnięte:** zaimplementowane i egzekwowane (BR-014) |
+| 3 | Kształt POST zwrotnego na `ReturnUrl` | **Rozstrzygnięte:** `multipart/form-data` (`HttpDeliverySender`) |
 | 4 | Read flow `GET /api/v1/document/{id}` | Placeholder |
 | 5 | Kontrola dostępu po klasyfikacji | Nie istnieje (klasyfikacja prezentacyjna) |
-| 6 | Tryb podglądu DOCX ładuje aktywną wersję, nie zawsze v1 | Znana rozbieżność (R-02) |
+| 6 | Tryb podglądu DOCX | Rozstrzygnięte: bez versionId ładowana v1 (R-02 Closed) |
 ```

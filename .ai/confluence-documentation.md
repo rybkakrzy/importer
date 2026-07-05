@@ -162,7 +162,7 @@ Dodatkowe projekty: `D2ViewerEditor.Benchmarks` (BenchmarkDotNet) oraz projekty 
 **[Fakt]** Główne scenariusze:
 
 1. **Ingest (Krok 1):** aplikacja zewnętrzna wysyła plik + metadane → External API zapisuje. DOCX → oryginał v1 + edytowalna kopia v2; PDF → tylko v1. Zwraca `{ MasterId, VersionId? }`.
-2. **Tryb podglądu (Krok 2):** GUI z `?masterId=` ładuje treść w trybie read-only (PDFViewer dla PDF, DocxEditor dla DOCX). **[Do weryfikacji / In Progress]** — patrz [niespójności](#nierozstrzygniete-niespojnosci) i ryzyko R-02.
+2. **Tryb podglądu (Krok 2):** GUI z `?masterId=` (bez `versionId`) ładuje **wersję bazową v1** (`downloadBaseVersion` → `GET .../{masterId}/download`) w trybie read-only (PDFViewer dla PDF, DocxEditor dla DOCX). **[Fakt]** — R-02 zamknięte.
 3. **Tryb edycji (Krok 3):** GUI z `?masterId=&versionId=` ładuje wersję edytowalną; auto-save nadpisuje v2 w miejscu.
 4. **Zakończ i wyślij (Krok 4):** backend utrwala stan edytora, zamraża niezmienny snapshot finalnego pliku i tworzy zadanie wysyłki; worker w tle asynchronicznie wysyła plik na `ReturnUrl` z metadanych (retry do 24 h). GUI odpytuje status.
 
@@ -365,7 +365,7 @@ stateDiagram-v2
 | BR-003 | Ingest DOCX → master + v1 + v2; zwraca `{ MasterId, VersionId }`. |
 | BR-004 | Ingest PDF → master + tylko v1; zwraca `{ MasterId, null }`. |
 | BR-005 | Auto-save / „Zapisz” nadpisują v2 w miejscu (ten sam obiekt GCS). |
-| BR-006 | Klasyfikacja `C1..C4` obligatoryjna przy ingeście. |
+| BR-006 | Klasyfikacja opcjonalna przy ingeście; jeśli podana, musi być `C1..C4` (zła wartość → 400). |
 | BR-007 | `ReturnUrl` wymagany dla DOCX, opcjonalny dla PDF. |
 | BR-008 | Backend jest źródłem prawdy walidacji; frontend waliduje tylko UX. |
 | BR-009 | Podpis cyfrowy = Custom XML Part (RSA-SHA256), nie standardowy OOXML; hash z `MainDocumentPart`. |
@@ -482,12 +482,15 @@ sequenceDiagram
     U->>API: POST /{masterId}/versions/{versionId}/finish
     API->>FH: FinishAndSendDocumentCommand
     FH->>GCS: UploadAsync(v2) + UploadRawAsync(deliveries/{id}) snapshot
-    FH->>DB: MarkSending + INSERT delivery (1 transakcja)
-    API-->>U: 202 Accepted { deliveryId, statusUrl }
-
-    loop polling co 4 s do stanu końcowego
-        U->>API: GET /deliveries/{deliveryId}
-        API-->>U: status (Pending/Sending/RetryScheduled/Sent/...)
+    FH->>DB: MarkQueued + INSERT delivery (Sending, bez lease)
+    FH->>RET: SYNCHRONICZNA 1. próba (SendAsync)
+    alt sukces
+        FH->>DB: MarkSent + Document.Sent
+        API-->>U: 200 { deliveryId, status, documentStatus, delivered: true }
+    else błąd 1. próby
+        FH->>DB: HoldAfterFailedInlineAttempt + Document.DeliveryFailed
+        API-->>U: 200 { delivered: false, error }
+        Note over U,API: decyzja: POST .../abort-send (przerwij)<br/>lub POST .../continue-delivery (worker dokańcza w tle)
     end
 
     loop cykl workera (PollInterval)
@@ -563,10 +566,15 @@ Zasada kompatybilności: nie zmieniać kontraktu w sposób breaking bez świadom
 | GET | `/{masterId}/download` | Bajty wersji bazowej (v1) |
 | GET | `/{masterId}/versions/{versionId}/download` | Bajty konkretnej wersji |
 | POST | `/{masterId}/restore/{versionId}` | Przywróć wersję |
-| POST | `/{masterId}/versions/{versionId}/finish` | „Zakończ i wyślij” → **202 Accepted** `{ deliveryId, status, statusUrl }` |
+| POST | `/{masterId}/versions/{versionId}/finish` | „Zakończ i wyślij" (synchroniczna 1. próba) → **200 OK** `{ deliveryId, status, documentStatus, delivered, error? }` |
+| POST | `/{masterId}/abort-send` | „Przerwij" po nieudanej 1. próbie (delivery `Cancelled`, dokument `SendAborted`) |
+| POST | `/{masterId}/continue-delivery` | „Kontynuuj wysyłkę w tle" (Requeue, dokument `Queued`) |
+| POST | `/{masterId}/user-download` | Pobranie edytowanego pliku przez użytkownika (gate `userDownload`) |
 | GET | `/deliveries/{deliveryId}` | Status zadania wysyłki |
 | GET | `/deliveries?status=&skip=&take=` | Lista zadań w statusie (monitoring/admin; GUI `/admin/deliveries`). DTO zawiera też `lockedUntil`/`lockedBy` |
 | POST | `/deliveries/{deliveryId}/retry` | Ręczne ponowienie nieudanego zadania |
+| POST | `/deliveries/{deliveryId}/cancel` | Anulowanie zadania oczekującego/zaplanowanego |
+| PUT | `/deliveries/{deliveryId}/recipient-url` | Zmiana adresu odbiorcy zadania |
 
 Pozostałe kontrolery Internal API: `DocumentController` (`/api/document` — operacje bezstanowe: open/save/sign/verify-signatures/templates; `export-pdf` = **501 placeholder**), `BarcodeController` (`/api/barcode`), `HealthController` (`/api/health`).
 
@@ -574,10 +582,13 @@ Pozostałe kontrolery Internal API: `DocumentController` (`/api/document` — op
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart): `File`, `ReturnUrl`, `Classification` (C1..C4), opc. `X-Created-By` → 201 `{ masterId, versionId? }` |
+| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart): `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (opcjonalna, C1..C4), opc. `UserDownload`/`ShowSaveState`, opc. `X-Created-By` → 201 `{ masterId, versionId? }` |
 | GET | `/api/v1/document/{documentId}` | Placeholder (read flow niezaimplementowany) |
+| PUT | `/api/v1/document/{masterId}/callback-url` | Aktualizacja URL zwrotu (`documents.metadata.returnUrl`) |
+| POST | `/api/v1/document/{masterId}/unlock` | Odblokowanie (`Editing → Saved`) |
+| GET | `/api/v1/document/{masterId}/status` | Status: `{ masterId, status }` (celowo okrojony) |
 
-Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2" }`.
+Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2", "userDownload": true|null, "showSaveState": false|null }`.
 
 ---
 
@@ -623,7 +634,7 @@ Swagger: Internal `/swagger` (5190), External `/swagger` (15112). Włączany fla
 ### Lokalny start
 
 ```bash
-# Wymagane poza repo: PostgreSQL (skrypty infra/sql/ 001..007 w kolejności)
+# Wymagane poza repo: PostgreSQL (skrypty infra/sql/ 001..011 w kolejności)
 #                     + GCS / fake-gcs-server (bucket d2viewereditor-documents)
 
 cd D2ApiViewerEditor && dotnet run --project D2ViewerEditor.Api          # Internal API
@@ -648,9 +659,9 @@ cd D2GuiViewerEditor && npm install && npm start                         # GUI :
 - Podpisy cyfrowe: certyfikaty/hasła do `/api/document/sign` są wrażliwe — nie logować, nie zapisywać.
 - Wysyłka: `RecipientUrl` walidowany jako absolutny http(s); POST z `Idempotency-Key`; wysyłany niezmienny snapshot.
 
-**[Do weryfikacji]** Mechanizm auth/autoryzacji nie został potwierdzony w `.ai` — sprawdzić `Program.cs`/middleware obu API przed zmianami auth.
+**Auth (zaktualizowane 2026-07-05):** Internal API — Entra ID przez Microsoft.Identity.Web (`[Authorize]` globalnie, klasowa polityka `RequireAppOperator` na kontrolerach edytora — ADR-0022; moduł admina `RequireAppAdmin`), kontrola `allowedCorporateKeys` na endpointach treści (BR-014). External API — app-to-app. Szczegóły: `SECURITY.md`.
 
-**[Rekomendacja]** `RecipientUrl` pochodzi z danych zewnętrznych i jest celem żądań serwerowych workera — rozważyć ochronę przed SSRF (allowlista hostów/schematów, blokada adresów prywatnych i endpointu metadata `169.254.169.254`). Obecnie walidowany jest tylko format http(s).
+**SSRF (zaktualizowane):** `ReturnUrlValidator` (ADR-0024) blokuje loopback/adresy prywatne/schematy nie-HTTP(S) i wspiera allowlistę hostów (`Security:ReturnUrl`); pozostaje DNS-rebind + obowiązkowa allowlista prod (R-07 Partial).
 
 ---
 
@@ -731,17 +742,17 @@ Założenia:
 | ID | Założenie | Status |
 |---|---|---|
 | A-02 | Lokalny PostgreSQL i GCS uruchamiane poza repo (brak docker-compose) | Open |
-| A-03 | Schemat bootstrapowany skryptami `infra/sql/` (001..007) w kolejności | Open |
+| A-03 | Schemat bootstrapowany skryptami `infra/sql/` (001..011) w kolejności | Open |
 | A-04 | Wersja edytowalna (v2) to dosłowna kopia bajtów oryginału, nie konwersja | Open |
-| A-05 | Mechanizm auth — niepotwierdzony | Open |
-| A-06 | Odbiorca `returnUrl` akceptuje POST z plikiem i obsługuje `Idempotency-Key` | Open |
+| A-05 | Mechanizm auth — potwierdzony: Entra ID + role (ADR-0011/0012/0022) | Closed |
+| A-06 | Odbiorca `returnUrl` akceptuje POST `multipart/form-data` (pole `file`) i obsługuje `Idempotency-Key` | Open (strona odbiorcy) |
 
 Ryzyka:
 
 | ID | Ryzyko | Status |
 |---|---|---|
 | R-01 | Brak CI/CD i docker-compose → niespójny build/deploy | Open |
-| R-02 | Tryb podglądu (Krok 2) ładuje aktywną wersję (v2), nie v1 | Open |
+| R-02 | Tryb podglądu (Krok 2) ładował aktywną wersję (v2), nie v1 | Closed (podgląd ładuje v1) |
 | R-06 | Brak testów integracyjnych claimu wysyłki na realnym PostgreSQL | Open |
 | R-07 | `RecipientUrl` z danych zewnętrznych → ryzyko SSRF | Open |
 | R-08 | Auto-save może nadpisać v2 po utworzeniu zadania — wysyłany jednak niezmienny snapshot (świadome) | Open |
@@ -756,7 +767,7 @@ Poza zakresem bez jawnej decyzji: redesign UI, zmiana frameworka/architektury, m
 
 1. **Status funkcji „Zakończ i wyślij” — ROZSTRZYGNIĘTE.** Wcześniej `PRODUCT_GOALS.md` wykazywał funkcję jako *Planned*, podczas gdy reszta dokumentacji (`FEATURES.md`, `DOMAIN.md`, `API_CONTRACTS.md`, `DATABASE.md`, `CURRENT_STATE.md`, `DECISIONS.md` ADR-0005) opisuje ją jako **wdrożoną**. `PRODUCT_GOALS.md` został zaktualizowany — cała dokumentacja `.ai` jest obecnie spójna (status: Implemented).
 
-2. **Tryb podglądu (Krok 2).** Dokumentacja jest spójna co do tego, że endpointy istnieją, ale GUI ładuje aktywną wersję (po DOCX = v2) zamiast oryginału v1 (`FEATURES.md`, `RISKS_ASSUMPTIONS.md` R-02). To znany, otwarty problem, nie sprzeczność — odnotowane dla jasności.
+2. **Tryb podglądu (Krok 2).** Rozstrzygnięte: GUI bez `versionId` ładuje oryginał v1 przez `downloadBaseVersion` (R-02 zamknięte — zweryfikowane w `document-editor.loadFromStorage`).
 
 3. **Format błędu API.** `API_CONTRACTS.md` wskazuje styl `{ "error": "..." }`, a `BaseApiController` używa `ProblemDetails` dla części odpowiedzi. **[Do weryfikacji]** — faktyczny, spójny format błędu między wszystkimi endpointami.
 

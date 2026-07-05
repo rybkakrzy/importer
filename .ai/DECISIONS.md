@@ -45,7 +45,9 @@ Niezawodne i spójne pozyskanie corpKey (zawsze z walidowanego tokenu), mniej kr
 ### Alternatives considered
 Naprawa odczytu w GUI (czytać claim z `acquireTokenSilent()` zamiast snapshotu) — odrzucone: duplikuje logikę, która i tak jest dostępna serwerowo. Pozostawienie fallbacku `request ?? _currentUser` — odrzucone: utrzymuje martwe, mylące pole.
 
-## ADR-0020: Centralne polityki bezpieczeństwa uploadu i callback URL
+## ADR-0024: Centralne polityki bezpieczeństwa uploadu i callback URL
+
+> Uwaga: pierwotnie zapisane omyłkowo jako drugi „ADR-0020" (numer zajęty przez decyzję o grafikach z tej samej daty). Przenumerowane na ADR-0024 podczas audytu dokumentacji 2026-07-05; odwołania do „ADR-0020" w innych plikach `.ai` dotyczą grafik i pozostają poprawne.
 
 - Date: 2026-06-22
 - Status: Accepted
@@ -515,3 +517,91 @@ Backend jest źródłem prawdy dla dostępu do edytora; ukrycie przycisków to j
 
 ### Alternatives considered
 (a) Globalna `FallbackPolicy = RequireAppOperator` w `Program.cs` — odrzucone: objęłaby też `HealthController` (anonimowy) i wymagałaby jawnych wyjątków; zmiana szersza niż problem. (b) `[Authorize(Roles="Operator,Administrator")]` na metodach — odrzucone: duplikacja i ryzyko pominięcia nowej akcji; polityka klasowa domyka wszystkie akcje kontrolera. (c) Tylko front-guard/ukrycie przycisków — odrzucone: nie jest autoryzacją (obejście przez bezpośrednie API).
+
+## ADR-0023: Wiele sekcji DOCX przez markery HTML (`div.docx-section-break`), pierwsza sekcja jako bazowa — 2026-07-05
+
+- Date: 2026-07-05
+- Status: Accepted; realizuje kierunek R-10 z DOCX_CONVERSION.md bez zmiany kontraktów API (alternatywa dla rozszerzania `DocumentContent` o kolekcję sekcji).
+
+### Context
+`DocumentContent` reprezentuje dokument jako jedną sekcję. Reader brał `Body.Elements<SectionProperties>().FirstOrDefault()` — a to w OOXML sectPr **ostatniej** sekcji (wcześniejsze sekcje kończą się paragrafem z `pPr/sectPr`). Skutki: (1) dokument pionowy z poziomym aneksem otwierał się w geometrii i z nagłówkami aneksu; (2) przerwy sekcji nie łamały strony w edytorze; (3) writer emitował wyłącznie body-level sectPr, więc autosave **spłaszczał dokument wielosekcyjny do jednej sekcji** — trwała utrata orientacji/marginesów sekcji.
+
+### Decision
+- Semantyka pól `DocumentContent.PageSize/Margins/Header/Footer` = **pierwsza** sekcja (to widzi użytkownik na stronie 1); nagłówek/stopka: pierwsza sekcja z referencją Default w kolejności dokumentu (fallback do `HeaderParts.FirstOrDefault()` bez zmian).
+- Dane pozostałych sekcji jadą **w polu `Html`**: paragraph-level `pPr/sectPr` → `div.page-break` (gdy przerwa łamie stronę) + niewidoczny `div.docx-section-break` z geometrią sekcji NASTĘPNEJ w `data-*` (break-type, rozmiar/orientacja, marginesy, dystanse header/footer; cm, InvariantCulture). Marker jest osobnym elementem, bo splitter stron GUI kanonizuje divy `page-break` i zgubiłby data-*.
+- Writer: marker → `w:p/pPr/sectPr` z geometrią sekcji ZAMYKANEJ (tak koduje OOXML; `w:type` przerwy należy do sekcji następnej); body-level sectPr = ostatnia sekcja; `div.page-break` bezpośrednio przed markerem nie emituje `w:br type=page` (sectPr nextPage sam łamie stronę); referencje header/footer + `titlePg` na PIERWSZYM sectPr (Word dziedziczy je na kolejne sekcje bez własnych referencji).
+- GUI traktuje marker jako niewidoczny nośnik danych (`display:none` w `wysiwyg-editor.scss`); przechodzi przez split/getContent bez zmian w logice paginacji.
+
+### Consequences
+Round-trip dokumentów wielosekcyjnych zachowuje sekcje, orientacje, rozmiary i marginesy (testy `MultiSectionFidelityTests` 12/12); kontrakty REST i model TS bez zmian. Ograniczenia: edytor renderuje wszystkie strony w geometrii pierwszej sekcji (per-page rendering = przyszła zmiana paginacji `wysiwyg-editor` czytająca markery); markery mogą zostać usunięte przez użytkownika edytującego wokół granicy sekcji (degradacja = powrót do jednej sekcji, jak dotąd); sectPr w elementach listy nie emituje markera (rzadkie).
+
+### Alternatives considered
+(a) Kolekcja `Sections` w `DocumentContent` + DTO + model TS + rendering per sekcja — odrzucone na ten krok: zmiana kontraktu API i dużej powierzchni frontu; markery dają zachowanie danych od razu i są kompatybilne z przyszłym modelem. (b) Klasa `page-break` na markerze sekcji — odrzucone: splitter GUI zastępuje takie divy czystym markerem i gubi data-*. (c) Pass-through całego body z oryginału — odrzucone: body niesie zmiany użytkownika.
+
+## ADR-0025: Nagłówki/stopki per sekcja przez `SectionHeadersFooters` + dynamiczne pasmo + tab-stopy pozycyjne — 2026-07-05
+
+> Uwaga: pierwotnie zapisane jako drugi „ADR-0024" (numer zajęty przez centralne polityki security). Przenumerowane na ADR-0025 2026-07-05.
+
+- Date: 2026-07-05
+- Status: Accepted; domyka R-10 (warstwa nagłówków/stopek wielosekcyjnych) i „częściowe" pozycje tab-stopów z DOCX_CONVERSION; rozszerza ADR-0023.
+
+### Context
+Po ADR-0023 geometria sekcji była zachowywana, ale model niósł JEDEN komplet nagłówków/stopek — dokument z innym nagłówkiem w każdej sekcji pokazywał i zapisywał tylko pierwszy zestaw. Pasmo nagłówka rysowało się od samej krawędzi strony (Word zaczyna je na wysokości w:pgMar header) i miało stałą wysokość — treść wyższa niż pasmo nachodziła na body, a paginacja jej nie widziała. Tab-stopy (klasyczny układ „lewa⇥środek⇥prawa") były przybliżane flexem 50%/100% szerokości, a przy zapisie pozycje per akapit ginęły (tylko sztywne 4536/9072 w stylach Header/Footer); literalny 	 w tekście trafiał do w:t, którego Word nie renderuje.
+
+### Decision
+- **Model (kontrakt, pole opcjonalne):** `SectionHeaderFooter { SectionIndex, Header, Footer }`; `DocumentContent.SectionHeadersFooters` i `SaveDocumentRequest.SectionHeadersFooters` (Domain + model TS). Wpis tylko dla sekcji ≥ 1 z WŁASNYMI referencjami; sekcja bez wpisu dziedziczy z poprzedniej (semantyka Worda, rozwiązywana we froncie po max indeksie ≤ sekcji strony). Sekcja 0 zostaje w `Header`/`Footer` (kompatybilność wstecz).
+- **Writer:** wpis sekcyjny → HeaderPart/FooterPart z referencją na sectPr SWOJEJ sekcji (`_emittedSectionProps[s]`; ostatnia sekcja = body-level). Handlery Save/DownloadEdited przenoszą pole; Sign świadomie nie.
+- **Dynamiczne pasmo (GUI):** `.page-header` z `margin-top = headerDistance` i `min-height = margines − dystans`; treść wyższa spycha body (flex); `_repaginateNow` mierzy realne pasma z DOM i odejmuje je od dostępnej wysokości strony. Dystanse per sekcja z data-* markera (`PageGeometry.headerDistanceCm/footerDistanceCm`); sekcja 1 = odwrotność wzoru readera.
+- **Tab-stopy:** reader emituje `data-tab-stops="pos:align[:leader]"` (efektywne stopy: łańcuch stylów + direct, semantyka clear) i w nagłówku/stopce renderuje segmenty pozycyjnie (`span.docx-tab-seg`; center=translateX(-50%), right=translateX(-100%) NA pozycji stopu); writer odtwarza `w:tabs` per akapit i emituje `w:tab` z segmentów oraz z literalnych 	 w tekście.
+
+### Consequences
+Dokumenty wielosekcyjne pokazują i round-tripują właściwe nagłówki/stopki per sekcja (testy `MultiSectionFidelityTests` +4, GUI +6); nagłówki „lewa⇥środek⇥prawa" lądują na pozycjach Worda i wracają do DOCX bez utraty pozycji (`TabStopFidelityTests` 7); wysoki nagłówek odbiera miejsce treści zamiast rozjeżdżać strony. Ograniczenia: przypisanie k-ty tab → k-ty stop (bez pełnej reguły „następny stop za bieżącym x"); leader nierysowany w edytorze; akapity ze złożonymi polami zostają na flexie; edycja pasma sekcji wymaga kliknięcia na stronie tej sekcji.
+
+### Alternatives considered
+(a) Nagłówki sekcji w data-* markera sekcji — odrzucone: HTML nagłówka w atrybucie jest kruchy i nieedytowalny. (b) Grid CSS dla tab-stopów — odrzucone: center-NA-pozycji nie mapuje się na wyrównanie w komórce gridu. (c) Mierzenie szerokości tekstu w backendzie dla tabów — odrzucone: zależne od fontu przeglądarki.
+
+## ADR-0026: Style tabel rozwiązywane do inline CSS + referencja w data-* (kontrolowane przybliżenie) — 2026-07-05
+
+- Date: 2026-07-05
+- Status: Accepted
+
+### Context
+Reader ignorował `w:tblStyle` — a większość tabel Worda („Tabela – Siatka", style z akcentami)
+ma obramowania/cieniowanie/marginesy w STYLU tabeli (styles.xml), nie w bezpośrednim tblPr.
+Tabele renderowały się w edytorze bez linii i teł, marker `data-no-borders` utrwalał stratę na
+eksporcie, a zewnętrzne `tblBorders` szły na wewnętrzne krawędzie komórek (brak rozróżnienia
+outer vs `insideH`/`insideV`). Dodatkowo: `themeFill`/wzory `pctNN` ginęły, `min-height` na `tr`
+nie działa w CSS (atLeast traciło wysokość), grubość linii sz/8+min 1px rosła przy każdym
+zapisie, a GUI zapiekało zmierzone wysokości WSZYSTKICH wierszy do DOCX (R-18).
+
+### Decision
+1. Reader rozwiązuje pełny łańcuch stylu tabeli (`tblStyle` → `basedOn`, per-side merge) +
+   formaty warunkowe `tblStylePr` (firstRow/lastRow/firstCol/lastCol/pasy wg flag `tblLook`,
+   banding pomija wiersz nagłówkowy jak Word) i **zapisuje rozwiązane wartości w inline CSS**
+   komórek (pozycyjnie: krawędź zewnętrzna vs insideH/V). Kolory motywu (`themeFill`/`themeColor`
+   + tint/shade) i wzory `pctNN` są rozwiązywane do hex (blend).
+2. Referencja stylu jedzie w `data-tbl-style` + `data-tbl-look`; writer re-emituje
+   `w:tblStyle`/`w:tblLook`. Po round-tripie formatowanie pochodzące ze stylu staje się
+   formatowaniem BEZPOŚREDNIM (wygląd identyczny w Wordzie; styl dalej podpięty).
+3. Wysokości wierszy: `height:` na tr (min-height nie działa) + `data-row-height-tw`/
+   `data-row-hrule` (writer preferuje twips/regułę z data-*); GUI nie zapieka mierzonych
+   wysokości (tylko jawne inline z importu/ręcznego resize; resize czyści data-*).
+4. Grubość linii: sz/6 px przy odczycie i px×6 przy zapisie (symetria, koniec pogrubiania).
+5. `tblHeader`/`cantSplit`/`tblCellSpacing`/`tblInd` — round-trip (data-* / CSS), bez
+   egzekwowania w paginacji edytora.
+6. GUI synchronizuje `<colgroup>` (źródło `w:tblGrid`) po resize i wstawieniu/usunięciu kolumny
+   (`table-grid.util.syncTableColgroup`).
+
+### Consequences
+Tabele stylowane wyglądają w edytorze jak w Wordzie i nie tracą wyglądu na eksporcie; dokument
+nie puchnie od sztucznych trHeight. Koszt: po edycji w naszym edytorze zmiana definicji stylu
+w Wordzie nie zmieni już wyglądu tabeli (formatowanie bezpośrednie wygrywa) — świadomy trade-off.
+NIE obsługujemy: warunkowego formatowania TEKSTU ze stylu (bold nagłówka), regionów narożnych,
+przekątnych `tl2br`/`tr2bl`, `fitText`/`hideMark`, powtarzania wiersza nagłówkowego w paginacji
+edytora.
+
+### Alternatives considered
+Emisja klas CSS + arkusza stylów per dokument (odrzucone: kontrakt edytora opiera się na inline
+styles — przeżywa split/merge stron i sanitizację). Pełne zachowanie rozdziału styl/direct przy
+eksporcie (odrzucone: wymagałoby śledzenia pochodzenia każdej właściwości w HTML; niewspółmierna
+złożoność do zysku).

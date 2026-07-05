@@ -13,25 +13,25 @@ Język domenowy, reguły biznesowe i model pojęciowy. Czytaj przed zmianą logi
 | Wersja oryginalna (v1) | Pierwsza wersja = oryginał przysłany przez aplikację zewnętrzną. **Nietykalna** | Active |
 | Wersja edytowalna (v2) | Kopia oryginału tworzona dla DOCX; na niej pracuje edytor + auto-save | Active |
 | MasterId / VersionId | GUID-y zwracane do aplikacji zewnętrznej po ingeście | Active |
-| Classification | Klasyfikacja dokumentu: `C1` | `C2` | `C3` | `C4` (obligatoryjna przy ingeście) | Active |
+| Classification | Klasyfikacja dokumentu: `C1` | `C2` | `C3` | `C4` (**opcjonalna** przy ingeście; zła wartość → 400) | Active |
 | ReturnUrl | URL, na który aplikacja zewnętrzna oczekuje zwrotu pliku po „Zakończ" | Active |
-| Metadata | JSON od aplikacji zewnętrznej (`{ returnUrl, classification, allowedCorporateKeys? }`) w kolumnie `documents.metadata` | Active |
-| CorporateKey | Identyfikator korporacyjny użytkownika; v1 z nagłówka `X-Corporate-Key` (seam pod Entra ID) | Active |
+| Metadata | JSON od aplikacji zewnętrznej (`{ returnUrl, classification, allowedCorporateKeys?, userDownload?, showSaveState? }`) w kolumnie `documents.metadata` | Active |
+| CorporateKey | Identyfikator korporacyjny użytkownika; z claimu tokenu Entra (`AzureAd:CorporateKeyClaim`, domyślnie `corpKey`, dopasowanie case-insensitive — ADR-0021); dev bypass: nagłówek `X-Corporate-Key` | Active |
 | allowedCorporateKeys | Opcjonalna lista `CorporateKey` uprawnionych do podglądu dokumentu (w metadanych) | Active |
-| DocumentStatus | Cykl życia dokumentu: `Saved` → `Editing` → `Sending` → `Sent` / `DeliveryFailed` | Active |
+| DocumentStatus | Cykl życia dokumentu: `Saved` → `Editing` → `Queued` („Zlecono do wysyłki") → `Sending` → `Sent` / `DeliveryFailed` / `SendAborted` (użytkownik przerwał wysyłkę) | Active |
 | DocumentDelivery | Zadanie wysyłki finalnego pliku na `ReturnUrl` (kolejka „Zakończ i wyślij") | Active |
-| DeliveryStatus | Status zadania wysyłki: `Pending` / `Sending` / `RetryScheduled` / `Sent` / `FailedPermanently` / `DeadLettered` | Active |
+| DeliveryStatus | Status zadania wysyłki: `Pending` / `Sending` / `RetryScheduled` / `Sent` / `FailedPermanently` / `DeadLettered` / `Cancelled` (anulowane ręcznie/przez użytkownika) | Active |
 | Snapshot (delivery) | Niezmienny obiekt GCS `deliveries/{deliveryId}` zamrożony w chwili „Zakończ" (chroni przed wysłaniem później zmienionej v2) | Active |
 
 ## Encje domenowe
 
 **`Document`** (`D2ViewerEditor.Domain/Entities/Document.cs`) — agregat-root.
-- `Id` (guid_master), `Name`, `MimeType`, `CreatedAt`, `CreatedBy`, `IsDeleted` (soft delete), `Metadata` (string? JSON), `Status` (`DocumentStatus`, domyślnie `Saved`), `Versions`.
+- `Id` (guid_master), `Name`, `MimeType`, `CreatedAt`, `CreatedBy`, `IsDeleted` (soft delete), `Metadata` (string? JSON), `Status` (`DocumentStatus`, domyślnie `Saved`), `LastModifiedBy` (corpKey; `SetLastModifiedBy`), `Versions`.
 - `AddVersion(storagePath, sizeInBytes, createdBy)` — tworzy nową wersję i dezaktywuje wszystkie poprzednie.
 - `UpdateVersion(versionId, sizeInBytes)` — nadpisuje istniejącą wersję w miejscu (auto-save); aktualizuje rozmiar + `ModifiedAt`, zachowuje Id/VersionNumber/StoragePath/CreatedAt.
 - `RestoreVersion(versionId)` — dezaktywuje wszystkie, aktywuje wskazaną.
 - `GetActiveVersion()` — może zwrócić null.
-- `MarkEditing()/MarkSending()/MarkSent()/MarkDeliveryFailed()` — przejścia `Status` (wołane przez handlery: auto-save → `Editing`; „Zakończ" → `Sending`; worker → `Sent`/`DeliveryFailed`).
+- `MarkEditing()/MarkQueued()/MarkSending()/MarkSent()/MarkDeliveryFailed()/MarkSendAborted()/MarkSaved()` — przejścia `Status` (auto-save → `Editing`; „Zakończ" → `Queued` → `Sending` (próba inline) → `Sent`/`DeliveryFailed`; „Przerwij" → `SendAborted`; „Kontynuuj w tle" → `Queued`; unlock/anulowanie → `Saved`).
 - `Delete()` — soft delete.
 
 **`DocumentVersion`** (`Domain/Entities/DocumentVersion.cs`) — nie agregat-root.
@@ -41,8 +41,10 @@ Język domenowy, reguły biznesowe i model pojęciowy. Czytaj przed zmianą logi
 **`DocumentDelivery`** (`Domain/Entities/DocumentDelivery.cs`) — aggregate-root kolejki wysyłki „Zakończ i wyślij".
 - `Create(...)` — fabryka; waliduje `recipientUrl` (absolutny http(s)), ustawia `Pending`, `DeadlineAt = teraz + okno (24 h)`.
 - Pola: `Id`, `DocumentId`, `SourceVersionId`, `SnapshotObjectName`/`SnapshotSizeBytes`/`SnapshotSha256`, `RecipientUrl`, `Status` (`DeliveryStatus`), `AttemptCount`, znaczniki czasu (`Created/Updated/FirstAttempt/LastAttempt/NextAttempt/Deadline`), lease (`LockedUntil`/`LockedBy`), `LastError`, `CorrelationId`, `CreatedBy`.
-- `MarkSent()` / `MarkPermanentFailure(error)` / `ScheduleRetryOrDeadLetter(error, backoff)` (retry jeśli `next ≤ DeadlineAt`, inaczej `DeadLettered`) / `Requeue(window)` (ręczne wznowienie zadania w stanie końcowym, oprócz `Sent`).
-- `IsTerminal` = `Sent` ∨ `FailedPermanently` ∨ `DeadLettered`. `IsValidRecipientUrl(url)` — statyczna walidacja URL.
+- `MarkSent()` / `MarkPermanentFailure(error)` / `ScheduleRetryOrDeadLetter(error, backoff)` (retry jeśli `next ≤ DeadlineAt`, inaczej `DeadLettered`) / `Requeue(window)` (ręczne wznowienie: stany końcowe nieudane, `RetryScheduled` „wyślij teraz" i `Cancelled`).
+- Próba inline („Zakończ" synchronicznie): `BeginInlineAttempt()` (→ `Sending` bez lease) / `HoldAfterFailedInlineAttempt(error)` (→ `RetryScheduled` „zaparkowane" na `DeadlineAt` — worker nie przejmie do decyzji użytkownika).
+- Anulowanie: `Cancel()` (`Pending`/`RetryScheduled` → `Cancelled`, czyści lease) / `CancelByUser()` (obejmuje też inline-`Sending` bez lease; worker-`Sending` z lease i stany końcowe rzucają). Zmiana adresu: `UpdateRecipientUrl(url)` (blokada dla `Sent`/`Sending`).
+- `IsTerminal` = `Sent` ∨ `FailedPermanently` ∨ `DeadLettered` ∨ `Cancelled`. `IsValidRecipientUrl(url)` — statyczna walidacja URL.
 - Logika wysyłki HTTP/GCS jest w infrastrukturze (`IDeliverySender`, `IDocumentStorageService`); domena decyduje tylko o przejściach stanu.
 
 ## Reguły biznesowe
@@ -54,7 +56,7 @@ Język domenowy, reguły biznesowe i model pojęciowy. Czytaj przed zmianą logi
 | BR-003 | Ingest DOCX → master + v1 (oryginał) + v2 (kopia edytowalna); zwraca `{ MasterId, VersionId }` | Active |
 | BR-004 | Ingest PDF → master + tylko v1; zwraca `{ MasterId, null }` (brak edytowalnego duplikatu) | Active |
 | BR-005 | Auto-save i ręczny „Zapisz" nadpisują v2 w miejscu (ten sam obiekt GCS) — nie tworzą v3/v4/... | Active |
-| BR-006 | Klasyfikacja `C1..C4` jest obligatoryjna przy ingeście; zła wartość → 400 | Active |
+| BR-006 | Klasyfikacja jest **opcjonalna** przy ingeście (brak/pusta = bez klasyfikacji); jeśli podana, musi być `C1..C4` — zła wartość → 400 (zmienione 2026-06-09, „opcjonalna klasyfikacja") | Active |
 | BR-007 | `ReturnUrl` wymagany dla DOCX, opcjonalny dla PDF | Active |
 | BR-008 | Backend jest źródłem prawdy dla walidacji; frontend waliduje tylko UX | Active |
 | BR-009 | Podpis cyfrowy to Custom XML Part (RSA-SHA256), nie standardowe OOXML; hash liczony z `MainDocumentPart` | Active |

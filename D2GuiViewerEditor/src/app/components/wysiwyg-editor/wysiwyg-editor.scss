@@ -564,6 +564,13 @@ body.image-moving * {
   font-size: 9pt;
 }
 
+/* Marker przerwy sekcji DOCX (div.docx-section-break z geometrią sekcji w data-*).
+   Niewidoczny nośnik danych: musi przetrwać edycję i wrócić w autosave do konwertera
+   HTML→DOCX, który odtwarza z niego w:sectPr (wiele sekcji, mieszane orientacje). */
+.editor-content .docx-section-break {
+  display: none;
+}
+
 /* Pola (numer strony / liczba stron / data) — dziedziczą rozmiar i krój z otoczenia (stopka/
    nagłówek/akapit), nie dostają domyślnego rozmiaru edytora. Bez tego numer strony bywał większy
    niż reszta stopki. */

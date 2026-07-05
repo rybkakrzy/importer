@@ -173,4 +173,73 @@ public class SaveDocumentCommandHandlerTests
             Arg.Is<HeaderFooterContent?>(f => f == null),
             Arg.Is(margins));
     }
+
+    [Test]
+    public async Task Handle_WithPageSizeAndSectionHeadersFooters_ShouldPassThemToConverter()
+    {
+        // Arrange — dokument wielosekcyjny: sekcja 1 ma własny nagłówek (ADR-0025).
+        var pageSize = new PageSize { WidthCm = 21, HeightCm = 29.7, Orientation = "portrait" };
+        var sectionHf = new List<SectionHeaderFooter>
+        {
+            new() { SectionIndex = 1, Header = new HeaderFooterContent { Html = "<p>Nagłówek sekcji 2</p>" } }
+        };
+        _converter.Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata>(),
+            Arg.Any<HeaderFooterContent>(), Arg.Any<HeaderFooterContent>(), Arg.Any<PageMargins>(),
+            Arg.Any<PageSize>(), Arg.Any<IReadOnlyList<SectionHeaderFooter>>())
+            .Returns(new byte[] { 1, 2 });
+
+        var command = new SaveDocumentCommand(
+            Html: "<p>Test</p>",
+            OriginalFileName: "test.docx",
+            Metadata: null,
+            Header: null,
+            Footer: null,
+            PageSize: pageSize,
+            SectionHeadersFooters: sectionHf
+        );
+
+        // Act
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert — lista sekcji musi dojść do konwertera nietknięta, inaczej autosave
+        // spłaszcza nagłówki sekcyjne do jednego kompletu.
+        result.IsSuccess.Should().BeTrue();
+        _converter.Received(1).Convert(
+            Arg.Is("<p>Test</p>"),
+            Arg.Is<DocumentMetadata?>(m => m == null),
+            Arg.Is<HeaderFooterContent?>(h => h == null),
+            Arg.Is<HeaderFooterContent?>(f => f == null),
+            Arg.Is<PageMargins?>(m => m == null),
+            Arg.Is(pageSize),
+            Arg.Is<IReadOnlyList<SectionHeaderFooter>?>(s => ReferenceEquals(s, sectionHf)));
+    }
+
+    [Test]
+    public async Task Handle_WithoutSectionHeadersFooters_ShouldPassNullToConverter()
+    {
+        // Arrange
+        _converter.Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata>(),
+            Arg.Any<HeaderFooterContent>(), Arg.Any<HeaderFooterContent>(), Arg.Any<PageMargins>(),
+            Arg.Any<PageSize>(), Arg.Any<IReadOnlyList<SectionHeaderFooter>>())
+            .Returns(new byte[] { 1 });
+
+        var command = new SaveDocumentCommand(
+            Html: "<p>Test</p>",
+            OriginalFileName: "test.docx",
+            Metadata: null,
+            Header: null,
+            Footer: null
+        );
+
+        // Act
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        _converter.Received(1).Convert(
+            Arg.Any<string>(), Arg.Any<DocumentMetadata?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(),
+            Arg.Is<PageSize?>(p => p == null),
+            Arg.Is<IReadOnlyList<SectionHeaderFooter>?>(s => s == null));
+    }
 }

@@ -70,7 +70,8 @@ public class DocumentController : BaseApiController
             request.Header,
             request.Footer,
             request.Margins,
-            request.PageSize
+            request.PageSize,
+            request.SectionHeadersFooters
         );
 
         var result = await Mediator.Send(command);

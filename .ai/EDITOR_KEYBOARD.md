@@ -24,8 +24,10 @@ karetki ani nie scala treści między osobnymi `contenteditable`.
 
 ### Kotwica karetki przy repaginacji (root cause Issue 1)
 
-Po wpisaniu znaku edytor planuje repaginację (debounce ~600 ms, `_schedulePaginate` →
-`_repaginateNow`), która **przebudowuje DOM stron** (`pageContents.set` → `[innerHTML]`).
+Po wpisaniu znaku edytor planuje repaginację (debounce 250 ms + **max-wait 600 ms**,
+`_schedulePaginate` → `_repaginateNow`; max-wait dodany 2026-07-05 — czysty debounce resetował
+się na każdym `input`, więc przytrzymany ENTER odsuwał repaginację w nieskończoność), która
+**przebudowuje DOM stron** (`pageContents.set` → `[innerHTML]`).
 Karetkę zachowujemy kotwicą **`{ block, offset }`**:
 
 - `block` = indeks bloku najwyższego poziomu w spłaszczonej sekwencji wszystkich stron
@@ -38,6 +40,18 @@ akapit po ENTER ma 0 znaków, więc restore lądował na końcu poprzedniego aka
 poprzedniego. Pusty blok → karetka na początku bloku (`_placeCaretAtTextOffset`).
 Ograniczenie: gdy tabela **przed** karetką dzieli się inaczej w danym przebiegu, indeks może
 się przesunąć (rzadkie podczas pisania w akapicie).
+
+### Pomiar przepełnienia strony (fix 2026-07-05)
+
+`_repaginateNow` mierzy bloki w measurerze `_createBlockMeasurer` — offscreen `<div>`
+**z klasą `editor-content`** (style globalne, `ViewEncapsulation.None`), żeby obowiązywały
+scope'owane reguły: marginesy akapitów/nagłówków/tabel i `p:empty::before {content:'\00a0'}`
+(wysokość pustego akapitu). Wysokość bloku liczy `_measureBlockRunHeights` **deltami pozycji**
+kolejnych bloków (+ sentinel 0 px) — zawiera marginesy pionowe i ich realny kolaps, czego nie
+daje `getBoundingClientRect().height`. Poprzedni pomiar (goły `<div>`, rect.height) zaniżał
+sumę → paginacja nie widziała przepełnienia i strona rosła w pion zamiast przelać treść na
+nową kartkę (objaw: „ENTER przy dolnej krawędzi rozciąga kartkę"). Regresje pinuje
+`wysiwyg-editor.pagination-overflow.spec.ts`.
 
 ## 2. Formatowanie tekstu
 

@@ -122,17 +122,19 @@ classDiagram
     DocumentContent --> DocumentImage : Images
 ```
 
-**Kluczowe ograniczenie modelu (R-10):** `DocumentContent` reprezentuje dokument jako
-**pojedynczą sekcję** — jeden `Header`, jeden `Footer`, jedne `Margins`, jeden `PageSize`,
-jeden ciąg `Html`. Warianty first-page / even-odd są wspierane **w obrębie tej jednej
-sekcji** (pola `DifferentFirstPage`/`FirstPageHtml`/`DifferentOddEven`/`EvenHtml`), ale
-**wiele sekcji z różnymi nagłówkami/stopkami/marginesami/rozmiarami strony nie jest
-reprezentowanych**. Reader i writer biorą `Body.Elements<SectionProperties>().FirstOrDefault()`.
+**Ograniczenie modelu (R-10, stan po ADR-0023 z 2026-07-05):** `DocumentContent` niesie
+**jeden komplet** pól sekcyjnych — jeden `Header`, jeden `Footer`, jedne `Margins`, jeden
+`PageSize` (wszystko z **PIERWSZEJ** sekcji dokumentu, `GetSectionPropertiesInDocumentOrder`)
+i jeden ciąg `Html`. Warianty first-page / even-odd są wspierane w obrębie tego kompletu
+(pola `DifferentFirstPage`/`FirstPageHtml`/`DifferentOddEven`/`EvenHtml`). **Wiele sekcji jest
+reprezentowane w `Html`**: przerwa sekcji → `div.page-break` + niewidoczny marker
+`div.docx-section-break` z geometrią następnej sekcji w `data-*`; writer odtwarza z markerów
+paragraph-level `w:sectPr` (body-level = ostatnia sekcja), a refs nagłówka/stopki + `titlePg`
+kładzie na pierwszym sectPr (dziedziczenie). **Nadal jedno-kompletowe pozostają
+nagłówki/stopki per sekcja** (różne nagłówki 2. i kolejnych sekcji nie są modelowane).
 
-Docelowe rozszerzenie modelu (Planned / not implemented yet) powinno objąć co najmniej:
-kolekcję sekcji, `SectionProperties` per sekcja, osobne referencje header/footer
-(default/first/even) per sekcja, `PageSettings` per sekcja oraz powiązanie bloków treści
-z sekcją.
+Docelowe rozszerzenie (Planned / not implemented yet): osobne referencje header/footer
+(default/first/even) per sekcja w modelu + UI edycji nagłówków per sekcja.
 
 ## 3. Jednostki (`OoxmlUnits`) — Implemented
 
@@ -152,9 +154,10 @@ Kierunek: R = DOCX→HTML (read), W = HTML→DOCX (write).
 | Jednostki (twips/EMU/half-pt/cm/px) | Implemented | R+W | `OoxmlUnits` | DPI 96; testy referencyjne |
 | Marginesy strony | Implemented | R+W | `ExtractPageMargins`; `AddPageSettings` | cm, round-trip |
 | Rozmiar strony + orientacja | Implemented | R+W | `ExtractPageSize`; `BuildPageSize` | full-stack (Etap 4); fallback A4 |
-| Sekcje — wiele sekcji | Partially implemented | R+W | `…FirstOrDefault()` | tylko pierwsza sekcja (R-10) |
+| Sekcje — wiele sekcji | Implemented (data + rendering geometrii) | R+W | `GetSectionPropertiesInDocumentOrder`, `BuildSectionBreakMarkerHtml`; writer `CreateSectionBreakParagraph`/`AppendSectionGeometry`; GUI `wysiwyg-editor` `pageGeometries`/`_parseSectionGeometry` | ADR-0023 (2026-07-05): geometria+nagłówki z PIERWSZEJ sekcji; przerwy sekcji → markery `div.docx-section-break` (data-*) round-tripowane do paragraph-level sectPr; refs nagłówka/stopki na pierwszym sectPr. Edytor renderuje strony w geometrii SWOJEJ sekcji (wymiary/orientacja/marginesy per strona z markerów; input `pageSize` dla sekcji 1). Nagłówki/stopki per sekcja: nadal jeden komplet (model) |
 | Nagłówek/stopka default | Implemented | R+W | `ExtractHeader/Footer`; `AddHeaderAndFooter` | wybór wg `sectPr` referencji |
 | First-page / even-odd header/footer | Implemented | R+W | `HasTitlePage`/`HasEvenAndOddHeaders` | w obrębie 1 sekcji; edycja even-page z UI niedostępna |
+| Nagłówki/stopki per sekcja | Implemented | R+W | `ExtractSectionHeadersFooters`; writer `AddSectionHeadersFooters` | ADR-0025 (2026-07-05): `DocumentContent.SectionHeadersFooters` (wpisy dla sekcji ≥ 1 z własnymi refs; dziedziczenie jak Word); GUI renderuje per strona (`pageSectionIndexes`) i edytuje na klikniętej stronie; Sign nie przenosi (odłożone) |
 | Styl akapitu (`basedOn` chain) | Implemented | R | `ConvertStyleToCssWithInheritance` | sklejanie stringów CSS + `DeduplicateCss` (regex) |
 | Styl znakowy (`w:rStyle`) | Implemented | R | `ConvertRunToHtml` (`_styles[rStyleId]`) | Etap 3 slice; direct wygrywa |
 | docDefaults | Partially implemented | R | `LoadDocDefaults` | tylko domyślny font + rozmiar; nie pełny rPr/pPr folding |
@@ -164,14 +167,18 @@ Kierunek: R = DOCX→HTML (read), W = HTML→DOCX (write).
 | Font generic fallback (CSS) | Implemented | R | `FontFamilyCss`/`GenericFontFallback` | nazwa kroju + dobrany generyk: serif (times/cambria/georgia/garamond/palatino/…) / monospace (courier/consolas/mono) / sans-serif; brakujący krój renderuje się we właściwej rodzinie (nie zawsze sans) |
 | Computed-style (jeden obiekt) | Planned / not implemented yet | R | — | brak `ComputedParagraph/RunStyle`; kaskada CSS |
 | Typografia bezpośrednia | Implemented | R+W | `GetRunStyleClean`/`ConvertRunPropertiesToCss` | bold/italic/underline/strike/color/size/highlight/sub-sup/letter-spacing |
-| Akapit: align/indent/spacing/line | Implemented | R+W | `ConvertParagraphPropertiesToCss`; writer pPr | exact/atLeast/auto line spacing |
-| Tabela: szerokości kolumn | Implemented | R | `ReadTableGridColumnsPx`/`BuildColgroupHtml` | `<colgroup>` + `table-layout:fixed` (Etap 5) |
-| Tabela: borders / shading | Implemented | R | `GetTableCellStyleDetailed`, `GetCellBorderCss` | `border-collapse:collapse` |
-| Tabela: `tcMar` / `tblCellMar` | Implemented | R+W | `GetTableCellStyleDetailed`, `TableCellMarginDefault`; writer `tblCellMar` 0/108 | domyślny padding = Word default (top/bottom **0**, left/right 108 tw); wcześniej `4px 8px` pompowało wiersze |
-| Tabela: `tblCellSpacing` | Planned / not implemented yet | R | — | nieczytane; `border-collapse:collapse` i tak wyklucza spacing |
-| Tabela: `gridSpan`/`vMerge` | Implemented | R | `AppendTableCellHtml`, `CountRowSpan` | fix dopasowania wg kolumny gridu (Etap 5) |
-| Tabela: szerokość (zapis) | Implemented | W | writer table-width path | brak/auto width → `tblW auto` (nie `pct 5000`); `%`→pct, `px`→dxa |
-| Tabela (zapis) — pozostałe | Partially implemented | W | writer `ConvertHtmlToBody` table path | zawsze `TableLayout Autofit`; grid odtwarzany z liczby komórek (nie z colgroup); split-table → 2 `<table>` (R-17) |
+| Akapit: align/indent/spacing/line | Implemented | R+W | `ConvertParagraphPropertiesToCss`; writer pPr | exact/atLeast/auto line spacing; 2026-07-05: reguła `atLeast` round-tripowana markerem CSS `--w-line-rule:atLeast` (wcześniej wracała jako `exact` → przycinanie w Wordzie) |
+| Tabela: szerokości kolumn | Implemented | R | `ReadTableGridColumnsPx`/`BuildColgroupHtml` | `<colgroup>` + `table-layout:fixed` (Etap 5); GUI synchronizuje colgroup po resize/wstawieniu/usunięciu kolumny (`table-grid.util.syncTableColgroup`) |
+| Tabela: **styl tabeli** (`tblStyle`+`basedOn`+`tblLook`+`tblStylePr`) | Implemented | R+W | `ResolveTableStyleContext`, `ComputeConditionalRegions`; writer emituje `w:tblStyle`/`w:tblLook` z `data-tbl-style`/`data-tbl-look` | ADR-0026 (2026-07-05): obramowania/cieniowanie/cellMar ze stylu (łańcuch basedOn) + formaty warunkowe firstRow/lastRow/firstCol/lastCol/pasy wg flag tblLook (banding pomija wiersz nagłówkowy jak Word); rozwiązane wartości idą w inline CSS (po round-tripie stają się formatowaniem bezpośrednim — kontrolowane przybliżenie), referencja stylu przeżywa w data-*. NIE: warunkowe formatowanie TEKSTU (bold nagłówka ze stylu), regiony narożne NW/NE/SW/SE |
+| Tabela: borders / shading | Implemented | R | `GetTableCellStyleDetailed`, `ResolveCellBorderSide`, `ResolveShadingHex` | Pozycyjne krawędzie: zewnętrzne top/bottom/left/right vs `insideH`/`insideV` wg pozycji komórki w siatce (wcześniej zewnętrzne szły na WSZYSTKIE krawędzie); `themeFill`/`themeColor`+tint/shade rozwiązywane przez motyw; wzory `pctNN` przybliżane blendem koloru; grubość `sz/6` px (0.5 pt = 0.7px; wcześniej sz/8+min 1px pogrubiało linie przy każdym zapisie). NIE: przekątne `tl2br`/`tr2bl` |
+| Tabela: `tcMar` / `tblCellMar` | Implemented | R+W | `GetTableCellStyleDetailed`, `TableCellMarginDefault`; writer `tblCellMar` 0/108 | domyślny padding: bezpośredni tblCellMar → styl tabeli → Word default (top/bottom **0**, left/right 108 tw) |
+| Tabela: `tblCellSpacing` | Implemented | R+W | reader → `border-collapse:separate`+`border-spacing` + `data-cell-spacing-tw`; writer → `w:tblCellSpacing` | 2026-07-05 |
+| Tabela: `gridSpan`/`vMerge` | Implemented | R | `AppendTableCellHtml`, `CountRowSpan` | fix dopasowania wg kolumny gridu (Etap 5); kursor siatki śledzi pozycję (kontynuacje vMerge zajmują kolumny) |
+| Tabela: wysokość wiersza (`trHeight`+`hRule`) | Implemented | R+W | reader: `height:` na tr + `data-row-height-tw`/`data-row-hrule`; writer preferuje data-* | `min-height` na `<tr>` jest ignorowane przez przeglądarki (atLeast traciło wysokość); `hRule=exact` przeżywa round-trip; GUI NIE zapieka już mierzonych wysokości wszystkich wierszy (R-18 zamknięte), ręczny resize czyści data-* |
+| Tabela: `tblHeader`/`cantSplit` | Implemented (round-trip) | R+W | `data-tbl-header`/`data-cant-split` na tr ↔ `w:tblHeader`/`w:cantSplit` | edytor NIE powtarza wiersza nagłówkowego przy paginacji ani nie honoruje cantSplit w łamaniu (tylko round-trip danych) |
+| Tabela: szerokość (zapis) | Implemented | W | writer table-width path | brak/auto width → `tblW auto` (nie `pct 5000`); `%`→pct (z ułamkiem, np. 66.66%→3333), `px`→dxa; `w:tblInd` (margin-left px) round-trip; szerokość komórki auto/nil (w=0) nie emituje już `width:0px` |
+| Tabela (zapis) — grid/layout/vMerge | Implemented | W | `ReadColgroupWidthsTwips`, `CreateVerticalMergeContinuationCell` | 2026-07-05: `tblGrid` z colgroup (px→twips), `table-layout:fixed`→`TableLayout Fixed`, komórki kontynuacji `vMerge` pod rowspan (pozycjonowanie po kolumnie gridu). Testy `TableWriteFidelityTests` |
+| Tabela: zagnieżdżone | Implemented | R+W | reader rekurencyjnie; writer `./tr|./thead/tr|./tbody/tr|./tfoot/tr` | 2026-07-05: `.//tr` na tabeli zewnętrznej łapało wiersze tabel ZAGNIEŻDŻONYCH (duplikacja) |
 | Obraz: rozmiar/EMU/proporcje | Implemented | R+W | `ConvertDrawingToHtml`; writer image path | `data-*-emu` round-trip |
 | Obraz: inline + floating (`wp:anchor`) | Implemented | R+W | anchor read/write | front/behind + offsety |
 | Obraz: border (`a:ln`) | Implemented | R+W | `data-border-*` ↔ `a:ln` | solid/dashed/dotted |
@@ -179,8 +186,8 @@ Kierunek: R = DOCX→HTML (read), W = HTML→DOCX (write).
 | Obraz: alt text | Implemented | R+W | `wp:docPr/@descr` ↔ `<img alt>` | `DeEntitize` po stronie zapisu (Etap 6) |
 | Obraz: rotacja (`a:xfrm/@rot`) | Planned / not implemented yet | R+W | — | brak odczytu/zapisu; bounding box bez obrotu |
 | Obraz: VML / legacy shapes | Partially implemented | R | `ConvertPictureToHtml` (VML ImageData) | tylko obraz + rozmiar; brak border/crop/alt/rot dla VML |
-| Tab-stopy: render L⇥C⇥R | Implemented | R | `ParagraphHasAlignmentTab`, `_flexTabs` | akapit z center/right tab → `display:flex` (Etap 7) |
-| Tab-stopy: zapis `w:tabs` | Partially implemented | W | `AddDocumentStyles` (style Header/Footer) | center/right tab-stopy emitowane **tylko w stylach Header/Footer**; per-akapit/własne pozycje nie zachowywane |
+| Tab-stopy: render L⇥C⇥R | Implemented | R | `GetEffectiveTabStops`, `BuildPositionedTabContent`; fallback `_flexTabs` | 2026-07-05: nagłówek/stopka z `w:tabs` → segmenty POZYCYJNE na pozycjach stopów (`span.docx-tab-seg`, center/right przez translateX); body → flex jak dotąd; efektywne stopy = łańcuch stylów + direct pPr (semantyka clear) |
+| Tab-stopy: zapis `w:tabs` | Implemented | W | `ParseTabStops` (`data-tab-stops`), `CreateRunsFromNode` | 2026-07-05: pozycje/wyrównania/leadery round-tripowane PER AKAPIT (`data-tab-stops="pos:align[:leader]"`); `span.docx-tab-seg`→`w:tab`; literalny `	` w tekście → element `w:tab` (nie `w:t`); style Header/Footer 4536/9072 zostają jako default |
 | Hyperlinki | Implemented | R | `ConvertHyperlinkToHtml` | |
 | Pola: data | Partially implemented | R | `ConvertSimpleFieldToHtml`, complex fields | `DateTime.Now` (dynamiczne, nie wartość z DOCX) |
 | Pola: numery stron | Partially implemented | R+W | `FieldSpan` (R); `BuildFieldRun` → `w:fldSimple`+inner run (W); front `_pageNumberHtml` | placeholder/edycja; brak realnej paginacji. **Font-size pola zachowany**: reader niesie rPr runu na `.field-page/.field-numpages`; writer odtwarza rPr w wewnętrznym runie `fldSimple`; wstawiany `.page-number` dziedziczy font-size stopki (CSS `font-size:inherit`) |
@@ -189,18 +196,22 @@ Kierunek: R = DOCX→HTML (read), W = HTML→DOCX (write).
 
 ### R-10 — wiele sekcji z różnymi nagłówkami/stopkami
 
-- **Status:** `Partially implemented`. Pojedyncza sekcja w pełni (z first/even); wiele sekcji
-  **nie** jest reprezentowanych w `DocumentContent`.
-- **Kod:** reader `ExtractHeader/ExtractFooter/ExtractPageMargins/ExtractPageSize` i writer
-  `AddPageSettings/GetOrCreateSectionProps` używają `Body.Elements<SectionProperties>().FirstOrDefault()`.
-- **Ograniczenie:** dokument z wieloma `sectPr` (różne marginesy/rozmiary/orientacja/nagłówki
-  per sekcja) pokaże tylko geometrię i nagłówki/stopki pierwszej sekcji.
-- **Kierunek docelowy (Planned / not implemented yet):** rozszerzyć `DocumentContent` o
-  kolekcję sekcji (`SectionProperties` + `PageSettings` + referencje header/footer
-  default/first/even per sekcja + powiązanie bloków treści z sekcją). Rozszerzyć
-  `SectionPropertiesReader` na wszystkie `sectPr`. Dotyczy **R i W**.
-- **Testy zabezpieczające:** golden DOCX z 2+ sekcjami (różne marginesy/orientacja, różne
-  nagłówki) + asercje per sekcja; round-trip wielu `sectPr`.
+- **Status:** w dużej mierze **Implemented** (ADR-0023, 2026-07-05) — geometria per sekcja
+  round-tripowana i renderowana; **Open pozostają nagłówki/stopki RÓŻNE per sekcja**.
+- **Kod (read):** `GetSectionPropertiesInDocumentOrder` — sekcje w kolejności dokumentu;
+  `PageSize`/`Margins`/nagłówek/stopka z PIERWSZEJ sekcji (pułapka: body-level `sectPr` to
+  OSTATNIA sekcja); przerwy sekcji → `div.page-break` + marker `div.docx-section-break`
+  (`BuildSectionBreakMarkerHtml`, geometria następnej sekcji w `data-*`).
+- **Kod (write):** `CreateSectionBreakParagraph`/`AppendSectionGeometry` — markery →
+  paragraph-level `w:sectPr`; refs nagłówka/stopki + `titlePg` na pierwszym sectPr;
+  `page-break` przed markerem nie emituje `w:br`.
+- **GUI:** `wysiwyg-editor` — `pageGeometries` per strona (sekcja 1 z inputów `pageSize`,
+  kolejne z `data-*` markera); repaginacja wg wymiarów bieżącej sekcji; scss ukrywa marker.
+- **Ograniczenia (Open):** nagłówki/stopki wspólne dla wszystkich sekcji (model
+  jedno-kompletowy); marker jest elementem contenteditable — użytkownik może go skasować
+  edycją przy granicy sekcji (degradacja do jednej sekcji).
+- **Testy:** `MultiSectionFidelityTests` (12), test przeżywalności markera w
+  `wysiwyg-editor.spec` (+6 testów geometrii per strona).
 
 ### Etap 3 — pełny computed-style
 

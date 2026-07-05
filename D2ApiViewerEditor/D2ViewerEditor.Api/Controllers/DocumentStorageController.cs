@@ -260,7 +260,8 @@ public class DocumentStorageController : BaseApiController
             Header: request?.Header,
             Footer: request?.Footer,
             Margins: request?.Margins,
-            PageSize: request?.PageSize);
+            PageSize: request?.PageSize,
+            SectionHeadersFooters: request?.SectionHeadersFooters);
 
         var result = await Mediator.Send(command, cancellationToken);
 

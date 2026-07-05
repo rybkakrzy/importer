@@ -41,6 +41,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     // left/center/right header-footer layout), tabs become flex-grow spacers.
     private bool _flexTabs;
 
+    // ── Liczniki numeracji list (semantyka Worda) ────────────────────────────────
+    // Word utrzymuje licznik per ABSTRAKCYJNA definicja numeracji: różne w:num wskazujące ten sam
+    // w:abstractNum KONTYNUUJĄ numerację (tak działa „Kontynuuj numerację"), chyba że dana instancja
+    // ma w:lvlOverride/w:startOverride — wtedy licznik poziomu resetuje się przy PIERWSZYM użyciu tej
+    // instancji („Rozpocznij od nowa"). Poziomy głębsze restartują po powrocie na poziom płytszy
+    // (chyba że w:lvlRestart=0). Klucz: (abstractNumId, level) → ostatnio wyemitowany numer.
+    private readonly Dictionary<(int abstractNumId, int level), int> _listCounters = new();
+    // numId-y, których startOverride już zastosowano (reset tylko przy pierwszym użyciu instancji).
+    private readonly HashSet<int> _appliedStartOverrides = new();
+
     // Firmowa czcionka — używana, gdy dokument nie definiuje własnej w docDefaults.
     private readonly DocumentDefaultsOptions _defaults;
     private readonly IGraphicConversionService _graphics;
@@ -92,6 +102,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _rawStyles.Clear();
         _documentStyles.Clear();
         _picBulletDataUris.Clear();
+        _listCounters.Clear();
+        _appliedStartOverrides.Clear();
         _imageCounter = 0;
         _numberingPart = null;
         _themePart = null;
@@ -121,10 +133,103 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             Header = ExtractHeader(document),
             Footer = ExtractFooter(document),
             Margins = ExtractPageMargins(document),
-            PageSize = ExtractPageSize(document)
+            PageSize = ExtractPageSize(document),
+            SectionHeadersFooters = ExtractSectionHeadersFooters(document)
         };
 
         return content;
+    }
+
+    /// <summary>
+    /// All w:sectPr in DOCUMENT order. In OOXML the sectPr that is a direct child of
+    /// w:body describes the LAST section; every earlier section ends with a paragraph
+    /// carrying its sectPr inside pPr. Callers that need "what the user sees on page 1"
+    /// must take the FIRST element here — Body.Elements&lt;SectionProperties&gt;() alone
+    /// silently returns the last section's geometry/references (R-10).
+    /// </summary>
+    private static List<SectionProperties> GetSectionPropertiesInDocumentOrder(Body? body)
+    {
+        var result = new List<SectionProperties>();
+        if (body == null) return result;
+
+        result.AddRange(body.Descendants<SectionProperties>()
+            .Where(sp => sp.Parent is ParagraphProperties));
+
+        var bodyLevel = body.Elements<SectionProperties>().FirstOrDefault();
+        if (bodyLevel != null) result.Add(bodyLevel);
+        return result;
+    }
+
+    private static SectionProperties? GetFirstSectionProperties(WordprocessingDocument document)
+        => GetSectionPropertiesInDocumentOrder(document.MainDocumentPart?.Document?.Body).FirstOrDefault();
+
+    /// <summary>
+    /// w:sectPr/w:type of the given section — how the section BEGINS relative to the
+    /// previous one. Absent w:type means a next-page break (Word default).
+    /// </summary>
+    private static string GetSectionBreakType(SectionProperties sectPr)
+    {
+        var type = sectPr.GetFirstChild<SectionType>()?.Val?.Value;
+        if (type == null) return "nextPage";
+        if (type == SectionMarkValues.Continuous) return "continuous";
+        if (type == SectionMarkValues.OddPage) return "oddPage";
+        if (type == SectionMarkValues.EvenPage) return "evenPage";
+        if (type == SectionMarkValues.NextColumn) return "nextColumn";
+        return "nextPage";
+    }
+
+    /// <summary>
+    /// Marker końca sekcji dla edytora. <c>endedSection</c> to sectPr paragrafu kończącego
+    /// sekcję; marker niesie geometrię sekcji NASTĘPNEJ (tej, która zaczyna się za nim) —
+    /// wartości w data-* (cm, InvariantCulture). Dla przerw zaczynających nową stronę
+    /// (nextPage/oddPage/evenPage) poprzedza go standardowy <c>div.page-break</c>, żeby
+    /// edytor łamał stronę; sam marker jest osobnym elementem, bo splitter stron w GUI
+    /// kanonizuje divy page-break i zgubiłby data-*.
+    /// </summary>
+    private static string BuildSectionBreakMarkerHtml(SectionProperties endedSection, List<SectionProperties> orderedSections)
+    {
+        var idx = orderedSections.IndexOf(endedSection);
+        if (idx < 0 || idx + 1 >= orderedSections.Count) return string.Empty;
+
+        var next = orderedSections[idx + 1];
+        var breakType = GetSectionBreakType(next);
+        var page = SectionPropertiesReader.ReadPageSettings(next);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        var sb = new StringBuilder();
+        if (breakType is "nextPage" or "oddPage" or "evenPage")
+            sb.Append("<div class=\"page-break\"></div>");
+
+        sb.Append("<div class=\"docx-section-break\" data-break-type=\"").Append(breakType).Append('"');
+
+        if (page.PageWidthTwips is { } w && page.PageHeightTwips is { } h)
+        {
+            sb.Append(string.Format(inv, " data-page-width-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(w)));
+            sb.Append(string.Format(inv, " data-page-height-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(h)));
+            sb.Append(page.Orientation == PageOrientation.Landscape
+                ? " data-orientation=\"landscape\""
+                : " data-orientation=\"portrait\"");
+        }
+
+        if (page.HasPageMargin)
+        {
+            // Top/Bottom jak w ExtractPageMargins: wartość bezwzględna (mirror/overlap).
+            if (page.TopMarginTwips is { } t)
+                sb.Append(string.Format(inv, " data-margin-top-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(Math.Abs(t))));
+            if (page.BottomMarginTwips is { } b)
+                sb.Append(string.Format(inv, " data-margin-bottom-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(Math.Abs(b))));
+            if (page.LeftMarginTwips is { } l)
+                sb.Append(string.Format(inv, " data-margin-left-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(l)));
+            if (page.RightMarginTwips is { } r)
+                sb.Append(string.Format(inv, " data-margin-right-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(r)));
+            if (page.HeaderDistanceTwips is { } hd)
+                sb.Append(string.Format(inv, " data-header-distance-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(hd)));
+            if (page.FooterDistanceTwips is { } fd)
+                sb.Append(string.Format(inv, " data-footer-distance-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(fd)));
+        }
+
+        sb.Append("></div>");
+        return sb.ToString();
     }
 
     /// <summary>
@@ -133,7 +238,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private static Domain.Models.PageSize? ExtractPageSize(WordprocessingDocument document)
     {
-        var sectionProps = document.MainDocumentPart?.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        var sectionProps = GetFirstSectionProperties(document);
         var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
         if (page.PageWidthTwips is not { } width || page.PageHeightTwips is not { } height)
             return null;
@@ -151,7 +256,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private static PageMargins? ExtractPageMargins(WordprocessingDocument document)
     {
-        var sectionProps = document.MainDocumentPart?.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        var sectionProps = GetFirstSectionProperties(document);
         var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
         if (!page.HasPageMargin) return null;
 
@@ -187,12 +292,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var mainPart = document.MainDocumentPart;
         if (mainPart == null) return null;
 
-        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        var sections = GetSectionPropertiesInDocumentOrder(mainPart.Document?.Body);
 
-        // Render the section's DEFAULT header (the one Word shows on ordinary pages),
-        // resolved via sectPr/headerReference — NOT HeaderParts.FirstOrDefault(), whose
-        // order is undefined and may return an empty even/first part. Fall back to the
-        // first available part only when the section declares no references.
+        // Render the DEFAULT header (the one Word shows on ordinary pages), resolved via
+        // sectPr/headerReference — NOT HeaderParts.FirstOrDefault(), whose order is
+        // undefined and may return an empty even/first part. Sections are scanned in
+        // document order (first section wins — that's what the user sees on page 1;
+        // later sections inherit in Word when they declare no reference). Fall back to
+        // the first available part only when no section declares a reference.
+        var sectionProps = sections.FirstOrDefault(s =>
+            ResolveHeaderPart(mainPart, s, HeaderFooterValues.Default) != null) ?? sections.FirstOrDefault();
         var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default)
                          ?? mainPart.HeaderParts.FirstOrDefault();
         if (headerPart?.Header == null) return null;
@@ -234,7 +343,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
-        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        // Band geometry follows the FIRST section's page margins — the same section whose
+        // margins/page size the rest of DocumentContent reports.
+        var page = SectionPropertiesReader.ReadPageSettings(sections.FirstOrDefault());
         double headerHeight = page.HasPageMargin
             ? ComputeBandHeightCm(page.TopMarginTwips, page.HeaderDistanceTwips)
             : 1.5;
@@ -258,10 +369,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var mainPart = document.MainDocumentPart;
         if (mainPart == null) return null;
 
-        var sectionProps = mainPart.Document?.Body?.Elements<SectionProperties>().FirstOrDefault();
+        var sections = GetSectionPropertiesInDocumentOrder(mainPart.Document?.Body);
 
         // See ExtractHeader: resolve the DEFAULT footer via sectPr/footerReference rather
         // than FooterParts.FirstOrDefault(), which can return an empty even/first part.
+        // First section with a reference wins (document order).
+        var sectionProps = sections.FirstOrDefault(s =>
+            ResolveFooterPart(mainPart, s, HeaderFooterValues.Default) != null) ?? sections.FirstOrDefault();
         var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default)
                          ?? mainPart.FooterParts.FirstOrDefault();
         if (footerPart?.Footer == null) return null;
@@ -301,7 +415,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
-        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        var page = SectionPropertiesReader.ReadPageSettings(sections.FirstOrDefault());
         double footerHeight = page.HasPageMargin
             ? ComputeBandHeightCm(page.BottomMarginTwips, page.FooterDistanceTwips)
             : 1.5;
@@ -310,6 +424,119 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             Html = html,
             Height = Math.Max(0.8, Math.Min(8, footerHeight)),
+            DifferentFirstPage = differentFirstPage,
+            FirstPageHtml = firstPageHtml,
+            DifferentOddEven = differentOddEven,
+            EvenHtml = evenHtml
+        };
+    }
+
+    /// <summary>
+    /// Własne nagłówki/stopki sekcji ≥ 1 (0-based, kolejność dokumentu). Wpis powstaje tylko,
+    /// gdy sekcja deklaruje WŁASNE referencje — sekcje dziedziczące (bez referencji) nie mają
+    /// wpisu i frontend rozwiązuje dziedziczenie jak Word (poprzednia sekcja). Sekcja 0 jest
+    /// raportowana w polach Header/Footer (kompatybilność wstecz).
+    /// </summary>
+    private List<SectionHeaderFooter>? ExtractSectionHeadersFooters(WordprocessingDocument document)
+    {
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return null;
+
+        var sections = GetSectionPropertiesInDocumentOrder(mainPart.Document?.Body);
+        if (sections.Count < 2) return null;
+
+        var result = new List<SectionHeaderFooter>();
+        for (int i = 1; i < sections.Count; i++)
+        {
+            var header = ExtractHeaderOwnedBySection(mainPart, document, sections[i]);
+            var footer = ExtractFooterOwnedBySection(mainPart, document, sections[i]);
+            if (header != null || footer != null)
+                result.Add(new SectionHeaderFooter { SectionIndex = i, Header = header, Footer = footer });
+        }
+        return result.Count > 0 ? result : null;
+    }
+
+    /// <summary>
+    /// Nagłówek zadeklarowany bezpośrednio przez daną sekcję (bez fallbacku do innych
+    /// części) + warianty first/even wg opt-inów tej sekcji. Geometria pasma z tej sekcji.
+    /// </summary>
+    private HeaderFooterContent? ExtractHeaderOwnedBySection(MainDocumentPart mainPart, WordprocessingDocument document, SectionProperties sectionProps)
+    {
+        var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default);
+        if (headerPart?.Header == null) return null;
+
+        var html = ConvertHeaderPartToHtml(headerPart, document);
+        if (string.IsNullOrWhiteSpace(html)) return null;
+
+        string? firstPageHtml = null;
+        var differentFirstPage = false;
+        if (HasTitlePage(sectionProps)
+            && ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First) is { Header: not null } firstPart
+            && ConvertHeaderPartToHtml(firstPart, document) is { Length: > 0 } fph && !string.IsNullOrWhiteSpace(fph))
+        {
+            firstPageHtml = fph;
+            differentFirstPage = true;
+        }
+
+        string? evenHtml = null;
+        var differentOddEven = false;
+        if (HasEvenAndOddHeaders(mainPart)
+            && ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Header: not null } evenPart
+            && ConvertHeaderPartToHtml(evenPart, document) is { Length: > 0 } eh && !string.IsNullOrWhiteSpace(eh))
+        {
+            evenHtml = eh;
+            differentOddEven = true;
+        }
+
+        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        var height = page.HasPageMargin ? ComputeBandHeightCm(page.TopMarginTwips, page.HeaderDistanceTwips) : 1.5;
+
+        return new HeaderFooterContent
+        {
+            Html = html,
+            Height = Math.Max(0.8, Math.Min(8, height)),
+            DifferentFirstPage = differentFirstPage,
+            FirstPageHtml = firstPageHtml,
+            DifferentOddEven = differentOddEven,
+            EvenHtml = evenHtml
+        };
+    }
+
+    private HeaderFooterContent? ExtractFooterOwnedBySection(MainDocumentPart mainPart, WordprocessingDocument document, SectionProperties sectionProps)
+    {
+        var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default);
+        if (footerPart?.Footer == null) return null;
+
+        var html = ConvertFooterPartToHtml(footerPart, document);
+        if (string.IsNullOrWhiteSpace(html)) return null;
+
+        string? firstPageHtml = null;
+        var differentFirstPage = false;
+        if (HasTitlePage(sectionProps)
+            && ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First) is { Footer: not null } firstPart
+            && ConvertFooterPartToHtml(firstPart, document) is { Length: > 0 } fph && !string.IsNullOrWhiteSpace(fph))
+        {
+            firstPageHtml = fph;
+            differentFirstPage = true;
+        }
+
+        string? evenHtml = null;
+        var differentOddEven = false;
+        if (HasEvenAndOddHeaders(mainPart)
+            && ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Footer: not null } evenPart
+            && ConvertFooterPartToHtml(evenPart, document) is { Length: > 0 } eh && !string.IsNullOrWhiteSpace(eh))
+        {
+            evenHtml = eh;
+            differentOddEven = true;
+        }
+
+        var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
+        var height = page.HasPageMargin ? ComputeBandHeightCm(page.BottomMarginTwips, page.FooterDistanceTwips) : 1.5;
+
+        return new HeaderFooterContent
+        {
+            Html = html,
+            Height = Math.Max(0.8, Math.Min(8, height)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,
             DifferentOddEven = differentOddEven,
@@ -542,11 +769,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             html.Append("<div class=\"document-content\">");
 
         var elements = body.Elements().ToList();
+        var orderedSections = GetSectionPropertiesInDocumentOrder(body);
         int i = 0;
         while (i < elements.Count)
         {
             var element = elements[i];
-            
+
             if (element is Paragraph p && IsListParagraph(p))
             {
                 // Zbierz kolejne elementy listy i owijaj w <ul>/<ol>
@@ -555,6 +783,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             else
             {
                 html.Append(ConvertElementToHtml(element, document));
+
+                // Paragraf z pPr/sectPr KOŃCZY sekcję. Emitujemy niewidoczny marker sekcji
+                // z geometrią NASTĘPNEJ sekcji (rozmiar/orientacja/marginesy) + zwykły
+                // page-break, gdy przerwa zaczyna nową stronę. Marker niesie dane w data-*
+                // i wraca w autosave — HtmlToDocxConverter odtwarza z niego w:sectPr, więc
+                // dokument wielosekcyjny nie jest już spłaszczany do jednej sekcji (R-10).
+                if (element is Paragraph sectionEnd &&
+                    sectionEnd.ParagraphProperties?.GetFirstChild<SectionProperties>() is { } endedSection)
+                {
+                    html.Append(BuildSectionBreakMarkerHtml(endedSection, orderedSections));
+                }
                 i++;
             }
         }
@@ -712,35 +951,51 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var firstLevel = GetListLevel(firstPara);
         var firstInfo = GetListLevelInfo(firstNumProps, firstLevel);
         var listType = firstInfo.Tag;
-        
+
         // Pobierz wcięcie z definicji numeracji i wylicz padding dla kontenera listy
         var (levelIndentPx, _) = GetNumberingLevelIndentation(firstNumProps, firstLevel);
-        var listPadding = levelIndentPx > parentIndentPx 
-            ? levelIndentPx - parentIndentPx 
+        var listPadding = levelIndentPx > parentIndentPx
+            ? levelIndentPx - parentIndentPx
             : (levelIndentPx > 0 ? levelIndentPx : 36);
-        
+
         var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};";
-        var startAttr = (listType == "ol" && firstInfo.Start > 1) ? $" start=\"{firstInfo.Start}\"" : "";
-        html.Append($"<{listType}{startAttr} style=\"{listStyleCss}\">");
-        
+
+        // `start` = FAKTYCZNY numer pierwszego elementu wg liczników Worda (kontynuacja po przerwaniu
+        // akapitem / współdzielony abstrakt), nie sama definicja w:start. Konsumpcja w pętli niżej.
+        var startNumber = listType == "ol" ? PeekNextListNumber(firstNumId, firstLevel) : 1;
+        var startAttr = (listType == "ol" && startNumber > 1) ? $" start=\"{startNumber}\"" : "";
+
+        // Tożsamość i definicja listy w data-* — HtmlToDocxConverter odtwarza z nich w:numPr
+        // (wspólny numId dla kontynuacji) i w:abstractNum (format/lvlText/start per poziom).
+        var identityAttrs = new StringBuilder();
+        identityAttrs.Append($" data-num-id=\"{firstNumId}\"");
+        var abstractId = ResolveAbstractNumId(firstNumId);
+        if (abstractId >= 0) identityAttrs.Append($" data-abstract-num-id=\"{abstractId}\"");
+        identityAttrs.Append($" data-ilvl=\"{firstLevel}\"");
+        identityAttrs.Append($" data-num-fmt=\"{firstInfo.FmtToken}\"");
+        if (firstInfo.Start > 1) identityAttrs.Append($" data-start=\"{firstInfo.Start}\"");
+        if (firstInfo.LvlText != null)
+            identityAttrs.Append($" data-lvl-text=\"{System.Net.WebUtility.HtmlEncode(firstInfo.LvlText)}\"");
+        if (!string.IsNullOrEmpty(firstInfo.BulletFont))
+            identityAttrs.Append($" data-bullet-font=\"{System.Net.WebUtility.HtmlEncode(firstInfo.BulletFont)}\"");
+
+        html.Append($"<{listType}{startAttr}{identityAttrs} style=\"{listStyleCss}\">");
+
         while (index < elements.Count)
         {
             if (elements[index] is not Paragraph p || !IsListParagraph(p))
                 break;
-            
-            // Sprawdź czy numId się zmienił (inna lista) — ale tylko gdy też zmienia się typ formatu,
-            // żeby luźne numId-y tej samej listy nie resetowały numeracji.
+
             var (currentNumId, _) = GetEffectiveNumberingInfo(p);
             var currentLevel = GetListLevel(p);
-            
+
+            // Inny numId na tym samym/płytszym poziomie = INNA lista (logiczna tożsamość, nie wygląd).
+            // Niezależne listy o identycznym formacie nie są już sklejane; kontynuację tej samej
+            // logicznej listy (współdzielony abstrakt, brak startOverride) zapewniają liczniki
+            // (`start` na kolejnym elemencie), a wspólny data-num-id scala je z powrotem przy zapisie.
             if (currentNumId != firstNumId && currentLevel <= firstLevel)
-            {
-                var currentProps = GetEffectiveNumberingProps(p);
-                var currentInfo = GetListLevelInfo(currentProps, currentLevel);
-                if (currentInfo.Tag != firstInfo.Tag || currentInfo.ListStyleType != firstInfo.ListStyleType)
-                    break;
-            }
-            
+                break;
+
             if (currentLevel > firstLevel)
             {
                 // Zagnieżdżona lista — przekaż aktualne wcięcie jako rodzica
@@ -755,6 +1010,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             else
             {
+                // Skonsumuj licznik numeracji (semantyka Worda): element na tym poziomie nadaje
+                // kolejny numer i restartuje poziomy głębsze (chyba że w:lvlRestart=0). Dotyczy
+                // także punktorów — element płytszy restartuje głębsze poziomy numerowane.
+                NextListNumber(currentNumId, currentLevel);
+
                 // Buduj CSS dla <li> BEZ wcięć — wcięcia obsługuje kontener <ul>/<ol>
                 var cssStyle = GetParagraphStyle(p.ParagraphProperties);
                 var styleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
@@ -1317,12 +1577,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             cssBuilder.Append(borderCss);
         }
         
+        // Tab-stopy: efektywne pozycje (styl + direct pPr). Zawsze serializowane do
+        // data-tab-stops (round-trip per akapit — writer odtwarza w:tabs). W nagłówku/stopce
+        // akapit z tabulatorami renderuje się POZYCYJNIE: segmenty lądują dokładnie na
+        // pozycjach stopów (center = wyśrodkowany NA pozycji, right = kończy się NA pozycji),
+        // jak w Wordzie. Flex (przybliżenie 50%/100%) zostaje dla body i braku pozycji.
+        var effectiveTabStops = GetEffectiveTabStops(paraProps);
+        var hasComplexField = paragraph.Descendants<FieldChar>().Any();
+        var usePositionedTabs = sourcePart is HeaderPart or FooterPart
+            && effectiveTabStops.Count > 0
+            && paragraph.Descendants<TabChar>().Any()
+            && !hasComplexField;
+
         // Left/center/right one-line layout: a paragraph with center or right/end tab stops
         // becomes a flex row so its tab-separated segments spread across the width instead of
         // collapsing into fixed gaps. Tab characters are preserved (round-trip stays intact).
-        var useFlexTabs = ParagraphHasAlignmentTab(paraProps);
+        var useFlexTabs = !usePositionedTabs && ParagraphHasAlignmentTab(paraProps);
         if (useFlexTabs)
             cssBuilder.Append("display:flex;align-items:baseline;width:100%;");
+        if (usePositionedTabs)
+            cssBuilder.Append("position:relative;");
+
+        var tabStopsAttr = effectiveTabStops.Count > 0
+            ? $" data-tab-stops=\"{SerializeTabStops(effectiveTabStops)}\""
+            : string.Empty;
 
         var cssStyle = cssBuilder.ToString();
         var classAttr = docClass != null ? $" class=\"{docClass}\"" : string.Empty;
@@ -1342,21 +1620,24 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         if (isListItem)
         {
-            html.Append($"<li{classAttr}{dataStyleAttr} style=\"{cssStyle}\">");
+            html.Append($"<li{classAttr}{dataStyleAttr}{tabStopsAttr} style=\"{cssStyle}\">");
         }
         else
         {
-            html.Append($"<{tag}{classAttr}{dataStyleAttr} style=\"{cssStyle}\">");
+            html.Append($"<{tag}{classAttr}{dataStyleAttr}{tabStopsAttr} style=\"{cssStyle}\">");
         }
 
         var prevFlexTabs = _flexTabs;
         _flexTabs = useFlexTabs;
 
         // Obsługa złożonych pól (FieldChar Begin/Separate/End)
-        var hasComplexField = paragraph.Descendants<FieldChar>().Any();
         if (hasComplexField)
         {
             html.Append(ConvertComplexFieldParagraphContent(paragraph, document, sourcePart));
+        }
+        else if (usePositionedTabs)
+        {
+            html.Append(BuildPositionedTabContent(paragraph, effectiveTabStops, document, sourcePart));
         }
         else
         {
@@ -1430,6 +1711,164 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             t.Val?.Value == TabStopValues.Center ||
             t.Val?.Value == TabStopValues.Right ||
             t.Val?.Value == TabStopValues.End);
+    }
+
+    /// <summary>Jeden efektywny tab-stop akapitu (pozycja w twips, wyrównanie, leader).</summary>
+    private sealed record TabStopInfo(int PositionTwips, string Alignment, string? Leader);
+
+    /// <summary>
+    /// Efektywne tab-stopy akapitu: łańcuch stylów (od bazy do liścia), potem direct pPr.
+    /// Późniejsza definicja na tej samej pozycji nadpisuje wcześniejszą; w:val=clear usuwa
+    /// stop odziedziczony ze stylu (tak działa Word).
+    /// </summary>
+    private List<TabStopInfo> GetEffectiveTabStops(ParagraphProperties? paraProps)
+    {
+        var result = new List<TabStopInfo>();
+
+        void Apply(Tabs? tabs)
+        {
+            if (tabs == null) return;
+            foreach (var t in tabs.Elements<TabStop>())
+            {
+                if (t.Position?.Value is not { } pos) continue;
+                result.RemoveAll(x => x.PositionTwips == pos);
+                var val = t.Val?.Value;
+                if (val == TabStopValues.Clear) continue;
+                // Bar-tab rysuje pionową linię, nie pozycjonuje tekstu — pomijamy.
+                if (val == TabStopValues.Bar) continue;
+                result.Add(new TabStopInfo(pos, MapTabAlignment(val), MapTabLeader(t.Leader?.Value)));
+            }
+        }
+
+        foreach (var style in GetParagraphStyleChainRootFirst(paraProps?.ParagraphStyleId?.Val?.Value))
+            Apply(style.StyleParagraphProperties?.GetFirstChild<Tabs>());
+        Apply(paraProps?.GetFirstChild<Tabs>());
+
+        result.Sort((a, b) => a.PositionTwips.CompareTo(b.PositionTwips));
+        return result;
+    }
+
+    /// <summary>Łańcuch stylów akapitowych basedOn, od korzenia do wskazanego stylu.</summary>
+    private IEnumerable<Style> GetParagraphStyleChainRootFirst(string? styleId)
+    {
+        var chain = new List<Style>();
+        var visited = new HashSet<string>();
+        while (styleId != null && visited.Add(styleId) && _rawStyles.TryGetValue(styleId, out var style))
+        {
+            chain.Add(style);
+            styleId = style.BasedOn?.Val?.Value;
+        }
+        chain.Reverse();
+        return chain;
+    }
+
+    private static string MapTabAlignment(TabStopValues? val)
+    {
+        if (val == TabStopValues.Center) return "center";
+        if (val == TabStopValues.Right || val == TabStopValues.End) return "right";
+        if (val == TabStopValues.Decimal) return "decimal";
+        return "left";
+    }
+
+    private static string? MapTabLeader(TabStopLeaderCharValues? leader)
+    {
+        if (leader == null || leader == TabStopLeaderCharValues.None) return null;
+        if (leader == TabStopLeaderCharValues.Dot) return "dot";
+        if (leader == TabStopLeaderCharValues.Hyphen) return "hyphen";
+        if (leader == TabStopLeaderCharValues.Underscore) return "underscore";
+        if (leader == TabStopLeaderCharValues.MiddleDot) return "middleDot";
+        if (leader == TabStopLeaderCharValues.Heavy) return "heavy";
+        return null;
+    }
+
+    /// <summary>Format atrybutu: "pos:align" lub "pos:align:leader", rozdzielane średnikami.</summary>
+    private static string SerializeTabStops(List<TabStopInfo> stops) =>
+        string.Join(";", stops.Select(s => s.Leader == null
+            ? $"{s.PositionTwips}:{s.Alignment}"
+            : $"{s.PositionTwips}:{s.Alignment}:{s.Leader}"));
+
+    /// <summary>
+    /// Rendering pozycyjny akapitu z tab-stopami (nagłówek/stopka): treść dzielona na segmenty
+    /// na KAŻDYM tabulatorze; segment 0 zostaje w przepływie (definiuje wysokość linii),
+    /// k-ty segment jest pozycjonowany absolutnie na k-tym stopie — center przez
+    /// translateX(-50%) (tekst wyśrodkowany NA pozycji), right przez translateX(-100%)
+    /// (tekst kończy się NA pozycji). Nadmiarowe segmenty (więcej tabów niż stopów) płyną
+    /// inline. Wrapper formatowania runu jest domykany i otwierany wokół każdego segmentu.
+    /// </summary>
+    private string BuildPositionedTabContent(Paragraph paragraph, List<TabStopInfo> stops,
+        WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        var segments = new List<StringBuilder> { new() };
+
+        foreach (var child in paragraph.Elements())
+        {
+            switch (child)
+            {
+                case Run run:
+                    var flags = GetRunSemanticFlags(run.RunProperties);
+                    var (prefix, suffix) = BuildRunWrapper(run.RunProperties,
+                        flags.Bold, flags.Italic, flags.Underline, flags.Strike, flags.Sup, flags.Sub);
+                    var chunk = new StringBuilder();
+                    void FlushChunk()
+                    {
+                        if (chunk.Length > 0)
+                        {
+                            segments[^1].Append(prefix).Append(chunk).Append(suffix);
+                            chunk.Clear();
+                        }
+                    }
+                    foreach (var rc in run.Elements())
+                    {
+                        if (rc is TabChar)
+                        {
+                            FlushChunk();
+                            segments.Add(new StringBuilder());
+                        }
+                        else
+                        {
+                            chunk.Append(ConvertRunChildToHtml(rc, document, sourcePart));
+                        }
+                    }
+                    FlushChunk();
+                    break;
+                case Hyperlink hyperlink:
+                    segments[^1].Append(ConvertHyperlinkToHtml(hyperlink, document));
+                    break;
+                case SimpleField simpleField:
+                    segments[^1].Append(ConvertSimpleFieldToHtml(simpleField));
+                    break;
+                case SdtRun sdtRun:
+                    segments[^1].Append(ConvertSdtRunToHtml(sdtRun, document, sourcePart));
+                    break;
+            }
+        }
+
+        var html = new StringBuilder();
+        // Strut: pusty segment 0 (akapit zaczyna się tabem) nie dawałby linii wysokości.
+        html.Append(segments[0].Length > 0 ? segments[0].ToString() : "&#8203;");
+
+        for (int k = 1; k < segments.Count; k++)
+        {
+            var stop = k - 1 < stops.Count ? stops[k - 1] : null;
+            if (stop == null)
+            {
+                html.Append(segments[k]);
+                continue;
+            }
+            var leftPx = TwipsToPx(stop.PositionTwips);
+            var transform = stop.Alignment switch
+            {
+                "center" => "transform:translateX(-50%);",
+                "right" => "transform:translateX(-100%);",
+                _ => string.Empty
+            };
+            html.Append($"<span class=\"docx-tab-seg\" data-tab-align=\"{stop.Alignment}\" " +
+                        $"style=\"position:absolute;left:{leftPx}px;{transform}white-space:pre;\">")
+                .Append(segments[k])
+                .Append("</span>");
+        }
+
+        return html.ToString();
     }
 
     /// <summary>
@@ -1565,10 +2004,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (borderVal == null || borderVal == BorderValues.None || borderVal == BorderValues.Nil)
             return "none";
 
+        // w:sz to 1/8 pt; px = pt × 96/72, czyli sz/6 (wcześniejsze sz/8 zaniżało grubość o 25%).
+        // Minimum 0.5px, by hairline Worda (0.25–0.5 pt) pozostał widoczny w przeglądarce.
         var size = border.Size?.Value ?? 4;
-        var sizePx = Math.Max(1, size / 8.0);
-        var color = border.Color?.Value ?? "000000";
-        if (color == "auto") color = "000000";
+        var sizePx = Math.Max(0.5, size / 6.0);
+        var color = border.Color?.Value;
+        if ((color == null || color == "auto") && border.ThemeColor?.HasValue == true)
+        {
+            var themeHex = ResolveThemeColor(border.ThemeColor.Value)?.TrimStart('#');
+            if (themeHex != null)
+                color = ApplyTintShade(themeHex, border.ThemeTint?.Value, border.ThemeShade?.Value);
+        }
+        if (color == null || color == "auto") color = "000000";
 
         string style = "solid";
         if (borderVal == BorderValues.Single) style = "solid";
@@ -1620,6 +2067,152 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// Rozwiązuje abstractNumId dla numId, podążając za w:numStyleLink (abstrakt delegujący do
+    /// stylu numeracji, którego pPr/numPr wskazuje inny numId → abstrakt). Zwraca -1, gdy brak.
+    /// </summary>
+    private int ResolveAbstractNumId(int numId)
+    {
+        if (_numberingPart?.Numbering == null) return -1;
+        var visited = new HashSet<int>();
+        while (visited.Add(numId))
+        {
+            var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
+                .FirstOrDefault(n => n.NumberID?.Value == numId);
+            var absId = numInstance?.AbstractNumId?.Val?.Value;
+            if (absId == null) return -1;
+
+            var abs = _numberingPart.Numbering.Elements<AbstractNum>()
+                .FirstOrDefault(a => a.AbstractNumberId?.Value == absId);
+            var linkedStyleId = abs?.GetFirstChild<NumberingStyleLink>()?.Val?.Value;
+            if (string.IsNullOrEmpty(linkedStyleId))
+                return absId.Value;
+
+            // numStyleLink → styl numeracji → jego numPr/numId → kolejna iteracja.
+            var linkedNumId = _rawStyles.TryGetValue(linkedStyleId, out var style)
+                ? style.StyleParagraphProperties?.GetFirstChild<NumberingProperties>()?.NumberingId?.Val?.Value
+                : null;
+            if (linkedNumId == null) return absId.Value;
+            numId = linkedNumId.Value;
+        }
+        return -1;
+    }
+
+    /// <summary>
+    /// Definicja poziomu dla (numId, level): w:lvlOverride/w:lvl z instancji ma pierwszeństwo,
+    /// potem w:lvl z abstraktu (po rozwiązaniu numStyleLink). Zwraca też startOverride (−1 = brak).
+    /// </summary>
+    private (Level? levelDef, int startOverride) FindLevelDefinition(int numId, int level)
+    {
+        if (_numberingPart?.Numbering == null) return (null, -1);
+
+        var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
+            .FirstOrDefault(n => n.NumberID?.Value == numId);
+        if (numInstance == null) return (null, -1);
+
+        var levelOverrideElem = numInstance.Elements<LevelOverride>()
+            .FirstOrDefault(lo => lo.LevelIndex?.Value == level);
+        int startOverride = levelOverrideElem?.StartOverrideNumberingValue?.Val?.Value ?? -1;
+
+        Level? levelDef = levelOverrideElem?.GetFirstChild<Level>();
+        if (levelDef == null)
+        {
+            var absId = ResolveAbstractNumId(numId);
+            var abstractNum = _numberingPart.Numbering.Elements<AbstractNum>()
+                .FirstOrDefault(a => a.AbstractNumberId?.Value == absId);
+            levelDef = abstractNum?.Elements<Level>()
+                .FirstOrDefault(l => l.LevelIndex?.Value == level);
+        }
+        return (levelDef, startOverride);
+    }
+
+    /// <summary>Wartość początkowa poziomu: startOverride instancji, inaczej w:start, inaczej 1.</summary>
+    private int GetLevelStart(int numId, int level)
+    {
+        var (levelDef, startOverride) = FindLevelDefinition(numId, level);
+        if (startOverride > 0) return startOverride;
+        return levelDef?.StartNumberingValue?.Val?.Value ?? 1;
+    }
+
+    /// <summary>Klucz licznika: abstrakt (współdzielony między instancjami); fallback per-numId.</summary>
+    private int CounterKeyFor(int numId)
+    {
+        var absId = ResolveAbstractNumId(numId);
+        return absId >= 0 ? absId : -numId;
+    }
+
+    /// <summary>
+    /// „Rozpocznij od nowa" w Wordzie = nowa instancja ze startOverride na ten sam abstrakt.
+    /// Reset licznika wykonujemy raz — przy pierwszym użyciu instancji w dokumencie.
+    /// </summary>
+    private void ApplyStartOverridesOnFirstUse(int numId, int counterKey)
+    {
+        if (!_appliedStartOverrides.Add(numId)) return;
+        if (_numberingPart?.Numbering == null) return;
+
+        var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
+            .FirstOrDefault(n => n.NumberID?.Value == numId);
+        if (numInstance == null) return;
+
+        foreach (var lo in numInstance.Elements<LevelOverride>())
+        {
+            var lvl = lo.LevelIndex?.Value;
+            var so = lo.StartOverrideNumberingValue?.Val?.Value;
+            if (lvl != null && so != null)
+                _listCounters[(counterKey, lvl.Value)] = so.Value - 1;
+        }
+    }
+
+    /// <summary>Numer, jaki dostanie następny element (numId, level) — bez konsumowania licznika.</summary>
+    private int PeekNextListNumber(int numId, int level)
+    {
+        var key = CounterKeyFor(numId);
+        ApplyStartOverridesOnFirstUse(numId, key);
+        return _listCounters.TryGetValue((key, level), out var last)
+            ? last + 1
+            : GetLevelStart(numId, level);
+    }
+
+    /// <summary>
+    /// Konsumuje kolejny numer dla (numId, level) i restartuje poziomy głębsze
+    /// (domyślne zachowanie Worda; w:lvlRestart=0 wyłącza restart danego poziomu).
+    /// </summary>
+    private int NextListNumber(int numId, int level)
+    {
+        var key = CounterKeyFor(numId);
+        ApplyStartOverridesOnFirstUse(numId, key);
+
+        var next = _listCounters.TryGetValue((key, level), out var last)
+            ? last + 1
+            : GetLevelStart(numId, level);
+        _listCounters[(key, level)] = next;
+
+        for (int deeper = level + 1; deeper <= 8; deeper++)
+        {
+            if (!_listCounters.ContainsKey((key, deeper))) continue;
+            var (deeperDef, _) = FindLevelDefinition(numId, deeper);
+            var lvlRestart = deeperDef?.LevelRestart?.Val?.Value;
+            if (lvlRestart == 0) continue; // nigdy nie restartuj
+            _listCounters.Remove((key, deeper));
+        }
+        return next;
+    }
+
+    /// <summary>Token formatu numeracji do round-tripu w data-num-fmt (nazwy z w:numFmt).</summary>
+    private static string NumFmtToken(Level? levelDef)
+    {
+        var fmt = levelDef?.NumberingFormat?.Val?.Value;
+        if (fmt == NumberFormatValues.Decimal) return "decimal";
+        if (fmt == NumberFormatValues.DecimalZero) return "decimalZero";
+        if (fmt == NumberFormatValues.LowerLetter) return "lowerLetter";
+        if (fmt == NumberFormatValues.UpperLetter) return "upperLetter";
+        if (fmt == NumberFormatValues.LowerRoman) return "lowerRoman";
+        if (fmt == NumberFormatValues.UpperRoman) return "upperRoman";
+        if (fmt == NumberFormatValues.Bullet) return "bullet";
+        if (fmt == NumberFormatValues.None) return "none";
+        return "decimal";
+    }
+
+    /// <summary>
     /// Pełna informacja o poziomie listy: tag (ol/ul), CSS list-style-type, znak punktatora
     /// (gdy niestandardowy), czcionka punktatora oraz początkowa wartość numeracji.
     /// </summary>
@@ -1631,38 +2224,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public string? BulletFont { get; init; }
         public string? BulletImageDataUri { get; init; }
         public int Start { get; init; }
+        /// <summary>Token w:numFmt do round-tripu (data-num-fmt).</summary>
+        public string FmtToken { get; init; }
+        /// <summary>Surowy w:lvlText (np. "%1)" albo znak punktatora) do round-tripu.</summary>
+        public string? LvlText { get; init; }
     }
 
     private ListLevelInfo GetListLevelInfo(NumberingProperties? numPr, int levelOverride = -1)
     {
-        var fallback = new ListLevelInfo { Tag = "ul", ListStyleType = "disc", Start = 1 };
+        var fallback = new ListLevelInfo { Tag = "ul", ListStyleType = "disc", Start = 1, FmtToken = "bullet" };
         if (numPr == null || _numberingPart?.Numbering == null) return fallback;
 
         var numId = numPr.NumberingId?.Val?.Value;
         if (numId == null) return fallback;
         var level = levelOverride >= 0 ? levelOverride : (numPr.NumberingLevelReference?.Val?.Value ?? 0);
 
-        var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
-            .FirstOrDefault(n => n.NumberID?.Value == numId);
-        if (numInstance == null) return fallback;
-
-        // LevelOverride wewnątrz NumberingInstance ma pierwszeństwo nad AbstractNum
-        var levelOverrideElem = numInstance.Elements<LevelOverride>()
-            .FirstOrDefault(lo => lo.LevelIndex?.Value == level);
-        Level? levelDef = levelOverrideElem?.GetFirstChild<Level>();
-
-        int startOverride = levelOverrideElem?.StartOverrideNumberingValue?.Val?.Value ?? -1;
-
-        if (levelDef == null)
-        {
-            var abstractNumId = numInstance.AbstractNumId?.Val?.Value;
-            if (abstractNumId == null) return fallback;
-            var abstractNum = _numberingPart.Numbering.Elements<AbstractNum>()
-                .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
-            if (abstractNum == null) return fallback;
-            levelDef = abstractNum.Elements<Level>()
-                .FirstOrDefault(l => l.LevelIndex?.Value == level);
-        }
+        // Wspólny resolver: lvlOverride/w:lvl instancji → w:lvl abstraktu (z numStyleLink).
+        var (levelDef, startOverride) = FindLevelDefinition(numId.Value, level);
         if (levelDef == null) return fallback;
 
         var numFmt = levelDef.NumberingFormat?.Val?.Value;
@@ -1766,7 +2344,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             BulletChar = bulletChar,
             BulletFont = bulletFont,
             BulletImageDataUri = bulletImageDataUri,
-            Start = start
+            Start = start,
+            FmtToken = NumFmtToken(levelDef),
+            LvlText = string.IsNullOrEmpty(levelText) ? null : levelText
         };
     }
 
@@ -1889,6 +2469,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 if (lineRule == LineSpacingRuleValues.Exact || lineRule == LineSpacingRuleValues.AtLeast)
                 {
                     css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
+                    // Rozróżnienie reguły dla round-tripu: bez tego markera writer mapował
+                    // KAŻDE line-height w pt z powrotem na w:lineRule=exact, a atLeast→exact
+                    // przycina w Wordzie tekst wyższy niż linia (np. większe glify, obrazki).
+                    if (lineRule == LineSpacingRuleValues.AtLeast)
+                        css.Append("--w-line-rule:atLeast;");
                 }
                 else
                 {
@@ -1952,6 +2537,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        var (prefix, suffix) = BuildRunWrapper(runProps, needsBold, needsItalic, needsUnderline, needsStrike, needsSup, needsSub);
+        html.Append(prefix);
+        foreach (var child in run.Elements())
+        {
+            html.Append(ConvertRunChildToHtml(child, document, sourcePart));
+        }
+        html.Append(suffix);
+
+        return html.ToString();
+    }
+
+    /// <summary>
+    /// Otwarcie/zamknięcie formatowania runu (span z CSS + tagi semantyczne). Wydzielone,
+    /// bo segmentacja po tabulatorach (tab-stopy) musi domykać i ponownie otwierać ten sam
+    /// wrapper wokół każdego segmentu runu.
+    /// </summary>
+    private (string Prefix, string Suffix) BuildRunWrapper(RunProperties? runProps,
+        bool needsBold, bool needsItalic, bool needsUnderline, bool needsStrike, bool needsSup, bool needsSub)
+    {
         var cleanCss = GetRunStyleClean(runProps);
 
         // Resolve a named character style (w:rStyle) and lay its inherited CSS *underneath*
@@ -1963,59 +2567,68 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? rsCss
             : string.Empty;
 
-        html.Append($"<span style=\"{rStyleCss}{cleanCss}\">");
-        if (needsBold) html.Append("<strong>");
-        if (needsItalic) html.Append("<em>");
-        if (needsUnderline) html.Append("<u>");
-        if (needsStrike) html.Append("<s>");
-        if (needsSup) html.Append("<sup>");
-        if (needsSub) html.Append("<sub>");
+        var prefix = new StringBuilder();
+        prefix.Append($"<span style=\"{rStyleCss}{cleanCss}\">");
+        if (needsBold) prefix.Append("<strong>");
+        if (needsItalic) prefix.Append("<em>");
+        if (needsUnderline) prefix.Append("<u>");
+        if (needsStrike) prefix.Append("<s>");
+        if (needsSup) prefix.Append("<sup>");
+        if (needsSub) prefix.Append("<sub>");
 
-        foreach (var child in run.Elements())
+        var suffix = new StringBuilder();
+        if (needsSub) suffix.Append("</sub>");
+        if (needsSup) suffix.Append("</sup>");
+        if (needsStrike) suffix.Append("</s>");
+        if (needsUnderline) suffix.Append("</u>");
+        if (needsItalic) suffix.Append("</em>");
+        if (needsBold) suffix.Append("</strong>");
+        suffix.Append("</span>");
+
+        return (prefix.ToString(), suffix.ToString());
+    }
+
+    private static (bool Bold, bool Italic, bool Underline, bool Strike, bool Sup, bool Sub) GetRunSemanticFlags(RunProperties? runProps)
+    {
+        if (runProps == null) return default;
+        var bold = runProps.Bold != null && (runProps.Bold.Val == null || runProps.Bold.Val.Value);
+        var italic = runProps.Italic != null && (runProps.Italic.Val == null || runProps.Italic.Val.Value);
+        var underline = runProps.Underline != null && runProps.Underline.Val?.Value != UnderlineValues.None;
+        var strike = (runProps.Strike != null && (runProps.Strike.Val == null || runProps.Strike.Val.Value)) ||
+                     (runProps.DoubleStrike != null && (runProps.DoubleStrike.Val == null || runProps.DoubleStrike.Val.Value));
+        var vertAlign = runProps.VerticalTextAlignment;
+        var sup = vertAlign?.Val != null && vertAlign.Val.Value == VerticalPositionValues.Superscript;
+        var sub = vertAlign?.Val != null && vertAlign.Val.Value == VerticalPositionValues.Subscript;
+        return (bold, italic, underline, strike, sup, sub);
+    }
+
+    private string ConvertRunChildToHtml(OpenXmlElement child, WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        switch (child)
         {
-            switch (child)
-            {
-                case Text text:
-                    html.Append(EscapeHtml(text.Text));
-                    break;
-                case Break br:
-                    html.Append(br.Type?.Value == BreakValues.Page ? "<div class=\"page-break\"></div>" : "<br/>");
-                    break;
-                case TabChar _:
-                    html.Append("<span style=\"display:inline-block;min-width:2em;\">\t</span>");
-                    break;
-                case Drawing drawing:
-                    html.Append(ConvertDrawingToHtml(drawing, document, sourcePart));
-                    break;
-                case Picture picture:
-                    html.Append(ConvertPictureToHtml(picture, document, sourcePart));
-                    break;
-                case NoBreakHyphen _:
-                    html.Append("&#8209;");
-                    break;
-                case SoftHyphen _:
-                    html.Append("&shy;");
-                    break;
-                case SymbolChar sym:
-                    if (sym.Char?.Value != null)
-                    {
-                        try { html.Append($"&#x{sym.Char.Value};"); } catch { }
-                    }
-                    break;
-                case LastRenderedPageBreak _:
-                    break;
-            }
+            case Text text:
+                return EscapeHtml(text.Text);
+            case Break br:
+                return br.Type?.Value == BreakValues.Page ? "<div class=\"page-break\"></div>" : "<br/>";
+            case TabChar _:
+                return "<span style=\"display:inline-block;min-width:2em;\">\t</span>";
+            case Drawing drawing:
+                return ConvertDrawingToHtml(drawing, document, sourcePart);
+            case Picture picture:
+                return ConvertPictureToHtml(picture, document, sourcePart);
+            case NoBreakHyphen _:
+                return "&#8209;";
+            case SoftHyphen _:
+                return "&shy;";
+            case SymbolChar sym:
+                if (sym.Char?.Value != null)
+                {
+                    try { return $"&#x{sym.Char.Value};"; } catch { return string.Empty; }
+                }
+                return string.Empty;
+            default:
+                return string.Empty;
         }
-
-        if (needsSub) html.Append("</sub>");
-        if (needsSup) html.Append("</sup>");
-        if (needsStrike) html.Append("</s>");
-        if (needsUnderline) html.Append("</u>");
-        if (needsItalic) html.Append("</em>");
-        if (needsBold) html.Append("</strong>");
-        html.Append("</span>");
-        
-        return html.ToString();
     }
 
     /// <summary>
@@ -2585,21 +3198,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var html = new StringBuilder();
         var tableProps = table.GetFirstChild<TableProperties>();
-        
+
+        // Rozwiąż styl tabeli (w:tblStyle → łańcuch basedOn → tblLook → tblStylePr).
+        // Większość tabel Worda (np. „Tabela – Siatka") ma obramowania/cieniowanie w STYLU,
+        // nie w bezpośrednim tblPr — bez tego kroku renderowały się jako tabele bez linii.
+        var styleCtx = ResolveTableStyleContext(tableProps);
+
         // Szerokość tabeli
         var tableWidth = "auto";
         var hasExplicitWidth = false;
         if (tableProps?.TableWidth?.Width?.Value != null)
         {
             var w = tableProps.TableWidth;
-            if (w.Type?.Value == TableWidthUnitValues.Pct)
+            if (w.Type?.Value == TableWidthUnitValues.Pct
+                && double.TryParse(w.Width.Value, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var pct50) && pct50 > 0)
             {
-                tableWidth = $"{int.Parse(w.Width.Value) / 50}%";
+                // w:tblW pct = 1/50 procenta — zachowaj ułamek (3333 → 66.66%, nie 66%).
+                tableWidth = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}%", pct50 / 50.0);
                 hasExplicitWidth = true;
             }
-            else if (w.Type?.Value == TableWidthUnitValues.Dxa)
+            else if (w.Type?.Value == TableWidthUnitValues.Dxa && int.TryParse(w.Width.Value, out var wtw) && wtw > 0)
             {
-                tableWidth = $"{TwipsToPx(int.Parse(w.Width.Value))}px";
+                tableWidth = $"{TwipsToPx(wtw)}px";
                 hasExplicitWidth = true;
             }
         }
@@ -2635,55 +3256,86 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             tableIndent = $"margin-left:{TwipsToPx(tableProps.TableIndentation.Width.Value)}px;";
         }
 
-        // Domyślne obramowania tabeli
-        var defaultBorders = tableProps?.TableBorders;
-
-        // Sygnał dla HtmlToDocx: czy tabela ma jakiekolwiek zdefiniowane tblBorders.
-        // Gdy wszystkie strony + inside to brak/None/Nil lub brak definicji — kod eksportu ma NIE
-        // wymuszać solid-black tblBorders (co powodowałoby fałszywe czarne linie).
-        var tblBordersAreEmpty = IsTableBordersEmpty(defaultBorders);
-        var tblBordersMarker = tblBordersAreEmpty ? " data-no-borders=\"1\"" : "";
-        
-        // Domyślny padding komórek = domyślne marginesy komórki Worda (TableNormal):
-        // top/bottom = 0, left/right = 108 twips. Wcześniejszy "4px 8px" dodawał 4px góra/dół
-        // do KAŻDEJ komórki, przez co tabele rosły w pionie po round-tripie (każdy wiersz +~120
-        // twips). Word domyślnie ma 0 góra/dół. Patrz analiza orginał_GOOD vs zapisany_BAD.
-        const int wordDefaultCellMarginTwips = 108; // 0.19 cm — domyślny lewy/prawy margines komórki
-        var defaultPadding = $"0px {TwipsToPx(wordDefaultCellMarginTwips)}px";
-        var tblCellMar = tableProps?.TableCellMarginDefault;
-        if (tblCellMar != null)
+        // Odstęp między komórkami (w:tblCellSpacing) — Word renderuje wtedy rozdzielone
+        // ramki komórek; w CSS odpowiada temu border-collapse:separate + border-spacing.
+        var collapseCss = "border-collapse:collapse;";
+        var cellSpacingAttr = string.Empty;
+        var cellSpacingTw = GetTwipsValue(tableProps?.GetFirstChild<TableCellSpacing>());
+        if (cellSpacingTw is > 0)
         {
-            var topPad = GetTwipsValue(tblCellMar.TopMargin) ?? 0;
-            var bottomPad = GetTwipsValue(tblCellMar.BottomMargin) ?? 0;
-            var leftPad = GetDxaValue(tblCellMar.TableCellLeftMargin) ?? wordDefaultCellMarginTwips;
-            var rightPad = GetDxaValue(tblCellMar.TableCellRightMargin) ?? wordDefaultCellMarginTwips;
-            defaultPadding = $"{TwipsToPx(topPad)}px {TwipsToPx(rightPad)}px {TwipsToPx(bottomPad)}px {TwipsToPx(leftPad)}px";
+            collapseCss = $"border-collapse:separate;border-spacing:{TwipsToPx(cellSpacingTw.Value)}px;";
+            cellSpacingAttr = $" data-cell-spacing-tw=\"{cellSpacingTw.Value}\"";
         }
-        
-        html.Append($"<table{tblBordersMarker} style=\"border-collapse:collapse;width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
+
+        // Sygnał dla HtmlToDocx: czy tabela ma jakiekolwiek zdefiniowane obramowania —
+        // teraz liczone z EFEKTYWNYCH borderów (bezpośrednie tblBorders LUB styl tabeli).
+        var tblBordersMarker = styleCtx.Borders.IsEmpty ? " data-no-borders=\"1\"" : "";
+
+        // Referencja stylu tabeli — zachowywana w data-*, by eksport mógł ponownie
+        // wyemitować w:tblStyle/w:tblLook (rozwiązane wartości i tak są w inline CSS).
+        var styleAttrs = string.Empty;
+        if (!string.IsNullOrEmpty(styleCtx.StyleId))
+            styleAttrs = $" data-tbl-style=\"{System.Net.WebUtility.HtmlEncode(styleCtx.StyleId)}\" data-tbl-look=\"{styleCtx.LookHex}\"";
+
+        // Domyślny padding komórek: bezpośredni tblCellMar → tblCellMar ze stylu tabeli →
+        // domyślne marginesy Worda (TableNormal): top/bottom = 0, left/right = 108 twips.
+        var defaultPadding = styleCtx.DefaultCellPaddingCss;
+
+        var rows = table.Elements<TableRow>().ToList();
+        var renderCtx = new TableRenderContext(
+            styleCtx,
+            defaultPadding,
+            rows.Count,
+            CountGridColumns(table, rows));
+
+        html.Append($"<table{tblBordersMarker}{styleAttrs}{cellSpacingAttr} style=\"{collapseCss}width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
         html.Append(colgroupHtml);
 
-        foreach (var row in table.Elements<TableRow>())
+        for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
         {
-            // Wysokość wiersza
+            var row = rows[rowIndex];
+            var trPr = row.TableRowProperties;
+
+            // Wysokość wiersza. Na <tr> działa wyłącznie `height` (w tabelach zachowuje się
+            // jak min-height); `min-height` na tr jest przez przeglądarki IGNOROWANE, więc
+            // wiersze atLeast traciły wysokość. Oryginalne twips + reguła idą w data-*,
+            // żeby eksport nie tracił hRule ani precyzji px→twips.
             var rowStyle = "";
-            var trHeight = row.TableRowProperties?.Elements<TableRowHeight>().FirstOrDefault();
+            var rowAttrs = new StringBuilder();
+            var trHeight = trPr?.Elements<TableRowHeight>().FirstOrDefault();
             if (trHeight?.Val?.Value != null)
             {
-                var hPx = TwipsToPx((int)trHeight.Val.Value);
-                var rule = trHeight.HeightType?.Value == HeightRuleValues.Exact ? "height" : "min-height";
-                rowStyle = $" style=\"{rule}:{hPx}px;\"";
+                var hRule = trHeight.HeightType?.Value ?? HeightRuleValues.AtLeast;
+                if (hRule != HeightRuleValues.Auto)
+                {
+                    var hPx = TwipsToPx((int)trHeight.Val.Value);
+                    rowStyle = $" style=\"height:{hPx}px;\"";
+                    rowAttrs.Append($" data-row-height-tw=\"{trHeight.Val.Value}\"");
+                    if (hRule == HeightRuleValues.Exact)
+                        rowAttrs.Append(" data-row-hrule=\"exact\"");
+                }
             }
-            
-            html.Append($"<tr{rowStyle}>");
-            
+
+            // Wiersz nagłówkowy powtarzany na stronach + zakaz dzielenia wiersza —
+            // brak odpowiednika w edytorze (nie paginuje jak Word), ale round-trip
+            // przez data-* chroni właściwości przy eksporcie.
+            if (trPr?.Elements<TableHeader>().Any() == true)
+                rowAttrs.Append(" data-tbl-header=\"1\"");
+            if (trPr?.Elements<CantSplit>().Any() == true)
+                rowAttrs.Append(" data-cant-split=\"1\"");
+
+            html.Append($"<tr{rowAttrs}{rowStyle}>");
+
             // Iteruj komórki uwzględniając komórki opakowane w SDT (Content Control / formant).
             // SdtCell zawiera SdtContentCell, a w nim faktyczne TableCell — inaczej znikają dane.
+            // gridCursor śledzi pozycję komórki w siatce (gridSpan przesuwa kursor; komórki
+            // kontynuacji vMerge też zajmują kolumny, mimo że nie emitują <td>).
+            var gridCursor = 0;
             foreach (var cellLike in row.Elements())
             {
                 if (cellLike is TableCell cell)
                 {
-                    AppendTableCellHtml(html, table, row, cell, defaultBorders, defaultPadding, document, sourcePart);
+                    AppendTableCellHtml(html, table, rows, rowIndex, cell, renderCtx, ref gridCursor, document, sourcePart);
                 }
                 else if (cellLike is SdtCell sdtCell)
                 {
@@ -2691,16 +3343,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     if (sdtContent != null)
                     {
                         foreach (var innerCell in sdtContent.Elements<TableCell>())
-                            AppendTableCellHtml(html, table, row, innerCell, defaultBorders, defaultPadding, document, sourcePart);
+                            AppendTableCellHtml(html, table, rows, rowIndex, innerCell, renderCtx, ref gridCursor, document, sourcePart);
                     }
                 }
             }
-            
+
             html.Append("</tr>");
         }
 
         html.Append("</table>");
         return html.ToString();
+    }
+
+    /// <summary>
+    /// Liczba kolumn siatki tabeli: z w:tblGrid, a gdy brak — maksimum sumy gridSpan po wierszach.
+    /// </summary>
+    private static int CountGridColumns(Table table, List<TableRow> rows)
+    {
+        var grid = table.GetFirstChild<TableGrid>();
+        var fromGrid = grid?.Elements<GridColumn>().Count() ?? 0;
+        if (fromGrid > 0) return fromGrid;
+
+        var max = 0;
+        foreach (var row in rows)
+        {
+            var count = row.Elements<TableCell>().Sum(GetGridSpan);
+            max = Math.Max(max, count);
+        }
+        return max;
     }
 
     /// <summary>
@@ -2804,19 +3474,36 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Pobiera szczegółowy styl CSS komórki z pełnym odwzorowaniem obramowań
+    /// Pobiera szczegółowy styl CSS komórki: obramowania (bezpośrednie → styl warunkowy →
+    /// styl tabeli, pozycyjnie: krawędź zewnętrzna vs insideH/insideV), padding, tło
+    /// (z warunkowym formatowaniem stylu: firstRow/lastRow/kolumny/pasy), wyrównania.
     /// </summary>
-    private string GetTableCellStyleDetailed(TableCell cell, TableBorders? defaultBorders, string defaultPadding)
+    private string GetTableCellStyleDetailed(
+        TableCell cell,
+        TableRenderContext ctx,
+        int rowIndex,
+        int gridColStart,
+        int gridSpan,
+        int rowSpan)
     {
         var css = new StringBuilder();
         var props = cell.TableCellProperties;
-        
-        // Obramowania: komórka > domyślne tabeli
+
+        // Regiony warunkowego formatowania stylu (najbardziej specyficzny pierwszy).
+        var regions = ComputeConditionalRegions(ctx, rowIndex, gridColStart, gridSpan, rowSpan);
+
+        // Pozycja komórki w siatce decyduje, która strona tabeli jest jej „domyślną" ramką:
+        // krawędzie zewnętrzne biorą top/bottom/left/right, wewnętrzne — insideH/insideV.
+        var isFirstRow = rowIndex == 0;
+        var isLastRow = rowIndex + rowSpan >= ctx.RowCount;
+        var isFirstCol = gridColStart == 0;
+        var isLastCol = ctx.GridColumnCount <= 0 || gridColStart + gridSpan >= ctx.GridColumnCount;
+
         var cb = props?.TableCellBorders;
-        css.Append($"border-top:{GetCellBorderCss(cb?.TopBorder, (BorderType?)defaultBorders?.TopBorder ?? (BorderType?)defaultBorders?.InsideHorizontalBorder)};");
-        css.Append($"border-bottom:{GetCellBorderCss(cb?.BottomBorder, (BorderType?)defaultBorders?.BottomBorder ?? (BorderType?)defaultBorders?.InsideHorizontalBorder)};");
-        css.Append($"border-left:{GetCellBorderCss(cb?.LeftBorder, (BorderType?)defaultBorders?.LeftBorder ?? (BorderType?)defaultBorders?.InsideVerticalBorder)};");
-        css.Append($"border-right:{GetCellBorderCss(cb?.RightBorder, (BorderType?)defaultBorders?.RightBorder ?? (BorderType?)defaultBorders?.InsideVerticalBorder)};");
+        css.Append($"border-top:{ResolveCellBorderSide(cb?.TopBorder, regions, TableCellEdge.Top, isFirstRow ? ctx.Style.Borders.Top : ctx.Style.Borders.InsideH, ctx)};");
+        css.Append($"border-bottom:{ResolveCellBorderSide(cb?.BottomBorder, regions, TableCellEdge.Bottom, isLastRow ? ctx.Style.Borders.Bottom : ctx.Style.Borders.InsideH, ctx)};");
+        css.Append($"border-left:{ResolveCellBorderSide(cb?.LeftBorder, regions, TableCellEdge.Left, isFirstCol ? ctx.Style.Borders.Left : ctx.Style.Borders.InsideV, ctx)};");
+        css.Append($"border-right:{ResolveCellBorderSide(cb?.RightBorder, regions, TableCellEdge.Right, isLastCol ? ctx.Style.Borders.Right : ctx.Style.Borders.InsideV, ctx)};");
 
         // Padding
         var cm = props?.TableCellMargin;
@@ -2824,7 +3511,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             var top = GetTwipsValue(cm.TopMargin) ?? 0;
             var bottom = GetTwipsValue(cm.BottomMargin) ?? 0;
-            var left = cm.LeftMargin != null && cm.LeftMargin.Width?.Value != null 
+            var left = cm.LeftMargin != null && cm.LeftMargin.Width?.Value != null
                 ? int.Parse(cm.LeftMargin.Width.Value) : 0;
             var right = cm.RightMargin != null && cm.RightMargin.Width?.Value != null
                 ? int.Parse(cm.RightMargin.Width.Value) : 0;
@@ -2832,31 +3519,47 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         else
         {
-            css.Append($"padding:{defaultPadding};");
+            css.Append($"padding:{ctx.DefaultPadding};");
         }
 
         css.Append("vertical-align:top;");
-        
+
+        // Tło: bezpośrednie tcPr → regiony stylu warunkowego → tcPr stylu (cała tabela) →
+        // tblPr shd (bezpośrednie lub ze stylu). Rozwiązuje themeFill/tint/shade i wzory pct.
+        var shadingHex = ResolveShadingHex(props?.Shading);
+        if (shadingHex == null)
+        {
+            foreach (var region in regions)
+            {
+                shadingHex = ResolveShadingHex(region.GetFirstChild<TableStyleConditionalFormattingTableCellProperties>()?.GetFirstChild<Shading>());
+                if (shadingHex != null) break;
+            }
+        }
+        shadingHex ??= ResolveShadingHex(ctx.Style.WholeTableCellShading);
+        shadingHex ??= ResolveShadingHex(ctx.Style.TableShading);
+        if (shadingHex != null)
+            css.Append($"background-color:#{shadingHex};");
+
         if (props != null)
         {
-            // Szerokość
+            // Szerokość — tylko realne jednostki. w:tcW type=auto/nil ma zwykle w:w="0",
+            // co dawało width:0px i łamało układ.
             var w = props.TableCellWidth;
             if (w?.Width?.Value != null)
             {
-                if (w.Type?.Value == TableWidthUnitValues.Pct)
-                    css.Append($"width:{int.Parse(w.Width.Value) / 50}%;");
-                else
-                    css.Append($"width:{TwipsToPx(int.Parse(w.Width.Value))}px;");
+                if (w.Type?.Value == TableWidthUnitValues.Pct
+                    && double.TryParse(w.Width.Value, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var pct50) && pct50 > 0)
+                    css.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture, "width:{0:0.##}%;", pct50 / 50.0));
+                else if ((w.Type == null || w.Type.Value == TableWidthUnitValues.Dxa)
+                    && int.TryParse(w.Width.Value, out var wtw) && wtw > 0)
+                    css.Append($"width:{TwipsToPx(wtw)}px;");
             }
-
-            // Kolor tła
-            if (props.Shading?.Fill?.Value != null && props.Shading.Fill.Value != "auto")
-                css.Append($"background-color:#{props.Shading.Fill.Value};");
 
             // Wyrównanie pionowe
             if (props.TableCellVerticalAlignment?.Val != null)
                 css.Append($"vertical-align:{GetTableVerticalAlignment(props.TableCellVerticalAlignment.Val.Value)};");
-            
+
             // Kierunek tekstu
             if (props.TextDirection?.Val != null)
             {
@@ -2873,14 +3576,76 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return css.ToString();
     }
 
-    private string GetCellBorderCss(BorderType? cellBorder, BorderType? defaultBorder)
+    private enum TableCellEdge { Top, Bottom, Left, Right }
+
+    /// <summary>
+    /// Rozstrzyga jedną krawędź komórki: bezpośredni tcBorders (w tym jawne none/nil) →
+    /// tcBorders/tblBorders regionów stylu warunkowego → tcPr stylu (cała tabela) →
+    /// pozycyjna krawędź z efektywnych tblBorders (przekazana jako fallback).
+    /// </summary>
+    private string ResolveCellBorderSide(
+        BorderType? directBorder,
+        List<TableStyleProperties> regions,
+        TableCellEdge edge,
+        BorderType? tableFallback,
+        TableRenderContext ctx)
     {
-        var border = cellBorder ?? defaultBorder;
-        if (border == null) return "none";
-        var v = border.Val?.Value;
-        if (v == null || v == BorderValues.None || v == BorderValues.Nil) return "none";
-        return GetBorderCss(border);
+        // Bezpośrednia definicja na komórce wygrywa zawsze — także jawne "brak linii".
+        if (directBorder != null)
+        {
+            var v = directBorder.Val?.Value;
+            if (v == null || v == BorderValues.None || v == BorderValues.Nil) return "none";
+            return GetBorderCss(directBorder);
+        }
+
+        foreach (var region in regions)
+        {
+            var tcB = region.GetFirstChild<TableStyleConditionalFormattingTableCellProperties>()?.GetFirstChild<TableCellBorders>();
+            var b = PickEdge(tcB, edge);
+            if (b == null)
+            {
+                var tblB = region.GetFirstChild<TableStyleConditionalFormattingTableProperties>()?.GetFirstChild<TableBorders>();
+                b = PickEdge(tblB, edge);
+            }
+            if (b != null)
+            {
+                var v = b.Val?.Value;
+                if (v == null || v == BorderValues.None || v == BorderValues.Nil) return "none";
+                return GetBorderCss(b);
+            }
+        }
+
+        var whole = PickEdge(ctx.Style.WholeTableCellBorders, edge);
+        if (whole != null)
+        {
+            var v = whole.Val?.Value;
+            if (v == null || v == BorderValues.None || v == BorderValues.Nil) return "none";
+            return GetBorderCss(whole);
+        }
+
+        if (tableFallback == null) return "none";
+        var fv = tableFallback.Val?.Value;
+        if (fv == null || fv == BorderValues.None || fv == BorderValues.Nil) return "none";
+        return GetBorderCss(tableFallback);
     }
+
+    private static BorderType? PickEdge(TableCellBorders? b, TableCellEdge edge) => edge switch
+    {
+        TableCellEdge.Top => b?.TopBorder,
+        TableCellEdge.Bottom => b?.BottomBorder,
+        TableCellEdge.Left => b?.LeftBorder,
+        TableCellEdge.Right => b?.RightBorder,
+        _ => null
+    };
+
+    private static BorderType? PickEdge(TableBorders? b, TableCellEdge edge) => edge switch
+    {
+        TableCellEdge.Top => b?.TopBorder,
+        TableCellEdge.Bottom => b?.BottomBorder,
+        TableCellEdge.Left => b?.LeftBorder,
+        TableCellEdge.Right => b?.RightBorder,
+        _ => null
+    };
 
     /// <summary>
     /// Sprawdza, czy TableBorders nie zawiera żadnego widocznego borderu
@@ -2902,6 +3667,309 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             && IsBlank(tb.InsideHorizontalBorder)
             && IsBlank(tb.InsideVerticalBorder);
     }
+
+    #region Rozwiązywanie stylu tabeli (w:tblStyle / w:tblLook / w:tblStylePr)
+
+    /// <summary>Efektywne obramowania tabeli: bezpośrednie tblBorders scalone per strona ze stylem tabeli.</summary>
+    private sealed class EffectiveTableBorders
+    {
+        public BorderType? Top, Bottom, Left, Right, InsideH, InsideV;
+
+        public bool IsEmpty
+        {
+            get
+            {
+                static bool Blank(BorderType? b)
+                {
+                    if (b == null) return true;
+                    var v = b.Val?.Value;
+                    return v == null || v == BorderValues.None || v == BorderValues.Nil;
+                }
+                return Blank(Top) && Blank(Bottom) && Blank(Left) && Blank(Right) && Blank(InsideH) && Blank(InsideV);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rozwiązany kontekst stylu tabeli: łańcuch basedOn, flagi tblLook, efektywne obramowania,
+    /// cieniowanie i marginesy komórek oraz formaty warunkowe (tblStylePr) per region.
+    /// </summary>
+    private sealed class TableStyleContext
+    {
+        public string? StyleId;
+        public string LookHex = "04A0";
+        public bool FirstRow, LastRow, FirstColumn, LastColumn, RowBands = true, ColumnBands;
+        public int RowBandSize = 1, ColBandSize = 1;
+        public EffectiveTableBorders Borders = new();
+        public Shading? TableShading;            // w:tblPr/w:shd (bezpośrednie lub ze stylu)
+        public Shading? WholeTableCellShading;   // w:tcPr/w:shd stylu — tło każdej komórki
+        public TableCellBorders? WholeTableCellBorders; // w:tcPr/w:tcBorders stylu
+        public string DefaultCellPaddingCss = "";
+        public Dictionary<TableStyleOverrideValues, TableStyleProperties> Conditional = new();
+    }
+
+    /// <summary>Kontekst renderowania jednej tabeli (styl + geometria siatki).</summary>
+    private sealed class TableRenderContext
+    {
+        public TableStyleContext Style { get; }
+        public string DefaultPadding { get; }
+        public int RowCount { get; }
+        public int GridColumnCount { get; }
+
+        public TableRenderContext(TableStyleContext style, string defaultPadding, int rowCount, int gridColumnCount)
+        {
+            Style = style;
+            DefaultPadding = defaultPadding;
+            RowCount = rowCount;
+            GridColumnCount = gridColumnCount;
+        }
+    }
+
+    private TableStyleContext ResolveTableStyleContext(TableProperties? tblPr)
+    {
+        var ctx = new TableStyleContext();
+
+        // Łańcuch stylów tabeli (najbardziej pochodny pierwszy), z limitem na cykle.
+        var chain = new List<Style>();
+        var styleId = tblPr?.TableStyle?.Val?.Value;
+        ctx.StyleId = styleId;
+        var guard = 0;
+        while (!string.IsNullOrEmpty(styleId) && guard++ < 12 && _rawStyles.TryGetValue(styleId!, out var st))
+        {
+            chain.Add(st);
+            styleId = st.BasedOn?.Val?.Value;
+        }
+
+        // tblLook: atrybuty boolowskie mają pierwszeństwo; starszy zapis to maska hex w @w:val
+        // (0x0020 firstRow, 0x0040 lastRow, 0x0080 firstColumn, 0x0100 lastColumn,
+        //  0x0200 noHBand, 0x0400 noVBand). Domyślne Worda: firstRow + firstColumn + noVBand.
+        var look = tblPr?.GetFirstChild<TableLook>();
+        int mask = 0x0020 | 0x0080 | 0x0400;
+        if (look?.Val?.Value is string lookVal
+            && int.TryParse(lookVal, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsedMask))
+            mask = parsedMask;
+        ctx.FirstRow = look?.FirstRow?.Value ?? (mask & 0x0020) != 0;
+        ctx.LastRow = look?.LastRow?.Value ?? (mask & 0x0040) != 0;
+        ctx.FirstColumn = look?.FirstColumn?.Value ?? (mask & 0x0080) != 0;
+        ctx.LastColumn = look?.LastColumn?.Value ?? (mask & 0x0100) != 0;
+        ctx.RowBands = !(look?.NoHorizontalBand?.Value ?? (mask & 0x0200) != 0);
+        ctx.ColumnBands = !(look?.NoVerticalBand?.Value ?? (mask & 0x0400) != 0);
+        ctx.LookHex = ((ctx.FirstRow ? 0x0020 : 0) | (ctx.LastRow ? 0x0040 : 0)
+            | (ctx.FirstColumn ? 0x0080 : 0) | (ctx.LastColumn ? 0x0100 : 0)
+            | (ctx.RowBands ? 0 : 0x0200) | (ctx.ColumnBands ? 0 : 0x0400))
+            .ToString("X4", System.Globalization.CultureInfo.InvariantCulture);
+
+        // Efektywne obramowania: per strona — bezpośrednie tblBorders wygrywa, potem
+        // pierwsza definicja tej strony w łańcuchu stylów (dziedziczenie element-wise).
+        BorderType? Side(Func<TableBorders, BorderType?> pick)
+        {
+            if (tblPr?.TableBorders is TableBorders direct && pick(direct) is BorderType d) return d;
+            foreach (var st in chain)
+            {
+                var sb = st.StyleTableProperties?.GetFirstChild<TableBorders>();
+                if (sb != null && pick(sb) is BorderType b) return b;
+            }
+            return null;
+        }
+        ctx.Borders.Top = Side(b => b.TopBorder);
+        ctx.Borders.Bottom = Side(b => b.BottomBorder);
+        ctx.Borders.Left = Side(b => b.LeftBorder);
+        ctx.Borders.Right = Side(b => b.RightBorder);
+        ctx.Borders.InsideH = Side(b => b.InsideHorizontalBorder);
+        ctx.Borders.InsideV = Side(b => b.InsideVerticalBorder);
+
+        // Cieniowanie całej tabeli / wszystkich komórek ze stylu.
+        ctx.TableShading = tblPr?.GetFirstChild<Shading>()
+            ?? chain.Select(s => s.StyleTableProperties?.GetFirstChild<Shading>()).FirstOrDefault(s => s != null);
+        ctx.WholeTableCellShading = chain
+            .Select(s => s.StyleTableCellProperties?.GetFirstChild<Shading>())
+            .FirstOrDefault(s => s != null);
+        ctx.WholeTableCellBorders = chain
+            .Select(s => s.StyleTableCellProperties?.GetFirstChild<TableCellBorders>())
+            .FirstOrDefault(b => b != null);
+
+        // Rozmiar pasów (banding).
+        ctx.RowBandSize = (int?)tblPr?.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value
+            ?? chain.Select(s => (int?)s.StyleTableProperties?.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value)
+                .FirstOrDefault(v => v != null) ?? 1;
+        ctx.ColBandSize = (int?)tblPr?.GetFirstChild<TableStyleColumnBandSize>()?.Val?.Value
+            ?? chain.Select(s => (int?)s.StyleTableProperties?.GetFirstChild<TableStyleColumnBandSize>()?.Val?.Value)
+                .FirstOrDefault(v => v != null) ?? 1;
+
+        // Formaty warunkowe: od bazy do najbardziej pochodnego, by pochodny nadpisał region.
+        for (var i = chain.Count - 1; i >= 0; i--)
+        {
+            foreach (var tsp in chain[i].Elements<TableStyleProperties>())
+            {
+                if (tsp.Type?.Value is TableStyleOverrideValues t)
+                    ctx.Conditional[t] = tsp;
+            }
+        }
+
+        // Domyślne marginesy komórek (padding): bezpośredni tblCellMar → styl → default Worda.
+        const int wordDefaultCellMarginTwips = 108; // 0.19 cm
+        var cellMars = new List<TableCellMarginDefault>();
+        if (tblPr?.TableCellMarginDefault != null) cellMars.Add(tblPr.TableCellMarginDefault);
+        foreach (var st in chain)
+        {
+            var m = st.StyleTableProperties?.GetFirstChild<TableCellMarginDefault>();
+            if (m != null) cellMars.Add(m);
+        }
+        int PadSide(Func<TableCellMarginDefault, int?> pick, int fallback)
+        {
+            foreach (var m in cellMars)
+                if (pick(m) is int v) return v;
+            return fallback;
+        }
+        var topPad = PadSide(m => GetTwipsValue(m.TopMargin), 0);
+        var bottomPad = PadSide(m => GetTwipsValue(m.BottomMargin), 0);
+        var leftPad = PadSide(m => GetDxaValue(m.TableCellLeftMargin), wordDefaultCellMarginTwips);
+        var rightPad = PadSide(m => GetDxaValue(m.TableCellRightMargin), wordDefaultCellMarginTwips);
+        ctx.DefaultCellPaddingCss = $"{TwipsToPx(topPad)}px {TwipsToPx(rightPad)}px {TwipsToPx(bottomPad)}px {TwipsToPx(leftPad)}px";
+
+        return ctx;
+    }
+
+    /// <summary>
+    /// Regiony formatowania warunkowego stylu obejmujące komórkę, w kolejności priorytetu
+    /// (najbardziej specyficzny pierwszy): firstRow/lastRow → firstCol/lastCol → pasy.
+    /// Pasy liczone z pominięciem wiersza nagłówkowego / pierwszej kolumny (jak w Wordzie).
+    /// </summary>
+    private static List<TableStyleProperties> ComputeConditionalRegions(
+        TableRenderContext ctx, int rowIndex, int gridColStart, int gridSpan, int rowSpan)
+    {
+        var s = ctx.Style;
+        var result = new List<TableStyleProperties>();
+        if (s.Conditional.Count == 0) return result;
+
+        var isFirstRow = s.FirstRow && rowIndex == 0;
+        var isLastRow = s.LastRow && rowIndex + rowSpan >= ctx.RowCount;
+        var isFirstCol = s.FirstColumn && gridColStart == 0;
+        var isLastCol = s.LastColumn && ctx.GridColumnCount > 0 && gridColStart + gridSpan >= ctx.GridColumnCount;
+
+        void Add(TableStyleOverrideValues t)
+        {
+            if (s.Conditional.TryGetValue(t, out var p)) result.Add(p);
+        }
+
+        if (isFirstRow) Add(TableStyleOverrideValues.FirstRow);
+        if (isLastRow) Add(TableStyleOverrideValues.LastRow);
+        if (isFirstCol) Add(TableStyleOverrideValues.FirstColumn);
+        if (isLastCol) Add(TableStyleOverrideValues.LastColumn);
+
+        if (s.ColumnBands && !isFirstCol && !isLastCol)
+        {
+            var colForBand = gridColStart - (s.FirstColumn ? 1 : 0);
+            if (colForBand >= 0)
+                Add((colForBand / Math.Max(1, s.ColBandSize)) % 2 == 0
+                    ? TableStyleOverrideValues.Band1Vertical
+                    : TableStyleOverrideValues.Band2Vertical);
+        }
+        if (s.RowBands && !isFirstRow && !isLastRow)
+        {
+            var rowForBand = rowIndex - (s.FirstRow ? 1 : 0);
+            if (rowForBand >= 0)
+                Add((rowForBand / Math.Max(1, s.RowBandSize)) % 2 == 0
+                    ? TableStyleOverrideValues.Band1Horizontal
+                    : TableStyleOverrideValues.Band2Horizontal);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Rozwiązuje w:shd na kolor hex (bez '#'): fill/themeFill(+tint/shade), a wzory pctNN
+    /// przybliża mieszając kolor wzoru z tłem w zadanej proporcji (val=solid → kolor wzoru).
+    /// Zwraca null dla braku/auto/clear-bez-fill.
+    /// </summary>
+    private string? ResolveShadingHex(Shading? shd)
+    {
+        if (shd == null) return null;
+
+        string? fill = null;
+        if (shd.Fill?.Value is string f && !string.Equals(f, "auto", StringComparison.OrdinalIgnoreCase))
+            fill = f;
+        else if (shd.ThemeFill?.HasValue == true)
+        {
+            var themeHex = ResolveThemeColor(shd.ThemeFill.Value)?.TrimStart('#');
+            if (themeHex != null)
+                fill = ApplyTintShade(themeHex, shd.ThemeFillTint?.Value, shd.ThemeFillShade?.Value);
+        }
+
+        var patternPct = GetShadingPatternPercent(shd.Val?.Value);
+        if (patternPct is double pct && pct > 0)
+        {
+            string patternColor = "000000";
+            if (shd.Color?.Value is string c && !string.Equals(c, "auto", StringComparison.OrdinalIgnoreCase))
+                patternColor = c;
+            else if (shd.ThemeColor?.HasValue == true)
+            {
+                var th = ResolveThemeColor(shd.ThemeColor.Value)?.TrimStart('#');
+                if (th != null) patternColor = ApplyTintShade(th, shd.ThemeTint?.Value, shd.ThemeShade?.Value);
+            }
+            fill = BlendHex(patternColor, fill ?? "FFFFFF", pct / 100.0);
+        }
+
+        if (fill == null) return null;
+        return Regex.IsMatch(fill, "^[0-9A-Fa-f]{6}$") ? fill.ToUpperInvariant() : null;
+    }
+
+    /// <summary>Procent wzoru cieniowania (pct5..pct95, solid=100). Null dla clear/braku.</summary>
+    private static double? GetShadingPatternPercent(ShadingPatternValues? val)
+    {
+        if (val == null) return null;
+        if (val == ShadingPatternValues.Solid) return 100;
+        // Nazwa literału OOXML ma postać "pctNN" / "pctNNN" (pct12 = 12.5% itd.).
+        var literal = ((DocumentFormat.OpenXml.IEnumValue)val.Value).Value;
+        var m = Regex.Match(literal, @"^pct(\d+)$");
+        if (!m.Success) return null;
+        var n = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        // pct12/37/62/87 to w OOXML 12.5/37.5/62.5/87.5.
+        if (n == 12 || n == 37 || n == 62 || n == 87) n += 0.5;
+        return n;
+    }
+
+    /// <summary>Aplikuje themeTint/themeShade (hex bajt) na kolor hex RRGGBB.</summary>
+    private static string ApplyTintShade(string hex, string? tintHex, string? shadeHex)
+    {
+        if (!Regex.IsMatch(hex, "^[0-9A-Fa-f]{6}$")) return hex;
+        double r = System.Convert.ToInt32(hex.Substring(0, 2), 16);
+        double g = System.Convert.ToInt32(hex.Substring(2, 2), 16);
+        double b = System.Convert.ToInt32(hex.Substring(4, 2), 16);
+
+        if (tintHex != null && int.TryParse(tintHex, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var tint))
+        {
+            var t = tint / 255.0;
+            r = r * t + 255 * (1 - t);
+            g = g * t + 255 * (1 - t);
+            b = b * t + 255 * (1 - t);
+        }
+        if (shadeHex != null && int.TryParse(shadeHex, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var shade))
+        {
+            var s = shade / 255.0;
+            r *= s; g *= s; b *= s;
+        }
+        return $"{(int)Math.Round(r):X2}{(int)Math.Round(g):X2}{(int)Math.Round(b):X2}";
+    }
+
+    /// <summary>Miesza kolor fg z tłem bg w proporcji weight (0..1) kanał po kanale.</summary>
+    private static string BlendHex(string fgHex, string bgHex, double weight)
+    {
+        if (!Regex.IsMatch(fgHex, "^[0-9A-Fa-f]{6}$") || !Regex.IsMatch(bgHex, "^[0-9A-Fa-f]{6}$"))
+            return fgHex;
+        weight = Math.Clamp(weight, 0, 1);
+        int Mix(int i)
+        {
+            var fg = System.Convert.ToInt32(fgHex.Substring(i, 2), 16);
+            var bg = System.Convert.ToInt32(bgHex.Substring(i, 2), 16);
+            return (int)Math.Round(fg * weight + bg * (1 - weight));
+        }
+        return $"{Mix(0):X2}{Mix(2):X2}{Mix(4):X2}";
+    }
+
+    #endregion
 
     private string ConvertSdtBlockToHtml(SdtBlock sdtBlock, WordprocessingDocument document)
     {
@@ -2991,32 +4059,39 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private void AppendTableCellHtml(
         StringBuilder html,
         Table table,
-        TableRow row,
+        List<TableRow> rows,
+        int rowIndex,
         TableCell cell,
-        TableBorders? defaultBorders,
-        string defaultPadding,
+        TableRenderContext ctx,
+        ref int gridCursor,
         WordprocessingDocument document,
         OpenXmlPart? sourcePart)
     {
         var cellProps = cell.TableCellProperties;
-        var cellStyle = GetTableCellStyleDetailed(cell, defaultBorders, defaultPadding);
+        var gridSpan = GetGridSpan(cell);
+        var gridColStart = gridCursor;
+        gridCursor += gridSpan; // komórka (także kontynuacja vMerge) zajmuje kolumny siatki
 
         var colspan = "";
-        if (cellProps?.GridSpan?.Val?.Value is > 1)
-            colspan = $" colspan=\"{cellProps.GridSpan.Val.Value}\"";
+        if (gridSpan > 1)
+            colspan = $" colspan=\"{gridSpan}\"";
 
         var rowspan = "";
+        var rowSpanCount = 1;
+        var row = rows[rowIndex];
         var vMerge = cellProps?.VerticalMerge;
         if (vMerge != null && vMerge.Val?.Value == MergedCellValues.Restart)
         {
-            var rsc = CountRowSpan(table, row, cell);
-            if (rsc > 1) rowspan = $" rowspan=\"{rsc}\"";
+            rowSpanCount = CountRowSpan(table, row, cell);
+            if (rowSpanCount > 1) rowspan = $" rowspan=\"{rowSpanCount}\"";
         }
         else if (vMerge != null && (vMerge.Val == null || vMerge.Val.Value == MergedCellValues.Continue))
         {
             // An omitted vMerge val defaults to "continue" (ECMA-376) — drop the merged cell.
             return;
         }
+
+        var cellStyle = GetTableCellStyleDetailed(cell, ctx, rowIndex, gridColStart, gridSpan, rowSpanCount);
 
         html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
 

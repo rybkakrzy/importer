@@ -1,13 +1,21 @@
 # Observability standard (ELK / GCP)
 
-Standard logowania dla `D2ViewerEditor.Api`. Logi to **structured JSON, jedna linia = jeden wpis**,
+Standard logowania dla **obu hostów**: `D2ViewerEditor.Api` (MS logging + własny
+`GcpJsonConsoleFormatter`, `Api/Logging/`) oraz `D2ServicesViewerEditor.Api` (Serilog + własny
+`GcpJsonSerilogFormatter` w tym samym formacie; pipeline ma też `UseRequestObservability()` +
+`UseExceptionHandlingMiddleware()`). Logi to **structured JSON, jedna linia = jeden wpis**,
 pisane na **stdout** (zbierane przez Filebeat/Logstash → Elasticsearch → Kibana; ten sam format niesie
-`severity` dla Google Cloud Logging). Bez nowych zależności — własny `GcpJsonConsoleFormatter`.
+`severity` dla Google Cloud Logging). Bez nowych zależności.
 
 ## Włączanie
 
 `AddGcpStructuredLogging()` (Program.cs) włącza formatter JSON poza Development (albo jawnie
 `Logging:UseGcpFormat=true`). Lokalnie zostaje czytelny tekst. Poziomy: `Logging:LogLevel` w appsettings.
+Konfiguracja formattera: `StructuredLogFormatterOptions` (`ProjectId`, `ServiceName`/`ServiceVersion`,
+`ServiceInstanceId`, przełączniki `IncludeScopes`/`IncludeEventId`/`IncludeSourceLocation`/
+`IncludeHttpRequest`/`IncludeElasticCommonSchemaFields`/`IncludeGoogleCloudFields`, lista
+`RedactedPropertyNames`). `LoggingExtensions` czyta ProjectId z `GOOGLE_CLOUD_PROJECT`, instance id
+z `K_REVISION`/`HOSTNAME`. `IHttpContextAccessor` jest opcjonalny — formatter działa też w workerze bez HTTP.
 
 ## Format wpisu
 
@@ -18,18 +26,28 @@ pisane na **stdout** (zbierane przez Filebeat/Logstash → Elasticsearch → Kib
 | `level` | `LogLevel.ToString()` | ELK-friendly (Information/Warning/…) |
 | `message` | sformatowana wiadomość (+ pełny stack trace przy wyjątku) | |
 | `category` | kategoria loggera (typ) | |
-| `service` | `IHostEnvironment.ApplicationName` | enrichment |
-| `environment` | `IHostEnvironment.EnvironmentName` | enrichment |
 | `traceId` / `spanId` | `Activity.Current` | trace W3C |
 | `eventId` | gdy ≠ 0 | |
 | `exceptionType` | FQN wyjątku | przy błędach |
-| `correlationId` | scope (middleware) | korelacja w obrębie requestu |
+| `correlation_id` (+ `labels.correlation_id`) | `HttpContext.Items` / nagłówek `X-Correlation-ID` / scope / Activity baggage | korelacja w obrębie requestu |
 | `requestId` | scope (`HttpContext.TraceIdentifier`) | |
 | `httpMethod`,`httpPath`,`statusCode`,`elapsedMs`,`userId` | access-log (argumenty strukturalne) | jeden wpis na request |
 | `masterId`,`versionId`,`deliveryId`,`attempt` | scope w workerze wysyłki | business context |
 
+**Pola GCP** (gdy `IncludeGoogleCloudFields`, domyślnie ON): `logging.googleapis.com/trace|spanId|trace_sampled|sourceLocation`, obiekt `httpRequest`, `labels`.
+
+**Pola ECS** (gdy `IncludeElasticCommonSchemaFields`, domyślnie ON): `@timestamp`, `log.*`,
+**`service.*` (obiekt — `service.name`/`version`/`environment`/`node`; UWAGA: przy ECS ON dawne płaskie
+pola `service`/`environment` żyją w obiekcie `service{}` — migracja kontraktu 2026-06-28)**, `trace.*`/`span.*`,
+`transaction.*`, `event.*` (w tym `event.reason` = klasyfikacja błędu: db/dependency/validation/authorization/code),
+`error.{type,message,stack_trace,inner}` (structured; wyjątek dodatkowo doklejony do `message` dla
+GCP Error Reporting), `http.*`, `url.*`, `user.id`.
+
+**Maskowanie:** pola wrażliwe (lista `RedactedPropertyNames`, dopasowanie case/separator-insensitive)
+oraz query string są zastępowane `"[REDACTED]"`.
+
 Dodatkowo: wszystkie pary klucz/wartość z **scope'ów** (`BeginScope`) oraz **argumenty szablonu**
-wiadomości (`LogInformation("... {Foo}", foo)`) trafiają jako osobne pola.
+wiadomości (`LogInformation("... {Foo}", foo)`) trafiają jako osobne pola (nie nadpisują pól systemowych).
 
 ## Korelacja
 

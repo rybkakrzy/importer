@@ -20,7 +20,7 @@ Kontekst technologiczny (zweryfikowany w repo):
 
 ## Krótki opis
 
-System przyjmuje dokument (DOCX lub PDF) od aplikacji zewnętrznej wraz z metadanymi (URL zwrotny + klasyfikacja C1..C4), zapisuje go i — dla DOCX — tworzy wersję edytowalną będącą kopią oryginału. Użytkownik otwiera dokument w GUI: PDF w trybie podglądu, DOCX w edytorze WYSIWYG. Zmiany w trybie edycji są nadpisywane w miejscu (auto-save) na wersji edytowalnej; oryginał pozostaje nietknięty. System wspiera też podpisy cyfrowe (własny format X.509 w Custom XML Part), generowanie kodów kreskowych/QR i bibliotekę szablonów.
+System przyjmuje dokument (DOCX lub PDF) od aplikacji zewnętrznej wraz z metadanymi (URL zwrotny + opcjonalna klasyfikacja C1..C4), zapisuje go i — dla DOCX — tworzy wersję edytowalną będącą kopią oryginału. Użytkownik otwiera dokument w GUI: PDF w trybie podglądu, DOCX w edytorze WYSIWYG. Zmiany w trybie edycji są nadpisywane w miejscu (auto-save) na wersji edytowalnej; oryginał pozostaje nietknięty. System wspiera też podpisy cyfrowe (własny format X.509 w Custom XML Part), generowanie kodów kreskowych/QR i bibliotekę szablonów.
 
 ## Trzy projekty w repo
 
@@ -31,6 +31,8 @@ System przyjmuje dokument (DOCX lub PDF) od aplikacji zewnętrznej wraz z metada
 | `D2GuiViewerEditor` | **Angular SPA** — edytor/viewer | 4200 (`ng serve`) | `docker/gui.dockerfile`, nginx, EXPOSE 80 |
 
 **Kto z kim rozmawia:** aplikacja zewnętrzna → `D2ServicesViewerEditor` (ingest + otwarcie URL do GUI). GUI → `D2ApiViewerEditor`. Aplikacja zewnętrzna nie rozmawia z internal API — sama składa URL do GUI z `MasterId`/`VersionId`.
+
+Dodatkowo w repo jest **`D2ExampleExternalApp`** (net8.0, port 15120) — przykładowa aplikacja integratora do testów end-to-end: wysyła plik do External API z `ReturnUrl` na własny callback i odbiera zwrotkę multipart po „Zakończ i wyślij" (szczegóły: `D2ExampleExternalApp/README.md`). Nie jest częścią produktu.
 
 ## Główni użytkownicy
 

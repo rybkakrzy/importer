@@ -26,7 +26,7 @@ Sposób uruchamiania, budowania i wdrażania projektu. Część szczegółów de
 
 ```bash
 # Wymagane zależności zewnętrzne (uruchamiane poza repo):
-#  - PostgreSQL  (schemat: uruchom skrypty infra/sql/ w kolejności 001..007)
+#  - PostgreSQL  (schemat: uruchom skrypty infra/sql/ w kolejności 001..011)
 #  - GCS lub fake-gcs-server (bucket: d2viewereditor-documents)
 
 # Internal API
@@ -37,6 +37,9 @@ cd D2ServicesViewerEditor && dotnet run --project D2ServicesViewerEditor.Api
 
 # GUI
 cd D2GuiViewerEditor && npm install && npm start   # http://localhost:4200
+
+# (opcjonalnie) przykładowy integrator do testów end-to-end zwrotki
+cd D2ExampleExternalApp && dotnet run              # http://localhost:15120/swagger
 ```
 
 ## CI/CD

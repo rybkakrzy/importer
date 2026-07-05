@@ -15,7 +15,7 @@ public class SaveDocumentCommandHandler : IRequestHandler<SaveDocumentCommand, R
 
     public Task<Result<SaveDocumentResult>> Handle(SaveDocumentCommand request, CancellationToken cancellationToken)
     {
-        var docxBytes = _converter.Convert(request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize);
+        var docxBytes = _converter.Convert(request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize, request.SectionHeadersFooters);
 
         var fileName = !string.IsNullOrEmpty(request.OriginalFileName)
             ? request.OriginalFileName

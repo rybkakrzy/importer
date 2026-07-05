@@ -38,6 +38,19 @@ public class HeaderFooterContent
 }
 
 /// <summary>
+/// Nagłówek/stopka JEDNEJ sekcji dokumentu wielosekcyjnego. Wpisy istnieją tylko dla
+/// sekcji (indeks 0-based w kolejności dokumentu), które deklarują WŁASNE referencje
+/// nagłówka/stopki; sekcja bez wpisu dziedziczy je z poprzedniej sekcji (jak Word).
+/// Sekcja 0 pozostaje w polach <see cref="DocumentContent.Header"/>/<see cref="DocumentContent.Footer"/>.
+/// </summary>
+public class SectionHeaderFooter
+{
+    public int SectionIndex { get; set; }
+    public HeaderFooterContent? Header { get; set; }
+    public HeaderFooterContent? Footer { get; set; }
+}
+
+/// <summary>
 /// Reprezentuje dokument z konwersji DOCX do HTML
 /// </summary>
 public class DocumentContent
@@ -50,6 +63,8 @@ public class DocumentContent
     public HeaderFooterContent? Footer { get; set; }
     public PageMargins? Margins { get; set; }
     public PageSize? PageSize { get; set; }
+    /// <summary>Własne nagłówki/stopki sekcji ≥ 1 (dokumenty wielosekcyjne, R-10/ADR-0023).</summary>
+    public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
 }
 
 /// <summary>
@@ -142,6 +157,7 @@ public class SaveDocumentRequest
     public HeaderFooterContent? Footer { get; set; }
     public PageMargins? Margins { get; set; }
     public PageSize? PageSize { get; set; }
+    public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
 }
 
 /// <summary>

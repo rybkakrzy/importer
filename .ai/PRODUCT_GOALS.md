@@ -26,8 +26,8 @@ Umożliwić aplikacjom zewnętrznym oddanie dokumentu (DOCX/PDF) do bezpiecznego
 | Ingest zewnętrzny (Krok 1) | Implemented | `D2ServicesViewerEditor` + `IngestExternalDocumentCommand` |
 | Płaski zapis edytowalnej wersji + auto-save | Implemented | `PUT .../versions/{versionId}`, switch AutoSave w GUI |
 | Endpoint metadanych (returnUrl, classification) | Implemented | `GET .../{masterId}/metadata` |
-| Tryb podglądu (Krok 2) — ładowanie v1 dla DOCX | In Progress | GUI wciąż ładuje aktywną wersję; patrz RISKS/FEATURES |
-| Zakończ i wyślij (Krok 4) — async zwrot pliku na returnUrl | Implemented | `FinishAndSendDocumentCommand` + tabela `document_deliveries` + worker `DocumentDeliveryWorker`; GUI `finishDocument()` z pollingiem. Patrz FEATURES, DECISIONS ADR-0005 |
+| Tryb podglądu (Krok 2) — ładowanie v1 dla DOCX | Implemented | GUI bez `versionId` ładuje v1 (`downloadBaseVersion`); patrz FEATURES |
+| Zakończ i wyślij (Krok 4) — zwrot pliku na returnUrl | Implemented | `FinishAndSendDocumentCommand`: synchroniczna 1. próba + worker `DocumentDeliveryWorker` (kontynuacja/retry w tle); GUI `finishDocument()` z „Przerwij"/„Kontynuuj w tle". Patrz FEATURES, DECISIONS ADR-0005 |
 
 ## Cele długoterminowe
 

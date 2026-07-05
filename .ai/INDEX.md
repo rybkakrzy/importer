@@ -60,6 +60,11 @@ Preferowane zasady:
 | `GRAPHICS_CONVERSION.md` | Konwerter grafik legacy (VML/EMF/WMF → SVG/PNG/placeholder): architektura `IGraphicConversionService`, strategia pass-through, bezpieczeństwo (XXE/SVG sanitizer), dlaczego bez LibreOffice/GDI, testy, benchmarki, roadmapa |
 | `BENCHMARKS.md` | Benchmarki wydajności/pamięci (BenchmarkDotNet) + fidelity-checks DOCX (R-15..R-21), perf harness frontu, jak uruchomić, progi, CI |
 | `FIDELITY_REPORT.md` | Zgodność odwzorowania DOCX→HTML z Wordem (macierz wierności, testy, kolejne kroki) |
+| `AUDIT_WORD_COMPATIBILITY.md` | Pełny audyt zgodności z MS Word (2026-07-05): ~60 problemów z klasyfikacją potwierdzone/potencjalne, ryzykiem, warstwą i etapami napraw (utrata danych → struktura → paginacja → tabele/listy → formatowanie → zaawansowane) |
+| `sequence-document-lifecycle.md` | Diagram sekwencji cyklu pracy z dokumentem (snapshot 2026-05-26, aktualizowany punktowo) |
+| `external-api-browser-open-diagram.md` | Diagram komunikacji: ingest przez External API + otwarcie w przeglądarce (snapshot z erratą 2026-07-05) |
+| `confluence-documentation.md` | Dokumentacja projektowa zsyntetyzowana z `.ai` (do Confluence) |
+| `confluence-principal-devops-documentation.md` | Dokumentacja techniczna/DevOps (do Confluence; snapshot z erratą 2026-07-05) |
 
 ## Reguła aktualizacji
 

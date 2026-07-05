@@ -70,12 +70,14 @@ public class DownloadEditedDocumentCommandHandler
             var original = await _storageService.DownloadAsync(baseVersion.StoragePath, cancellationToken);
             using var originalStream = new MemoryStream(original);
             docxBytes = _converter.ConvertPreservingPackage(
-                request.Html, originalStream, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize);
+                request.Html, originalStream, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize,
+                request.SectionHeadersFooters);
         }
         else
         {
             docxBytes = _converter.Convert(
-                request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize);
+                request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize,
+                request.SectionHeadersFooters);
         }
 
         var fileName = string.IsNullOrWhiteSpace(request.OriginalFileName)

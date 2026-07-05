@@ -66,6 +66,44 @@ public class LineSpacingMappingTests
             .Should().Contain("line-height:18pt;");
 
     [Test]
+    public void AtLeastSpacing_IsMarkedForRoundTrip_ExactIsNot()
+    {
+        // Bez markera writer mapował KAŻDE pt-owe line-height na w:lineRule=exact;
+        // atLeast→exact przycina w Wordzie tekst wyższy niż linia.
+        ParagraphCss(new SpacingBetweenLines { Line = "360", LineRule = LineSpacingRuleValues.AtLeast })
+            .Should().Contain("--w-line-rule:atLeast;");
+        ParagraphCss(new SpacingBetweenLines { Line = "360", LineRule = LineSpacingRuleValues.Exact })
+            .Should().NotContain("--w-line-rule");
+    }
+
+    [Test]
+    public void AtLeastSpacing_RoundTripsBackToAtLeastRule()
+    {
+        var writer = new HtmlToDocxConverter();
+
+        var bytes = writer.Convert("<p style=\"line-height:18pt;--w-line-rule:atLeast;\">Tekst</p>");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var spacing = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<SpacingBetweenLines>().Single();
+        spacing.LineRule!.Value.Should().Be(LineSpacingRuleValues.AtLeast);
+        spacing.Line!.Value.Should().Be("360");
+    }
+
+    [Test]
+    public void ExactSpacing_RoundTripsBackToExactRule()
+    {
+        var writer = new HtmlToDocxConverter();
+
+        var bytes = writer.Convert("<p style=\"line-height:18pt;\">Tekst</p>");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var spacing = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<SpacingBetweenLines>().Single();
+        spacing.LineRule!.Value.Should().Be(LineSpacingRuleValues.Exact);
+    }
+
+    [Test]
     public void SpaceBeforeAfter_MapToMarginsInPoints()
     {
         var css = ParagraphCss(new SpacingBetweenLines { Before = "240", After = "200" });

@@ -12,7 +12,8 @@ public interface IHtmlToDocxConverter
     /// </summary>
     byte[] Convert(string html, DocumentMetadata? metadata = null,
                    HeaderFooterContent? header = null, HeaderFooterContent? footer = null,
-                   PageMargins? margins = null, PageSize? pageSize = null);
+                   PageMargins? margins = null, PageSize? pageSize = null,
+                   IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null);
 
     /// <summary>
     /// Pass-through wariant: konwertuje HTML jak <see cref="Convert"/>, a następnie zachowuje
@@ -26,5 +27,6 @@ public interface IHtmlToDocxConverter
     byte[] ConvertPreservingPackage(string html, Stream? originalPackage,
                    DocumentMetadata? metadata = null,
                    HeaderFooterContent? header = null, HeaderFooterContent? footer = null,
-                   PageMargins? margins = null, PageSize? pageSize = null);
+                   PageMargins? margins = null, PageSize? pageSize = null,
+                   IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null);
 }

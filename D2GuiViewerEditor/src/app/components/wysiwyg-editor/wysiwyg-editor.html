@@ -1,21 +1,26 @@
 <div class="wysiwyg-editor-wrapper">
   <div class="pages-container">
-    <!-- Każda strona A4 -->
+    <!-- Każda strona w geometrii swojej sekcji (rozmiar/orientacja/marginesy z pageGeometries;
+         sekcja 1 = pageSize/pageMargins, kolejne z markerów docx-section-break) -->
     @for (page of pageContents(); track $index) {
       <div class="page-wrapper">
-        <div class="page" 
-             [class.landscape]="pageOrientation === 'landscape'"
+        <div class="page"
+             [class.landscape]="isLandscapePage($index)"
+             [style.width.px]="pageWidthPx($index)"
+             [style.min-height.px]="pageMinHeightPx($index)"
              [attr.data-page-number]="$index + 1">
-          
-          <!-- Nagłówek strony -->
+
+          <!-- Nagłówek strony: zaczyna się headerDistance od krawędzi (w:pgMar header),
+               min-height = pasmo (margines − dystans); wyższa treść SPYCHA body jak w Wordzie -->
           <div class="page-header"
                [class.editing]="editingSection() === 'header'"
-               [style.min-height.cm]="headerHeight()"
-               [style.padding-left.px]="pageMargins().left * 37.8"
-               [style.padding-right.px]="pageMargins().right * 37.8"
+               [style.margin-top.px]="headerOffsetPx($index)"
+               [style.min-height.px]="headerBandPx($index)"
+               [style.padding-left.px]="pageMarginPx($index, 'left')"
+               [style.padding-right.px]="pageMarginPx($index, 'right')"
                (click)="startEditingHeader($event)"
                (dblclick)="startEditingHeader($event)">
-            @if (editingSection() === 'header' && $index === 0) {
+            @if (editingSection() === 'header' && $index === editingHfPageIndex()) {
               <div
                 #headerContent
                 class="header-editor-content"
@@ -29,19 +34,17 @@
               <div class="header-display" [innerHTML]="getHeaderContentSafe($index)"></div>
             }
           </div>
-          
+
           @if ($index === 0) {
-            <div 
+            <div
               #pageEditor
               class="editor-content"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="true"
               [attr.data-page-index]="$index"
               [attr.placeholder]="'Zacznij pisać...'"
-              [style.padding-left.px]="pageMargins().left * 37.8"
-              [style.padding-right.px]="pageMargins().right * 37.8"
-              [style.padding-top.px]="contentPaddingTop()"
-              [style.padding-bottom.px]="contentPaddingBottom()"
+              [style.padding-left.px]="pageMarginPx($index, 'left')"
+              [style.padding-right.px]="pageMarginPx($index, 'right')"
               [style.font-size]="documentDefaultFontSize()"
               [style.font-family]="documentDefaultFontFamily()"
               [innerHTML]="getPageContentSafe($index)"
@@ -52,16 +55,14 @@
               (click)="stopEditingHeaderFooter()"
             ></div>
           } @else {
-            <div 
+            <div
               #pageEditor
               class="editor-content"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="true"
               [attr.data-page-index]="$index"
-              [style.padding-left.px]="pageMargins().left * 37.8"
-              [style.padding-right.px]="pageMargins().right * 37.8"
-              [style.padding-top.px]="contentPaddingTop()"
-              [style.padding-bottom.px]="contentPaddingBottom()"
+              [style.padding-left.px]="pageMarginPx($index, 'left')"
+              [style.padding-right.px]="pageMarginPx($index, 'right')"
               [style.font-size]="documentDefaultFontSize()"
               [style.font-family]="documentDefaultFontFamily()"
               [innerHTML]="getPageContentSafe($index)"
@@ -73,15 +74,17 @@
             ></div>
           }
 
-          <!-- Stopka strony -->
+          <!-- Stopka strony: dół stopki footerDistance od dołu strony; wyższa treść odbiera
+               miejsce body (repaginacja mierzy realne pasmo) -->
           <div class="page-footer"
                [class.editing]="editingSection() === 'footer'"
-               [style.min-height.cm]="footerHeight()"
-               [style.padding-left.px]="pageMargins().left * 37.8"
-               [style.padding-right.px]="pageMargins().right * 37.8"
+               [style.margin-bottom.px]="footerOffsetPx($index)"
+               [style.min-height.px]="footerBandPx($index)"
+               [style.padding-left.px]="pageMarginPx($index, 'left')"
+               [style.padding-right.px]="pageMarginPx($index, 'right')"
                (click)="startEditingFooter($event)"
                (dblclick)="startEditingFooter($event)">
-            @if (editingSection() === 'footer' && $index === 0) {
+            @if (editingSection() === 'footer' && $index === editingHfPageIndex()) {
               <!-- Pasek stopki przeniesiony do d2-header-footer-panel (dock po lewej). -->
               <div
                 #footerContent
@@ -99,10 +102,10 @@
           <!-- Prowadnice marginesów (przerywane linie jak w MS Word / Docs) -->
           @if (showMarginGuides) {
             <div class="margin-guides">
-              <div class="margin-guide margin-guide-top" [style.top.px]="pageMargins().top * 37.8"></div>
-              <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMargins().bottom * 37.8"></div>
-              <div class="margin-guide margin-guide-left" [style.left.px]="pageMargins().left * 37.8"></div>
-              <div class="margin-guide margin-guide-right" [style.right.px]="pageMargins().right * 37.8"></div>
+              <div class="margin-guide margin-guide-top" [style.top.px]="pageMarginPx($index, 'top')"></div>
+              <div class="margin-guide margin-guide-bottom" [style.bottom.px]="pageMarginPx($index, 'bottom')"></div>
+              <div class="margin-guide margin-guide-left" [style.left.px]="pageMarginPx($index, 'left')"></div>
+              <div class="margin-guide margin-guide-right" [style.right.px]="pageMarginPx($index, 'right')"></div>
             </div>
           }
         </div>

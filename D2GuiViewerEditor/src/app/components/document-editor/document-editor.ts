@@ -34,6 +34,7 @@ import {
   MARGIN_PRESETS,
   DocumentStyle,
   HeaderFooterContent,
+  SectionHeaderFooter,
   DigitalSignatureInfo,
   SignDocumentRequest
 } from '../../models/document.model';
@@ -54,6 +55,7 @@ import {
   restoreDefaultTableBorders as restoreDefaultBordersUtil
 } from '../../core/utils/table-style.util';
 import { resolveTableContext } from '../../core/utils/table-context.util';
+import { syncTableColgroup } from '../../core/utils/table-grid.util';
 import { isValidReturnUrl } from '../../core/utils/return-url.util';
 
 /**
@@ -568,6 +570,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   });
   /** Page size/orientation (cm) from the imported DOCX; round-tripped verbatim on save. */
   documentPageSize = signal<PageSize | undefined>(undefined);
+  /** Własne nagłówki/stopki sekcji ≥ 1 z importu (dokumenty wielosekcyjne, ADR-0023). */
+  sectionHeadersFooters = signal<SectionHeaderFooter[] | null>(null);
   marginPresets = MARGIN_PRESETS;
 
   // Dialog nagłówka i stopki
@@ -753,7 +757,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       header: this.headerContent(),
       footer: this.footerContent(),
       margins: this.pageSettings().margins,
-      pageSize: this.documentPageSize()
+      pageSize: this.documentPageSize(),
+      sectionHeadersFooters: this.sectionHeadersFooters() ?? undefined
     };
   }
 
@@ -1065,6 +1070,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.documentPageSize.set(content.pageSize);
       this.pageSettings.update(s => ({ ...s, orientation: content.pageSize!.orientation }));
     }
+    // Własne nagłówki/stopki sekcji ≥ 1 (dokumenty wielosekcyjne) — round-trip przez zapis.
+    this.sectionHeadersFooters.set(content.sectionHeadersFooters ?? null);
     if (this.editor) {
       this.editor.setContent(content.html);
     }
@@ -3972,6 +3979,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       td.innerHTML = '&nbsp;';
       td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
     });
+    syncTableColgroup(table);
     this.notifyEditorChange();
   }
 
@@ -3988,6 +3996,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       td.innerHTML = '&nbsp;';
       td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
     });
+    syncTableColgroup(table);
     this.notifyEditorChange();
   }
 
@@ -4022,6 +4031,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         row.deleteCell(pos.colIndex);
       }
     });
+    syncTableColgroup(table);
     this.notifyEditorChange();
   }
 

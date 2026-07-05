@@ -18,16 +18,36 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
-import { 
-  EditorCommand, 
-  EditorState, 
-  HeadingLevel, 
+import {
+  EditorCommand,
+  EditorState,
+  HeadingLevel,
   TextFormatting,
   ParagraphStyle,
   PageMargins,
-  HeaderFooterContent
+  PageSize,
+  HeaderFooterContent,
+  SectionHeaderFooter
 } from '../../models/document.model';
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
+import { syncTableColgroup } from '../../core/utils/table-grid.util';
+
+/**
+ * Geometria pojedynczej strony w edytorze (cm). Sekcja 1 pochodzi z inputów
+ * (`pageSize`/`pageMargins`/`pageOrientation`); kolejne sekcje z markerów
+ * `div.docx-section-break` (data-* z readera, ADR-0023). Dzięki temu dokumenty
+ * mieszające orientacje/rozmiary stron renderują każdą stronę we właściwej geometrii.
+ */
+export interface PageGeometry {
+  widthCm: number;
+  heightCm: number;
+  orientation: 'portrait' | 'landscape';
+  margins: PageMargins;
+  /** w:pgMar header — odległość GÓRY nagłówka od góry strony (cm). Brak → wyliczana z pasma. */
+  headerDistanceCm?: number;
+  /** w:pgMar footer — odległość DOŁU stopki od dołu strony (cm). Brak → wyliczana z pasma. */
+  footerDistanceCm?: number;
+}
 
 /**
  * Komponent edytora WYSIWYG
@@ -82,14 +102,97 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._captureDocumentDefaults(value);
       // Rozbij na strony po znacznikach <div class="page-break">
       const splitPages = this._splitHtmlIntoPages(value || '<p></p>');
-      this.pageContents.set(splitPages.length ? splitPages : ['<p></p>']);
+      const pages = splitPages.length ? splitPages : ['<p></p>'];
+      this.pageContents.set(pages);
+      this.pageGeometries.set(this._deriveGeometriesForPages(pages));
       // Po Angular re-render zaktualizuj aktywny edytor i zrepaginuj
       this._schedulePaginate('content-input');
     }
   }
   
   pageMargins = input<PageMargins>({ top: 2.5, bottom: 2.5, left: 2.5, right: 2.5 });
-  @Input() pageOrientation: 'portrait' | 'landscape' = 'portrait';
+  /** Orientacja jako sygnał (mirror inputu), by geometria bazowa reagowała na zmianę z toolbara. */
+  private readonly _orientationSig = signal<'portrait' | 'landscape'>('portrait');
+  @Input() set pageOrientation(value: 'portrait' | 'landscape') {
+    this._orientationSig.set(value === 'landscape' ? 'landscape' : 'portrait');
+  }
+  get pageOrientation(): 'portrait' | 'landscape' {
+    return this._orientationSig();
+  }
+  /** Rzeczywisty rozmiar strony dokumentu (cm; sekcja 1 z readera). Brak → A4. */
+  private readonly _pageSizeSig = signal<PageSize | null>(null);
+  @Input() set pageSize(value: PageSize | undefined) {
+    this._pageSizeSig.set(value ?? null);
+  }
+
+  /**
+   * Geometria strony sekcji 1 — źródło prawdy dla stron bez markera sekcji.
+   * Wymiary z `pageSize` (fallback A4); orientacja z inputu wygrywa (toolbar może ją
+   * przełączyć bez aktualizacji wymiarów) — wtedy wymiary są obracane.
+   */
+  readonly baseGeometry = computed<PageGeometry>(() => {
+    const size = this._pageSizeSig();
+    const landscape = this._orientationSig() === 'landscape';
+    let widthCm = size?.widthCm ?? (landscape ? 29.7 : 21);
+    let heightCm = size?.heightCm ?? (landscape ? 21 : 29.7);
+    if (widthCm > 0 && heightCm > 0 && landscape !== widthCm >= heightCm) {
+      [widthCm, heightCm] = [heightCm, widthCm];
+    }
+    return {
+      widthCm,
+      heightCm,
+      orientation: landscape ? 'landscape' : 'portrait',
+      margins: this.pageMargins(),
+    };
+  });
+
+  /** Geometria per strona (indeks = strona). Wypełniana przy split/repaginacji; brak → baza. */
+  readonly pageGeometries = signal<PageGeometry[]>([]);
+
+  /** Indeks sekcji (0-based) per strona — do doboru nagłówka/stopki sekcji. Brak → sekcja 0. */
+  readonly pageSectionIndexes = signal<number[]>([]);
+
+  geometryFor(index: number): PageGeometry {
+    return this.pageGeometries()[index] ?? this.baseGeometry();
+  }
+
+  // Helpery szablonu — px przy 96 DPI (37.8 px/cm), spójnie z resztą komponentu.
+  pageWidthPx(index: number): number {
+    return this.geometryFor(index).widthCm * 37.8;
+  }
+  pageMinHeightPx(index: number): number {
+    return this.geometryFor(index).heightCm * 37.8;
+  }
+  isLandscapePage(index: number): boolean {
+    return this.geometryFor(index).orientation === 'landscape';
+  }
+  pageMarginPx(index: number, side: 'top' | 'bottom' | 'left' | 'right'): number {
+    return this.geometryFor(index).margins[side] * 37.8;
+  }
+  /**
+   * Geometria pasma nagłówka/stopki jak w Wordzie: pasmo zaczyna się `headerDistance`
+   * (w:pgMar header) od krawędzi strony i ma MINIMALNĄ wysokość (margines − dystans) —
+   * treść wyższa niż pasmo spycha body (flex + min-height), zamiast się przycinać.
+   * Sekcja 1 nie niesie dystansu w kontrakcie → odtwarzamy go z pasma (margines − band),
+   * czyli dokładnie odwrotność wzoru readera.
+   */
+  private _bandCmFor(geo: PageGeometry, side: 'header' | 'footer'): number {
+    const margin = side === 'header' ? geo.margins.top : geo.margins.bottom;
+    const dist = side === 'header' ? geo.headerDistanceCm : geo.footerDistanceCm;
+    if (dist == null) return side === 'header' ? this._headerHeight() : this._footerHeight();
+    const band = margin - dist;
+    return Math.max(0.3, Math.min(8, band > 0 ? band : margin));
+  }
+  private _distanceCmFor(geo: PageGeometry, side: 'header' | 'footer'): number {
+    const explicit = side === 'header' ? geo.headerDistanceCm : geo.footerDistanceCm;
+    if (explicit != null) return explicit;
+    const margin = side === 'header' ? geo.margins.top : geo.margins.bottom;
+    return Math.max(0, margin - this._bandCmFor(geo, side));
+  }
+  headerOffsetPx(index: number): number { return this._distanceCmFor(this.geometryFor(index), 'header') * 37.8; }
+  footerOffsetPx(index: number): number { return this._distanceCmFor(this.geometryFor(index), 'footer') * 37.8; }
+  headerBandPx(index: number): number { return this._bandCmFor(this.geometryFor(index), 'header') * 37.8; }
+  footerBandPx(index: number): number { return this._bandCmFor(this.geometryFor(index), 'footer') * 37.8; }
   /** Tryb tylko-do-odczytu (Krok 2) — blokuje edycję contenteditable. */
   @Input() readOnly = false;
   @Input() showMarginGuides = false;
@@ -139,6 +242,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
   }
   
+  /**
+   * Własne nagłówki/stopki sekcji ≥ 1 (dokumenty wielosekcyjne, ADR-0023). Sekcja bez
+   * wpisu dziedziczy z poprzedniej; sekcja 0 = headerContent/footerContent.
+   */
+  @Input() set sectionHeadersFooters(value: SectionHeaderFooter[] | undefined) {
+    this._sectionHF.set(value ?? []);
+    this.invalidateHeaderFooterCache();
+  }
+  private readonly _sectionHF = signal<SectionHeaderFooter[]>([]);
+  @Output() sectionHeadersFootersChange = new EventEmitter<SectionHeaderFooter[]>();
+
   @Output() contentChange = new EventEmitter<string>();
   @Output() stateChange = new EventEmitter<EditorState>();
   @Output() selectionChange = new EventEmitter<Selection | null>();
@@ -272,9 +386,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this._safeFooterCache.clear();
   }
 
-  // Wysokość strony A4 w pikselach (bez marginesów)
-  private readonly PAGE_HEIGHT_PX = 1122; // ~29.7cm at 96 DPI
-
   // Paginator: debounce + safety flag
   private _paginateTimer: ReturnType<typeof setTimeout> | null = null;
   private _isRepaginating = false;
@@ -308,6 +419,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private _differentFirstPage = signal<boolean>(false);
   private _differentOddEven = signal<boolean>(false);
   editingSection = signal<'header' | 'footer' | 'body'>('body');
+  /** Strona, na której trwa edycja nagłówka/stopki — edycja pasma sekcji ≥ 1 odbywa się
+   *  na stronie tej sekcji (właściciel treści = wpis sekcyjny albo baza). */
+  editingHfPageIndex = signal<number>(0);
   
   // Menu opcji nagłówka/stopki
   showHeaderOptionsMenu = signal<boolean>(false);
@@ -329,21 +443,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return pagesArr.map((_, i) => this._computeFooterContent(i));
   });
 
-  // Computed: efektywne paddingi treści (margines minus wysokość nagłówka/stopki)
-  // W MS Word, nagłówek/stopka zajmują CZĘŚĆ marginesu, nie dodają się do niego
-  contentPaddingTop = computed(() => {
-    const topMargin = this.pageMargins().top; // cm
-    const headerH = this._headerHeight(); // cm
-    const effectivePadding = Math.max(0, topMargin - headerH);
-    return effectivePadding * 37.8; // px
-  });
-  
-  contentPaddingBottom = computed(() => {
-    const bottomMargin = this.pageMargins().bottom; // cm
-    const footerH = this._footerHeight(); // cm
-    const effectivePadding = Math.max(0, bottomMargin - footerH);
-    return effectivePadding * 37.8; // px
-  });
+  // Efektywne paddingi treści (margines minus wysokość nagłówka/stopki) liczone są per strona
+  // w contentPadTopPx/contentPadBottomPx — w MS Word nagłówek/stopka zajmują CZĘŚĆ marginesu.
 
   // Stan edytora
   editorState = signal<EditorState>({
@@ -432,8 +533,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (!page) return;
     const pr = page.getBoundingClientRect();
     const br = band.getBoundingClientRect();
-    // Skala niezależna od wzrostu pasma: z szerokości strony (stała: A4 21cm / landscape 29.7cm).
-    const expectedWidthPx = (this.pageOrientation === 'portrait' ? 21 : 29.7) * 37.8;
+    // Skala niezależna od wzrostu pasma: z szerokości strony wg geometrii TEJ strony
+    // (per sekcja; wcześniej stała A4).
+    const pageIndex = Math.max(0, Number(page.getAttribute('data-page-number') ?? '1') - 1);
+    const expectedWidthPx = this.pageWidthPx(pageIndex);
     const scale = pr.width > 0 ? pr.width / expectedWidthPx : 1;
     const topCm = ((br.top - pr.top) / scale) / 37.8;
     const bottomCm = ((br.bottom - pr.top) / scale) / 37.8;
@@ -980,6 +1083,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     };
 
     const onMouseUp = () => {
+      const finished = this.tableResizeState;
       this.tableResizeState = null;
       document.body.classList.remove('table-resizing');
       document.body.style.cursor = '';
@@ -989,6 +1093,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       }
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup', onMouseUp);
+      // Po zmianie szerokości kolumn/tabeli przelicz <colgroup> — to z niego eksport
+      // odtwarza w:tblGrid; bez synchronizacji zapis wracał ze starą geometrią kolumn.
+      if (finished && (finished.type === 'col' || finished.type === 'table')) {
+        syncTableColgroup(finished.table);
+      }
       this.onContentChange();
     };
 
@@ -1044,6 +1153,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const row = st.table.rows[st.rowIndex];
     if (row) {
       row.style.height = `${newHeight}px`;
+      // Ręczna zmiana wysokości unieważnia dokładne twips/regułę z importu — inaczej
+      // eksport użyłby STAREJ wartości z data-* zamiast nowej wysokości px (atLeast).
+      row.removeAttribute('data-row-height-tw');
+      row.removeAttribute('data-row-hrule');
     }
   }
 
@@ -1447,17 +1560,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private onContentChange(): void {
     const section = this.editingSection();
 
-    // Header / footer — emituj headerChange / footerChange
+    // Header / footer — zapis do WŁAŚCIWEGO wariantu (sekcja/first-page/default) + emit
     if (section === 'header' && this.headerContentEl?.nativeElement) {
       const html = this.headerContentEl.nativeElement.innerHTML;
-      this._headerHtml.set(html);
+      this._applyEditedHeaderHtml(html);
       this.emitHeaderFooterChanges();
       this.updateFormattingState();
       return;
     }
     if (section === 'footer' && this.footerContentEl?.nativeElement) {
       const html = this.footerContentEl.nativeElement.innerHTML;
-      this._footerHtml.set(html);
+      this._applyEditedFooterHtml(html);
       this.emitHeaderFooterChanges();
       this.updateFormattingState();
       return;
@@ -3215,18 +3328,129 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Zmierzone wysokości pasm nagłówka/stopki z DOM (px layoutu; transform zoomu nie wpływa
+   * na offsetHeight). Strona 1 może mieć inny wariant (titlePg) niż pozostałe, stąd osobno
+   * first/rest. Brak DOM (start, jsdom w testach) → 0, czyli zostaje samo min-height pasma
+   * z geometrii — bez regresji względem statycznego wzoru.
+   */
+  private _measureBandHeightsPx(refs: ElementRef<HTMLDivElement>[]):
+    { headerFirst: number; headerRest: number; footerFirst: number; footerRest: number } {
+    const container = refs[0]?.nativeElement.closest('.pages-container');
+    const pageEls = container ? (Array.from(container.querySelectorAll('.page')) as HTMLElement[]) : [];
+    const headers = pageEls.map(p => (p.querySelector('.page-header') as HTMLElement | null)?.offsetHeight ?? 0);
+    const footers = pageEls.map(p => (p.querySelector('.page-footer') as HTMLElement | null)?.offsetHeight ?? 0);
+    const restMax = (arr: number[]) => arr.length > 1 ? Math.max(...arr.slice(1)) : (arr[0] ?? 0);
+    return {
+      headerFirst: headers[0] ?? 0,
+      headerRest: restMax(headers),
+      footerFirst: footers[0] ?? 0,
+      footerRest: restMax(footers),
+    };
+  }
+
+  /** Marker przerwy sekcji DOCX (niewidoczny div z geometrią następnej sekcji w data-*). */
+  private _isSectionBreakMarker(el: Element | null): boolean {
+    return !!el && el.nodeType === 1 && el.classList?.contains('docx-section-break');
+  }
+
+  /**
+   * Geometria sekcji z data-* markera; brakujące atrybuty dziedziczą z geometrii bieżącej
+   * (reader emituje tylko to, co sekcja jawnie deklaruje).
+   */
+  private _parseSectionGeometry(el: HTMLElement, current: PageGeometry): PageGeometry {
+    const dim = (name: string): number | null => {
+      const v = parseFloat(el.getAttribute(name) ?? '');
+      return Number.isFinite(v) && v > 0 ? v : null;
+    };
+    const margin = (name: string): number | null => {
+      const v = parseFloat(el.getAttribute(name) ?? '');
+      return Number.isFinite(v) && v >= 0 ? v : null;
+    };
+    const rawOrientation = el.getAttribute('data-orientation');
+    return {
+      widthCm: dim('data-page-width-cm') ?? current.widthCm,
+      heightCm: dim('data-page-height-cm') ?? current.heightCm,
+      orientation: rawOrientation === 'landscape' || rawOrientation === 'portrait'
+        ? rawOrientation
+        : current.orientation,
+      margins: {
+        top: margin('data-margin-top-cm') ?? current.margins.top,
+        bottom: margin('data-margin-bottom-cm') ?? current.margins.bottom,
+        left: margin('data-margin-left-cm') ?? current.margins.left,
+        right: margin('data-margin-right-cm') ?? current.margins.right,
+      },
+      headerDistanceCm: margin('data-header-distance-cm') ?? current.headerDistanceCm,
+      footerDistanceCm: margin('data-footer-distance-cm') ?? current.footerDistanceCm,
+    };
+  }
+
+  /**
+   * Geometria per strona dla podanych stron HTML. Marker OTWIERAJĄCY stronę (pierwszy element —
+   * tak układa go split: reader emituje page-break przed markerem nextPage) zmienia geometrię
+   * od TEJ strony; marker w środku strony (przerwa continuous) — od następnej. Treść przed
+   * markerem należy do kończonej sekcji, więc strona zachowuje jej geometrię.
+   */
+  private _deriveGeometriesForPages(pages: string[]): PageGeometry[] {
+    let current = this.baseGeometry();
+    let sectionCounter = 0;
+    const sectionIndexes: number[] = [];
+    const probe = document.createElement('div');
+    const result = pages.map(html => {
+      probe.innerHTML = html;
+      const markers = Array.from(probe.querySelectorAll('.docx-section-break')) as HTMLElement[];
+      let geo = current;
+      let pageSection = sectionCounter;
+      if (markers.length > 0) {
+        let idx = 0;
+        if (this._isSectionBreakMarker(probe.firstElementChild)) {
+          current = this._parseSectionGeometry(markers[0], current);
+          geo = current;
+          sectionCounter++;
+          pageSection = sectionCounter;
+          idx = 1;
+        }
+        for (; idx < markers.length; idx++) {
+          current = this._parseSectionGeometry(markers[idx], current);
+          sectionCounter++;
+        }
+      }
+      sectionIndexes.push(pageSection);
+      return geo;
+    });
+    this.pageSectionIndexes.set(sectionIndexes);
+    return result;
+  }
+
+  /**
    * Schedule paginacji z krótkim debouncingiem. 250 ms to kompromis: wystarczająco długo,
    * by nie repaginować na każdym wciśnięciu klawisza (IME/wydajność), ale na tyle krótko, że
    * strona nie zdąży widocznie urosnąć poza format A4 zanim treść spłynie na kolejną stronę
    * (Issue: „Enter wydłuża stronę do niestandardowych rozmiarów"). Wcześniej 600 ms — przy tym
    * oknie strona z `min-height:1122px; overflow:visible` rozciągała się zauważalnie przed reflow.
+   *
+   * Max-wait: czysty debounce resetuje się przy KAŻDYM evencie `input`, więc przytrzymany
+   * ENTER (auto-repeat ~30 ms) odsuwał repaginację w nieskończoność — strona rosła, dopóki
+   * użytkownik nie puścił klawisza. Przy ciągłym wpisywaniu repaginacja odpala najpóźniej
+   * po PAGINATE_MAX_WAIT_MS od pierwszego zaplanowania.
    */
+  private static readonly PAGINATE_DEBOUNCE_MS = 250;
+  private static readonly PAGINATE_MAX_WAIT_MS = 600;
+  private _paginateFirstScheduledAt: number | null = null;
+
   private _schedulePaginate(_reason: string): void {
     if (this._paginateTimer) clearTimeout(this._paginateTimer);
+    const now = Date.now();
+    if (this._paginateFirstScheduledAt === null) this._paginateFirstScheduledAt = now;
+    const waited = now - this._paginateFirstScheduledAt;
+    const delay = Math.min(
+      WysiwygEditorComponent.PAGINATE_DEBOUNCE_MS,
+      Math.max(0, WysiwygEditorComponent.PAGINATE_MAX_WAIT_MS - waited)
+    );
     this._paginateTimer = setTimeout(() => {
       this._paginateTimer = null;
+      this._paginateFirstScheduledAt = null;
       this._repaginateNow();
-    }, 250);
+    }, delay);
   }
 
   /**
@@ -3256,47 +3480,92 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         allBlocks.push(document.createElement('p'));
       }
 
-      const marginTop = this.pageMargins().top * 37.8;
-      const marginBottom = this.pageMargins().bottom * 37.8;
-      const headerHpx = this._headerHeight() * 37.8;
-      const footerHpx = this._footerHeight() * 37.8;
-      const padTop = Math.max(0, marginTop - headerHpx);
-      const padBottom = Math.max(0, marginBottom - footerHpx);
-      const availableHeight = Math.max(100, this.PAGE_HEIGHT_PX - headerHpx - footerHpx - padTop - padBottom);
+      // Wysokość dostępna dla treści zależy od geometrii BIEŻĄCEJ sekcji (per strona)
+      // ORAZ od realnie wyrenderowanego pasma nagłówka/stopki: pasmo z treścią wyższą niż
+      // (margines − dystans) SPYCHA body jak w Wordzie, więc body dostaje mniej miejsca
+      // i treść spływa na kolejną stronę zamiast rozciągać format strony.
+      const measuredBands = this._measureBandHeightsPx(refs);
+      const availableFor = (geo: PageGeometry, pageIdx: number): number => {
+        const headerBand = Math.max(this._bandCmFor(geo, 'header') * 37.8,
+          pageIdx === 0 ? measuredBands.headerFirst : measuredBands.headerRest);
+        const footerBand = Math.max(this._bandCmFor(geo, 'footer') * 37.8,
+          pageIdx === 0 ? measuredBands.footerFirst : measuredBands.footerRest);
+        const offsets = (this._distanceCmFor(geo, 'header') + this._distanceCmFor(geo, 'footer')) * 37.8;
+        return Math.max(100, geo.heightCm * 37.8 - headerBand - footerBand - offsets);
+      };
+      const contentWidthPx = (geo: PageGeometry): number =>
+        Math.max(2, geo.widthCm - geo.margins.left - geo.margins.right) * 37.8;
+
+      const baseGeo = this.baseGeometry();
+      let curGeo = baseGeo;
 
       const probeEd = refs[0].nativeElement;
       const cs = getComputedStyle(probeEd);
-      const measurer = document.createElement('div');
+      // Szerokość pomiaru: realna szerokość treści strony 1 z DOM (uwzględnia zoom itp.);
+      // dla kolejnych sekcji skalowana proporcjonalnie do ich szerokości treści w cm.
       const innerW = probeEd.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-      measurer.style.cssText = `position:absolute;left:-99999px;top:0;width:${innerW}px;font-family:${cs.fontFamily};font-size:${cs.fontSize};line-height:${cs.lineHeight};visibility:hidden;`;
+      const baseContentPx = contentWidthPx(baseGeo);
+      const widthScale = innerW > 0 && baseContentPx > 0 ? innerW / baseContentPx : 1;
+      const measurerWidthFor = (geo: PageGeometry): number => contentWidthPx(geo) * widthScale;
+      const measurer = this._createBlockMeasurer(cs, measurerWidthFor(curGeo));
       document.body.appendChild(measurer);
 
-      const measureBlock = (block: HTMLElement): number => {
-        measurer.innerHTML = '';
-        measurer.appendChild(block.cloneNode(true));
-        return measurer.firstElementChild?.getBoundingClientRect().height ?? 0;
-      };
+      const measureBlock = (block: HTMLElement): number =>
+        this._measureBlockRunHeights(measurer, [block])[0] ?? 0;
+
+      // Pomiar wsadowy: jeden append + jeden layout-flush na ciągły przebieg zwykłych bloków
+      // (zamiast reflow per blok) — istotne przy dużych dokumentach.
+      const measureRun = (blocks: HTMLElement[]): number[] =>
+        this._measureBlockRunHeights(measurer, blocks);
 
       const pages: HTMLElement[][] = [[]];
+      const pageGeos: PageGeometry[] = [curGeo];
+      let curSection = 0;
+      const pageSections: number[] = [0];
       let currentHeight = 0;
+      let availableHeight = availableFor(curGeo, 0);
 
-      const pushBlock = (block: HTMLElement) => {
-        const h = measureBlock(block);
+      const openPage = () => {
+        pages.push([]);
+        pageGeos.push(curGeo);
+        pageSections.push(curSection);
+        currentHeight = 0;
+        availableHeight = availableFor(curGeo, pages.length - 1);
+      };
+
+      const pushMeasured = (block: HTMLElement, h: number) => {
         if (currentHeight + h > availableHeight && pages[pages.length - 1].length > 0) {
-          pages.push([]);
-          currentHeight = 0;
+          openPage();
         }
         pages[pages.length - 1].push(block);
         currentHeight += h;
       };
 
-      for (const block of allBlocks) {
+      let bi = 0;
+      while (bi < allBlocks.length) {
+        const block = allBlocks[bi];
+        if (this._isSectionBreakMarker(block)) {
+          // Marker sekcji: od tego miejsca obowiązuje geometria następnej sekcji. Marker zostaje
+          // w treści (przeżywa zapis → writer odtwarza paragraph-level sectPr). Gdy otwiera stronę
+          // (typowo: po page-breaku emitowanym przez reader), geometria dotyczy TEJ strony.
+          curGeo = this._parseSectionGeometry(block, curGeo);
+          curSection++;
+          pages[pages.length - 1].push(block);
+          if (pages[pages.length - 1].length === 1) {
+            pageGeos[pageGeos.length - 1] = curGeo;
+            pageSections[pageSections.length - 1] = curSection;
+            availableHeight = availableFor(curGeo, pages.length - 1);
+          }
+          measurer.style.width = `${measurerWidthFor(curGeo)}px`;
+          bi++;
+          continue;
+        }
         if (this._isPageBreakBlock(block)) {
           // Manualny page break: wymuś nową stronę. Marker zostaje na końcu bieżącej strony,
           // żeby przeżył zapis (getContent → writer → w:br type=page).
           pages[pages.length - 1].push(block);
-          pages.push([]);
-          currentHeight = 0;
+          openPage();
+          bi++;
           continue;
         }
         if (block.tagName === 'TABLE') {
@@ -3308,15 +3577,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           );
           for (let i = 0; i < split.length; i++) {
             if (i > 0) {
-              pages.push([]);
-              currentHeight = 0;
+              openPage();
             }
             pages[pages.length - 1].push(split[i]);
             currentHeight += measureBlock(split[i]);
           }
-        } else {
-          pushBlock(block);
+          bi++;
+          continue;
         }
+        // Ciągły przebieg zwykłych bloków — zmierz wsadowo, potem rozłóż na strony.
+        let runEnd = bi;
+        while (
+          runEnd < allBlocks.length &&
+          !this._isSectionBreakMarker(allBlocks[runEnd]) &&
+          !this._isPageBreakBlock(allBlocks[runEnd]) &&
+          allBlocks[runEnd].tagName !== 'TABLE'
+        ) {
+          runEnd++;
+        }
+        const run = allBlocks.slice(bi, runEnd);
+        const heights = measureRun(run);
+        for (let k = 0; k < run.length; k++) {
+          pushMeasured(run[k], heights[k]);
+        }
+        bi = runEnd;
       }
 
       measurer.remove();
@@ -3327,6 +3611,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         return tmp.innerHTML || '<p></p>';
       });
 
+      this.pageGeometries.set(pageGeos);
+      this.pageSectionIndexes.set(pageSections);
       const current = this.pageContents();
       const identical = current.length === newPageContents.length
         && current.every((v, i) => v === newPageContents[i]);
@@ -3338,6 +3624,50 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     } finally {
       this._isRepaginating = false;
     }
+  }
+
+  /**
+   * Measurer do paginacji. MUSI renderować bloki w tym samym kontekście stylów co realna
+   * strona: klasa `editor-content` (style globalne — ViewEncapsulation.None) nadaje blokom
+   * marginesy akapitów/nagłówków/tabel, paddingi komórek oraz wysokość pustego akapitu
+   * (`.editor-content p:empty::before { content:'\00a0' }`). Goły <div> zaniżał pomiar
+   * (pusty <p> = 0 px, brak marginesów bloków) → paginacja nie widziała przepełnienia
+   * i strona rosła w pion zamiast przelać treść na nową kartkę.
+   */
+  private _createBlockMeasurer(cs: CSSStyleDeclaration, widthPx: number): HTMLElement {
+    const measurer = document.createElement('div');
+    measurer.className = 'editor-content';
+    measurer.style.cssText =
+      `position:absolute;left:-99999px;top:0;width:${widthPx}px;padding:0;border:0;` +
+      `font-family:${cs.fontFamily};font-size:${cs.fontSize};line-height:${cs.lineHeight};visibility:hidden;`;
+    return measurer;
+  }
+
+  /**
+   * Wysokość KONSUMOWANA przez każdy blok, liczona deltami pozycji kolejnych bloków
+   * (+ sentinel o zerowej wysokości na końcu). W odróżnieniu od
+   * `getBoundingClientRect().height` uwzględnia pionowe marginesy bloków wraz z ich
+   * realnym kolapsem między sąsiadami — dokładnie tak, jak bloki ułożą się na stronie
+   * (`.editor-content` ma `overflow:hidden`, więc marginesy nie wyciekają z kontenera).
+   * Margin-top pierwszego bloku jest doliczany do niego. Jeden append + jeden
+   * layout-flush na przebieg (wydajność jak dotychczasowy pomiar wsadowy).
+   */
+  private _measureBlockRunHeights(measurer: HTMLElement, blocks: HTMLElement[]): number[] {
+    measurer.innerHTML = '';
+    for (const b of blocks) measurer.appendChild(b.cloneNode(true));
+    const sentinel = document.createElement('div');
+    sentinel.style.cssText = 'margin:0;padding:0;border:0;height:0;';
+    measurer.appendChild(sentinel);
+    const kids = Array.from(measurer.children) as HTMLElement[];
+    const tops = kids.map(k => k.getBoundingClientRect().top);
+    const base = measurer.getBoundingClientRect().top;
+    const out: number[] = [];
+    for (let i = 0; i < blocks.length; i++) {
+      let h = tops[i + 1] - tops[i];
+      if (i === 0) h += Math.max(0, tops[0] - base);
+      out.push(Math.max(0, h));
+    }
+    return out;
   }
 
   /** Dzieli tabelę między wierszami; zwraca array <table> dla kolejnych stron. */
@@ -3625,7 +3955,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (depth >= 3) return kids;
     if (kids.length === 1) {
       const c = kids[0];
-      if (c.tagName === 'DIV' || c.tagName === 'SECTION' || c.tagName === 'ARTICLE') {
+      // Markerów page-break / docx-section-break nie rozwijamy — to atomiczne bloki-znaczniki;
+      // rekursja do środka gubiłaby je przy repaginacji (strona z samym markerem).
+      if (
+        (c.tagName === 'DIV' || c.tagName === 'SECTION' || c.tagName === 'ARTICLE') &&
+        !c.classList.contains('page-break') &&
+        !c.classList.contains('docx-section-break')
+      ) {
         return this._flattenTopBlocks(c, depth + 1);
       }
     }
@@ -3745,33 +4081,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return this._mergeSplitTables(merged);
   }
 
-  /** Serializuje pojedynczy edytor strony do HTML (z zachowaniem wysokości tabel i odwijaniem image-wrapperów). */
+  /** Serializuje pojedynczy edytor strony do HTML (z odwijaniem image-wrapperów).
+   *
+   * UWAGA (R-18, zamknięte): wcześniej KAŻDY wiersz tabeli dostawał tu „zapieczoną"
+   * wysokość zmierzoną z DOM (getBoundingClientRect) — render edytora nadpisywał
+   * semantykę DOCX (wiersze bez trHeight dostawały sztuczne atLeast, exact rosło od
+   * line-height edytora) i dokument puchł przy każdym autosave. Teraz serializujemy
+   * wyłącznie to, co jest jawnie w inline style (import z DOCX / ręczny resize) —
+   * wiersze bez wysokości wracają do Worda jako auto, jak w oryginale. */
   private _serializeSingleEditor(editor: HTMLDivElement): string {
-    const tableRowHeights: Map<number, { heights: number[] }> = new Map();
-    const liveTables = editor.querySelectorAll('table');
-    liveTables.forEach((table, tableIdx) => {
-      const rows = table.querySelectorAll('tr');
-      const heights: number[] = [];
-      rows.forEach(tr => {
-        heights.push(Math.round((tr as HTMLElement).getBoundingClientRect().height));
-      });
-      tableRowHeights.set(tableIdx, { heights });
-    });
-
     const clone = editor.cloneNode(true) as HTMLDivElement;
-
-    const cloneTables = clone.querySelectorAll('table');
-    cloneTables.forEach((table, tableIdx) => {
-      const data = tableRowHeights.get(tableIdx);
-      if (!data) return;
-      const rows = table.querySelectorAll('tr');
-      rows.forEach((tr, rowIdx) => {
-        const h = data.heights[rowIdx];
-        if (h && h > 0) {
-          (tr as HTMLElement).style.height = `${h}px`;
-        }
-      });
-    });
 
     clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;
@@ -4034,16 +4353,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this.editingSection() === 'header') return;
     const clickX = event?.clientX;
     const clickY = event?.clientY;
+    this.editingHfPageIndex.set(this._pageIndexFromEvent(event));
     this.editingSection.set('header');
     this.editingSectionChange.emit('header');
     setTimeout(() => {
       const el = this.headerContentEl?.nativeElement;
       if (el) {
-        // Load the variant currently shown on page 0 so the editor matches the
-        // displayed content (rule 10 — no apparent editing).
-        el.innerHTML = this._differentFirstPage()
-          ? this._headerFirstPageHtml()
-          : this._headerHtml();
+        // Load the variant shown on the CLICKED page so the editor matches the
+        // displayed content (rule 10 — no apparent editing): wpis sekcyjny > warianty bazy.
+        el.innerHTML = this._editableHeaderHtml(this.editingHfPageIndex());
         this.wrapExistingImages(el);
         this.attachEditorListeners(el);
         el.focus();
@@ -4060,14 +4378,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this.editingSection() === 'footer') return;
     const clickX = event?.clientX;
     const clickY = event?.clientY;
+    this.editingHfPageIndex.set(this._pageIndexFromEvent(event));
     this.editingSection.set('footer');
     this.editingSectionChange.emit('footer');
     setTimeout(() => {
       const el = this.footerContentEl?.nativeElement;
       if (el) {
-        el.innerHTML = this._differentFirstPage()
-          ? this._footerFirstPageHtml()
-          : this._footerHtml();
+        el.innerHTML = this._editableFooterHtml(this.editingHfPageIndex());
         this.wrapExistingImages(el);
         this.attachEditorListeners(el);
         el.focus();
@@ -4075,6 +4392,42 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         this.observeActiveSectionGeometry();
       }
     }, 0);
+  }
+
+  /** Strona, na której kliknięto pasmo nagłówka/stopki (fallback: 0). */
+  private _pageIndexFromEvent(event?: MouseEvent): number {
+    const page = (event?.target as HTMLElement | null)?.closest?.('.page') as HTMLElement | null;
+    const n = Number(page?.getAttribute('data-page-number') ?? '1');
+    return Number.isFinite(n) && n >= 1 ? n - 1 : 0;
+  }
+
+  /** HTML wariantu edytowanego na danej stronie: wpis sekcyjny albo warianty bazy. */
+  private _editableHeaderHtml(pageIndex: number): string {
+    const entry = this._sectionEntryFor(pageIndex, 'header');
+    if (entry?.header) return entry.header.html || '';
+    return this._differentFirstPage() && pageIndex === 0
+      ? this._headerFirstPageHtml()
+      : this._headerHtml();
+  }
+
+  private _editableFooterHtml(pageIndex: number): string {
+    const entry = this._sectionEntryFor(pageIndex, 'footer');
+    if (entry?.footer) return entry.footer.html || '';
+    return this._differentFirstPage() && pageIndex === 0
+      ? this._footerFirstPageHtml()
+      : this._footerHtml();
+  }
+
+  /** Aktualizuje html WŁASNEGO nagłówka/stopki sekcji i emituje zmianę (autosave rodzica). */
+  private _updateSectionEntry(sectionIndex: number, kind: 'header' | 'footer', html: string): void {
+    const updated = this._sectionHF().map(e => {
+      if (e.sectionIndex !== sectionIndex) return e;
+      const current = kind === 'header' ? e.header : e.footer;
+      const next: HeaderFooterContent = { ...(current ?? { html: '', height: 1.27 }), html };
+      return kind === 'header' ? { ...e, header: next } : { ...e, footer: next };
+    });
+    this._sectionHF.set(updated);
+    this.sectionHeadersFootersChange.emit(updated);
   }
 
   /**
@@ -4122,11 +4475,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onHeaderBlur(): void {
     const content = this.headerContentEl?.nativeElement?.innerHTML || '';
-    if (this._differentFirstPage()) {
-      this._headerFirstPageHtml.set(content);
-    } else {
-      this._headerHtml.set(content);
-    }
+    this._applyEditedHeaderHtml(content);
     // Emit the full header (incl. firstPage/even variants) — partial emit on blur
     // would drop the other variants in the parent's signal.
     this.emitHeaderFooterChanges();
@@ -4136,15 +4485,37 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   /**
    * Obsługa input nagłówka — emituje zmiany do parent (saveDocument używa headerContent)
    */
-  onHeaderInput(event: Event): void {
-    const content = (event.target as HTMLDivElement).innerHTML;
-    // Write to the variant the user is actually editing on page 0; otherwise the
-    // first-page edit would silently overwrite the default content.
-    if (this._differentFirstPage()) {
+  /**
+   * Zapis edytowanej treści nagłówka do WŁAŚCIWEGO wariantu (rule 10 — no apparent
+   * editing): wpis sekcyjny strony edycji > wariant first-page (tylko strona 0) > default.
+   */
+  private _applyEditedHeaderHtml(content: string): void {
+    const pageIndex = this.editingHfPageIndex();
+    const entry = this._sectionEntryFor(pageIndex, 'header');
+    if (entry) {
+      this._updateSectionEntry(entry.sectionIndex, 'header', content);
+    } else if (this._differentFirstPage() && pageIndex === 0) {
       this._headerFirstPageHtml.set(content);
     } else {
       this._headerHtml.set(content);
     }
+  }
+
+  private _applyEditedFooterHtml(content: string): void {
+    const pageIndex = this.editingHfPageIndex();
+    const entry = this._sectionEntryFor(pageIndex, 'footer');
+    if (entry) {
+      this._updateSectionEntry(entry.sectionIndex, 'footer', content);
+    } else if (this._differentFirstPage() && pageIndex === 0) {
+      this._footerFirstPageHtml.set(content);
+    } else {
+      this._footerHtml.set(content);
+    }
+  }
+
+  onHeaderInput(event: Event): void {
+    const content = (event.target as HTMLDivElement).innerHTML;
+    this._applyEditedHeaderHtml(content);
     this.invalidateHeaderFooterCache();
     this.emitHeaderFooterChanges();
   }
@@ -4154,11 +4525,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onFooterBlur(): void {
     const content = this.footerContentEl?.nativeElement?.innerHTML || '';
-    if (this._differentFirstPage()) {
-      this._footerFirstPageHtml.set(content);
-    } else {
-      this._footerHtml.set(content);
-    }
+    this._applyEditedFooterHtml(content);
     this.emitHeaderFooterChanges();
   }
 
@@ -4167,19 +4534,40 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onFooterInput(event: Event): void {
     const content = (event.target as HTMLDivElement).innerHTML;
-    if (this._differentFirstPage()) {
-      this._footerFirstPageHtml.set(content);
-    } else {
-      this._footerHtml.set(content);
-    }
+    this._applyEditedFooterHtml(content);
     this.invalidateHeaderFooterCache();
     this.emitHeaderFooterChanges();
+  }
+
+  /**
+   * Wpis sekcyjny (własny nagłówek/stopka) obowiązujący na danej stronie: wpis o NAJWYŻSZYM
+   * indeksie sekcji ≤ sekcji strony — sekcje bez wpisu dziedziczą z poprzedniej (jak Word).
+   * Brak wpisu ≤ sekcji strony → null (obowiązuje nagłówek bazowy sekcji 0).
+   */
+  private _sectionEntryFor(pageIndex: number, kind: 'header' | 'footer'): SectionHeaderFooter | null {
+    const entries = this._sectionHF();
+    if (!entries.length) return null;
+    const pageSection = this.pageSectionIndexes()[pageIndex] ?? 0;
+    let best: SectionHeaderFooter | null = null;
+    for (const e of entries) {
+      const content = kind === 'header' ? e.header : e.footer;
+      if (!content || !content.html) continue;
+      if (e.sectionIndex <= pageSection && (!best || e.sectionIndex > best.sectionIndex)) {
+        best = e;
+      }
+    }
+    return best;
   }
 
   /**
    * Wylicza zawartość nagłówka dla danej strony (używane wewnętrznie przez computed)
    */
   private _computeHeaderContent(pageIndex: number): string {
+    // Sekcja z WŁASNYM nagłówkiem wygrywa nad bazowym (dokumenty wielosekcyjne).
+    const sectionEntry = this._sectionEntryFor(pageIndex, 'header');
+    if (sectionEntry?.header) {
+      return sectionEntry.header.html || '';
+    }
     // First-page variant wins over odd/even for page 0.
     if (this._differentFirstPage() && pageIndex === 0) {
       return this._headerFirstPageHtml();
@@ -4206,7 +4594,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private _computeFooterContent(pageIndex: number): string {
     let content: string;
-    if (this._differentFirstPage() && pageIndex === 0) {
+    const sectionEntry = this._sectionEntryFor(pageIndex, 'footer');
+    if (sectionEntry?.footer) {
+      content = sectionEntry.footer.html || '';
+    }
+    else if (this._differentFirstPage() && pageIndex === 0) {
       content = this._footerFirstPageHtml();
     }
     // See _computeHeaderContent: "default" = odd; canonical source is _footerHtml.
@@ -4234,7 +4626,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Oblicza dostępną wysokość dla treści głównej (bez nagłówka i stopki)
    */
   getContentAreaHeight(): number {
-    const pageHeight = this.pageOrientation === 'landscape' ? 816 : 1122;
+    const pageHeight = this.baseGeometry().heightCm * 37.8;
     const headerHeightPx = this._headerHeight() * 37.8;
     const footerHeightPx = this._footerHeight() * 37.8;
     return pageHeight - headerHeightPx - footerHeightPx;

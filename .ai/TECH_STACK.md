@@ -15,17 +15,19 @@ Agent nie może zgadywać wersji technologii. Musi sprawdzić fakty w repozytori
 | Architektura | Clean Architecture (Domain/Application/Infrastructure/Api) | layout solucji |
 | CQRS / mediator | MediatR | `Application` + behaviours |
 | Walidacja | FluentValidation (wszystkie komendy mają walidatory) | `Application/Validators` |
-| Auth (Internal API) | Microsoft Entra ID — `Microsoft.AspNetCore.Authentication.JwtBearer` 8.0.12 (walidacja access tokena, App Roles, policy) | `Api.csproj`, `Program.cs` |
+| Auth (Internal API) | Microsoft Entra ID — **`Microsoft.Identity.Web` 3.12.0** (`AddMicrosoftIdentityWebApi`; JwtBearer dostarczany tranzytywnie, nie pinowany) + `Microsoft.Graph` 5.103.0 (app-only lookup userów) + `Azure.Identity` 1.13.1 + `Google.Cloud.SecretManager.V1` 2.6.0 (ClientSecret z GCP) | `Api.csproj`, `Program.cs` |
 | ORM | EF Core 8 (`Microsoft.EntityFrameworkCore` 8.0.12) | `Infrastructure.csproj` |
 | Baza | PostgreSQL via Npgsql (`Npgsql.EntityFrameworkCore.PostgreSQL` 8.0.11) | `Infrastructure.csproj` |
 | Storage | Google Cloud Storage (`Google.Cloud.Storage.V1` 4.10.0); fake-gcs-server w DEV | `Infrastructure` |
 | Worker w tle | `BackgroundService` (`DocumentDeliveryWorker`) + typed `HttpClient` — pakiety `Microsoft.Extensions.Hosting.Abstractions` 8.0.1, `Microsoft.Extensions.Http` 8.0.1 | `Infrastructure.csproj` |
-| DOCX | `DocumentFormat.OpenXml` 3.0.2 + `HtmlAgilityPack` 1.11.61 | `Infrastructure.csproj` |
-| Kody kreskowe | `ZXing.Net` 0.16.9 + `SkiaSharp` 3.116.1 | `Infrastructure.csproj` |
-| Podpisy | RSA-SHA256, Custom XML Part w DOCX (**nie** standardowe OOXML) | `DigitalSignatureService` |
-| Swagger | `Swashbuckle.AspNetCore` 6.5.0 | `Api.csproj` |
-| Testy | **NUnit 4.2.2** + FluentAssertions 8.8.0 + Moq 4.20.72 / NSubstitute 5.3.0 (projekty testowe targetują `net9.0`, kod aplikacji `net8.0`) | `*.UnitTests.csproj` |
+| DOCX | `DocumentFormat.OpenXml` 3.0.2 + `HtmlAgilityPack` 1.11.61; `NPOI` 2.8.0 (dekrypcja DOCX z hasłem) | `Infrastructure.csproj` |
+| Kody kreskowe / grafika | `ZXing.Net` 0.16.9 + `SkiaSharp` 3.119.2 (+ `SkiaSharp.NativeAssets.Linux`) | `Infrastructure.csproj` |
+| Podpisy | RSA-SHA256, Custom XML Part w DOCX (**nie** standardowe OOXML); `System.Security.Cryptography.Xml` 10.0.6 | `DigitalSignatureService`, `Infrastructure.csproj` |
+| Swagger | `Swashbuckle.AspNetCore` 6.5.0 (Internal) / 6.6.2 (External) | `*.csproj` |
+| Logowanie (External API) | Serilog (`Serilog.AspNetCore` 8.0.3, sinks Console/File) + własny `GcpJsonSerilogFormatter`; Internal API: MS logging + własny `GcpJsonConsoleFormatter` | `D2ServicesViewerEditor.Api.csproj`, `Api/Logging` |
+| Testy | **NUnit 4.2.2** + FluentAssertions 8.8.0 + Moq 4.20.72 / NSubstitute 5.3.0. Unit: `D2ViewerEditor.{Api,Application,Domain,Infrastructure}.UnitTests` (target `net9.0`) + `D2ServicesViewerEditor.Api.UnitTests`. Integracyjne: `D2ViewerEditor.Api.IntegrationTests` (`net8.0`, `Microsoft.AspNetCore.Mvc.Testing` — testy autoryzacji 401/403) + `D2ViewerEditor.Infrastructure.IntegrationTests`. Kod aplikacji `net8.0` | `*.Tests.csproj` |
 | Benchmarki | BenchmarkDotNet (`D2ViewerEditor.Benchmarks`) | projekt |
+| Przykładowy integrator | `D2ExampleExternalApp` (net8.0, port 15120) — symulator aplikacji źródłowej: upload do External API + odbiór zwrotki na własnym callbacku | `D2ExampleExternalApp/README.md` |
 
 ## Frontend — `D2GuiViewerEditor`
 

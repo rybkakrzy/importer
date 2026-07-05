@@ -199,6 +199,32 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
     expect(component.getContent()).toContain('class="page-break"');
   });
 
+  it('marker sekcji DOCX (docx-section-break) przeżywa split na strony i zapis z pełnymi data-*', () => {
+    // Reader emituje parę page-break + docx-section-break dla przerwy sekcji nextPage;
+    // marker niesie geometrię następnej sekcji (orientacja/rozmiar/marginesy) i musi
+    // wrócić do writera NIETKNIĘTY — inaczej dokument wielosekcyjny spłaszczy się
+    // do jednej sekcji przy autosave (R-10).
+    const sectionMarker =
+      '<div class="docx-section-break" data-break-type="nextPage"' +
+      ' data-page-width-cm="29.7" data-page-height-cm="21" data-orientation="landscape"' +
+      ' data-margin-top-cm="1.27"></div>';
+    const html = `<p>Pion</p><div class="page-break"></div>${sectionMarker}<p>Poziom</p>`;
+
+    const pages = (component as any)._splitHtmlIntoPages(html);
+
+    expect(pages.length).toBe(2);
+    expect(pages[1]).toContain('docx-section-break'); // marker otwiera następną stronę
+
+    mockPages(...pages);
+    const saved = component.getContent();
+    expect(saved).toContain('class="docx-section-break"');
+    expect(saved).toContain('data-orientation="landscape"');
+    expect(saved).toContain('data-page-width-cm="29.7"');
+    expect(saved).toContain('data-break-type="nextPage"');
+    // Pełna para: page-break (wizualny) + marker (dane sekcji).
+    expect(saved).toContain('class="page-break"');
+  });
+
   it('_isPageBreakBlock wykrywa manualny page break (top-level i zagnieżdżony), nie zwykły akapit', () => {
     const top = document.createElement('div');
     top.className = 'page-break';
@@ -230,5 +256,236 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
 
     expect(component.documentDefaultFontSize()).toBeNull();
     expect(component.documentDefaultFontFamily()).toBeNull();
+  });
+});
+
+/**
+ * Geometria stron per sekcja (ADR-0023, krok renderingu): sekcja 1 z inputów
+ * (`pageSize`/`pageMargins`/`pageOrientation`), kolejne sekcje z data-* markera
+ * `div.docx-section-break`. Wcześniej wszystkie strony renderowały się w stałej
+ * geometrii A4 pierwszej sekcji — dokument mieszający pion/poziom był łamany źle.
+ */
+describe('WysiwygEditorComponent — geometria stron per sekcja', () => {
+  let fixture: ComponentFixture<WysiwygEditorComponent>;
+  let component: WysiwygEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [WysiwygEditorComponent] }).compileComponents();
+    fixture = TestBed.createComponent(WysiwygEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  const A5 = { widthCm: 14.8, heightCm: 21, orientation: 'portrait' as const };
+
+  it('baseGeometry: brak pageSize → A4 portrait; pageSize (A5) nadpisuje wymiary', () => {
+    expect(component.baseGeometry().widthCm).toBe(21);
+    expect(component.baseGeometry().heightCm).toBe(29.7);
+
+    component.pageSize = A5;
+    expect(component.baseGeometry().widthCm).toBe(14.8);
+    expect(component.baseGeometry().heightCm).toBe(21);
+    expect(component.pageWidthPx(0)).toBeCloseTo(14.8 * 37.8, 3);
+  });
+
+  it('baseGeometry: orientacja z inputu wygrywa — portrait-owe wymiary są obracane', () => {
+    component.pageSize = A5;
+    component.pageOrientation = 'landscape';
+
+    const geo = component.baseGeometry();
+    expect(geo.orientation).toBe('landscape');
+    expect(geo.widthCm).toBe(21);
+    expect(geo.heightCm).toBe(14.8);
+  });
+
+  it('marker otwierający stronę nadaje jej geometrię sekcji (landscape od strony 2)', () => {
+    const html =
+      '<p>Pion</p><div class="page-break"></div>' +
+      '<div class="docx-section-break" data-break-type="nextPage"' +
+      ' data-page-width-cm="29.7" data-page-height-cm="21" data-orientation="landscape"' +
+      ' data-margin-top-cm="1.27" data-margin-left-cm="3"></div><p>Poziom</p>';
+
+    component.content = html;
+
+    const geos = component.pageGeometries();
+    expect(geos.length).toBe(2);
+    expect(geos[0].orientation).toBe('portrait');       // sekcja 1 = baza
+    expect(component.isLandscapePage(0)).toBe(false);
+    expect(geos[1].orientation).toBe('landscape');      // marker otwiera stronę 2
+    expect(geos[1].widthCm).toBeCloseTo(29.7, 3);
+    expect(geos[1].margins.top).toBeCloseTo(1.27, 3);   // margines z data-*
+    expect(geos[1].margins.left).toBeCloseTo(3, 3);
+    expect(geos[1].margins.bottom).toBe(2.5);           // brak atrybutu → dziedziczy bazę
+    expect(component.pageWidthPx(1)).toBeCloseTo(29.7 * 37.8, 3);
+  });
+
+  it('marker w środku strony (continuous) zmienia geometrię dopiero od następnej strony', () => {
+    const pages = [
+      '<p>Sekcja 1</p><div class="docx-section-break" data-break-type="continuous"' +
+        ' data-orientation="landscape" data-page-width-cm="29.7" data-page-height-cm="21"></div><p>Dalej</p>',
+      '<p>Strona 2</p>',
+    ];
+
+    const geos = (component as any)._deriveGeometriesForPages(pages);
+
+    expect(geos[0].orientation).toBe('portrait');  // treść przed markerem = stara sekcja
+    expect(geos[1].orientation).toBe('landscape'); // od następnej strony nowa geometria
+  });
+
+  it('_parseSectionGeometry: brakujące/nieprawidłowe data-* dziedziczą z geometrii bieżącej', () => {
+    const el = document.createElement('div');
+    el.className = 'docx-section-break';
+    el.setAttribute('data-page-width-cm', 'not-a-number');
+    el.setAttribute('data-margin-top-cm', '0'); // 0 to poprawny margines
+
+    const current = component.baseGeometry();
+    const geo = (component as any)._parseSectionGeometry(el, current);
+
+    expect(geo.widthCm).toBe(current.widthCm);   // zły wymiar → dziedziczy
+    expect(geo.margins.top).toBe(0);             // margines 0 respektowany
+    expect(geo.orientation).toBe(current.orientation);
+  });
+
+  it('_flattenTopBlocks nie rekursuje do wnętrza markera sekcji (marker przeżywa repaginację)', () => {
+    const page = document.createElement('div');
+    page.innerHTML = '<div class="docx-section-break" data-break-type="nextPage"></div>';
+
+    const blocks = (component as any)._flattenTopBlocks(page);
+
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].classList.contains('docx-section-break')).toBe(true);
+  });
+});
+
+/**
+ * Dynamiczne pasmo nagłówka/stopki (geometria jak w Wordzie): pasmo zaczyna się
+ * `headerDistance` (w:pgMar header) od krawędzi strony, ma MIN wysokość
+ * (margines − dystans) i rośnie z treścią spychając body — zamiast statycznego
+ * paddingu treści liczonego ze stałego pasma.
+ */
+describe('WysiwygEditorComponent — dynamiczne pasmo nagłówka/stopki', () => {
+  let fixture: ComponentFixture<WysiwygEditorComponent>;
+  let component: WysiwygEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [WysiwygEditorComponent] }).compileComponents();
+    fixture = TestBed.createComponent(WysiwygEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('baza: pasmo = height z headerContent, offset = margines − pasmo (odwrotność readera)', () => {
+    component.headerContent = { html: '<p>H</p>', height: 1.25 };
+    // margines górny 2.5 cm (default)
+
+    expect(component.headerBandPx(0)).toBeCloseTo(1.25 * 37.8, 3);
+    expect(component.headerOffsetPx(0)).toBeCloseTo((2.5 - 1.25) * 37.8, 3);
+  });
+
+  it('sekcja z jawnym dystansem z markera: offset = dystans, pasmo = margines − dystans', () => {
+    const html =
+      '<p>Pion</p><div class="page-break"></div>' +
+      '<div class="docx-section-break" data-break-type="nextPage"' +
+      ' data-page-width-cm="29.7" data-page-height-cm="21" data-orientation="landscape"' +
+      ' data-margin-top-cm="2" data-margin-bottom-cm="2"' +
+      ' data-header-distance-cm="0.6" data-footer-distance-cm="0.5"></div><p>Poziom</p>';
+
+    component.content = html;
+
+    // Strona 2 = sekcja z markera.
+    expect(component.headerOffsetPx(1)).toBeCloseTo(0.6 * 37.8, 3);
+    expect(component.headerBandPx(1)).toBeCloseTo((2 - 0.6) * 37.8, 3);
+    expect(component.footerOffsetPx(1)).toBeCloseTo(0.5 * 37.8, 3);
+    expect(component.footerBandPx(1)).toBeCloseTo((2 - 0.5) * 37.8, 3);
+  });
+
+  it('offset + pasmo = margines górny (body zaczyna się na marginesie, gdy treść mieści się w paśmie)', () => {
+    component.headerContent = { html: '<p>H</p>', height: 1.27 };
+
+    const total = component.headerOffsetPx(0) + component.headerBandPx(0);
+    expect(total).toBeCloseTo(2.5 * 37.8, 3);
+  });
+});
+
+/**
+ * Nagłówki/stopki per sekcja (rozszerzenie modelu, ADR-0023): wpisy sekcyjne
+ * (sectionIndex ≥ 1) z WŁASNYMI referencjami; strony sekcji bez wpisu dziedziczą
+ * z poprzedniej; edycja pasma na stronie sekcji trafia do wpisu tej sekcji.
+ */
+describe('WysiwygEditorComponent — nagłówki/stopki per sekcja', () => {
+  let fixture: ComponentFixture<WysiwygEditorComponent>;
+  let component: WysiwygEditorComponent;
+
+  const twoSectionHtml =
+    '<p>Sekcja 1</p><div class="page-break"></div>' +
+    '<div class="docx-section-break" data-break-type="nextPage"' +
+    ' data-page-width-cm="29.7" data-page-height-cm="21" data-orientation="landscape"></div>' +
+    '<p>Sekcja 2</p>';
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [WysiwygEditorComponent] }).compileComponents();
+    fixture = TestBed.createComponent(WysiwygEditorComponent);
+    component = fixture.componentInstance;
+    component.headerContent = { html: 'BAZOWY', height: 1.27 };
+    component.content = twoSectionHtml;
+  });
+
+  it('mapuje strony na sekcje (pageSectionIndexes) przy splicie treści', () => {
+    expect(component.pageSectionIndexes()).toEqual([0, 1]);
+  });
+
+  it('strona sekcji z własnym nagłówkiem pokazuje nagłówek sekcji, wcześniejsze — bazowy', () => {
+    component.sectionHeadersFooters = [
+      { sectionIndex: 1, header: { html: 'SEKCYJNY', height: 1.27 } }
+    ];
+
+    expect((component as any)._computeHeaderContent(0)).toBe('BAZOWY');
+    expect((component as any)._computeHeaderContent(1)).toBe('SEKCYJNY');
+  });
+
+  it('sekcja bez wpisu dziedziczy nagłówek z poprzedniego wpisu (jak Word)', () => {
+    // 3 strony: sekcje 0,1,2 — wpis tylko dla sekcji 1; sekcja 2 dziedziczy z 1.
+    (component as any).pageSectionIndexes.set([0, 1, 2]);
+    component.sectionHeadersFooters = [
+      { sectionIndex: 1, header: { html: 'SEKCYJNY', height: 1.27 } }
+    ];
+
+    expect((component as any)._computeHeaderContent(2)).toBe('SEKCYJNY');
+  });
+
+  it('edycja nagłówka na stronie sekcji trafia do wpisu sekcji i emituje zmianę; baza nietknięta', () => {
+    component.sectionHeadersFooters = [
+      { sectionIndex: 1, header: { html: 'SEKCYJNY', height: 1.27 } }
+    ];
+    const emitted: unknown[] = [];
+    component.sectionHeadersFootersChange.subscribe(v => emitted.push(v));
+
+    component.editingHfPageIndex.set(1);
+    component.onHeaderInput({ target: { innerHTML: 'EDYTOWANY-SEKCYJNY' } } as unknown as Event);
+
+    expect(emitted.length).toBe(1);
+    const entries = emitted[0] as { sectionIndex: number; header?: { html: string } }[];
+    expect(entries[0].header!.html).toBe('EDYTOWANY-SEKCYJNY');
+    expect((component as any)._headerHtml()).toBe('BAZOWY');
+  });
+
+  it('edycja nagłówka na stronie sekcji 0 edytuje bazę (bez dotykania wpisów sekcji)', () => {
+    component.sectionHeadersFooters = [
+      { sectionIndex: 1, header: { html: 'SEKCYJNY', height: 1.27 } }
+    ];
+
+    component.editingHfPageIndex.set(0);
+    component.onHeaderInput({ target: { innerHTML: 'EDYTOWANA-BAZA' } } as unknown as Event);
+
+    expect((component as any)._headerHtml()).toBe('EDYTOWANA-BAZA');
+    expect((component as any)._sectionHF()[0].header.html).toBe('SEKCYJNY');
+  });
+
+  it('stopka sekcyjna: podmiana {page} działa też dla wpisu sekcji', () => {
+    component.footerContent = { html: 'BAZOWA', height: 1.27 };
+    component.sectionHeadersFooters = [
+      { sectionIndex: 1, footer: { html: 'Strona {page}', height: 1.27 } }
+    ];
+
+    const footer = (component as any)._computeFooterContent(1);
+    expect(footer).toBe('Strona 2');
   });
 });

@@ -20,6 +20,17 @@ export interface PageSize {
   orientation: 'portrait' | 'landscape';
 }
 
+/**
+ * Nagłówek/stopka JEDNEJ sekcji dokumentu wielosekcyjnego (indeks 0-based w kolejności
+ * dokumentu). Wpisy istnieją tylko dla sekcji ≥ 1 z WŁASNYMI referencjami; sekcja bez
+ * wpisu dziedziczy nagłówek/stopkę poprzedniej (jak Word). Sekcja 0 = pola header/footer.
+ */
+export interface SectionHeaderFooter {
+  sectionIndex: number;
+  header?: HeaderFooterContent;
+  footer?: HeaderFooterContent;
+}
+
 /** Zawartość dokumentu z konwersji DOCX */
 export interface DocumentContent {
   html: string;
@@ -30,6 +41,7 @@ export interface DocumentContent {
   footer?: HeaderFooterContent;
   margins?: PageMargins;
   pageSize?: PageSize;
+  sectionHeadersFooters?: SectionHeaderFooter[];
 }
 
 /** Metadane dokumentu */
@@ -153,6 +165,7 @@ export interface SaveDocumentRequest {
   footer?: HeaderFooterContent;
   margins?: PageMargins;
   pageSize?: PageSize;
+  sectionHeadersFooters?: SectionHeaderFooter[];
 }
 
 /** Szablon dokumentu */

@@ -50,7 +50,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Verify(c => c.Convert(
             It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
             It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()), Times.Never);
+            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()), Times.Never);
     }
 
     [TestCase(null, TestName = "metadata missing entirely")]
@@ -73,7 +73,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Verify(c => c.Convert(
             It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
             It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()), Times.Never);
+            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()), Times.Never);
     }
 
     [Test]
@@ -86,7 +86,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Setup(c => c.Convert(
                 It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
                 It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()))
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()))
             .Returns(expected);
 
         var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
@@ -122,7 +122,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Setup(c => c.ConvertPreservingPackage(
                 It.IsAny<string>(), It.IsAny<Stream?>(), It.IsAny<DocumentMetadata?>(),
                 It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()))
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()))
             .Returns(expected);
 
         var result = await _handler.Handle(BuildCmd(doc.Id), CancellationToken.None);
@@ -132,7 +132,70 @@ public class DownloadEditedDocumentCommandHandlerTests
         _storage.Verify(s => s.DownloadAsync("documents/v1", It.IsAny<CancellationToken>()), Times.Once);
         _converter.Verify(c => c.Convert(
             It.IsAny<string>(), It.IsAny<DocumentMetadata?>(), It.IsAny<HeaderFooterContent?>(),
-            It.IsAny<HeaderFooterContent?>(), It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()), Times.Never);
+            It.IsAny<HeaderFooterContent?>(), It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()), Times.Never);
+    }
+
+    [Test]
+    public async Task Handle_SectionHeadersFooters_AreForwardedToConvert()
+    {
+        // Bez wersji bazowej → ścieżka Convert; lista sekcji musi dojść nietknięta (ADR-0025).
+        var doc = NewDoc("{\"userDownload\":true}");
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+
+        var sectionHf = new List<SectionHeaderFooter>
+        {
+            new() { SectionIndex = 1, Footer = new HeaderFooterContent { Html = "<p>Stopka sekcji 2</p>" } }
+        };
+        _converter.Setup(c => c.Convert(
+                It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
+                It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()))
+            .Returns(new byte[] { 5 });
+
+        var cmd = new DownloadEditedDocumentCommand(doc.Id, "<p>x</p>", "out.docx", null, null, null, null,
+            PageSize: null, SectionHeadersFooters: sectionHf);
+
+        var result = await _handler.Handle(cmd, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _converter.Verify(c => c.Convert(
+            It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
+            It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(),
+            It.Is<IReadOnlyList<SectionHeaderFooter>?>(s => ReferenceEquals(s, sectionHf))), Times.Once);
+    }
+
+    [Test]
+    public async Task Handle_SectionHeadersFooters_AreForwardedToPassThroughConvert()
+    {
+        // Z wersją bazową → ścieżka ConvertPreservingPackage; ta sama gwarancja przekazania listy.
+        var doc = NewDoc("{\"userDownload\":true}");
+        doc.AddVersion(Guid.NewGuid(), "documents/v1", 123, "User");
+        _documentRepo.Setup(r => r.GetByIdWithVersionsAsync(doc.Id, It.IsAny<CancellationToken>())).ReturnsAsync(doc);
+        _storage.Setup(s => s.DownloadAsync("documents/v1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new byte[] { 1 });
+
+        var sectionHf = new List<SectionHeaderFooter>
+        {
+            new() { SectionIndex = 1, Header = new HeaderFooterContent { Html = "<p>Nagłówek sekcji 2</p>" } }
+        };
+        _converter.Setup(c => c.ConvertPreservingPackage(
+                It.IsAny<string>(), It.IsAny<Stream?>(), It.IsAny<DocumentMetadata?>(),
+                It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()))
+            .Returns(new byte[] { 7 });
+
+        var cmd = new DownloadEditedDocumentCommand(doc.Id, "<p>x</p>", "out.docx", null, null, null, null,
+            PageSize: null, SectionHeadersFooters: sectionHf);
+
+        var result = await _handler.Handle(cmd, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _converter.Verify(c => c.ConvertPreservingPackage(
+            It.IsAny<string>(), It.IsAny<Stream?>(), It.IsAny<DocumentMetadata?>(),
+            It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
+            It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(),
+            It.Is<IReadOnlyList<SectionHeaderFooter>?>(s => ReferenceEquals(s, sectionHf))), Times.Once);
     }
 
     [Test]
@@ -143,7 +206,7 @@ public class DownloadEditedDocumentCommandHandlerTests
         _converter.Setup(c => c.Convert(
                 It.IsAny<string>(), It.IsAny<DocumentMetadata?>(),
                 It.IsAny<HeaderFooterContent?>(), It.IsAny<HeaderFooterContent?>(),
-                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>()))
+                It.IsAny<PageMargins?>(), It.IsAny<PageSize?>(), It.IsAny<IReadOnlyList<SectionHeaderFooter>?>()))
             .Returns(new byte[] { 9 });
 
         var cmd = new DownloadEditedDocumentCommand(doc.Id, "<p>x</p>", null, null, null, null, null);

@@ -6,8 +6,10 @@ Testy mają chronić zachowanie systemu, nie tylko podnosić coverage.
 
 ## Stack testowy (zweryfikowany)
 
-- Backend: **NUnit 4.2.2** + FluentAssertions 8.8.0 + Moq 4.20.72 / NSubstitute 5.3.0. Projekty: `D2ViewerEditor.{Api,Application,Domain,Infrastructure}.UnitTests`. Benchmarki: `D2ViewerEditor.Benchmarks` (BenchmarkDotNet).
-- Frontend: **Vitest 3.1.1** (`ng test`).
+- Backend (unit): **NUnit 4.2.2** + FluentAssertions 8.8.0 + Moq 4.20.72 / NSubstitute 5.3.0. Projekty: `D2ViewerEditor.{Api,Application,Domain,Infrastructure}.UnitTests` oraz `D2ServicesViewerEditor.Api.UnitTests`.
+- Backend (integracyjne): `D2ViewerEditor.Api.IntegrationTests` (`Microsoft.AspNetCore.Mvc.Testing` — autoryzacja 401/403 na kontrolerach) + `D2ViewerEditor.Infrastructure.IntegrationTests`.
+- Benchmarki: `D2ViewerEditor.Benchmarks` (BenchmarkDotNet).
+- Frontend: **Vitest 3.1.1** (`ng test`). Znany pre-existing fail: `spec-layout-shell.spec` (niezwiązany z bieżącą pracą).
 
 ## Komendy
 

@@ -24,6 +24,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private int _numberingId = 1;
     private NumberingDefinitionsPart? _numberingPart;
     private readonly Dictionary<int, int> _abstractNumIds = new(); // track list numbering
+    // HTML data-num-id (tożsamość listy z readera) → numId w generowanym pakiecie. Fragmenty listy
+    // rozdzielone akapitem, ale należące do tej samej listy logicznej Worda, współdzielą jedną
+    // NumberingInstance — Word kontynuuje wtedy numerację. Różne data-num-id → osobne instancje.
+    private readonly Dictionary<string, int> _numIdByHtmlList = new();
 
     // Domyślne ustawienia dokumentu (firmowa czcionka itp.). Wstrzykiwane przez DI;
     // dla benchmarków / testów konstruktor bezparametrowy używa wartości domyślnych.
@@ -61,16 +65,63 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private string? _currentSectionStyleId = null;
 
     /// <summary>
+    /// Geometria jednej sekcji strony (cm). Wartości null = dziedziczone/domyślne.
+    /// <c>BreakType</c> opisuje, jak sekcja się ZACZYNA (w:sectPr/w:type następnej sekcji).
+    /// </summary>
+    private sealed class SectionGeometry
+    {
+        public Domain.Models.PageSize? PageSize { get; set; }
+        public PageMargins? Margins { get; set; }
+        public double? HeaderDistanceCm { get; set; }
+        public double? FooterDistanceCm { get; set; }
+        public string? BreakType { get; set; }
+    }
+
+    /// <summary>
+    /// Geometria AKTUALNIE otwartej sekcji podczas konwersji body. Start = argumenty
+    /// Convert (pierwsza sekcja); każdy marker <c>div.docx-section-break</c> zamyka
+    /// bieżącą sekcję (w:p/pPr/sectPr z tą geometrią) i otwiera następną z data-*.
+    /// Na końcu trzyma geometrię OSTATNIEJ sekcji → trafia do body-level sectPr.
+    /// </summary>
+    private SectionGeometry _currentSection = new();
+
+    /// <summary>Pierwszy sectPr w kolejności dokumentu — tu wpinamy referencje
+    /// nagłówka/stopki i titlePg (kolejne sekcje dziedziczą je w Wordzie).</summary>
+    private SectionProperties? _firstSectionProps;
+
+    /// <summary>Paragraph-level sectPr w kolejności emisji: element [k] zamyka sekcję o
+    /// indeksie k (0-based) — cel dla własnych nagłówków/stopek sekcji (SectionHeaderFooter).</summary>
+    private readonly List<SectionProperties> _emittedSectionProps = new();
+
+    /// <summary>Czy body zawierało markery sekcji (dokument wielosekcyjny).</summary>
+    private bool _hasSectionMarkers;
+
+    /// <summary>Wysokości pasm nagłówka/stopki (cm) do wyliczenia w:header/w:footer
+    /// distance dla sectPr sekcji pośrednich (te same, co dla body-level sectPr).</summary>
+    private double? _headerBandCm;
+    private double? _footerBandCm;
+
+    /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
         {
             _mainPart = document.AddMainDocumentPart();
             _mainPart.Document = new Document();
-            
+
+            // Stan sekcji per konwersja: pierwsza sekcja = geometria z argumentów;
+            // markery w HTML nadpisują ją dla kolejnych sekcji.
+            _currentSection = new SectionGeometry { PageSize = pageSize, Margins = margins };
+            _firstSectionProps = null;
+            _emittedSectionProps.Clear();
+            _numIdByHtmlList.Clear();
+            _hasSectionMarkers = false;
+            _headerBandCm = header?.Height;
+            _footerBandCm = footer?.Height;
+
             var body = new Body();
             _mainPart.Document.Body = body;
 
@@ -95,6 +146,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Dodaj ustawienia strony
             AddPageSettings(body, header, footer, margins, pageSize);
 
+            // Własne nagłówki/stopki sekcji ≥ 1 (po AddPageSettings — body-level sectPr istnieje)
+            AddSectionHeadersFooters(document, sectionHeadersFooters);
+
             document.Save();
         }
 
@@ -103,9 +157,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
     public byte[] ConvertPreservingPackage(string html, Stream? originalPackage,
         DocumentMetadata? metadata = null, HeaderFooterContent? header = null,
-        HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null)
+        HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null,
+        IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null)
     {
-        var generated = Convert(html, metadata, header, footer, margins, pageSize);
+        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters);
 
         if (originalPackage == null || !originalPackage.CanRead)
             return generated;
@@ -223,7 +278,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
     }
 
-    private void WriteHeaderPart(string html, HeaderFooterValues type)
+    private void WriteHeaderPart(string html, HeaderFooterValues type, SectionProperties? targetSection = null)
     {
         var headerPart = _mainPart!.AddNewPart<HeaderPart>();
         var headerElement = new Header();
@@ -255,10 +310,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         headerPart.Header = headerElement;
         headerPart.Header.Save();
 
-        AddHeaderReference(_mainPart.GetIdOfPart(headerPart), type);
+        AddHeaderReference(_mainPart.GetIdOfPart(headerPart), type, targetSection);
     }
 
-    private void WriteFooterPart(string html, HeaderFooterValues type)
+    private void WriteFooterPart(string html, HeaderFooterValues type, SectionProperties? targetSection = null)
     {
         var footerPart = _mainPart!.AddNewPart<FooterPart>();
         var footerElement = new Footer();
@@ -289,12 +344,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         footerPart.Footer = footerElement;
         footerPart.Footer.Save();
 
-        AddFooterReference(_mainPart.GetIdOfPart(footerPart), type);
+        AddFooterReference(_mainPart.GetIdOfPart(footerPart), type, targetSection);
     }
 
-    private void EnsureTitlePage()
+    private void EnsureTitlePage(SectionProperties? targetSection = null)
     {
-        var sectionProps = GetOrCreateSectionProps();
+        var sectionProps = targetSection ?? GetReferenceSectionProps();
         if (sectionProps == null) return;
         if (!sectionProps.Elements<TitlePage>().Any())
         {
@@ -327,6 +382,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
         return sectionProps;
     }
+
+    /// <summary>
+    /// sectPr, do którego wpinamy referencje nagłówka/stopki i titlePg: PIERWSZY sectPr
+    /// w kolejności dokumentu. W dokumencie wielosekcyjnym to sectPr pierwszego markera —
+    /// sekcje bez własnych referencji dziedziczą je w Wordzie z poprzedniej sekcji; gdyby
+    /// referencje trafiły tylko do body-level sectPr (ostatnia sekcja), wcześniejsze strony
+    /// nie miałyby nagłówka/stopki.
+    /// </summary>
+    private SectionProperties? GetReferenceSectionProps() => _firstSectionProps ?? GetOrCreateSectionProps();
 
     /// <summary>
     /// Konwertuje HTML na elementy nagłówka/stopki.
@@ -532,18 +596,74 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
     }
 
-    private void AddHeaderReference(string headerPartId, HeaderFooterValues type)
+    private void AddHeaderReference(string headerPartId, HeaderFooterValues type, SectionProperties? targetSection = null)
     {
-        var sectionProps = GetOrCreateSectionProps();
+        var sectionProps = targetSection ?? GetReferenceSectionProps();
         if (sectionProps == null) return;
         sectionProps.InsertAt(new HeaderReference { Type = type, Id = headerPartId }, 0);
     }
 
-    private void AddFooterReference(string footerPartId, HeaderFooterValues type)
+    private void AddFooterReference(string footerPartId, HeaderFooterValues type, SectionProperties? targetSection = null)
     {
-        var sectionProps = GetOrCreateSectionProps();
+        var sectionProps = targetSection ?? GetReferenceSectionProps();
         if (sectionProps == null) return;
         sectionProps.InsertAt(new FooterReference { Type = type, Id = footerPartId }, 0);
+    }
+
+    /// <summary>
+    /// Wpina WŁASNE nagłówki/stopki sekcji ≥ 1 na ich sectPr: sekcja o indeksie s (0-based)
+    /// → _emittedSectionProps[s] (paragraph-level sectPr zamykający tę sekcję) albo body-level
+    /// sectPr, gdy s to sekcja ostatnia. Sekcja 0 (bazowa) idzie standardową ścieżką
+    /// AddHeaderAndFooter → pierwszy sectPr; sekcje bez wpisu dziedziczą w Wordzie.
+    /// </summary>
+    private void AddSectionHeadersFooters(WordprocessingDocument document, IReadOnlyList<SectionHeaderFooter>? sections)
+    {
+        if (sections == null || sections.Count == 0) return;
+        var body = _mainPart?.Document?.Body;
+        if (body == null) return;
+        var bodySectPr = body.Elements<SectionProperties>().FirstOrDefault();
+
+        foreach (var entry in sections)
+        {
+            if (entry.SectionIndex < 1) continue; // sekcja 0 = pola bazowe Header/Footer
+
+            SectionProperties? target = null;
+            if (entry.SectionIndex < _emittedSectionProps.Count)
+                target = _emittedSectionProps[entry.SectionIndex];
+            else if (entry.SectionIndex == _emittedSectionProps.Count)
+                target = bodySectPr; // ostatnia sekcja
+            if (target == null) continue; // markery usunięte z treści → sekcja nie istnieje
+
+            if (entry.Header is { } h && !string.IsNullOrWhiteSpace(h.Html))
+            {
+                WriteHeaderPart(h.Html, HeaderFooterValues.Default, target);
+                if (h.DifferentFirstPage && !string.IsNullOrWhiteSpace(h.FirstPageHtml))
+                {
+                    WriteHeaderPart(h.FirstPageHtml!, HeaderFooterValues.First, target);
+                    EnsureTitlePage(target);
+                }
+                if (h.DifferentOddEven && !string.IsNullOrWhiteSpace(h.EvenHtml))
+                {
+                    WriteHeaderPart(h.EvenHtml!, HeaderFooterValues.Even, target);
+                    EnsureEvenAndOddHeaders(document);
+                }
+            }
+
+            if (entry.Footer is { } f && !string.IsNullOrWhiteSpace(f.Html))
+            {
+                WriteFooterPart(f.Html, HeaderFooterValues.Default, target);
+                if (f.DifferentFirstPage && !string.IsNullOrWhiteSpace(f.FirstPageHtml))
+                {
+                    WriteFooterPart(f.FirstPageHtml!, HeaderFooterValues.First, target);
+                    EnsureTitlePage(target);
+                }
+                if (f.DifferentOddEven && !string.IsNullOrWhiteSpace(f.EvenHtml))
+                {
+                    WriteFooterPart(f.EvenHtml!, HeaderFooterValues.Even, target);
+                    EnsureEvenAndOddHeaders(document);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -814,9 +934,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 break;
 
             case "div":
-                if (IsPageBreakNode(node))
+                if (IsSectionBreakNode(node))
                 {
-                    elements.Add(CreatePageBreak());
+                    elements.Add(CreateSectionBreakParagraph(node));
+                }
+                else if (IsPageBreakNode(node))
+                {
+                    // Marker sekcji tuż za page-breakiem = przerwa sekcji typu nextPage;
+                    // sectPr sam łamie stronę, dodatkowy w:br type=page dawałby pustą stronę.
+                    if (!NextElementSiblingIsSectionBreak(node))
+                        elements.Add(CreatePageBreak());
                 }
                 else if (node.HasClass("sdt-block"))
                 {
@@ -896,6 +1023,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             props.Append(new ParagraphStyleId { Val = styleId });
         }
 
+        // Tab-stopy per akapit (reader: data-tab-stops="pos:align[:leader];…", pos w twips) —
+        // odtwarzane jako w:tabs, żeby pozycje/wyrównania/leadery nie ginęły przy zapisie.
+        var tabStopsAttr = node.GetAttributeValue("data-tab-stops", "");
+        if (!string.IsNullOrEmpty(tabStopsAttr) && ParseTabStops(tabStopsAttr) is { } tabs)
+        {
+            props.Append(tabs);
+        }
+
         if (props.HasChildren)
             paragraph.Append(props);
 
@@ -941,22 +1076,40 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
         else
         {
-            // Lista najwyższego poziomu — utwórz nową definicję numeracji
             EnsureNumberingPart();
-            
-            // Przeskanuj strukturę listy aby określić format dla każdego poziomu
-            var levelFormats = new Dictionary<int, bool>();
-            ScanListLevels(node, ordered, level, levelFormats);
 
-            // Wykryj poziomy z punktatorem obrazkowym (DocxToHtmlConverter wstawia
-            // <span class="list-marker"><img .../></span> jako wizualny marker).
-            // Dla takich poziomów wyłączymy automatyczny punktator Worda, żeby nie
-            // dublować markera (kropka + grafika).
-            var pictureBulletLevels = new HashSet<int>();
-            ScanPictureBulletLevels(node, level, pictureBulletLevels);
+            // Tożsamość listy z readera: fragmenty tej samej listy logicznej (np. rozdzielone
+            // zwykłym akapitem) niosą ten sam data-num-id → współdzielą jedną NumberingInstance,
+            // więc Word kontynuuje numerację. Bez atrybutu (lista utworzona w edytorze) — nowa.
+            var htmlListId = node.GetAttributeValue("data-num-id", "");
+            if (htmlListId.Length > 0 && _numIdByHtmlList.TryGetValue(htmlListId, out var existingNumId))
+            {
+                numId = existingNumId;
+            }
+            else
+            {
+                // Przeskanuj strukturę listy aby określić format dla każdego poziomu
+                var levelFormats = new Dictionary<int, bool>();
+                ScanListLevels(node, ordered, level, levelFormats);
 
-            var abstractNumId = CreateAbstractNumbering(levelFormats, pictureBulletLevels);
-            numId = CreateNumberingInstance(abstractNumId);
+                // Wykryj poziomy z punktatorem obrazkowym (DocxToHtmlConverter wstawia
+                // <span class="list-marker"><img .../></span> jako wizualny marker).
+                // Dla takich poziomów wyłączymy automatyczny punktator Worda, żeby nie
+                // dublować markera (kropka + grafika).
+                var pictureBulletLevels = new HashSet<int>();
+                ScanPictureBulletLevels(node, level, pictureBulletLevels);
+
+                // Definicje poziomów round-tripowane z readera (data-num-fmt / data-lvl-text /
+                // data-start / data-bullet-font) — zachowują oryginalny format numeracji
+                // (np. upperRoman, "%1)", start=5) zamiast hardkodowanej drabinki.
+                var levelSpecs = new Dictionary<int, HtmlListLevelSpec>();
+                ScanListLevelSpecs(node, level, levelSpecs);
+
+                var abstractNumId = CreateAbstractNumbering(levelFormats, pictureBulletLevels, levelSpecs);
+                numId = CreateNumberingInstance(abstractNumId);
+                if (htmlListId.Length > 0)
+                    _numIdByHtmlList[htmlListId] = numId;
+            }
         }
 
         foreach (var child in node.ChildNodes)
@@ -1046,6 +1199,62 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
+    /// Definicja poziomu listy odczytana z data-* kontenera (round-trip z DocxToHtmlConverter).
+    /// </summary>
+    private readonly record struct HtmlListLevelSpec(string? Fmt, string? LvlText, int Start, string? BulletFont);
+
+    /// <summary>
+    /// Zbiera definicje poziomów z atrybutów data-num-fmt / data-lvl-text / data-start /
+    /// data-bullet-font na kontenerach ul/ol (każdy zagnieżdżony kontener opisuje swój poziom).
+    /// Pierwsze napotkane wystąpienie poziomu wygrywa.
+    /// </summary>
+    private static void ScanListLevelSpecs(HtmlNode node, int level, Dictionary<int, HtmlListLevelSpec> specs)
+    {
+        if (!specs.ContainsKey(level))
+        {
+            var fmt = node.GetAttributeValue("data-num-fmt", "");
+            var lvlText = node.GetAttributeValue("data-lvl-text", "");
+            var startRaw = node.GetAttributeValue("data-start", "");
+            var bulletFont = node.GetAttributeValue("data-bullet-font", "");
+            if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0)
+            {
+                _ = int.TryParse(startRaw, out var start);
+                specs[level] = new HtmlListLevelSpec(
+                    fmt.Length > 0 ? fmt : null,
+                    lvlText.Length > 0 ? HtmlEntity.DeEntitize(lvlText) : null,
+                    start > 0 ? start : 1,
+                    bulletFont.Length > 0 ? HtmlEntity.DeEntitize(bulletFont) : null);
+            }
+        }
+
+        foreach (var child in node.ChildNodes)
+        {
+            if (child.Name.ToLower() != "li") continue;
+            var nested = child.SelectNodes("./ul|./ol");
+            if (nested == null) continue;
+            foreach (var nestedList in nested)
+                ScanListLevelSpecs(nestedList, level + 1, specs);
+        }
+    }
+
+    /// <summary>Mapuje token data-num-fmt (nazwy w:numFmt) na NumberFormatValues.</summary>
+    private static bool TryMapNumFmt(string token, out NumberFormatValues fmt)
+    {
+        switch (token)
+        {
+            case "decimal": fmt = NumberFormatValues.Decimal; return true;
+            case "decimalZero": fmt = NumberFormatValues.DecimalZero; return true;
+            case "lowerLetter": fmt = NumberFormatValues.LowerLetter; return true;
+            case "upperLetter": fmt = NumberFormatValues.UpperLetter; return true;
+            case "lowerRoman": fmt = NumberFormatValues.LowerRoman; return true;
+            case "upperRoman": fmt = NumberFormatValues.UpperRoman; return true;
+            case "bullet": fmt = NumberFormatValues.Bullet; return true;
+            case "none": fmt = NumberFormatValues.None; return true;
+            default: fmt = NumberFormatValues.Decimal; return false;
+        }
+    }
+
+    /// <summary>
     /// Skanuje strukturę HTML listy aby określić format (ordered/unordered) dla każdego poziomu zagnieżdżenia
     /// </summary>
     private void ScanListLevels(HtmlNode node, bool ordered, int level, Dictionary<int, bool> levelFormats)
@@ -1126,17 +1335,20 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Tworzy definicję abstrakcyjnej numeracji
     /// </summary>
-    private int CreateAbstractNumbering(Dictionary<int, bool> levelFormats, HashSet<int>? pictureBulletLevels = null)
+    private int CreateAbstractNumbering(
+        Dictionary<int, bool> levelFormats,
+        HashSet<int>? pictureBulletLevels = null,
+        Dictionary<int, HtmlListLevelSpec>? levelSpecs = null)
     {
         var abstractNumId = _numberingId++;
-        
+
         var abstractNum = new AbstractNum { AbstractNumberId = abstractNumId };
-        
+
         // Dodaj wymagany identyfikator Nsid dla poprawnej obsługi numeracji w Word
         var nsidValue = Guid.NewGuid().ToString("N").Substring(0, 8).ToUpper();
         abstractNum.Append(new Nsid { Val = nsidValue });
         abstractNum.Append(new MultiLevelType { Val = MultiLevelValues.HybridMultilevel });
-        
+
         // Zdefiniuj 9 poziomów — każdy poziom ma format zgodny ze strukturą HTML
         for (int lvl = 0; lvl < 9; lvl++)
         {
@@ -1144,9 +1356,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var isOrdered = levelFormats.TryGetValue(lvl, out var fmt)
                 ? fmt
                 : (levelFormats.TryGetValue(0, out var defaultFmt) && defaultFmt);
-            
+
+            HtmlListLevelSpec? spec = levelSpecs != null && levelSpecs.TryGetValue(lvl, out var s) ? s : null;
+
             var levelDef = new Level { LevelIndex = lvl };
-            levelDef.Append(new StartNumberingValue { Val = 1 });
+            levelDef.Append(new StartNumberingValue { Val = spec?.Start ?? 1 });
 
             // Poziom z punktatorem obrazkowym — wyłącz automatyczny marker Worda,
             // grafika została wstawiona jako wiodący inline run w paragrafie.
@@ -1154,6 +1368,31 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 levelDef.Append(new NumberingFormat { Val = NumberFormatValues.None });
                 levelDef.Append(new LevelText { Val = string.Empty });
+            }
+            else if (spec is { Fmt: not null } sp && TryMapNumFmt(sp.Fmt, out var mappedFmt))
+            {
+                // Round-trip z data-*: dokładny format/lvlText/font punktatora z oryginału.
+                if (mappedFmt == NumberFormatValues.Bullet)
+                {
+                    levelDef.Append(new NumberingFormat { Val = NumberFormatValues.Bullet });
+                    levelDef.Append(new LevelText { Val = !string.IsNullOrEmpty(sp.LvlText) ? sp.LvlText : "•" });
+                    var bulletFont = sp.BulletFont;
+                    levelDef.Append(new NumberingSymbolRunProperties(string.IsNullOrEmpty(bulletFont)
+                        ? new RunFonts { Ascii = "Symbol", HighAnsi = "Symbol", Hint = FontTypeHintValues.Default }
+                        : new RunFonts { Ascii = bulletFont, HighAnsi = bulletFont, Hint = FontTypeHintValues.Default }));
+                }
+                else
+                {
+                    levelDef.Append(new NumberingFormat { Val = mappedFmt });
+                    // lvlText z placeholderem %N; bez niego (lub uszkodzony) — standardowe "%N.".
+                    var lvlText = !string.IsNullOrEmpty(sp.LvlText) && sp.LvlText.Contains('%')
+                        ? sp.LvlText
+                        : $"%{lvl + 1}.";
+                    levelDef.Append(new LevelText { Val = lvlText });
+                    levelDef.Append(new NumberingSymbolRunProperties(
+                        new RunFonts { Hint = FontTypeHintValues.Default }
+                    ));
+                }
             }
             else if (isOrdered)
             {
@@ -1262,23 +1501,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         
         // Parsuj style tabeli
         var tableStyle = node.GetAttributeValue("style", "");
-        
-        // Szerokość
-        var tableWidthMatch = Regex.Match(tableStyle, @"width:\s*(\d+)(px|%)?");
+
+        // Referencja stylu tabeli Worda zachowana przez reader w data-* — emitujemy ją z powrotem.
+        // w:tblStyle musi być PIERWSZYM dzieckiem tblPr (kolejność schematu). Rozwiązane wartości
+        // stylu i tak są w inline CSS komórek, więc wygląd odtwarza formatowanie bezpośrednie,
+        // a referencja stylu przeżywa round-trip (edycja w Wordzie dalej "widzi" styl).
+        var tblStyleId = node.GetAttributeValue("data-tbl-style", "");
+        if (!string.IsNullOrEmpty(tblStyleId))
+            tableProps.Append(new TableStyle { Val = System.Net.WebUtility.HtmlDecode(tblStyleId) });
+
+        // Szerokość (reader emituje też ułamkowe %: 66.66%)
+        var tableWidthMatch = Regex.Match(tableStyle, @"width:\s*([\d.]+)(px|%)?");
         if (tableWidthMatch.Success)
         {
-            var widthValue = tableWidthMatch.Groups[1].Value;
+            var widthValue = double.Parse(tableWidthMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
             var unit = tableWidthMatch.Groups[2].Value;
-            
+
             if (unit == "%")
             {
-                var pct = int.Parse(widthValue);
-                tableProps.Append(new TableWidth { Width = (pct * 50).ToString(), Type = TableWidthUnitValues.Pct });
+                tableProps.Append(new TableWidth { Width = ((int)Math.Round(widthValue * 50)).ToString(), Type = TableWidthUnitValues.Pct });
             }
             else if (unit == "px" || string.IsNullOrEmpty(unit))
             {
-                var px = int.Parse(widthValue);
-                tableProps.Append(new TableWidth { Width = (px * 15).ToString(), Type = TableWidthUnitValues.Dxa });
+                tableProps.Append(new TableWidth { Width = ((int)Math.Round(widthValue * 15)).ToString(), Type = TableWidthUnitValues.Dxa });
             }
         }
         else
@@ -1288,7 +1533,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // full text width. Patrz analiza orginał_GOOD (tblW auto) vs zapisany_BAD (pct 5000).
             tableProps.Append(new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto });
         }
-        
+
         // Wyrównanie tabeli
         if (tableStyle.Contains("margin-left:auto") && tableStyle.Contains("margin-right:auto"))
         {
@@ -1299,14 +1544,40 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             tableProps.Append(new TableJustification { Val = TableRowAlignmentValues.Right });
         }
 
+        // Odstęp między komórkami: preferuj dokładne twips z data-*, inaczej border-spacing px.
+        var cellSpacingTwAttr = node.GetAttributeValue("data-cell-spacing-tw", "");
+        if (int.TryParse(cellSpacingTwAttr, out var cellSpacingTw) && cellSpacingTw > 0)
+        {
+            tableProps.Append(new TableCellSpacing { Width = cellSpacingTw.ToString(), Type = TableWidthUnitValues.Dxa });
+        }
+        else
+        {
+            var spacingMatch = Regex.Match(tableStyle, @"border-spacing:\s*([\d.]+)px");
+            if (spacingMatch.Success)
+            {
+                var spacingPx = double.Parse(spacingMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                if (spacingPx > 0)
+                    tableProps.Append(new TableCellSpacing { Width = ((int)Math.Round(spacingPx * 15)).ToString(), Type = TableWidthUnitValues.Dxa });
+            }
+        }
+
+        // Wcięcie tabeli (margin-left w px, nie 'auto') → w:tblInd. Wcześniej gubione na eksporcie.
+        var indentMatch = Regex.Match(tableStyle, @"margin-left:\s*(-?[\d.]+)px");
+        if (indentMatch.Success)
+        {
+            var indentPx = double.Parse(indentMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            if (Math.Abs(indentPx) > 0.01)
+                tableProps.Append(new TableIndentation { Width = (int)Math.Round(indentPx * 15), Type = TableWidthUnitValues.Dxa });
+        }
+
         // Parsuj obramowania tabeli z CSS
-        var borderMatch = Regex.Match(tableStyle, @"border:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
+        var borderMatch = Regex.Match(tableStyle, @"(?<![a-z-])border:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
         if (borderMatch.Success)
         {
-            var bSize = (uint)(double.Parse(borderMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 8);
+            var bSize = CssPxToBorderEighthPoints(borderMatch.Groups[1].Value);
             var bStyle = ParseBorderStyle(borderMatch.Groups[2].Value);
             var bColor = NormalizeColor(borderMatch.Groups[3].Value);
-            
+
             defaultBorders = new TableBorders(
                 new TopBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new BottomBorder { Val = bStyle, Size = bSize, Color = bColor },
@@ -1316,9 +1587,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 new InsideVerticalBorder { Val = bStyle, Size = bSize, Color = bColor }
             );
         }
-        
+
         tableProps.Append(defaultBorders);
-        tableProps.Append(new TableLayout { Type = TableLayoutValues.Autofit });
+
+        // Reader emituje table-layout:fixed dla tabel z geometrią kolumn z tblGrid —
+        // wymuszanie Autofit gubiło układ Worda przy każdym zapisie (autosave!).
+        var isFixedLayout = tableStyle.Contains("table-layout:fixed");
+        tableProps.Append(new TableLayout { Type = isFixedLayout ? TableLayoutValues.Fixed : TableLayoutValues.Autofit });
         
         // Domyślne marginesy komórek = domyślne Worda (TableNormal): top/bottom=0, left/right=108
         // twips. Wcześniej hardkodowane 40/80 dodawało pionowy margines do każdej komórki (tabele
@@ -1329,12 +1604,32 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             new BottomMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
             new TableCellRightMargin { Width = 108, Type = TableWidthValues.Dxa }
         ));
-        
+
+        // w:tblLook (flagi formatowania warunkowego stylu) — round-trip z data-tbl-look.
+        var tblLookHex = node.GetAttributeValue("data-tbl-look", "");
+        if (Regex.IsMatch(tblLookHex, "^[0-9A-Fa-f]{4}$"))
+        {
+            var lookMask = int.Parse(tblLookHex, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture);
+            tableProps.Append(new TableLook
+            {
+                Val = tblLookHex.ToUpperInvariant(),
+                FirstRow = (lookMask & 0x0020) != 0,
+                LastRow = (lookMask & 0x0040) != 0,
+                FirstColumn = (lookMask & 0x0080) != 0,
+                LastColumn = (lookMask & 0x0100) != 0,
+                NoHorizontalBand = (lookMask & 0x0200) != 0,
+                NoVerticalBand = (lookMask & 0x0400) != 0
+            });
+        }
+
         table.Append(tableProps);
 
         // Oblicz liczbę kolumn
         var maxCols = 0;
-        var rowNodes = node.SelectNodes(".//tr");
+        // Tylko wiersze TEJ tabeli (bezpośrednie lub w thead/tbody/tfoot) — `.//tr` schodziło
+        // do tabel ZAGNIEŻDŻONYCH i duplikowało ich wiersze jako wiersze tabeli zewnętrznej.
+        var rowNodes = node.SelectNodes("./tr | ./thead/tr | ./tbody/tr | ./tfoot/tr");
         if (rowNodes != null)
         {
             foreach (var rowNode in rowNodes)
@@ -1353,53 +1648,108 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             }
         }
 
-        // Siatka tabeli
-        if (maxCols > 0)
+        // Siatka tabeli. Szerokości kolumn pochodzą z <colgroup> (reader emituje je z tblGrid);
+        // wcześniej grid był odtwarzany z samej LICZBY komórek bez szerokości, więc geometria
+        // kolumn Worda ginęła przy każdym zapisie.
+        var colWidthsTwips = ReadColgroupWidthsTwips(node);
+        var gridColCount = Math.Max(maxCols, colWidthsTwips.Count);
+        if (gridColCount > 0)
         {
             var grid = new TableGrid();
-            for (int i = 0; i < maxCols; i++)
-                grid.Append(new GridColumn());
+            for (int i = 0; i < gridColCount; i++)
+            {
+                var col = new GridColumn();
+                if (i < colWidthsTwips.Count && colWidthsTwips[i] > 0)
+                    col.Width = colWidthsTwips[i].ToString();
+                grid.Append(col);
+            }
             table.Append(grid);
         }
 
-        // Przetwórz wiersze
+        // Przetwórz wiersze. HTML pomija komórki przykryte przez rowspan w kolejnych
+        // wierszach — OOXML wymaga tam jawnych komórek kontynuacji (vMerge bez val).
+        // Bez nich komórki przesuwały się w lewo i tabela była uszkodzona w Wordzie.
+        // activeRowSpans: kolumna gridu → (pozostałe wiersze scalenia, rozpiętość kolumn).
+        var activeRowSpans = new Dictionary<int, (int RemainingRows, int ColSpan)>();
         if (rowNodes != null)
         {
             foreach (var rowNode in rowNodes)
             {
                 var row = new TableRow();
-                
-                // Wysokość wiersza
-                var rowStyle = rowNode.GetAttributeValue("style", "");
-                var rowHeightMatch = Regex.Match(rowStyle, @"(?:min-)?height:\s*([\d.]+)px");
-                if (rowHeightMatch.Success)
+                var gridCursor = 0;
+                var spansStartedThisRow = new HashSet<int>();
+
+                void AppendPendingContinuations()
                 {
-                    var heightPx = (int)Math.Round(double.Parse(rowHeightMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
-                    var heightTwips = PxToTwips(heightPx);
-                    var rowProps = new TableRowProperties(
-                        new TableRowHeight { Val = (uint)heightTwips, HeightType = HeightRuleValues.AtLeast }
-                    );
-                    row.Append(rowProps);
+                    while (activeRowSpans.TryGetValue(gridCursor, out var span))
+                    {
+                        row.Append(CreateVerticalMergeContinuationCell(span.ColSpan));
+                        gridCursor += span.ColSpan;
+                    }
                 }
-                
+
+                // Właściwości wiersza (kolejność schematu trPr: cantSplit → trHeight → tblHeader).
+                // Wysokość: preferuj dokładne twips + regułę z data-* (round-trip bez strat
+                // px→twips i bez gubienia hRule=exact); fallback: height/min-height px → atLeast.
+                var rowStyle = rowNode.GetAttributeValue("style", "");
+                var rowProps = new TableRowProperties();
+
+                if (rowNode.GetAttributeValue("data-cant-split", "") == "1")
+                    rowProps.Append(new CantSplit());
+
+                var hRule = rowNode.GetAttributeValue("data-row-hrule", "") == "exact"
+                    ? HeightRuleValues.Exact
+                    : HeightRuleValues.AtLeast;
+                var heightTwAttr = rowNode.GetAttributeValue("data-row-height-tw", "");
+                if (uint.TryParse(heightTwAttr, out var heightTwFromAttr) && heightTwFromAttr > 0)
+                {
+                    rowProps.Append(new TableRowHeight { Val = heightTwFromAttr, HeightType = hRule });
+                }
+                else
+                {
+                    var rowHeightMatch = Regex.Match(rowStyle, @"(?:min-)?height:\s*([\d.]+)px");
+                    if (rowHeightMatch.Success)
+                    {
+                        var heightPx = (int)Math.Round(double.Parse(rowHeightMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+                        var heightTwips = PxToTwips(heightPx);
+                        if (heightTwips > 0)
+                            rowProps.Append(new TableRowHeight { Val = (uint)heightTwips, HeightType = hRule });
+                    }
+                }
+
+                // Wiersz nagłówkowy powtarzany na kolejnych stronach (w:tblHeader).
+                if (rowNode.GetAttributeValue("data-tbl-header", "") == "1")
+                    rowProps.Append(new TableHeader());
+
+                if (rowProps.HasChildren)
+                    row.Append(rowProps);
+
                 var cells = rowNode.SelectNodes("./td|./th");
                 if (cells != null)
                 {
                     foreach (var cellNode in cells)
                     {
+                        AppendPendingContinuations();
+
                         var cell = new TableCell();
                         var cellProps = new TableCellProperties();
-                        
+
                         // Colspan
                         var colspanAttr = cellNode.GetAttributeValue("colspan", "1");
-                        if (int.TryParse(colspanAttr, out var colspan) && colspan > 1)
+                        if (!int.TryParse(colspanAttr, out var colspan) || colspan < 1) colspan = 1;
+                        if (colspan > 1)
                             cellProps.Append(new GridSpan { Val = colspan });
-                        
+
                         // Rowspan
                         var rowspanAttr = cellNode.GetAttributeValue("rowspan", "1");
                         if (int.TryParse(rowspanAttr, out var rowspan) && rowspan > 1)
+                        {
                             cellProps.Append(new VerticalMerge { Val = MergedCellValues.Restart });
-                        
+                            activeRowSpans[gridCursor] = (rowspan - 1, colspan);
+                            spansStartedThisRow.Add(gridCursor);
+                        }
+                        gridCursor += colspan;
+
                         // Parsuj style komórki
                         var cellStyle = cellNode.GetAttributeValue("style", "");
                         ApplyCellStyle(cellProps, cellStyle);
@@ -1450,11 +1800,58 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     }
                 }
 
+                // Kontynuacje scaleń wypadające ZA ostatnią komórką wiersza.
+                AppendPendingContinuations();
+
+                // Scalenia rozpoczęte w tym wierszu obejmują dopiero KOLEJNE wiersze.
+                foreach (var col in activeRowSpans.Keys.ToList())
+                {
+                    if (spansStartedThisRow.Contains(col)) continue;
+                    var (remaining, span) = activeRowSpans[col];
+                    if (remaining <= 1) activeRowSpans.Remove(col);
+                    else activeRowSpans[col] = (remaining - 1, span);
+                }
+
                 table.Append(row);
             }
         }
 
         return table;
+    }
+
+    /// <summary>
+    /// Komórka kontynuacji scalenia pionowego (w:vMerge bez w:val = continue) —
+    /// odpowiednik komórki, którą HTML pomija pod komórką z rowspan.
+    /// </summary>
+    private static TableCell CreateVerticalMergeContinuationCell(int colSpan)
+    {
+        var props = new TableCellProperties();
+        if (colSpan > 1)
+            props.Append(new GridSpan { Val = colSpan });
+        props.Append(new VerticalMerge());
+        return new TableCell(props, new Paragraph());
+    }
+
+    /// <summary>
+    /// Szerokości kolumn (twips) z &lt;colgroup&gt; tabeli — reader emituje je z w:tblGrid
+    /// (px). Kolumna bez szerokości daje 0 (Word rozłoży resztę).
+    /// </summary>
+    private static List<int> ReadColgroupWidthsTwips(HtmlNode tableNode)
+    {
+        var result = new List<int>();
+        var cols = tableNode.SelectNodes("./colgroup/col");
+        if (cols == null) return result;
+
+        foreach (var col in cols)
+        {
+            var style = col.GetAttributeValue("style", "");
+            var m = Regex.Match(style, @"width:\s*([\d.]+)px");
+            result.Add(m.Success
+                ? (int)Math.Round(OoxmlUnits.PixelsToTwips(
+                    double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)))
+                : 0);
+        }
+        return result;
     }
 
     /// <summary>
@@ -1473,17 +1870,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         if (string.IsNullOrEmpty(style)) return;
         
-        // Szerokość
-        var widthMatch = Regex.Match(style, @"width:\s*(\d+)(px|%)?");
+        // Szerokość (min-width pomijamy — to artefakt edytora, nie geometria Worda).
+        var widthMatch = Regex.Match(style, @"(?<![a-z-])width:\s*([\d.]+)(px|%)?");
         if (widthMatch.Success)
         {
-            var widthVal = int.Parse(widthMatch.Groups[1].Value);
+            var widthVal = double.Parse(widthMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
             var widthUnit = widthMatch.Groups[2].Value;
-            
+
             if (widthUnit == "%")
-                cellProps.Append(new TableCellWidth { Width = (widthVal * 50).ToString(), Type = TableWidthUnitValues.Pct });
+                cellProps.Append(new TableCellWidth { Width = ((int)Math.Round(widthVal * 50)).ToString(), Type = TableWidthUnitValues.Pct });
             else
-                cellProps.Append(new TableCellWidth { Width = (widthVal * 15).ToString(), Type = TableWidthUnitValues.Dxa });
+                cellProps.Append(new TableCellWidth { Width = ((int)Math.Round(widthVal * 15)).ToString(), Type = TableWidthUnitValues.Dxa });
         }
         else
         {
@@ -1563,7 +1960,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var match = Regex.Match(style, $@"{Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{{3,6}})");
             if (match.Success)
             {
-                var size = (uint)(double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 8);
+                var size = CssPxToBorderEighthPoints(match.Groups[1].Value);
                 var bStyle = ParseBorderStyle(match.Groups[2].Value);
                 var color = NormalizeColor(match.Groups[3].Value);
                 
@@ -1590,7 +1987,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var borderAll = Regex.Match(style, @"(?<![a-z-])border:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
             if (borderAll.Success)
             {
-                var size = (uint)(double.Parse(borderAll.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 8);
+                var size = CssPxToBorderEighthPoints(borderAll.Groups[1].Value);
                 var bStyle = ParseBorderStyle(borderAll.Groups[2].Value);
                 var color = NormalizeColor(borderAll.Groups[3].Value);
                 
@@ -1609,6 +2006,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Parsuje styl obramowania CSS na wartość OpenXML
     /// </summary>
+    /// <summary>
+    /// CSS px → w:sz (1/8 pt): sz = px × 72/96 × 8 = px × 6. Symetryczne do readera (sz/6 → px);
+    /// wcześniejsze ×8 pogrubiało każdą linię o 33% przy każdym round-tripie. Minimum 2 (0.25 pt).
+    /// </summary>
+    private static uint CssPxToBorderEighthPoints(string px)
+    {
+        var v = double.Parse(px, System.Globalization.CultureInfo.InvariantCulture);
+        return (uint)Math.Max(2, Math.Round(v * 6));
+    }
+
     private BorderValues ParseBorderStyle(string cssStyle) => cssStyle.ToLower() switch
     {
         "solid" => BorderValues.Single,
@@ -2085,11 +2492,26 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 var text = System.Net.WebUtility.HtmlDecode(node.InnerText);
                 if (!string.IsNullOrEmpty(text))
                 {
-                    var run = new Run();
-                    if (inheritedProps != null)
-                        run.Append(inheritedProps.CloneNode(true));
-                    run.Append(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
-                    runs.Add(run);
+                    // Literalny znak tabulacji → w:tab (element), nie tekst w w:t — Word nie
+                    // renderuje tabów zapisanych w treści w:t, więc ginęły po round-tripie.
+                    var parts = text.Split('\t');
+                    for (int pi = 0; pi < parts.Length; pi++)
+                    {
+                        if (pi > 0)
+                        {
+                            var tabRun = new Run();
+                            if (inheritedProps != null)
+                                tabRun.Append(inheritedProps.CloneNode(true));
+                            tabRun.Append(new TabChar());
+                            runs.Add(tabRun);
+                        }
+                        if (parts[pi].Length == 0) continue;
+                        var run = new Run();
+                        if (inheritedProps != null)
+                            run.Append(inheritedProps.CloneNode(true));
+                        run.Append(new Text(parts[pi]) { Space = SpaceProcessingModeValues.Preserve });
+                        runs.Add(run);
+                    }
                 }
                 break;
 
@@ -2103,6 +2525,20 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 if (IsPageBreakNode(node))
                 {
                     runs.Add(new Run(new Break { Type = BreakValues.Page }));
+                    break;
+                }
+
+                // Segment pozycyjny tab-stopu (reader: nagłówek/stopka z w:tabs) — segment
+                // zaczyna się od tabulatora; pozycję odtwarza pPr/w:tabs z data-tab-stops.
+                if (node.HasClass("docx-tab-seg"))
+                {
+                    var segTab = new Run();
+                    if (inheritedProps != null)
+                        segTab.Append(inheritedProps.CloneNode(true));
+                    segTab.Append(new TabChar());
+                    runs.Add(segTab);
+                    foreach (var segChild in node.ChildNodes)
+                        runs.AddRange(CreateRunsFromNode(segChild, inheritedProps));
                     break;
                 }
 
@@ -2185,6 +2621,43 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         return runs;
+    }
+
+    /// <summary>
+    /// Parsuje atrybut data-tab-stops ("4536:center;9072:right:dot") na w:tabs.
+    /// Zwraca null przy braku poprawnych wpisów.
+    /// </summary>
+    private static Tabs? ParseTabStops(string attr)
+    {
+        var tabs = new Tabs();
+        foreach (var entry in attr.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = entry.Split(':');
+            if (parts.Length < 2 || !int.TryParse(parts[0], out var pos)) continue;
+
+            var val = parts[1] switch
+            {
+                "center" => TabStopValues.Center,
+                "right" => TabStopValues.Right,
+                "decimal" => TabStopValues.Decimal,
+                _ => TabStopValues.Left
+            };
+            var stop = new TabStop { Val = val, Position = pos };
+            if (parts.Length >= 3)
+            {
+                stop.Leader = parts[2] switch
+                {
+                    "dot" => TabStopLeaderCharValues.Dot,
+                    "hyphen" => TabStopLeaderCharValues.Hyphen,
+                    "underscore" => TabStopLeaderCharValues.Underscore,
+                    "middleDot" => TabStopLeaderCharValues.MiddleDot,
+                    "heavy" => TabStopLeaderCharValues.Heavy,
+                    _ => TabStopLeaderCharValues.None
+                };
+            }
+            tabs.Append(stop);
+        }
+        return tabs.HasChildren ? tabs : null;
     }
 
     /// <summary>
@@ -2276,9 +2749,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var unit = lineHeightMatch.Groups[2].Value;
             if (unit == "pt")
             {
-                // Dokładna wartość w pt
+                // Dokładna wartość w pt. Reader oznacza regułę atLeast markerem
+                // --w-line-rule:atLeast — bez niego atLeast wracało jako exact,
+                // a exact przycina w Wordzie tekst wyższy niż linia.
                 spacing.Line = ((int)Math.Round(OoxmlUnits.PointsToTwips(val))).ToString();
-                spacing.LineRule = LineSpacingRuleValues.Exact;
+                spacing.LineRule = Regex.IsMatch(style, @"--w-line-rule\s*:\s*atLeast")
+                    ? LineSpacingRuleValues.AtLeast
+                    : LineSpacingRuleValues.Exact;
             }
             else
             {
@@ -2354,7 +2831,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 var border = createBorder();
                 border.Val = ParseBorderStyle(match.Groups[2].Value);
-                border.Size = (uint)(double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) * 8);
+                border.Size = CssPxToBorderEighthPoints(match.Groups[1].Value);
                 border.Color = NormalizeColor(match.Groups[3].Value);
                 border.Space = 4;
                 borders.Append(border);
@@ -2513,6 +2990,119 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         return Regex.IsMatch(style, @"(page-break-before|break-before)\s*:\s*(always|page)", RegexOptions.IgnoreCase);
     }
 
+    /// <summary>
+    /// Marker końca sekcji emitowany przez DocxToHtmlConverter (R-10): niewidoczny
+    /// <c>div.docx-section-break</c> z geometrią NASTĘPNEJ sekcji w data-*.
+    /// </summary>
+    private static bool IsSectionBreakNode(HtmlNode node) =>
+        node.NodeType == HtmlNodeType.Element && node.HasClass("docx-section-break");
+
+    /// <summary>
+    /// Czy następny znaczący sąsiad (pomijając komentarze i białe znaki) to marker sekcji.
+    /// Reader emituje parę <c>div.page-break</c> + <c>div.docx-section-break</c> dla przerwy
+    /// nextPage — page-break jest wtedy tylko wizualny i nie może stać się w:br type=page.
+    /// </summary>
+    private static bool NextElementSiblingIsSectionBreak(HtmlNode node)
+    {
+        var next = node.NextSibling;
+        while (next != null && (next.NodeType == HtmlNodeType.Comment ||
+               (next.NodeType == HtmlNodeType.Text && string.IsNullOrWhiteSpace(next.InnerText))))
+        {
+            next = next.NextSibling;
+        }
+        return next != null && IsSectionBreakNode(next);
+    }
+
+    /// <summary>
+    /// Zamyka bieżącą sekcję: paragraf z pPr/sectPr niosącym geometrię sekcji ZAMYKANEJ
+    /// (tak koduje to OOXML), po czym otwiera następną sekcję geometrią z data-* markera.
+    /// Pierwszy taki sectPr zapamiętujemy — do niego pójdą referencje nagłówka/stopki
+    /// (kolejne sekcje dziedziczą je w Wordzie, gdy nie deklarują własnych).
+    /// </summary>
+    private Paragraph CreateSectionBreakParagraph(HtmlNode node)
+    {
+        var closingSection = new SectionProperties();
+        AppendSectionBreakType(closingSection, _currentSection.BreakType);
+        AppendSectionGeometry(closingSection, _currentSection);
+
+        _firstSectionProps ??= closingSection;
+        _emittedSectionProps.Add(closingSection);
+        _hasSectionMarkers = true;
+        _currentSection = ReadSectionGeometryFromMarker(node, _currentSection);
+
+        return new Paragraph(new ParagraphProperties(closingSection));
+    }
+
+    /// <summary>
+    /// Geometria sekcji z data-* markera; brakujące wartości dziedziczą z poprzedniej
+    /// sekcji (przybliżenie dziedziczenia sekcji Worda).
+    /// </summary>
+    private static SectionGeometry ReadSectionGeometryFromMarker(HtmlNode node, SectionGeometry previous)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double? Attr(string name)
+        {
+            var raw = node.GetAttributeValue(name, string.Empty);
+            return !string.IsNullOrEmpty(raw) &&
+                   double.TryParse(raw, System.Globalization.NumberStyles.Float, inv, out var v)
+                ? v : null;
+        }
+
+        Domain.Models.PageSize? pageSize = null;
+        if (Attr("data-page-width-cm") is { } w && Attr("data-page-height-cm") is { } h)
+        {
+            pageSize = new Domain.Models.PageSize
+            {
+                WidthCm = w,
+                HeightCm = h,
+                Orientation = node.GetAttributeValue("data-orientation", "portrait")
+            };
+        }
+
+        PageMargins? margins = null;
+        var top = Attr("data-margin-top-cm");
+        var bottom = Attr("data-margin-bottom-cm");
+        var left = Attr("data-margin-left-cm");
+        var right = Attr("data-margin-right-cm");
+        if (top != null || bottom != null || left != null || right != null)
+        {
+            margins = new PageMargins
+            {
+                Top = top ?? previous.Margins?.Top ?? 2.5,
+                Bottom = bottom ?? previous.Margins?.Bottom ?? 2.5,
+                Left = left ?? previous.Margins?.Left ?? 2.5,
+                Right = right ?? previous.Margins?.Right ?? 2.5
+            };
+        }
+
+        return new SectionGeometry
+        {
+            PageSize = pageSize ?? previous.PageSize,
+            Margins = margins ?? previous.Margins,
+            HeaderDistanceCm = Attr("data-header-distance-cm"),
+            FooterDistanceCm = Attr("data-footer-distance-cm"),
+            BreakType = node.GetAttributeValue("data-break-type", "nextPage")
+        };
+    }
+
+    /// <summary>
+    /// w:type sekcji — zapisywany tylko, gdy różni się od domyślnego nextPage.
+    /// Musi poprzedzać pgSz/pgMar (kolejność schematu sectPr).
+    /// </summary>
+    private static void AppendSectionBreakType(SectionProperties sectionProps, string? breakType)
+    {
+        SectionMarkValues? val = breakType switch
+        {
+            "continuous" => SectionMarkValues.Continuous,
+            "oddPage" => SectionMarkValues.OddPage,
+            "evenPage" => SectionMarkValues.EvenPage,
+            "nextColumn" => SectionMarkValues.NextColumn,
+            _ => null
+        };
+        if (val is { } v && !sectionProps.Elements<SectionType>().Any())
+            sectionProps.Append(new SectionType { Val = v });
+    }
+
     private void SetDocumentMetadata(WordprocessingDocument document, DocumentMetadata metadata)
     {
         // Core Properties (OPC package properties)
@@ -2567,34 +3157,59 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             body.Append(sectionProps);
         }
 
+        // Body-level sectPr opisuje OSTATNIĄ sekcję. Gdy body zawierało markery sekcji,
+        // jej geometria pochodzi z ostatniego markera (_currentSection); bez markerów —
+        // z argumentów (dotychczasowe zachowanie, jedna sekcja).
+        var geometry = _hasSectionMarkers
+            ? _currentSection
+            : new SectionGeometry { PageSize = pageSize, Margins = margins };
+
+        if (_hasSectionMarkers)
+            AppendSectionBreakType(sectionProps, geometry.BreakType);
+        AppendSectionGeometry(sectionProps, geometry);
+    }
+
+    /// <summary>
+    /// Dopisuje w:pgSz + w:pgMar do sectPr wg geometrii sekcji (jedno źródło reguł dla
+    /// body-level i paragraph-level sectPr).
+    ///
+    /// Margins (cm) → twips via the central converter (the exact factor is 1440/2.54).
+    /// Defaults are 1 inch sides, 0.5 inch header/footer bands. Body margins are written
+    /// AS AUTHORED — they must not be inflated. The reader derives the header/footer band
+    /// height as (margin − distance); here we invert that to recover the original
+    /// w:header / w:footer distance = (margin − band), clamped to [0, 720] — unless the
+    /// section marker carried the authored distances (data-header/footer-distance-cm),
+    /// which round-trip verbatim. The previous Math.Max(top, headerHeight + 720) +
+    /// hardcoded Header/Footer=720 pushed a small-margin / small-header document
+    /// (top=567, header=6) to top=1281, adding pages. Patrz analiza orginał_GOOD vs zapisany_BAD.
+    /// </summary>
+    private void AppendSectionGeometry(SectionProperties sectionProps, SectionGeometry geometry)
+    {
         // Round-trip the authored page size/orientation; fall back to A4 portrait when unknown.
         if (!sectionProps.Elements<OoxmlPageSize>().Any())
         {
-            sectionProps.Append(BuildPageSize(pageSize));
+            sectionProps.Append(BuildPageSize(geometry.PageSize));
         }
-        
-        // Margins (cm) → twips via the central converter (supersedes the old 567 approximation;
-        // the exact factor is 1440/2.54). Defaults are 1 inch sides, 0.5 inch header/footer bands.
+
         int defaultMarginTwips = OoxmlUnits.TwipsPerInch;
         int defaultBandTwips = OoxmlUnits.TwipsPerInch / 2;
+        var margins = geometry.Margins;
         int leftTwips  = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Left))  : defaultMarginTwips;
         int rightTwips = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Right)) : defaultMarginTwips;
 
-        var headerHeightTwips = header != null ? (int)OoxmlUnits.CmToTwips(header.Height) : defaultBandTwips;
-        var footerHeightTwips = footer != null ? (int)OoxmlUnits.CmToTwips(footer.Height) : defaultBandTwips;
+        var headerHeightTwips = _headerBandCm is { } hb ? (int)OoxmlUnits.CmToTwips(hb) : defaultBandTwips;
+        var footerHeightTwips = _footerBandCm is { } fb ? (int)OoxmlUnits.CmToTwips(fb) : defaultBandTwips;
 
         int topTwips    = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Top))    : defaultMarginTwips;
         int bottomTwips = margins != null ? (int)Math.Round(OoxmlUnits.CmToTwips(margins.Bottom)) : defaultMarginTwips;
 
-        // Body margins are written AS AUTHORED — they must not be inflated. The reader derives
-        // the header/footer band height as (margin − distance); here we invert that to recover
-        // the original w:header / w:footer distance = (margin − band), clamped to [0, 720].
-        // The previous Math.Max(top, headerHeight + 720) + hardcoded Header/Footer=720 pushed a
-        // small-margin / small-header document (top=567, header=6) to top=1281, adding pages.
-        // Patrz analiza orginał_GOOD vs zapisany_BAD.
         const int maxBandDistanceTwips = 720; // 0.5"
-        uint headerDistance = (uint)Math.Clamp(topTwips - headerHeightTwips, 0, maxBandDistanceTwips);
-        uint footerDistance = (uint)Math.Clamp(bottomTwips - footerHeightTwips, 0, maxBandDistanceTwips);
+        uint headerDistance = geometry.HeaderDistanceCm is { } hd
+            ? (uint)Math.Max(0, (int)Math.Round(OoxmlUnits.CmToTwips(hd)))
+            : (uint)Math.Clamp(topTwips - headerHeightTwips, 0, maxBandDistanceTwips);
+        uint footerDistance = geometry.FooterDistanceCm is { } fd
+            ? (uint)Math.Max(0, (int)Math.Round(OoxmlUnits.CmToTwips(fd)))
+            : (uint)Math.Clamp(bottomTwips - footerHeightTwips, 0, maxBandDistanceTwips);
 
         if (!sectionProps.Elements<PageMargin>().Any())
         {

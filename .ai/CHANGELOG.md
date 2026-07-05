@@ -11,6 +11,126 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-05 — Zwiększenie pokrycia testami: propagacja SectionHeadersFooters + brzegi ADR-0025/0026 (+16 testów, tylko testy)
+### Changed
+- **Application.UnitTests (+4)**: `SaveDocumentCommandHandlerTests` — `PageSize`+`SectionHeadersFooters` przekazywane do `Convert` nietknięte (ta sama referencja) oraz null-default; `DownloadEditedDocumentCommandHandlerTests` — lista sekcji dochodzi do OBU ścieżek (`Convert` bez wersji bazowej i `ConvertPreservingPackage` z wersją bazową).
+- **Infrastructure.UnitTests (+12)**: `TabStopFidelityTests` +4 (leader `dot` serializowany w `data-tab-stops`, `w:val=clear` usuwa stop odziedziczony ze STYLU akapitowego, direct nadpisuje stop stylu na tej samej pozycji, bar-tab pomijany); `TableStyleFidelityTests` +5 (lastRow tylko na ostatnim wierszu, firstColumn tylko w kolumnie 0, legacy maska hex `tblLook@w:val` bez atrybutów boolowskich, `noHBand` wyłącza pasy mimo definicji band1Horz w stylu, pasy PIONOWE band1Vert alternują kolumny); `MultiSectionFidelityTests` +3 writer (wpis footer-only → `FooterReference` wyłącznie na sectPr sekcji 1, wpis z indeksem poza zakresem ignorowany bez wyjątku i bez osieroconych partów — scenariusz „użytkownik skasował marker sekcji", wpis dla sekcji 0 ignorowany — sekcja 0 = pola bazowe).
+### Verified
+- `dotnet test` Application.UnitTests **306/306** (było 302), Infrastructure.UnitTests **265/265** (było 253) — 0 niepowodzeń, zero zmian w kodzie produkcyjnym.
+### Notes
+- Luki pokryte wg diffu bieżącej pracy (ADR-0025/0026): kontrakt handlerów na nowy parametr był nietestowany (regresja = ciche spłaszczenie nagłówków sekcyjnych przy autosave), podobnie odporność writera na wpis sekcyjny wskazujący nieistniejącą sekcję.
+- Nadal niepokryte (świadomie): warunkowe formatowanie TEKSTU ze stylu tabeli, regiony narożne i przekątne (nieobsłużone w kodzie — patrz ADR-0026), leader nierysowany w edytorze.
+
+## 2026-07-05 — Audyt zgodności edytora z MS Word (tylko dokumentacja, zero zmian w kodzie)
+### Changed
+- Nowy `.ai/AUDIT_WORD_COMPATIBILITY.md`: kompletny audyt pipeline DOCX→HTML→edycja→DOCX (~60 problemów, każdy z kategorią, reprodukcją, przyczyną, warstwą, ryzykiem i kierunkiem naprawy; podział potwierdzone/potencjalne + 6-etapowa kolejność napraw). Wpis w `INDEX.md`.
+### Verified
+- Fakty zweryfikowane w kodzie (`DocxToHtmlConverter`, `HtmlToDocxConverter`, `wysiwyg-editor.ts`, handlery Save/Sign/Finish/Download) — kluczowe: cichy drop nieznanych elementów w readerze + pełna regeneracja pakietu w autosave/„Zakończ i wyślij" (pass-through tylko w Download); `w:ins` (wstawiony tekst) znika; pola ≠ PAGE/NUMPAGES/DATE tracą kod i wartość (TOC!); txbx/oMath/wykresy/kształty drop; Sign bez `SectionHeadersFooters`.
+### Notes
+- Bez zmian w kodzie i testach. Najpilniejsze wg audytu: Etap 1 „stop utracie danych" (w:ins, wartości pól, txbx, zakładki, vanish, keep*, Sign, marker sekcji contenteditable=false, ostrzeżenie o nieobsługiwanych elementach).
+
+## 2026-07-05 — Tabele: styl tabeli (tblStyle/tblLook/tblStylePr), pozycyjne krawędzie, wysokości wierszy, round-trip (ADR-0026)
+### Changed
+- **Reader (`DocxToHtmlConverter`)**: rozwiązywanie stylu tabeli (`ResolveTableStyleContext`: łańcuch basedOn per-side, flagi tblLook, formaty warunkowe firstRow/lastRow/firstCol/lastCol/pasy z pominięciem nagłówka), pozycyjne krawędzie komórek (outer vs insideH/insideV), `themeFill`/`themeColor`+tint/shade, wzory `pctNN` (blend), `sz/6` px, `height:`+`data-row-height-tw`/`data-row-hrule` na tr, `data-tbl-header`/`data-cant-split`, `tblCellSpacing`→`border-collapse:separate`+`border-spacing`+data-*, `%` z ułamkiem, cell width auto/nil bez `width:0px`, `data-tbl-style`/`data-tbl-look` na `<table>`.
+- **Writer (`HtmlToDocxConverter`)**: `w:tblStyle` (pierwsze dziecko tblPr) + `w:tblLook` z data-*, trHeight z twips+hRule (data-* preferowane nad px), `w:tblHeader`/`w:cantSplit`, `w:tblCellSpacing`, `w:tblInd` z margin-left px, px×6 dla wszystkich borderów (symetria z readerem), dziesiętne szerokości %/px, fix zagnieżdżonych tabel (`.//tr` duplikowało wiersze).
+- **GUI**: `_serializeSingleEditor` nie zapieka już mierzonych wysokości wierszy (R-18 — eksportowane tylko jawne inline: import/ręczny resize); resize wiersza czyści `data-row-height-tw`/`data-row-hrule`; nowy `core/utils/table-grid.util.syncTableColgroup` wołany po resize kolumn/tabeli (wysiwyg-editor) i po wstawieniu/usunięciu kolumny (document-editor) — `w:tblGrid` podąża za edycją.
+### Verified
+- Nowe `TableStyleFidelityTests` 21/21 (styl/basedOn/tblLook/banding/theme/pattern/priorytety/wysokości/spacing/nested/round-trip); `dotnet test D2ViewerEditor.sln` — 0 niepowodzeń (Infrastructure 253/253); Golden `simple-table`/`merged-cells-table`/`tab-stops-lcr` zregenerowane.
+- GUI: `table-grid.util.spec` 5/5; pełne `ng test` 317/318 (fail wyłącznie pre-existing `spec-layout-shell`); `ng build` OK (tylko pre-existing budżet scss).
+### Notes
+- Kontrolowane przybliżenie: formatowanie ze stylu wraca do DOCX jako bezpośrednie (wygląd w Wordzie identyczny; referencja stylu zachowana w `w:tblStyle`). Nieobsłużone (udokumentowane w ADR-0026): warunkowe formatowanie tekstu ze stylu, regiony narożne, przekątne tl2br/tr2bl, fitText/hideMark, powtarzanie wiersza nagłówkowego w paginacji edytora.
+
+## 2026-07-05 — Nagłówki/stopki: dynamiczne pasmo, tab-stopy pozycyjne (w:tabs per akapit), nagłówki/stopki PER SEKCJA (ADR-0025)
+### Changed
+- **Dynamiczne pasmo nagłówka/stopki (GUI, geometria Worda)**: `.page-header` zaczyna się teraz `headerDistance` (w:pgMar header) od krawędzi strony (`margin-top`), ma `min-height` = pasmo (margines − dystans) i **rośnie z treścią spychając body** — wcześniej pasmo rysowało się od samej krawędzi (za wysoko), a treść dostawała sztywny padding liczony ze stałego pasma. `PageGeometry` +`headerDistanceCm`/`footerDistanceCm` (z `data-header/footer-distance-cm` markera sekcji; sekcja 1 = odwrotność wzoru readera: dystans = margines − pasmo). `_repaginateNow` mierzy REALNE wysokości pasm z DOM (`_measureBandHeightsPx`, osobno strona 1 / reszta) i odejmuje je od dostępnej wysokości — nagłówek z obrazkiem/kilkoma liniami odbiera miejsce treści zamiast rozjeżdżać strony.
+- **Tab-stopy per akapit**: reader czyta efektywne `w:tabs` (łańcuch stylów + direct pPr, semantyka `clear`) i ZAWSZE emituje `data-tab-stops="pos:align[:leader]"` (twips). W nagłówku/stopce akapit z tabulatorami renderuje się **pozycyjnie**: segmenty na pozycjach stopów (`span.docx-tab-seg`, center = `translateX(-50%)` NA pozycji, right = `translateX(-100%)`), zamiast przybliżenia flex 50%/100% (flex zostaje dla body). Writer: `data-tab-stops` → `w:tabs` w pPr (pozycje/wyrównania/leadery wracają per akapit, nie tylko sztywne 4536/9072 w stylach Header/Footer); `span.docx-tab-seg` → `w:tab` + treść; **literalny `\t` w tekście → element `w:tab`** (wcześniej trafiał do `w:t`, którego Word nie renderuje). Refaktor: `BuildRunWrapper`/`ConvertRunChildToHtml` wydzielone z `ConvertRunToHtml` (segmentacja domyka i reotwiera formatowanie runu wokół segmentów).
+- **Nagłówki/stopki per sekcja (zmiana kontraktu)**: nowy typ `SectionHeaderFooter { SectionIndex, Header, Footer }`; `DocumentContent.SectionHeadersFooters` + `SaveDocumentRequest.SectionHeadersFooters` (Domain + model TS). Reader: wpis dla każdej sekcji ≥ 1 z WŁASNYMI referencjami (default/first/even + geometria pasma tej sekcji); sekcje bez wpisu dziedziczą (jak Word). Writer: `Convert`/`ConvertPreservingPackage` +param; wpisy lądują na sectPr SWOJEJ sekcji (`_emittedSectionProps[s]` / body-level dla ostatniej); baza (sekcja 0) bez zmian na pierwszym sectPr. Handlery: `SaveDocument`, `DownloadEditedDocument` (+ kontrolery). GUI: `pageSectionIndexes` (strona→sekcja, split + repaginacja), `_computeHeader/FooterContent` wybiera wpis sekcyjny (dziedziczenie po max indeksie ≤ sekcji strony), **edycja pasma na klikniętej stronie** (`editingHfPageIndex`, template `$index === editingHfPageIndex()`), routing zapisu do właściciela (`_applyEditedHeader/FooterHtml` — wpis sekcji / wariant first-page / default; ujednolicone też w `onContentChange`/blur), output `sectionHeadersFootersChange` → `document-editor.sectionHeadersFooters` → `buildSaveRequest`.
+### Verified
+- Backend: Infrastructure **232/232** (nowe: `TabStopFidelityTests` 7, `MultiSectionFidelityTests` +4 sekcyjne nagłówki — w tym pełne round-tripy DOCX→HTML→DOCX); pełna solucja Domain 79 / Application 302 / Api 130 / Integration 9 — 0 fail. Snapshoty golden tabel odświeżone (zmiana z równoległej pracy nad stylami tabel — dokładne szerokości ramek 0.7px; przejrzane).
+- GUI: `ng test` **312/313** (+9 nowych: dynamiczne pasmo 3, sekcyjne nagłówki 6; fail tylko pre-existing `spec-layout-shell` NG0201). `npm run build` OK (warningi budżetów pre-existing). `tsc` czysto.
+### Notes
+- Kontrakt: `sectionHeadersFooters` to pole OPCJONALNE (dokumenty jednosekcyjne — bez zmian w payloadach). Ścieżka Sign nie przenosi sekcyjnych nagłówków (świadomie odłożone).
+- Ograniczenia: przypisanie k-ty tab → k-ty stop (bez pełnej semantyki „następny stop za bieżącą pozycją x"); leader (kropki) nie jest rysowany w edytorze (wraca do DOCX); akapity ze złożonymi polami (PAGE w fldChar) zostają na flexie.
+
+## 2026-07-05 — Edytor: fix paginacji — ENTER przy dolnej krawędzi tworzy nową stronę zamiast rozciągać kartkę
+### Changed
+- **`wysiwyg-editor.ts` — pomiar bloków w `_repaginateNow`** (root cause):
+  - bloki były mierzone w gołym `<div>` doczepionym do `document.body`, POZA kontekstem stylów `.editor-content` — pusty `<p>` mierzył **0 px** (reguła `.editor-content p:empty::before {content:'\00a0'}` nie działała w measurerze), znikały też scope'owane marginesy akapitów/nagłówków/tabel;
+  - dodatkowo `getBoundingClientRect().height` **nie zawiera marginesów** (−10 px na akapit, −30 px na nagłówek/tabelę) → suma pomiarów zaniżona → `currentHeight + h > availableHeight` nie odpalał → wszystkie bloki zostawały na stronie, a `.page` (tylko `min-height`, `overflow:visible`) rosła w pion.
+  - Fix: `_createBlockMeasurer` — measurer z klasą `editor-content` (style globalne, `ViewEncapsulation.None`) + `_measureBlockRunHeights` — wysokość KONSUMOWANA liczona deltami pozycji kolejnych bloków (+ sentinel 0 px): zawiera marginesy i ich realny kolaps, margin-top 1. bloku doliczany; nadal 1 append + 1 layout-flush na przebieg (bez regresji wydajności). Fragmenty tabel (`_splitTableForPagination`) mierzą teraz w kontekście stylów (paddingi `td` liczone poprawnie).
+- **`_schedulePaginate` — max-wait 600 ms**: czysty debounce 250 ms resetował się na każdym `input`, więc PRZYTRZYMANY Enter (auto-repeat ~30 ms) odsuwał repaginację w nieskończoność; teraz repaginacja odpala najpóźniej 600 ms od pierwszego zaplanowania.
+- Kursor i tworzenie kolejnej strony NIE wymagały zmian: kotwica `{block, offset}` (`_saveGlobalCaret`/`_restoreGlobalCaret`) przenosi karetkę na nową stronę, `pageEditorRefs.changes` podpina listenery nowym stronom — problemem był wyłącznie pomiar przepełnienia.
+### Verified
+- Nowy `wysiwyg-editor.pagination-overflow.spec.ts` **9/9**: measurer w kontekście `.editor-content`, pomiar z marginesami (delty pozycji), 5 przepełnionych bloków → 5 stron, pusty akapit po ENTER przenoszony na nową stronę, kolejność bez utraty/duplikacji, scalanie w górę po usunięciu bloków, max-wait przy ciągłym strumieniu input, zwykły debounce 250 ms.
+- Specy wysiwyg **69/69**; pełne GUI **312/313** (jedyny fail — pre-existing `spec-layout-shell`); `ng build` OK (warningi budżetów pre-existing). Backend nietknięty.
+### Notes
+- `.page` celowo zostaje na `min-height` (nie sztywny `height`+clip): między wejściem a repaginacją (≤600 ms) treść nie może zniknąć spod kursora; po repaginacji strona wraca do formatu.
+- Ograniczenia bez zmian: blok wyższy niż strona (poza tabelą) nie jest dzielony (block-atomic); bloki out-of-flow (absolute/float) na najwyższym poziomie mierzą 0 konsumpcji (jak w realnym układzie).
+
+## 2026-07-05 — Listy wielopoziomowe: logiczna tożsamość + liczniki Worda + round-trip formatów (numPr/abstractNum)
+### Changed
+- **Reader (`DocxToHtmlConverter`)** — semantyka numeracji Worda odtworzona jawnie:
+  - liczniki per **(abstractNumId, ilvl)** (`_listCounters`): różne `w:num` na wspólny abstrakt KONTYNUUJĄ numerację; `w:startOverride` restartuje poziom przy pierwszym użyciu instancji (`ApplyStartOverridesOnFirstUse`); element płytszy restartuje poziomy głębsze (honorowane `w:lvlRestart=0`); `w:numStyleLink` rozwiązywany (`ResolveAbstractNumId`).
+  - `<ol start>` = FAKTYCZNY numer pierwszego elementu z liczników (kontynuacja po przerwaniu akapitem / współdzielony abstrakt), nie sama definicja `w:start`.
+  - grupowanie `ConvertConsecutiveListItems`: tożsamość listy = **numId** (koniec sklejania niezależnych list o identycznym wyglądzie; usunięty warunek „ten sam format ⇒ ta sama lista").
+  - kontener `ol/ul` niesie **data-num-id / data-abstract-num-id / data-ilvl / data-num-fmt / data-start / data-lvl-text / data-bullet-font** (wspólny resolver `FindLevelDefinition`: lvlOverride/w:lvl instancji → abstrakt).
+- **Writer (`HtmlToDocxConverter`)**:
+  - `_numIdByHtmlList`: fragmenty listy z tym samym `data-num-id` (lista przerwana akapitem) współdzielą JEDNĄ `NumberingInstance` → Word kontynuuje numerację; różne `data-num-id` → osobne instancje.
+  - `CreateAbstractNumbering` przyjmuje specyfikacje poziomów z data-* (`ScanListLevelSpecs`/`HtmlListLevelSpec`): dokładny `w:numFmt` (decimal/…/upperRoman/bullet/none), `w:lvlText` (np. "%1)"), `w:start`, font punktatora — zamiast hardkodowanej drabinki formatów, która przy każdym autosave niszczyła oryginalną numerację.
+### Verified
+- Nowy `ListNumberingFidelityTests` **12/12**: zagnieżdżenie z kontynuacją głównego poziomu, kontynuacja po zwykłym akapicie (start=3), niezależne listy NIE sklejane, `w:start=5`, wspólny abstrakt = kontynuacja, `startOverride` = restart, restart głębszego poziomu po powrocie na poziom główny, formaty mieszane per poziom (upperRoman "%1)" / bullet / lowerLetter), writer: wspólny/rozdzielny numId, round-trip formatu do abstractNum, pełny round-trip DOCX→HTML→DOCX→HTML (struktura + kontynuacja + tożsamość zachowane).
+- Infrastructure 225/226 w trakcie zmian (jedyny fail: snapshot `tab-stops-lcr` — `data-tab-stops` z RÓWNOLEGŁEJ sesji, baseline do regeneracji; niezwiązane z listami). Pełny przebieg po ustabilizowaniu drzewa — patrz kolejny wpis/TASK_HANDOFF.
+### Notes
+- Ograniczenia (HTML/przeglądarka): sufiks markera z `lvlText` ("1)" vs "1.") nie jest renderowany wizualnie w edytorze (CSS `list-style-type`); numeracja złożona multilevel ("1.1.2") nierenderowana; oba wracają do DOCX bez strat przez data-*. Listy NOWE z edytora (bez data-*) dostają domyślną drabinkę formatów jak dotąd. Egzotyczne `w:lvlRestart>0` uproszczone do zachowania domyślnego.
+
+## 2026-07-05 — Audyt zgodności dokumentacji `.ai` z kodem (tylko docs, zero zmian w kodzie)
+### Changed
+- **TECH_STACK**: auth = Microsoft.Identity.Web 3.12.0 (nie pinowany JwtBearer 8.0.12), SkiaSharp 3.119.2, + NPOI/System.Security.Cryptography.Xml/Serilog, pełna lista projektów testowych, + `D2ExampleExternalApp`.
+- **PROJECT_CONTEXT/ARCHITECTURE**: + `D2ExampleExternalApp` i projekty testowe (Api.IntegrationTests, Services.Api.UnitTests); zaktualizowana realna struktura frontendu (guards/, nowe komponenty/pages/core-utils).
+- **API_CONTRACTS**: external `GET /status` zwraca okrojone `{masterId,status}` (nie pełny DTO); `Classification` opcjonalna; + `POST /api/barcode/generate-image`; + `GET /api/identity/resources`; autoryzacja klasowa `RequireAppOperator` (ADR-0022).
+- **DATABASE**: skrypty 008–011; statusy `Queued`/`SendAborted`/`Cancelled`; kolumny `last_modified_by`/`corporate_key`.
+- **SECURITY**: guardy frontu (bez `appAdminGuard`), claim `corpKey` case-insensitive (nie `ck`), centralne polityki uploadu + SSRF `ReturnUrlValidator` (zamiast „rekomendacji"), wysyłka multipart, trasa `/brak-uprawnien`.
+- **DOMAIN/GLOSSARY**: pełne enumy statusów, metody inline-delivery/cancel/`LastModifiedBy`, klasyfikacja opcjonalna (BR-006), CorporateKey z tokenu.
+- **FEATURES/PRODUCT_GOALS**: Krok 2 = Implemented (podgląd ładuje v1 — R-02 zamknięte); „Zakończ" = synchroniczna 1. próba (200, nie 202) + abort/continue; + wiersze RBAC obszarów, security upload, userDownload/showSaveState, external callback-url/unlock/status, .doc, grafiki, multi-section, LastModifiedBy.
+- **TESTING_QUALITY**: + projekty integracyjne i Services.UnitTests.
+- **OBSERVABILITY**: obejmuje oba hosty; pola ECS+GCP (obiekt `service{}` — migracja 2026-06-28), redaction, `StructuredLogFormatterOptions`.
+- **DOCX_CONVERSION**: sekcja 2 i roadmapa R-10 dostosowane do ADR-0023 (koniec `FirstOrDefault`, markery sekcji; Open: nagłówki per sekcja).
+- **RISKS_ASSUMPTIONS**: R-02→Closed, A-05→Closed, A-03 001..011, A-06 multipart potwierdzone, duplikat R-25→R-29.
+- **DECISIONS**: drugi „ADR-0020" (centralne polityki security) przenumerowany na **ADR-0024**.
+- **TASK_HANDOFF**: „Aktualne zadanie"/„Następne kroki"/„Niedokończone" odświeżone (Krok 1–4 done; otwarte R-06/R-07/R-28/R-09 + nagłówki per sekcja).
+- **Diagramy/Confluence** (`sequence-document-lifecycle`, `external-api-browser-open-diagram`, `confluence-*`): erraty + poprawki: auth istnieje (Entra + role + allowedCorporateKeys), finish 200 sync, multipart potwierdzony, R-02 zamknięte.
+- **INDEX**: + 4 brakujące pliki (diagramy, confluence).
+### Verified
+- Fakty porównane z kodem: `*.csproj` (wersje pakietów/TFM), `package.json`, kontrolery obu API (routingi), `app.routes.ts` + `guards/`, `infra/sql/001..011`, `HttpDeliverySender` (multipart), `ClaimsCurrentUserProvider`/`AzureAdOptions` (corpKey), `document-editor.loadFromStorage` (v1 w podglądzie), enumy `DocumentStatus`/`DeliveryStatus`, `GcpJsonConsoleFormatter`/`StructuredLogFormatterOptions`, `Document`/`DocumentDelivery` (metody domenowe).
+### Notes
+- Bez zmian w kodzie/konfiguracji. Logi historyczne (`CURRENT_STATE`/`CHANGELOG`/stare wpisy ADR) pozostawione bez retro-edycji — opisują stan na swoją datę.
+
+## 2026-07-05 — Edytor: rendering stron per sekcja (domknięcie ADR-0023) + realny PageSize + szybsza repaginacja
+### Changed
+- **`wysiwyg-editor` — geometria per strona**: nowy input `pageSize` (z `documentPageSize()` w `document-editor.html`) + `PageGeometry` i sygnał `pageGeometries` (per strona). `baseGeometry` = pageSize/pageMargins/pageOrientation (orientacja z toolbara wygrywa — wymiary obracane); kolejne sekcje czytane z `data-*` markera `div.docx-section-break` (`_parseSectionGeometry`, brakujące atrybuty dziedziczą). Marker OTWIERAJĄCY stronę zmienia geometrię od tej strony; marker w środku strony (continuous) — od następnej. Szablon binduje per strona: `width/min-height` (px), klasę `landscape`, paddingi treści i prowadnice marginesów. **Koniec renderowania wszystkich stron w sztywnej geometrii A4 pierwszej sekcji** — dokument pionowy z poziomym aneksem renderuje i łamie strony we właściwych wymiarach; dokumenty A5/Letter dostają realną wysokość łamania (wcześniej hardkody 1122/816 px i „21 vs 29.7").
+- **`_repaginateNow`**: dostępna wysokość i szerokość pomiaru z geometrii bieżącej sekcji (skala szerokości z DOM strony 1 → proporcjonalnie dla sekcji); **pomiar wsadowy** ciągłych przebiegów zwykłych bloków (`measureRun`: jeden append + jeden layout-flush na przebieg zamiast reflow per blok — istotne przy dużych dokumentach; tabele mierzone jak dotąd).
+- **Guard**: `_flattenTopBlocks` nie rekursuje do wnętrza markerów `page-break`/`docx-section-break` (strona z samym markerem gubiła go przy repaginacji); `emitSectionGeometry` i `getContentAreaHeight` liczą z geometrii strony (wcześniej stałe A4).
+### Verified
+- GUI: specy `wysiwyg-editor` **51/51** (nowy blok „geometria stron per sekcja": 6 testów — baseGeometry/pageSize/orientacja, marker otwierający stronę, continuous od następnej strony, dziedziczenie data-*, guard flatten); pełne `ng test` **294/295** (jedyny fail pre-existing `spec-layout-shell`); `ng build` OK (warning budżetu SCSS pre-existing).
+- Backend bez zmian w tym kroku; pełna solucja **730/730** (Domain 79, Application 302, Api 130, Integration 9, Infrastructure 210).
+### Notes
+- Nagłówki/stopki per sekcja nadal wspólne (model `DocumentContent` niesie jeden komplet — rendering treści R-10 domknięty, warianty header/footer per sekcja = osobny krok). Edycja przy granicy sekcji może skasować marker (degradacja do jednej sekcji — bez zmian względem ADR-0023).
+
+## 2026-07-05 — DOCX↔HTML: wiele sekcji (R-10 read+write), pierwsza sekcja jako bazowa, tabele (tblGrid/fixed/vMerge), interlinia atLeast
+### Changed
+- **Reader (`DocxToHtmlConverter`)**: nowy `GetSectionPropertiesInDocumentOrder` — `Body.Elements<SectionProperties>().FirstOrDefault()` zwracało sectPr OSTATNIEJ sekcji (body-level), więc dokument pionowy z poziomym aneksem otwierał się cały poziomo, z nagłówkami aneksu. Teraz `PageSize`/`Margins`/wysokości pasm liczone z PIERWSZEJ sekcji; nagłówek/stopka: pierwsza sekcja z referencją Default (kolejność dokumentu), fallback bez zmian.
+- **Reader**: paragraph-level `pPr/sectPr` (koniec sekcji) emituje parę: `div.page-break` (dla przerw nextPage/oddPage/evenPage) + niewidoczny marker `div.docx-section-break` z geometrią NASTĘPNEJ sekcji w `data-*` (`data-break-type`, `data-page-width/height-cm`, `data-orientation`, `data-margin-*-cm`, `data-header/footer-distance-cm`).
+- **Writer (`HtmlToDocxConverter`)**: marker odtwarza `w:p/pPr/sectPr` (geometria sekcji zamykanej; `w:type` z markera otwierającego; dystanse header/footer wprost z data-*), body-level sectPr dostaje geometrię OSTATNIEJ sekcji; `page-break` bezpośrednio przed markerem NIE staje się `w:br type=page` (sectPr sam łamie stronę); referencje nagłówka/stopki + `titlePg` idą do PIERWSZEGO sectPr (dziedziczenie na kolejne sekcje). Koniec spłaszczania dokumentu wielosekcyjnego do jednej sekcji przy autosave.
+- **Writer tabele**: `w:tblGrid` budowany z `<colgroup>` (szerokości px→twips; wcześniej pusty grid z samej liczby komórek — szerokości kolumn ginęły przy każdym zapisie); `table-layout:fixed` → `TableLayout Fixed` (wcześniej zawsze Autofit); komórki kontynuacji `w:vMerge` (bez val) wstawiane pod rowspan z pozycjonowaniem po kolumnie gridu (wcześniej brak → komórki przesuwały się w lewo, tabela uszkodzona w Wordzie).
+- **Interlinia**: reader oznacza `lineRule=atLeast` markerem CSS `--w-line-rule:atLeast;` przy `line-height:Xpt`; writer odtwarza `AtLeast` (wcześniej każde pt → `Exact`, co przycina w Wordzie tekst wyższy niż linia).
+- **GUI**: `wysiwyg-editor.scss` ukrywa `.docx-section-break` (`display:none`) — marker to nośnik danych, przeżywa split stron (nie ma klasy `page-break`, więc splitter go nie kanonizuje) i wraca w `getContent()`.
+### Verified
+- Backend: `Infrastructure.UnitTests` **210/210** (nowe: `MultiSectionFidelityTests` 12, `TableWriteFidelityTests` 6, `LineSpacingMappingTests` +3); pełna solucja: Domain 79, Application 302, Api 130, IntegrationTests 9 — 0 fail; snapshoty Golden bez zmian (brak regresji single-section).
+- GUI: `ng test` **288/289** (+1 nowy test przeżywalności markera sekcji; jedyny fail `spec-layout-shell.spec` — pre-existing, NG0201 HttpClient w teście dashboardu, niezwiązany). `npm run build` OK (warningi budżetów pre-existing).
+### Notes
+- Kontrakty API bez zmian — sekcje jadą w polu `Html` jako markery; `DocumentContent.PageSize/Margins/Header/Footer` = pierwsza sekcja.
+- Ograniczenie: edytor nadal RENDERUJE wszystkie strony w geometrii pierwszej sekcji (per-page orientacja to zmiana paginacji w `wysiwyg-editor`); dane sekcji są już jednak zachowywane w round-tripie. Decyzja: **ADR-0023**.
+
 ## 2026-07-03 — SECURITY: egzekwowanie roli `Operator` na backendzie edytora (broken access control)
 ### Changed
 - **Backend (krytyczne):** `DocumentController` i `DocumentStorageController` dostały klasowy `[Authorize(Policy = RequireAppOperator)]`. Wcześniej dziedziczyły tylko `[Authorize]` (dowolny zalogowany), więc użytkownik **bez roli aplikacyjnej** mógł przez bezpośrednie wywołanie API tworzyć/zapisywać/nadpisywać/przywracać/podpisywać i „Zakończyć i wysłać" dokumenty. Endpointy admina zachowują `RequireAppAdmin` (AND z polityką klasy → wymagany Administrator).

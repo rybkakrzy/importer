@@ -1,6 +1,6 @@
 # Diagram sekwencji: cykl pracy z dokumentem
 
-> Źródło prawdy: `.ai/` + kod (stan 2026-05-26). Elementy niepotwierdzone oznaczono **[Wymaga potwierdzenia]**.
+> Źródło prawdy: `.ai/` + kod (stan 2026-05-26; zaktualizowano 2026-07-05: auth Entra ID, synchroniczna 1. próba „Zakończ" — 200 zamiast 202, podgląd ładuje v1). Elementy niepotwierdzone oznaczono **[Wymaga potwierdzenia]**.
 
 ## 1. Cel diagramu
 
@@ -25,13 +25,13 @@ Diagram pokazuje realny przepływ pracy z dokumentem w D2 ViewerEditor: od wejś
 - `pages/pdf-viewer/pdf-viewer.ts` — load przez `getDocument(masterId)` + niezależny `getDocumentMetadata(masterId)` (klasyfikacja).
 - `components/document-editor/document-editor.ts` — `loadFromStorage`: `getDocumentMetadata` → decyzja PDF/DOCX → `downloadVersion`/`downloadBaseVersion` → `documentService.openDocument` (POST `/api/document/open`); `finishDocument()` z pollingiem; `documentClassification` z metadanych.
 - `services/document-storage.service.ts` — `updateDocumentVersion` (PUT), `finishAndSend` (POST `.../finish`), `getDeliveryStatus`.
-- `Api/Controllers/DocumentStorageController.cs` — endpointy `finish` (202), `deliveries/{id}`, `deliveries`, `retry`.
+- `Api/Controllers/DocumentStorageController.cs` — endpointy `finish` (200, synchroniczna 1. próba), `abort-send`, `continue-delivery`, `deliveries/{id}`, `deliveries`, `retry`, `cancel`, `recipient-url`.
 - `Infrastructure/Services/Delivery/*` + `DocumentDeliveryRepository` — worker, claim `FOR UPDATE SKIP LOCKED`, wysyłka HTTP.
 
-**Wymaga potwierdzenia:**
-- **Sprawdzenie dostępu / autoryzacja** — brak warstwy auth w repo (`SECURITY.md` A-05). Pokazane jako krok warunkowy „[Wymaga potwierdzenia]".
-- Krok 2 (podgląd) ładuje aktywną wersję, nie v1 (R-02).
-- Dokładny `Content-Type`/body POST-u zwrotnego (`HttpDeliverySender`).
+**Rozstrzygnięte po snapshotcie (2026-07-05):**
+- **Sprawdzenie dostępu / autoryzacja** — zaimplementowane: token Entra ID + role `Operator`/`Administrator` (ADR-0022) + `allowedCorporateKeys` (BR-014); A-05 zamknięte. Adnotacje „brak warstwy auth" w diagramach poniżej są historyczne.
+- Krok 2 (podgląd): ładuje v1 przez `downloadBaseVersion` (R-02 zamknięte).
+- POST zwrotny: `multipart/form-data` — części `file`/`masterId`/`versionId`/`corporateKey` (`HttpDeliverySender`).
 
 ---
 
@@ -69,7 +69,7 @@ sequenceDiagram
         DB-->>APP: Document(metadata)
         APP-->>API: { mimeType, returnUrl?, classification? }
         API-->>GUI: 200 metadata
-        Note over GUI: [Wymaga potwierdzenia] brak warstwy auth —<br/>dostęp = znajomość masterId
+        Note over GUI: dostęp: token Entra + rola (401/403)<br/>+ allowedCorporateKeys (BR-014)
         GUI->>GUI: classification → badge (wspólny komponent)
         alt mimeType = PDF
             GUI->>GUI: render PDF (patrz 4.3)
@@ -106,7 +106,7 @@ sequenceDiagram
     else Tryb podglądu (brak versionId)
         ED->>SVC: downloadBaseVersion(masterId)
         SVC->>API: GET /{masterId}/download
-        Note over ED: [Wymaga potwierdzenia] R-02:<br/>ładowana aktywna wersja, nie zawsze v1
+        Note over ED: podgląd bez versionId = wersja bazowa v1 (R-02 zamknięte)
     end
     API->>GCS: DownloadAsync(documents/{versionId})
     alt Błąd GCS / brak pliku
@@ -229,19 +229,21 @@ sequenceDiagram
         ED-->>U: błąd finalizacji
     else OK
         APP->>GCS: UploadAsync(v2) + UploadRawAsync(deliveries/{id}) snapshot (SHA-256)
-        APP->>DB: 1 transakcja: Status=Sending + INSERT document_deliveries(Pending)
+        APP->>DB: Status=Queued + INSERT document_deliveries(Sending, bez lease)
         Note over APP,DB: Idempotencja: unique partial index<br/>(jedno aktywne zadanie/dokument) → ponowny klik zwraca istniejące
-        APP-->>API: { deliveryId, status }
-        API-->>ED: 202 { deliveryId, statusUrl }
+        APP->>R: SYNCHRONICZNA 1. próba (IDeliverySender.SendAsync)
+        alt Sukces
+            APP->>DB: delivery.MarkSent + Document.Status=Sent
+            APP-->>API: { deliveryId, delivered: true }
+            API-->>ED: 200 { deliveryId, status, documentStatus, delivered }
+        else Błąd 1. próby
+            APP->>DB: HoldAfterFailedInlineAttempt (RetryScheduled „zaparkowane") + DeliveryFailed
+            API-->>ED: 200 { delivered: false, error }
+            ED-->>U: modal problemu: „Przerwij" (POST .../abort-send → Cancelled + SendAborted)<br/>lub „Kontynuuj w tle" (POST .../continue-delivery → Requeue + Queued)
+        end
     end
 
-    loop Polling statusu (co ~4 s, do stanu końcowego)
-        ED->>SVC: getDeliveryStatus(deliveryId)
-        SVC->>API: GET /deliveries/{deliveryId}
-        API-->>ED: { status, attemptCount, lastError? }
-    end
-
-    Note over W,R: Asynchroniczne przetwarzanie (BackgroundService)
+    Note over W,R: Kontynuacja w tle (BackgroundService) — po „Kontynuuj w tle" lub retry
     W->>DB: ClaimDueBatch (FOR UPDATE SKIP LOCKED + lease)
     W->>GCS: DownloadAsync(deliveries/{id})
     W->>R: POST snapshot (Idempotency-Key=deliveryId, X-Content-SHA256)
@@ -266,7 +268,7 @@ sequenceDiagram
 
 **Wczytanie dokumentu:** GUI pobiera `GET /{masterId}/metadata`; brak dokumentu → 404. mimeType decyduje o ścieżce (PDF/DOCX); `classification` zasila wspólny badge.
 
-**Sprawdzenie dostępu:** **[Wymaga potwierdzenia]** — brak warstwy auth w repo; obecnie kontrola sprowadza się do istnienia zasobu (404). Nie ma `CorporateKey`/`allowedCorporateKeys`.
+**Sprawdzenie dostępu:** (zaktualizowane) całe Internal API wymaga tokenu Entra ID (401 bez tokenu) + roli aplikacyjnej `Operator`/`Administrator` (403, ADR-0022); endpointy treści/metadanych dodatkowo sprawdzają `allowedCorporateKeys` względem `CorporateKey` z claimu tokenu (403; admin omija — BR-014).
 
 **Ścieżka DOCX:** pobranie pliku z GCS (`downloadVersion` w trybie edycji / `downloadBaseVersion` w podglądzie) → konwersja DOCX→HTML (`POST /api/document/open`) → render edytora.
 
@@ -274,7 +276,7 @@ sequenceDiagram
 
 **Auto-zapis:** pętla `loop` (timer 30 s, tylko gdy włączony i jest `versionId`) → `PUT /{masterId}/versions/{versionId}` → nadpisanie v2 w GCS + `SaveChanges` (Status=Editing). v1 jest chroniona (BR-002).
 
-**Zakończenie pracy:** `POST .../finish` → snapshot + status `Sending` + zadanie `Pending` (202) → polling `GET /deliveries/{id}` → worker wysyła na `ReturnUrl`.
+**Zakończenie pracy:** `POST .../finish` → snapshot + **synchroniczna pierwsza próba** (200 `{ deliveryId, status, documentStatus, delivered, error? }`); sukces → `Sent`, błąd → decyzja użytkownika: `POST .../abort-send` (przerwij) lub `POST .../continue-delivery` (worker dokańcza w tle, retry do 24 h).
 
 **Obsługa błędów:** 404 (brak dokumentu), 5xx/404 (błąd GCS/brak pliku), 4xx/5xx (błąd zapisu → `autoSaveStatus=error`), 400 (zły/brak `ReturnUrl` przy finalizacji), klasyfikacja błędów wysyłki (retry vs `FailedPermanently` vs `DeadLettered`).
 
@@ -311,8 +313,8 @@ sequenceDiagram
 
 ## 8. Rekomendacje dotyczące czytelności procesu
 
-- **Dostęp:** doprecyzować w `.ai` i kodzie mechanizm autoryzacji (obecnie luka) — to największa niejasność procesu.
-- **Krok 2 (podgląd):** ujednolicić, by tryb read-only ładował v1 przez `/download` (dziś ładuje aktywną wersję — R-02).
+- **Dostęp:** (zrobione) auth Entra ID + role + `allowedCorporateKeys` — patrz `SECURITY.md`, ADR-0011/0012/0022.
+- **Krok 2 (podgląd):** (zrobione) tryb read-only ładuje v1 przez `/download` (R-02 zamknięte).
 - **Logi/correlation:** propagować `correlation_id` z `document_deliveries` do logów finalizacji i wysyłki dla śledzenia end-to-end.
 - **Kontrakt zwrotny:** udokumentować `Content-Type`/body POST-u na `ReturnUrl` (potwierdzić w `HttpDeliverySender`).
 ```

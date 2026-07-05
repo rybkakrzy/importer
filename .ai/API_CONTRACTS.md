@@ -53,9 +53,9 @@ Obecny styl projektu: `{ "error": "komunikat" }` (sprawdź `BaseApiController` p
 
 Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DTO `SaveDocumentVersionRequest` używany też przez `finish`).
 
-**Uwierzytelnianie (Entra ID):** Internal API (via **Microsoft.Identity.Web**) wymaga **access tokena** (`Authorization: Bearer …`) dla wszystkich endpointów poza `GET /api/health`. Brak/nieważny token → **401**. Token dołącza front przez `MsalInterceptor`. Role: App Roles + **mapowanie grup→role** (`groups`→`APP_*`). Admin: `GET /api/identity/users?query=` (Graph user lookup, `RequireAppAdmin`). Patrz `SECURITY.md`, `DECISIONS.md` ADR-0011 + **ADR-0012**.
+**Uwierzytelnianie (Entra ID):** Internal API (via **Microsoft.Identity.Web**) wymaga **access tokena** (`Authorization: Bearer …`) dla wszystkich endpointów poza `GET /api/health`. Brak/nieważny token → **401**. Token dołącza front przez `MsalInterceptor`. Role: App Roles + **mapowanie grup→role** (`groups`→`APP_*`). Identity: `GET /api/identity/users?query=` (Graph user lookup, `RequireAppAdmin`) oraz `GET /api/identity/resources` (`RequireAppOperator`) — lista nazw zasobów frontowych (`dashboard`/`editor`/`viewer`/`admin`) dostępnych dla zalogowanego użytkownika; konsumowana przez `resourceGuard` w GUI. Patrz `SECURITY.md`, `DECISIONS.md` ADR-0011 + **ADR-0012** + **ADR-0022**.
 
-**Autoryzacja (role):** endpointy administracyjne — `GET /api/documentstorage`, `GET /api/documentstorage/deliveries`, `POST /api/documentstorage/deliveries/{id}/retry` — wymagają roli `Administrator` (policy `RequireAppAdmin`); inaczej **403**.
+**Autoryzacja (role, ADR-0022):** `DocumentController` i `DocumentStorageController` mają **klasową** politykę `RequireAppOperator` (Operator lub Administrator) — samo zalogowanie nie wystarcza do edytora/cyklu życia dokumentu. Endpointy administracyjne — `GET /api/documentstorage`, `GET /api/documentstorage/deliveries`, `POST /api/documentstorage/deliveries/{id}/retry` — mają dodatkowo `RequireAppAdmin` (atrybut metody łączy się AND z polityką klasy → wymagany `Administrator`); inaczej **403**.
 
 **Kontrola dostępu do dokumentu:** endpointy treści/metadanych (`GET /{masterId}`, `/{masterId}/metadata`, `/{masterId}/download`, `/{masterId}/versions/{versionId}/download`) sprawdzają `allowedCorporateKeys` względem `CorporateKey` z claimu access tokena (`AzureAd:CorporateKeyClaim`). Brak uprawnień → **403** `{ error }`. Dokument bez `allowedCorporateKeys` = każdy zalogowany. **`Administrator` omija listę.** GUI: `documentAccessGuard` → `/access-denied`.
 
@@ -77,6 +77,7 @@ Request DTO zapisu: `{ content: byte[]/base64, createdBy?: string }` (ten sam DT
 | Metoda | Ścieżka | Opis |
 |---|---|---|
 | POST | `/generate` | `{ content, barcodeType, width, height, showText }` → `{ imageBase64, mimeType }` |
+| POST | `/generate-image` | jak `/generate`, ale zwraca surowy obraz (plik), nie JSON |
 | GET | `/types` | `string[]` typów (QR_CODE, CODE_128, EAN_13, ...) |
 
 ## HealthController — `/api/health`
@@ -91,11 +92,11 @@ Standardowe health checki.
 
 | Metoda | Ścieżka | Opis |
 |---|---|---|
-| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, obligatoryjna), **opcjonalnie `UserDownload: bool?`** (domyślnie `false`; tylko jawne `true` zezwala użytkownikowi na pobranie edytowanego pliku — patrz reguła `userDownload` poniżej), **opcjonalnie `ShowSaveState: bool?`** (domyślnie `true`; tylko jawne `false` ukrywa w edytorze autozapis + przycisk „Zapisz" — patrz reguła `showSaveState` poniżej). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
+| POST | `/api/v1/document` | Ingest DOCX/PDF (multipart). Pola: `File`, `ReturnUrl` (wymagany dla DOCX), `Classification` (C1..C4, **opcjonalna** — brak/pusta = bez klasyfikacji; zła wartość → 400), **opcjonalnie `UserDownload: bool?`** (domyślnie `false`; tylko jawne `true` zezwala użytkownikowi na pobranie edytowanego pliku — patrz reguła `userDownload` poniżej), **opcjonalnie `ShowSaveState: bool?`** (domyślnie `true`; tylko jawne `false` ukrywa w edytorze autozapis + przycisk „Zapisz" — patrz reguła `showSaveState` poniżej). Nagłówek opcjonalny `X-Created-By`. → 201 `CreateDocumentResponse { masterId, versionId? }` (versionId tylko DOCX) |
 | GET | `/api/v1/document/{documentId}` | Placeholder (read flow niezaimplementowany) |
 | **PUT** | `/api/v1/document/{masterId}/callback-url` | **Aktualizacja URL do wysyłki po „Zakończ"**. Body: `{ "url": "https://..." }`. Walidacja przez `DocumentDelivery.IsValidRecipientUrl` (absolutny http/https, ≤ 2048 znaków). Zapisuje w `documents.metadata.returnUrl` (zachowuje `classification`). Idempotentny. Blokowany w stanach `Sending`/`Sent`/`DeliveryFailed`. → 204 / 400 / 404 / 409 |
 | **POST** | `/api/v1/document/{masterId}/unlock` | **Odblokowanie dokumentu**. Body opcjonalne: `{ "reason": "..." }` (logowane). W tej domenie `DocumentStatus.Editing` = „trzymany przez edytora", więc unlock = `Editing → Saved` (dodano `Document.MarkSaved()`). Idempotentny: `Saved` → 200 z `Changed=false`. Blokowany dla stanów wysyłki (409). → 200 `UnlockDocumentResult { masterId, changed }` / 404 / 409 |
-| **GET** | `/api/v1/document/{masterId}/status` | **Status dokumentu**. → 200 `DocumentStatusDto { masterId, status, isLocked, hasCallbackUrl, activeVersionId?, activeVersionNumber?, activeVersionModifiedAt?, latestDelivery? { deliveryId, status, attemptCount, lastAttemptAt?, nextAttemptAt?, deadlineAt } }`. Pełny `callbackUrl` celowo NIE jest zwracany (może zawierać token — surfacowany tylko jako boolean `hasCallbackUrl`). / 404 |
+| **GET** | `/api/v1/document/{masterId}/status` | **Status dokumentu**. → 200 **`DocumentStatusResponse { masterId, status }`** — odpowiedź celowo zawężona do statusu cyklu życia (enum `DocumentStatus`); bez danych o wersji, dostawie i flag. Pod spodem używane jest współdzielone `GetDocumentStatusQuery`, którego pełny `DocumentStatusDto` (isLocked, hasCallbackUrl, activeVersion*, latestDelivery) pozostaje kontraktem wewnętrznym D2ApiViewerEditor i jest tu rzutowany na okrojoną odpowiedź. / 404 |
 
 ### Decyzja `masterGuid` vs `versionGuid` dla trzech nowych endpointów
 
@@ -105,7 +106,7 @@ Wszystkie trzy używają **wyłącznie `masterGuid`** — uzasadnienie:
 |---|---|---|
 | `PUT .../callback-url` | `masterGuid` | `returnUrl` żyje w `documents.metadata` (master), wspólny dla wszystkich wersji. Po „Zakończ" worker pracuje na **zamrożonej** `RecipientUrl` w `DocumentDelivery` (snapshot) — edycja metadanych później nie psuje już-zakolejkowanej wysyłki, ale też nie ma sensu wymuszać konkretnej wersji. |
 | `POST .../unlock` | `masterGuid` | Brak osobnego user-locka w domenie. „Lock" = `Document.Status == Editing` (frontend pokazuje to jako `lockedByOther`). Status na poziomie master → `versionGuid` nic nie wnosi. Worker-lease `LockedUntil`/`LockedBy` na `DocumentDelivery` to inny mechanizm i nie powinien być odblokowywany z zewnątrz. |
-| `GET .../status` | `masterGuid` | Status jest atrybutem master; wersje nie mają własnego statusu. Odpowiedź niesie `activeVersionId` + `latestDelivery` dla pełnego obrazu cyklu życia. |
+| `GET .../status` | `masterGuid` | Status jest atrybutem master; wersje nie mają własnego statusu. Odpowiedź zewnętrzna jest okrojona do `{ masterId, status }` (pełny `DocumentStatusDto` z `activeVersionId` + `latestDelivery` pozostaje wewnętrzny). |
 
 Metadane trafiają do `documents.metadata` jako `{ "returnUrl": "...", "classification": "C2", "userDownload": true | null, "showSaveState": false | null }`.
 

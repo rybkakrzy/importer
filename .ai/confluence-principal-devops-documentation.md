@@ -1,6 +1,8 @@
 # Dokumentacja techniczna systemu — D2 ViewerEditor
 
 > Dokument przeznaczony do Confluence. Źródło prawdy: katalog `.ai/` oraz kod repozytorium (stan na 2026-05-26). Sekcje niepotwierdzone w `.ai`/kodzie są jawnie oznaczone **[Wymaga potwierdzenia]** lub **[Brak w repo]**. Rekomendacje są oddzielone od stanu obecnego.
+>
+> **ERRATA (2026-07-05):** snapshot jest w kilku punktach nieaktualny względem kodu: (1) **auth istnieje** — Internal API wymaga tokenu Entra ID + roli `Operator`/`Administrator` (ADR-0011/0012/0022), `CorporateKey`/`allowedCorporateKeys` są zaimplementowane i egzekwowane (BR-014); (2) tryb podglądu **ładuje v1** (R-02 zamknięte); (3) POST zwrotny na `ReturnUrl` to potwierdzone **`multipart/form-data`** (`file`/`masterId`/`versionId`/`corporateKey`); (4) „Zakończ" wykonuje synchroniczną 1. próbę (200, nie 202) z kontynuacją w tle; (5) SSRF częściowo zmitygowane `ReturnUrlValidator` (ADR-0024). Aktualny stan: `SECURITY.md`, `API_CONTRACTS.md`, `FEATURES.md`. Oznaczenia „[Wymaga potwierdzenia] brak auth" w treści poniżej są historyczne.
 
 ## Spis treści
 
@@ -343,7 +345,7 @@ flowchart TD
 
 **Objaśnienie:** edytor DOCX najpierw pobiera metadane, na ich podstawie decyduje o typie pliku (PDF → przekierowanie do `/viewer`) i trybie (edycja vs read-only).
 
-> **[Wymaga potwierdzenia]** Zgodnie z `RISKS_ASSUMPTIONS` (R-02), tryb podglądu (Krok 2) ładuje **aktywną** wersję, która po edycji DOCX jest v2 — nie oryginał v1. To znana rozbieżność, nie docelowe zachowanie.
+> **Nieaktualne (errata 2026-07-05):** R-02 zamknięte — tryb podglądu (`?masterId=` bez `versionId`) ładuje **wersję bazową v1** przez `downloadBaseVersion` (`GET .../{masterId}/download`).
 
 ---
 
@@ -353,7 +355,7 @@ flowchart TD
 
 **DocumentVersion** — wersja z referencją do pliku w GCS (`StoragePath = documents/{versionId}`). v1 = oryginał (nietykalny), v2 = kopia edytowalna (DOCX). Tylko jedna aktywna naraz.
 
-**Klasyfikacja** — wartość `C1`..`C4` (słownik domenowy, obligatoryjna przy ingeście, BR-006). Przechowywana w `documents.metadata` jako JSON. Prezentowana w GUI wspólnym komponentem `document-classification-badge` (funkcjonalność **prezentacyjna** — nie wpływa na dostęp).
+**Klasyfikacja** — wartość `C1`..`C4` (słownik domenowy, opcjonalna przy ingeście, BR-006). Przechowywana w `documents.metadata` jako JSON. Prezentowana w GUI wspólnym komponentem `document-classification-badge` (funkcjonalność **prezentacyjna** — nie wpływa na dostęp).
 
 **Relacja DOCX/PDF:** DOCX ma v1 (oryginał) + v2 (edytowalna); PDF ma tylko v1 (brak edytowalnego duplikatu). Metadane (`returnUrl`, `classification`) są wspólne — w `documents.metadata`, niezależnie od typu pliku.
 
@@ -364,9 +366,9 @@ flowchart TD
 | Pole | Typ | Wymagalność | Znaczenie | Wpływ na UI/API | Uwagi |
 |---|---|---|---|---|---|
 | `returnUrl` | string (URL) | wymagany dla DOCX, opcjonalny dla PDF | adres zwrotu pliku po „Zakończ" | warunek operacji `finish` (400 gdy brak/zły) | walidacja: absolutny http(s) |
-| `classification` | string (`C1`..`C4`) | obligatoryjna przy ingeście (BR-006) | poziom klasyfikacji | badge w edytorze/viewerze; pole w `/metadata` | spoza słownika → backend przepuszcza, UI pokazuje neutralnie |
+| `classification` | string (`C1`..`C4`) | opcjonalna przy ingeście (BR-006) | poziom klasyfikacji | badge w edytorze/viewerze; pole w `/metadata` | spoza słownika → backend przepuszcza, UI pokazuje neutralnie |
 
-> **[Wymaga potwierdzenia / Brak w repo]** Prompt integracyjny wspomina `allowedCorporateKeys` oraz `CorporateKey` użytkownika jako mechanizm dostępu. **Takie pola nie istnieją w `.ai` ani w kodzie tego repozytorium** (jedyne trafienie to katalog `template/`, który jest starterem, nie tym projektem). Jeżeli mechanizm jest planowany, wymaga decyzji i implementacji — patrz [16](#16-bezpieczeństwo) i [32](#32-nierozstrzygnięte-niespójności-i-braki).
+> **Nieaktualne (errata 2026-07-05):** `allowedCorporateKeys`/`CorporateKey` są **zaimplementowane** — `DocumentAccessPolicy` (Domain) + `IDocumentAccessGuard` egzekwują listę na endpointach treści/metadanych (403; `Administrator` omija — BR-014, ADR-0011); `CorporateKey` pochodzi z claimu tokenu Entra (`corpKey`, case-insensitive — ADR-0021).
 
 ### 10.2 Diagram prezentacji klasyfikacji
 
@@ -407,7 +409,7 @@ stateDiagram-v2
 **Kroki pełnego lifecycle:**
 1. **Ingest** — External API zapisuje plik (GCS) + metadane (DB). Status `Saved`.
 2. **Pobranie metadanych** — GUI `GET /{masterId}/metadata` (mimeType, returnUrl, classification).
-3. **Sprawdzenie dostępu** — **[Wymaga potwierdzenia]** brak potwierdzonego mechanizmu; backend zwraca `NotFound` dla nieistniejącego zasobu.
+3. **Sprawdzenie dostępu** — token Entra ID (401) + rola `Operator`/`Administrator` (403, ADR-0022) + `allowedCorporateKeys` (403, BR-014); `NotFound` dla nieistniejącego zasobu.
 4. **Otwarcie** — PDF → viewer; DOCX → edytor (v2 edycja lub v1/aktywna read-only).
 5. **Edycja** — auto-save nadpisuje v2 w miejscu; status `Editing`.
 6. **Zapis** — `PUT /{masterId}/versions/{versionId}`.
@@ -495,15 +497,20 @@ sequenceDiagram
 
 ### 13.3 Sprawdzenie dostępu do dokumentu
 
-> **[Brak w repo / Wymaga potwierdzenia]** Nie znaleziono mechanizmu autoryzacji (`AddAuthentication`/`[Authorize]`) ani pól `CorporateKey`/`allowedCorporateKeys`. Obecnie dostęp do dokumentu sprowadza się do znajomości `masterId` w URL; backend zwraca `NotFound` dla nieistniejącego zasobu, ale nie weryfikuje tożsamości/uprawnień. Poniższy diagram opisuje **stan faktyczny**, nie docelowy.
+> **Zaktualizowane (errata 2026-07-05):** autoryzacja istnieje — `[Authorize]` na `BaseApiController` (Entra ID, Microsoft.Identity.Web), klasowa polityka `RequireAppOperator` na kontrolerach edytora (ADR-0022), a endpointy treści/metadanych sprawdzają `allowedCorporateKeys` względem `CorporateKey` z claimu tokenu (`IDocumentAccessGuard`, BR-014; admin omija).
 
 ```mermaid
 flowchart TD
-    A["URL z masterId"] --> B["GET /{masterId}/metadata lub /{masterId}"]
-    B --> C{"Dokument istnieje?"}
+    A["URL z masterId"] --> B["GET /{masterId}/metadata lub /{masterId} (Bearer token)"]
+    B --> T{"Token ważny?"}
+    T -- "nie" --> U["401"]
+    T -- "tak" --> R{"Rola Operator/Administrator?"}
+    R -- "nie" --> S["403 (ADR-0022)"]
+    R -- "tak" --> C{"Dokument istnieje?"}
     C -- "nie" --> D["404 NotFound"]
-    C -- "tak" --> E["Zwróć dane (brak weryfikacji tożsamości)"]
-    E -.->|"Wymaga potwierdzenia:<br/>brak warstwy auth"| F["[planowane?] kontrola dostępu"]
+    C -- "tak" --> K{"allowedCorporateKeys puste<br/>lub CorporateKey pasuje lub admin?"}
+    K -- "nie" --> L["403 (BR-014)"]
+    K -- "tak" --> E["Zwróć dane"]
 ```
 
 ### 13.4 Wyświetlenie klasyfikacji
@@ -577,7 +584,7 @@ sequenceDiagram
 ### 14.1 Co integrator musi dostarczyć
 
 1. **Plik** DOCX lub PDF (multipart, pole `File`).
-2. **`Classification`** — `C1`..`C4` (obligatoryjne; zła wartość → 400).
+2. **`Classification`** — `C1`..`C4` (opcjonalna; zła wartość → 400).
 3. **`ReturnUrl`** — absolutny http(s); **wymagany dla DOCX**, opcjonalny dla PDF.
 4. Opcjonalnie nagłówek `X-Created-By`.
 
@@ -626,14 +633,14 @@ Integrator składa URL do GUI samodzielnie:
 
 ### 14.4 Jak działa dostęp i klasyfikacja
 
-- **Dostęp:** **[Wymaga potwierdzenia]** brak potwierdzonej warstwy auth; obecnie znajomość `masterId` wystarcza. Nie zakładaj kontroli `CorporateKey` — **takiego mechanizmu nie ma w repo**.
-- **Klasyfikacja:** `C1`..`C4`, prezentacyjna w GUI; nie ogranicza obecnie dostępu.
+- **Dostęp:** (errata 2026-07-05) token Entra ID + rola aplikacyjna + opcjonalna lista `allowedCorporateKeys` w metadanych (egzekwowana backendowo, 403; admin omija — BR-014).
+- **Klasyfikacja:** `C1`..`C4` (opcjonalna), prezentacyjna w GUI; nie ogranicza obecnie dostępu.
 
 ### 14.5 Wysyłka zwrotna (odbiorca `ReturnUrl`)
 
 Odbiorca musi przyjąć **POST** z plikiem oraz obsłużyć nagłówek **`Idempotency-Key`** (dedup; wysyłka jest at-least-once) i może użyć `X-Content-SHA256` do weryfikacji integralności.
 
-> **[Wymaga potwierdzenia]** Dokładny `Content-Type` POST-u zwrotnego oraz kształt body (octet-stream vs multipart) nie są jednoznacznie opisane w `.ai` — potwierdzić w kodzie `HttpDeliverySender` przed integracją odbiorcy.
+> **Potwierdzone (errata 2026-07-05):** POST zwrotny to `multipart/form-data` — części `file` (DOCX, filename `document.docx`), `masterId`, `versionId`, `corporateKey`; nagłówki `Idempotency-Key` i `X-Content-SHA256` (kod `HttpDeliverySender`). Odbiorca czyta plik z pola formularza `file`.
 
 ### 14.6 Statusy i błędy
 
@@ -696,7 +703,7 @@ Inne kontrolery Internal API: `DocumentController` (`/api/document` — open/sav
 | POST | `/api/v1/document` | ingest (multipart) → 201 `{ masterId, versionId? }` |
 | GET | `/api/v1/document/{documentId}` | **placeholder** (read flow niezaimplementowany) |
 
-**Autoryzacja:** **[Wymaga potwierdzenia]** — brak potwierdzonego mechanizmu. **Idempotencja:** „Zakończ i wyślij" jest idempotentne (unique partial index — jedno aktywne zadanie per dokument); wysyłka HTTP używa `Idempotency-Key`.
+**Autoryzacja:** (errata 2026-07-05) Internal API — Entra ID (token + role, ADR-0022); External API — app-to-app, patrz `SECURITY.md`. **Idempotencja:** „Zakończ i wyślij" jest idempotentne (unique partial index — jedno aktywne zadanie per dokument); wysyłka HTTP używa `Idempotency-Key`.
 
 ---
 
@@ -957,7 +964,7 @@ flowchart LR
 ```bash
 # Backend
 dotnet test D2ApiViewerEditor/D2ViewerEditor.sln
-# Integracyjne DB (wymaga Postgres + migracje 001..007)
+# Integracyjne DB (wymaga Postgres + migracje 001..011)
 RUN_DB_INTEGRATION_TESTS=1 dotnet test .../D2ViewerEditor.Infrastructure.IntegrationTests
 # Frontend
 cd D2GuiViewerEditor && npm test
@@ -992,17 +999,18 @@ cd D2GuiViewerEditor && npm test
 
 **Fakty (potwierdzone):**
 - Brak CI/CD i `docker-compose` w repo (R-01).
-- Tryb podglądu (Krok 2) ładuje aktywną wersję, nie v1 (R-02).
-- `RecipientUrl` z danych zewnętrznych — tylko walidacja formatu http(s), ryzyko SSRF (R-07).
-- Schemat bazy poza EF Migrations (świadome) — bootstrap = ręczne skrypty.
-- Mechanizm auth niepotwierdzony (A-05); `CorporateKey`/`allowedCorporateKeys`/Entra ID nie istnieją w repo.
-- Read flow External API (`GET /api/v1/document/{id}`) to placeholder.
-- `export-pdf` = 501 (placeholder).
+- ~~Tryb podglądu (Krok 2) ładuje aktywną wersję~~ **Zamknięte** — podgląd ładuje v1 (R-02 Closed).
+- `RecipientUrl` — SSRF częściowo zmitygowane `ReturnUrlValidator` (loopback/private IP/allowlista, ADR-0024); pozostaje DNS-rebind + obowiązkowa allowlista prod (R-07 Partial).
+- Schemat bazy poza EF Migrations (świadome) — bootstrap = ręczne skrypty (`infra/sql/` 001..011).
+- ~~Mechanizm auth niepotwierdzony~~ **Zamknięte** — Entra ID + role + `allowedCorporateKeys` zaimplementowane (A-05 Closed; ADR-0011/0012/0022).
+- Read flow External API (`GET /api/v1/document/{id}`) to placeholder — nadal aktualne.
+- `export-pdf` = 501 (placeholder) — nadal aktualne.
 
 **Dług techniczny / braki dokumentacji:**
 - brak IaC GCP, brak opisu polityk bucketu/IAM,
-- brak potwierdzonego kształtu POST-u zwrotnego (octet-stream vs multipart),
-- brak metryk/alertów (tylko logi + audyt w DB).
+- ~~brak potwierdzonego kształtu POST-u zwrotnego~~ potwierdzone: `multipart/form-data`,
+- brak metryk/alertów (tylko logi + audyt w DB),
+- skaner AV uploadu = `NoOpFileScanner` (R-28).
 
 ---
 
@@ -1036,7 +1044,7 @@ cd D2GuiViewerEditor && npm test
 | DocumentVersion | wersja z plikiem w GCS; v1 oryginał (nietykalny), v2 edytowalna |
 | MasterId / VersionId | GUID-y zwracane po ingeście; integrator składa z nich URL do GUI |
 | Metadane | JSON w `documents.metadata` (`returnUrl`, `classification`) |
-| Classification | poziom `C1`..`C4`; obligatoryjny przy ingeście; prezentacyjny w GUI |
+| Classification | poziom `C1`..`C4`; opcjonalny przy ingeście; prezentacyjny w GUI |
 | ReturnUrl | URL zwrotu pliku po „Zakończ"; wymagany dla DOCX |
 | DOCX / PDF | obsługiwane formaty (edycja / podgląd) |
 | GCS | Google Cloud Storage; obiekty `documents/{versionId}`, `deliveries/{deliveryId}` |
@@ -1055,7 +1063,7 @@ cd D2GuiViewerEditor && npm test
 
 **Pliki `.ai`:** `PROJECT_CONTEXT.md`, `ARCHITECTURE.md`, `DOMAIN.md`, `DATABASE.md`, `API_CONTRACTS.md`, `SECURITY.md`, `DEVOPS_DEPLOYMENT.md`, `DECISIONS.md`, `TECH_STACK.md`, `GLOSSARY.md`, `FEATURES.md`, `PRODUCT_GOALS.md`, `CURRENT_STATE.md`, `TASK_HANDOFF.md`, `RISKS_ASSUMPTIONS.md`, `CHANGELOG.md`, `confluence-documentation.md`.
 
-**Kod (istotny):** `D2ViewerEditor.Domain/Entities/{Document,DocumentVersion,DocumentDelivery}.cs`; `Application/Features/Documents/Queries/GetDocumentMetadata/*`; `Application/Features/Documents/Commands/FinishAndSendDocument/*`; `Infrastructure/Persistence/Repositories/DocumentDeliveryRepository.cs`; `Api/Controllers/DocumentStorageController.cs`; `infra/sql/001..007`; `D2GuiViewerEditor/src/app/{pages/pdf-viewer, components/document-editor, components/document-classification-badge, services/document-storage.service.ts, app.routes.ts}`; `docker/*.dockerfile`; `appsettings*.json`.
+**Kod (istotny):** `D2ViewerEditor.Domain/Entities/{Document,DocumentVersion,DocumentDelivery}.cs`; `Application/Features/Documents/Queries/GetDocumentMetadata/*`; `Application/Features/Documents/Commands/FinishAndSendDocument/*`; `Infrastructure/Persistence/Repositories/DocumentDeliveryRepository.cs`; `Api/Controllers/DocumentStorageController.cs`; `infra/sql/001..011`; `D2GuiViewerEditor/src/app/{pages/pdf-viewer, components/document-editor, components/document-classification-badge, services/document-storage.service.ts, app.routes.ts}`; `docker/*.dockerfile`; `appsettings*.json`.
 
 **Recon (negatywny — potwierdzony brak):** brak `AddAuthentication`/`[Authorize]`, brak `CorporateKey`/`allowedCorporateKeys`/Entra ID (poza `template/`), brak `.github/workflows`/`docker-compose`.
 
@@ -1072,6 +1080,6 @@ cd D2GuiViewerEditor && npm test
 | 5 | **Infrastruktura GCP** — Cloud Run/GKE, Cloud SQL, Secret Manager, IAM | Wymaga potwierdzenia (brak IaC) |
 | 6 | **CI/CD** — brak pipeline w repo | Brak w repo |
 | 7 | **Metryki/tracing/alerty** — tylko rekomendacje | Brak w repo |
-| 8 | **Krok 2 (podgląd)** — ładuje aktywną wersję (v2), nie v1 | Znana rozbieżność (R-02) |
+| 8 | **Krok 2 (podgląd)** — ładował aktywną wersję (v2) | Rozstrzygnięte: podgląd ładuje v1 (R-02 Closed) |
 | 9 | **Graceful shutdown / polityki retry GCS** — nieopisane | Wymaga potwierdzenia |
 ```
