@@ -8,6 +8,8 @@ using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
 using D2ViewerEditor.Infrastructure.Conversion;
 using D2ViewerEditor.Infrastructure.DocxModel;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace D2ViewerEditor.Infrastructure.Services;
@@ -54,17 +56,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     // Firmowa czcionka — używana, gdy dokument nie definiuje własnej w docDefaults.
     private readonly DocumentDefaultsOptions _defaults;
     private readonly IGraphicConversionService _graphics;
+    private readonly ILogger<DocxToHtmlConverter> _log;
 
     public DocxToHtmlConverter()
     {
         _defaults = new DocumentDefaultsOptions();
         _graphics = new GraphicConversionService();
+        _log = NullLogger<DocxToHtmlConverter>.Instance;
     }
 
-    public DocxToHtmlConverter(IOptions<DocumentDefaultsOptions> defaults, IGraphicConversionService? graphics = null)
+    public DocxToHtmlConverter(IOptions<DocumentDefaultsOptions> defaults, IGraphicConversionService? graphics = null,
+        ILogger<DocxToHtmlConverter>? logger = null)
     {
         _defaults = defaults?.Value ?? new DocumentDefaultsOptions();
         _graphics = graphics ?? new GraphicConversionService();
+        _log = logger ?? NullLogger<DocxToHtmlConverter>.Instance;
     }
 
     /// <summary>
@@ -76,8 +82,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private (string dataUrl, bool isBlank)? WebGraphicForLegacy(byte[] bytes, string? contentType, long widthEmu, long heightEmu, string? sourcePath = null)
     {
+        // Unknown też przechodzi przez konwerter: pokrywa EMZ/WMZ (gzip), rastry rozpoznawalne
+        // tylko przez Skia oraz parts z kłamiącym content-type. Bez tego `src` dostawał
+        // nierenderowalny data:{contentType} i przeglądarka pokazywała ikonę złamanego obrazka.
         var kind = _graphics.Detect(bytes, contentType);
-        if (kind is not (GraphicKind.Emf or GraphicKind.Wmf or GraphicKind.Tiff))
+        if (kind is not (GraphicKind.Emf or GraphicKind.Wmf or GraphicKind.Tiff or GraphicKind.Unknown))
             return null; // web-native → zostaje dotychczasowa ścieżka
         var result = _graphics.ConvertForEditor(new GraphicSource
         {
@@ -88,6 +97,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             TargetWidthEmu = widthEmu > 0 ? widthEmu : null,
             TargetHeightEmu = heightEmu > 0 ? heightEmu : null
         });
+        if (result.Diagnostics.Status is GraphicConversionStatus.Fallback
+            or GraphicConversionStatus.Unsupported or GraphicConversionStatus.Rejected)
+        {
+            _log.LogWarning(
+                "Grafika bez pełnej konwersji web: part={SourcePath} declaredType={ContentType} detected={Kind} " +
+                "size={Size}B status={Status} strategie=[{Strategies}] powód={Reason}",
+                sourcePath, contentType, result.Diagnostics.InputKind, bytes.Length,
+                result.Diagnostics.Status, string.Join(",", result.Diagnostics.AttemptedStrategies),
+                result.Diagnostics.FailureReason);
+        }
         return result.Web != null ? (result.Web.ToDataUrl(), result.Web.IsBlankFallback) : null;
     }
 
@@ -1400,11 +1419,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 LoadImageFromPart(footerPart, imagePart);
     }
 
+    /// <summary>
+    /// rId-y są unikalne wyłącznie W OBRĘBIE jednej części pakietu — main, każdy nagłówek i każda
+    /// stopka mają WŁASNE przestrzenie relacji zaczynające się od rId1. Cache obrazów musi więc być
+    /// kluczowany częścią + rId; sam rId powodował, że obraz nagłówka o kolidującym rId renderował
+    /// obraz z body (lub odwrotnie).
+    /// </summary>
+    private static string ImageCacheKey(OpenXmlPart part, string relationshipId)
+        => $"{part.Uri}|{relationshipId}";
+
     private void LoadImageFromPart(OpenXmlPart part, ImagePart imagePart)
     {
         var relationshipId = part.GetIdOfPart(imagePart);
-        if (_images.ContainsKey(relationshipId)) return;
-        
+        var cacheKey = ImageCacheKey(part, relationshipId);
+        if (_images.ContainsKey(cacheKey)) return;
+
         using var stream = imagePart.GetStream();
         using var memoryStream = new MemoryStream();
         stream.CopyTo(memoryStream);
@@ -1430,9 +1459,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 rawBytes = w.Data;       // osadzony/zdekodowany raster (PNG/JPEG)
                 contentType = w.MimeType;
             }
+            // SVG (tłumaczenie wektorowe) NIE podmienia bajtów w _images — oryginalny metafile
+            // musi zostać, żeby renderer dał go do data-original-src (round-trip do DOCX);
+            // podgląd SVG powstaje w WebGraphicForLegacy z cache po hashu treści.
+            else if (converted.Diagnostics.Status is GraphicConversionStatus.Fallback
+                     or GraphicConversionStatus.Unsupported or GraphicConversionStatus.Rejected)
+            {
+                _log.LogWarning(
+                    "Media part bez rastra web: part={PartUri} relId={RelId} declaredType={ContentType} " +
+                    "size={Size}B status={Status} powód={Reason}",
+                    imagePart.Uri, relationshipId, imagePart.ContentType, rawBytes.Length,
+                    converted.Diagnostics.Status, converted.Diagnostics.FailureReason);
+            }
         }
 
-        _images[relationshipId] = new DocumentImage
+        _images[cacheKey] = new DocumentImage
         {
             Id = relationshipId,
             ContentType = contentType,
@@ -1445,7 +1486,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (string.IsNullOrEmpty(contentType)) return false;
         var ct = contentType.ToLowerInvariant();
         return ct.Contains("emf") || ct.Contains("wmf") || ct.Contains("metafile")
-            || ct.Contains("tiff") || ct.Contains("tif");
+            || ct.Contains("tiff") || ct.Contains("tif")
+            || ct.Contains("emz") || ct.Contains("wmz");   // skompresowane metafile (gzip)
     }
 
     /// <summary>
@@ -2616,6 +2658,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 return ConvertDrawingToHtml(drawing, document, sourcePart);
             case Picture picture:
                 return ConvertPictureToHtml(picture, document, sourcePart);
+            case AlternateContent alternate:
+                return ConvertAlternateContentToHtml(alternate, document, sourcePart);
             case NoBreakHyphen _:
                 return "&#8209;";
             case SoftHyphen _:
@@ -2629,6 +2673,33 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             default:
                 return string.Empty;
         }
+    }
+
+    /// <summary>
+    /// Word owija nowsze rysunki (obrazy zakotwiczone z efektami, grupy, kanwy, kształty) w
+    /// mc:AlternateContent: mc:Choice niesie nowoczesny markup (w:drawing), mc:Fallback wersję
+    /// VML (w:pict) dla starych czytników. Bez tej gałęzi KAŻDY taki element znikał bez śladu
+    /// (default w switchu → pusty string). Bierzemy pierwszą gałąź, z której da się
+    /// wyprodukować HTML — Choice w kolejności dokumentu, potem Fallback.
+    /// </summary>
+    private string ConvertAlternateContentToHtml(AlternateContent alternate, WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        foreach (var branch in alternate.ChildElements)
+        {
+            if (branch is not (AlternateContentChoice or AlternateContentFallback)) continue;
+
+            var html = new StringBuilder();
+            foreach (var drawing in branch.Descendants<Drawing>())
+                html.Append(ConvertDrawingToHtml(drawing, document, sourcePart));
+            if (html.Length == 0)
+            {
+                foreach (var pict in branch.Descendants<Picture>())
+                    html.Append(ConvertPictureToHtml(pict, document, sourcePart));
+            }
+            if (html.Length > 0) return html.ToString();
+        }
+        _log.LogDebug("mc:AlternateContent bez konwertowalnego obrazu (kształt/textbox) — element pominięty.");
+        return string.Empty;
     }
 
     /// <summary>
@@ -2999,10 +3070,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string ConvertDrawingToHtml(Drawing drawing, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
-        if (blip?.Embed?.Value == null) return string.Empty;
+        if (blip?.Embed?.Value == null)
+        {
+            // r:link = obraz linkowany (plik poza pakietem DOCX) — nie mamy jego bajtów i nie
+            // pobieramy zewnętrznych URL-i po stronie serwera (SSRF). Kontrolowane pominięcie z logiem.
+            if (blip?.Link?.Value != null)
+                _log.LogWarning("Pominięto obraz z relacją zewnętrzną r:link={RelId} (obrazy linkowane nie są osadzone w pakiecie).",
+                    blip.Link.Value);
+            return string.Empty;
+        }
 
         var relationshipId = blip.Embed.Value;
-        
+
+        // Relacje rozwiązujemy względem części, w której siedzi w:drawing (body/nagłówek/stopka) —
+        // rId z nagłówka NIE wolno szukać w relacjach body (kolizje numeracji rId między częściami).
+        var effectivePart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+        if (effectivePart == null) return string.Empty;
+
         var extent = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
         var width = extent?.Cx != null ? EmuToPx(extent.Cx.Value) : 200;
         var height = extent?.Cy != null ? EmuToPx(extent.Cy.Value) : 200;
@@ -3012,37 +3096,55 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         string? base64Data = null;
         string? contentType = null;
 
-        if (_images.TryGetValue(relationshipId, out var image))
+        if (_images.TryGetValue(ImageCacheKey(effectivePart, relationshipId), out var image))
         {
             base64Data = image.Base64Data;
             contentType = image.ContentType;
         }
-        else if (sourcePart != null)
+        else
         {
             try
             {
-                var imagePart = sourcePart.GetPartById(relationshipId) as ImagePart;
+                var imagePart = effectivePart.GetPartById(relationshipId) as ImagePart;
                 if (imagePart != null)
                 {
-                    using var stream = imagePart.GetStream();
-                    using var memoryStream = new MemoryStream();
-                    stream.CopyTo(memoryStream);
-                    
-                    base64Data = System.Convert.ToBase64String(memoryStream.ToArray());
-                    contentType = imagePart.ContentType;
-
-                    _images[relationshipId] = new DocumentImage
+                    LoadImageFromPart(effectivePart, imagePart);
+                    if (_images.TryGetValue(ImageCacheKey(effectivePart, relationshipId), out var lazy))
                     {
-                        Id = relationshipId,
-                        ContentType = contentType,
-                        Base64Data = base64Data
-                    };
+                        base64Data = lazy.Base64Data;
+                        contentType = lazy.ContentType;
+                    }
+                }
+                else
+                {
+                    _log.LogWarning("Relacja obrazu {RelId} w części {PartUri} nie wskazuje na ImagePart — obraz pominięty.",
+                        relationshipId, effectivePart.Uri);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Nie udało się rozwiązać relacji obrazu {RelId} w części {PartUri}: {Error}",
+                    relationshipId, effectivePart.Uri, ex.Message);
+            }
         }
 
         if (base64Data == null || contentType == null) return string.Empty;
+
+        // Zerowy/nieprawidłowy wp:extent (cx/cy = 0 u niektórych generatorów) dawał width:0px —
+        // obraz istniał w DOM, ale był niewidoczny. Bierzemy wtedy wymiary intrinsic z nagłówka pliku.
+        if (width <= 0 || height <= 0)
+        {
+            var probe = _graphics.ConvertForEditor(new GraphicSource
+            {
+                Data = System.Convert.FromBase64String(base64Data),
+                ContentType = contentType,
+                Origin = GraphicOrigin.LegacyDocxPart
+            });
+            width = probe.Web is { WidthPx: > 0 } pw ? pw.WidthPx : 200;
+            height = probe.Web is { HeightPx: > 0 } ph ? ph.HeightPx : 200;
+            widthEmu = OoxmlUnits.PixelsToEmu(width);
+            heightEmu = OoxmlUnits.PixelsToEmu(height);
+        }
 
         // Legacy metafile (EMF/WMF) → renderowalny data:URL (osadzony raster / placeholder SVG);
         // dla web-native zostaje oryginalny data:URL. Oryginalny part nietknięty (pass-through).
@@ -3150,27 +3252,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         string? base64Data = null;
         string? contentType = null;
 
-        if (_images.TryGetValue(relationshipId, out var image))
+        // Jak w ConvertDrawingToHtml: relacje per część (kolizje rId między body a nagłówkiem/stopką).
+        var effectivePart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+        if (effectivePart == null) return string.Empty;
+
+        if (_images.TryGetValue(ImageCacheKey(effectivePart, relationshipId), out var image))
         {
             base64Data = image.Base64Data;
             contentType = image.ContentType;
         }
-        else if (sourcePart != null)
+        else
         {
             try
             {
-                var imagePart = sourcePart.GetPartById(relationshipId) as ImagePart;
-                if (imagePart != null)
+                if (effectivePart.GetPartById(relationshipId) is ImagePart imagePart)
                 {
-                    using var stream = imagePart.GetStream();
-                    using var memoryStream = new MemoryStream();
-                    stream.CopyTo(memoryStream);
-                    base64Data = System.Convert.ToBase64String(memoryStream.ToArray());
-                    contentType = imagePart.ContentType;
-                    _images[relationshipId] = new DocumentImage { Id = relationshipId, ContentType = contentType, Base64Data = base64Data };
+                    LoadImageFromPart(effectivePart, imagePart);
+                    if (_images.TryGetValue(ImageCacheKey(effectivePart, relationshipId), out var lazy))
+                    {
+                        base64Data = lazy.Base64Data;
+                        contentType = lazy.ContentType;
+                    }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Nie udało się rozwiązać relacji VML v:imagedata {RelId} w części {PartUri}: {Error}",
+                    relationshipId, effectivePart.Uri, ex.Message);
+            }
         }
 
         if (base64Data == null || contentType == null) return string.Empty;

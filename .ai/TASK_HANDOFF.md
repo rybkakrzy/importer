@@ -4,6 +4,19 @@
 
 ## Ostatnia aktualizacja (2026-07-05)
 
+- **Własny tłumacz wektorowy EMF/WMF → SVG, etap 1 (ADR-0027).**
+   - Nowy `MetafileVectorTranslator` (Infrastructure, internal, pure-managed — zero zależności) tłumaczy podzbiór rekordów GDI na SVG; wpięty jako strategia `vector-translate` w `GraphicConversionService.ConvertMetafile` po `dib-rasterize`, przed blankiem. SVG tylko podgląd — eksport zawsze niesie oryginalny metafile (data-original-src / pass-through), `LoadImageFromPart` nie podmienia bajtów na SVG.
+   - Pokrycie etapu 1: pióra/pędzle/stock/dash, linie, rect/ellipse/roundrect, poly*/polypolygon (16/32-bit, fill-rule), ścieżki, world transform, StretchDIBits→`<image>`; WMF: slotowa tabela obiektów + odwrócone parametry. Limity anty-DoS; wyjątek → blank.
+   - Testy: `MetafileVectorTranslationTests` 10/10; Infrastructure 285/285 (stare blank-testy bez zmian); Application 306/306.
+   - **Etap 2 (kandydaci):** ExtTextOut (tekst z przybliżeniem metryk), clipping (SelectClipPath → clipPath), Arc/Pie/Chord, PatternBrush, parsowanie rekordów EMF+ z GDICOMMENT; ewentualnie rasteryzacja SVG→PNG dla spójności miniatur. Rozważyć realne pliki EMF od użytkowników jako fixtures.
+
+- **Import obrazów z DOCX — naprawa 6 potwierdzonych bugów w istniejącym mechanizmie (bez nowych zależności, bez nowego systemu konwersji).**
+   - Reader (`DocxToHtmlConverter`): klucz obrazów per część pakietu (`ImageCacheKey(part, rId)` — kolizje rId main vs header/footer podmieniały obrazy), nowa gałąź `ConvertAlternateContentToHtml` (mc:Choice→mc:Fallback; wcześniej całe `mc:AlternateContent` szło w pusty string), zero-extent → wymiary intrinsic (koniec `width:0px`), `WebGraphicForLegacy` obejmuje `Unknown` (EMZ/WMZ/nieznane nie trafiają do `src` jako nierenderowalny data URL), `r:link`-only pomijany z logiem, opcjonalny `ILogger` (diagnostyka etapu: część/relId/typ/rozmiar/status/powód).
+   - `GraphicConversionService`: dekompresja GZIP (EMZ/WMZ) przed detekcją, bounded do `MaxInputBytes`.
+   - Writer (`HtmlToDocxConverter.BuildImageDrawing`): prawdziwy content type partu (Tiff/Icon mapowane; nieznane `image/*` przez `AddImagePart(contentType)`; wcześniej wszystko nieznane = „Jpeg" → obrazy psuły się po pierwszym autosave).
+   - Testy: nowy `ImageImportRegressionTests` 10/10; Infrastructure 275/275, Application 306/306, build solucji 0 błędów, golden nietknięte.
+   - **Do zrobienia w następnych sesjach (świadomie poza zakresem):** rendering obrazów w textboxach/grupach wieloobrazowych (obecnie pierwszy blip), SVG-blip extension (`asvg:svgBlip` — dziś renderowany PNG-fallback Worda), potwierdzenie testów w kontenerze Linux w CI (zmiany pure-managed, ryzyko niskie), ewentualny placeholder wizualny dla `r:link`.
+
 - **Pokrycie testami zmian ADR-0025/0026 (+16 testów, tylko testy — zero zmian w kodzie produkcyjnym).**
    - Application (+4): `SaveDocumentCommandHandlerTests` i `DownloadEditedDocumentCommandHandlerTests` pilnują, że `SectionHeadersFooters`/`PageSize` dochodzą do `IHtmlToDocxConverter` nietknięte (obie ścieżki: `Convert` i `ConvertPreservingPackage`); regresją byłoby ciche spłaszczenie nagłówków sekcyjnych przy autosave.
    - Infrastructure (+12): `TabStopFidelityTests` (leader `dot`, `w:val=clear` usuwa stop ze STYLU akapitowego, direct nadpisuje pozycję stylu, bar-tab pomijany), `TableStyleFidelityTests` (lastRow, firstColumn, legacy maska hex `tblLook@w:val`, `noHBand` wyłącza pasy, pasy pionowe band1Vert), `MultiSectionFidelityTests` writer (wpis footer-only na sectPr swojej sekcji, wpis z indeksem poza zakresem/0 ignorowany bez wyjątku — scenariusz skasowanego markera sekcji).

@@ -605,3 +605,50 @@ Emisja klas CSS + arkusza stylów per dokument (odrzucone: kontrakt edytora opie
 styles — przeżywa split/merge stron i sanitizację). Pełne zachowanie rozdziału styl/direct przy
 eksporcie (odrzucone: wymagałoby śledzenia pochodzenia każdej właściwości w HTML; niewspółmierna
 złożoność do zysku).
+
+## ADR-0027: Własny pure-managed tłumacz wektorowy EMF/WMF → SVG (etap 1, tylko podgląd) — 2026-07-05
+
+- Date: 2026-07-05
+- Status: Accepted
+
+### Context
+Czysto wektorowe EMF/WMF (bez osadzonego rastra) renderowały się w edytorze jako przezroczysty
+blank (ADR-0020) — dokument działał, ale użytkownik nie widział grafiki do czasu otwarcia w Word.
+Rasteryzacja przez LibreOffice/GDI/System.Drawing jest zakazana (Windows-only / proces zewnętrzny),
+Magick.NET deleguje metafile do natywnych delegatów nieobecnych w kontenerze, a roadmapowy sidecar
+to osobna infrastruktura. Brak gotowej, permisywnej, pure-managed biblioteki renderującej EMF/WMF.
+
+### Decision
+1. Nowy `MetafileVectorTranslator` (Infrastructure, internal): własny parser rekordów binarnych
+   MS-EMF / MS-WMF tłumaczący BEZPOŚREDNIO na SVG podzbiór GDI etapu 1: pióra/pędzle (kolor,
+   grubość, dash, stock objects), MoveTo/LineTo, Rectangle/Ellipse/RoundRect,
+   Polygon/Polyline/PolyBezier (warianty 16/32-bit), PolyPolygon (fill-rule),
+   ścieżki (BeginPath/CloseFigure/Fill/Stroke/StrokeAndFill), SetWorldTransform/
+   ModifyWorldTransform (macierz 2×3, rotacja → polygon), SetPolyFillMode,
+   StretchDIBits → `<image>` (DIB przez istniejące SliceDib/DibToPng + Skia).
+   WMF: tabela obiektów slotowa (fonty/palety/regiony zajmują sloty), placeable bbox /
+   SETWINDOWORG/EXT jako viewBox, kolejność parametrów odwrócona (spec).
+2. Wpięty jako strategia `vector-translate` w łańcuch `ConvertMetafile`:
+   `embedded-raster` → `dib-rasterize` → **`vector-translate`** → blank. Wynik przechodzi przez
+   `SanitizeSvg`; Status=Converted, Fidelity=Lossy; rekordy spoza podzbioru liczone i raportowane
+   w Warnings/LostProperties (rekordy czysto stanowe pomijane bez liczenia).
+3. Tłumaczenie jest WYŁĄCZNIE podglądem: oryginalny metafile nadal jedzie do DOCX
+   (data-original-src / pass-through) — writer nigdy nie zapisuje SVG jako blip.
+   `LoadImageFromPart` nie podmienia bajtów partu na SVG (podgląd powstaje w renderze, z cache).
+4. Limity niezaufanego wejścia: 200k rekordów, 100k punktów/poly, 20k elementów SVG, 2 MB
+   wyjścia; każdy wyjątek → null → łańcuch przechodzi na blank.
+
+### Consequences
+Wektorowe EMF/WMF (ramki, schematy, loga, pieczątki, proste cliparty) są wreszcie WIDOCZNE
+w edytorze — z poprawnymi kolorami, grubościami linii i transformacjami; brak treści możliwej
+do przetłumaczenia degraduje się do dotychczasowego blanku (zero regresji — stare testy blank
+przechodzą bez zmian). Poza zakresem etapu 1 (świadomie): tekst (ExtTextOut — wymaga metryk
+fontów), clipping, ROP-y rastrowe, pędzle wzorkowe, rekordy EMF+ (GDI+; pliki dual niosą
+fallback EMF, który tłumaczymy). Testy: `MetafileVectorTranslationTests` 10/10 (EMF rect/polygon/
+line/path/transform/WMF/integracja DOCX z eksportem oryginału), Infrastructure 285/285.
+
+### Alternatives considered
+(a) Sidecar rasteryzujący w osobnym kontenerze — odrzucone na teraz: infrastruktura + latencja;
+pozostaje opcją dla pełnej wierności (EMF+/tekst). (b) Magick.NET / natywne delegaty — odrzucone:
+niedeterministyczne w kontenerze (ADR-0020 §4). (c) Rasteryzacja SVG→PNG po stronie serwera —
+zbędna: przeglądarka renderuje SVG natywnie, wektor skaluje się lepiej.

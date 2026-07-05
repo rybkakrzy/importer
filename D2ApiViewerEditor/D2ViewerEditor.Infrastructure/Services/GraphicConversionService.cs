@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -107,6 +108,30 @@ public sealed class GraphicConversionService : IGraphicConversionService
         var warnings = new List<string>();
         var lost = new List<string>();
         var kind = Detect(source.Data, source.ContentType);
+
+        // Word zapisuje metafile także w wariancie skompresowanym GZIP (EMZ/WMZ — content type
+        // image/x-emz / image/x-wmz). Sygnatura 1F 8B nie pasuje do żadnego formatu graficznego,
+        // więc bez dekompresji taki part kończył jako Unknown → broken image w edytorze.
+        if (kind == GraphicKind.Unknown && IsGzip(source.Data))
+        {
+            attempted.Add("gzip-decompress");
+            var inner = TryGunzip(source.Data, options.MaxInputBytes);
+            if (inner != null)
+            {
+                warnings.Add("Skompresowany media part (EMZ/WMZ/GZIP) — zdekompresowano.");
+                source = new GraphicSource
+                {
+                    Data = inner,
+                    ContentType = source.ContentType,
+                    FileName = source.FileName,
+                    SourcePath = source.SourcePath,
+                    Origin = source.Origin,
+                    TargetWidthEmu = source.TargetWidthEmu,
+                    TargetHeightEmu = source.TargetHeightEmu
+                };
+                kind = Detect(inner, source.ContentType);
+            }
+        }
 
         try
         {
@@ -240,12 +265,39 @@ public sealed class GraphicConversionService : IGraphicConversionService
                 source, cacheKey, sw, attempted, warnings, lost);
         }
 
-        // Brak osadzonego rastra → przezroczysty, niewidoczny element zachowujący wymiary/układ.
-        // Oryginalny metafile zachowany do eksportu (Word renderuje wektor z data-original-src).
+        // Etap 1 własnego tłumacza wektorowego (pure-managed): podzbiór rekordów GDI → SVG.
+        // Tylko podgląd (Lossy) — oryginalny metafile i tak jedzie do DOCX przez pass-through.
+        attempted.Add("vector-translate");
+        var vector = MetafileVectorTranslator.Translate(kind, source.Data, w, h);
+        if (vector != null && SanitizeSvg(vector.Svg) is { } safeSvg)
+        {
+            warnings.Add($"{kind}: rekordy wektorowe przetłumaczone na SVG (etap 1 — podzbiór GDI).");
+            if (vector.SkippedRecords > 0)
+            {
+                warnings.Add($"{kind}: pominięto {vector.SkippedRecords} rekordów spoza podzbioru.");
+                lost.Add("Rekordy GDI spoza podzbioru etapu 1 (tekst, clipping, ROP, EMF+).");
+            }
+            return new GraphicConversionResult
+            {
+                Web = new WebGraphicRepresentation
+                {
+                    MimeType = "image/svg+xml",
+                    Data = Encoding.UTF8.GetBytes(safeSvg),
+                    WidthPx = w,
+                    HeightPx = h
+                },
+                PreserveOriginalPart = source.Origin == GraphicOrigin.LegacyDocxPart,
+                Diagnostics = Diag(kind, "image/svg+xml", GraphicConversionStatus.Converted, GraphicFidelity.Lossy,
+                    source, cacheKey, sw, attempted, null, warnings, lost)
+            };
+        }
+
+        // Brak osadzonego rastra i nic do przetłumaczenia → przezroczysty, niewidoczny element
+        // zachowujący wymiary/układ. Oryginał zachowany do eksportu (data-original-src).
         lost.Add("Podgląd wektorowego metafile (renderowany w Word z zachowanego oryginału).");
         return BlankFallback(kind, source, options, cacheKey, sw, attempted, warnings, lost,
             GraphicConversionStatus.Fallback,
-            $"{kind} czysto wektorowy bez osadzonego rastra — brak pure-managed rasteryzera wektora.",
+            $"{kind} czysto wektorowy bez osadzonego rastra i bez rekordów obsługiwanych przez tłumacz SVG.",
             preComputedDims: (w, h));
     }
 
@@ -387,6 +439,28 @@ public sealed class GraphicConversionService : IGraphicConversionService
         if (d[0] == 0x49 && d[1] == 0x49 && d[2] == 0x2A && d[3] == 0x00) return true;
         if (d[0] == 0x4D && d[1] == 0x4D && d[2] == 0x00 && d[3] == 0x2A) return true;
         return false;
+    }
+
+    private static bool IsGzip(ReadOnlySpan<byte> d) => d.Length >= 3 && d[0] == 0x1F && d[1] == 0x8B;
+
+    /// <summary>Dekompresja GZIP z twardym limitem rozmiaru wyjścia (ochrona przed decompression bomb).</summary>
+    private static byte[]? TryGunzip(byte[] data, int maxOutputBytes)
+    {
+        try
+        {
+            using var input = new MemoryStream(data, writable: false);
+            using var gz = new GZipStream(input, CompressionMode.Decompress);
+            using var output = new MemoryStream();
+            var buffer = new byte[81920];
+            int read;
+            while ((read = gz.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (output.Length + read > maxOutputBytes) return null; // bomba/oversize → odrzuć
+                output.Write(buffer, 0, read);
+            }
+            return output.Length > 0 ? output.ToArray() : null;
+        }
+        catch { return null; }
     }
 
     private static bool LooksLikeSvg(ReadOnlySpan<byte> d)
@@ -614,8 +688,15 @@ public sealed class GraphicConversionService : IGraphicConversionService
         return best;
     }
 
+    /// <summary>DIB → BMP → PNG (SkiaSharp). Współdzielone z tłumaczem wektorowym (StretchDIBits → &lt;image&gt;).</summary>
+    internal static byte[]? DibToPng(byte[] dib)
+    {
+        var bmp = WrapDibInBmpFile(dib);
+        return bmp == null ? null : DecodeToPng(bmp);
+    }
+
     /// <summary>Wycina blok (BITMAPINFOHEADER+palety + bity) z rekordu wg offsetów względnych.</summary>
-    private static byte[]? SliceDib(byte[] d, int recStart, uint offBmi, uint cbBmi, uint offBits, uint cbBits, uint recSize)
+    internal static byte[]? SliceDib(byte[] d, int recStart, uint offBmi, uint cbBmi, uint offBits, uint cbBits, uint recSize)
     {
         if (cbBmi < 40 || cbBits == 0) return null;
         long bmiAbs = (long)recStart + offBmi, bitsAbs = (long)recStart + offBits;

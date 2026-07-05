@@ -42,13 +42,18 @@ DocxToHtmlConverter.WebGraphicForLegacy(...)        ← hook: EMF/WMF media part
 | **TIFF** | dekoder **SkiaSharp** → PNG (gdy kodek dostępny), inaczej **przezroczysty blank** | PNG / blank | Lossy/Fallback |
 | **EMF/WMF** z osadzonym PNG/JPEG | ekstrakcja PNG/JPEG z bajtów | osadzony raster | Lossy |
 | **EMF/WMF** z osadzonym DIB (StretchDIBits itp.) | DIB→BMP→**SkiaSharp**→PNG (od 2026-06-11) | PNG | Lossy |
-| **EMF/WMF** bez rastra (czysty wektor) | **przezroczysty blank SVG** (wymiary z headera, zero widocznej treści) + **pass-through oryginału** | blank (niewidoczny) | Fallback |
+| **EMF/WMF** bez rastra (czysty wektor) | **własny tłumacz wektorowy → SVG** (etap 1, ADR-0027: kształty/poly/ścieżki/transformacje/pióra/pędzle); gdy brak obsługiwanych rekordów → przezroczysty blank. Zawsze + **pass-through oryginału** | SVG / blank | Lossy / Fallback |
 | **VML** rect/oval/line/roundrect | mapowanie bezpiecznego podzbioru | SVG (fill/stroke) | Lossy |
 | **VML** v:imagedata | rozwiązanie partu → ścieżka EMF/WMF/raster | jw. | jw. |
+| **EMZ/WMZ** (metafile GZIP, `image/x-emz`/`x-wmz`) | dekompresja GZIP (bounded do `MaxInputBytes`) → dalej jak EMF/WMF | jw. | jw. |
 | VML inne / nieznane media | raster-rescue SkiaSharp, inaczej **przezroczysty blank** + diagnostyka | blank (niewidoczny) | Unsupported |
 
 Łańcuch strategii dla EMF/WMF (kolejność, raportowany w `AttemptedStrategies`):
-`embedded-raster` → `dib-rasterize` → blank. Dla TIFF/Unknown: `skia-decode` → blank.
+`embedded-raster` → `dib-rasterize` → **`vector-translate`** (etap 1 własnego tłumacza
+`MetafileVectorTranslator`, ADR-0027) → blank. Dla TIFF/Unknown: `skia-decode` → blank.
+Dla GZIP: `gzip-decompress` poprzedza detekcję (2026-07-05). Reader (`WebGraphicForLegacy`)
+kieruje do konwersji także `GraphicKind.Unknown` — `src` NIGDY nie dostaje nierenderowalnego
+`data:{contentType}` (wcześniej EMZ/nieznane = ikona złamanego obrazka w edytorze).
 
 ## 4. Dlaczego BEZ LibreOffice / GDI / System.Drawing
 
@@ -119,6 +124,8 @@ Uruchom: `dotnet test D2ViewerEditor.Infrastructure.UnitTests --filter GraphicCo
 | `GraphicConversionSecurityTests` | sanitizacja SVG (script/on*/external/javascript), XXE/DTD blok, malformed SVG/EMF → fallback bez wyjątku, clamp wymiarów |
 | `GraphicConversionIntegrationTests` | DOCX EMF/**WMF**/**mixed native+EMF**/**duplicated EMF**: renderowalny `src` (NIGDY raw x-emf/x-wmf), `data-legacy-graphic="blank"`, skan HTML/SVG bez widocznego placeholdera, round-trip EMF→valid DOCX z partem EMF |
 | `GraphicConversionIntegrationTests` | DOCX z EMF a:blip → reader emituje `data:image/svg+xml` + `data-legacy-graphic="placeholder"`, **nigdy** `data:image/x-emf` |
+| `ImageImportRegressionTests` (2026-07-05) | kolizja rId body↔header (obraz nagłówka ≠ obraz body), `mc:AlternateContent` Choice/Fallback renderowany, EMZ (gzip) z osadzonym PNG → PNG w src / czysty wektor → blank, gunzip w serwisie (`gzip-decompress`), zerowy `wp:extent` → wymiary intrinsic, writer zapisuje prawdziwy content type (TIFF/WEBP), `r:link`-only nie wywraca importu |
+| `MetafileVectorTranslationTests` (2026-07-05, ADR-0027) | EMF: rect+pen/brush → `<rect>` z kolorami, POLYGON16, MoveTo/LineTo → `<line>`, ścieżka Begin/Close/StrokePath → `<path>`, SetWorldTransform (translacja), header-only → nadal blank (tłumacz nie fabrykuje treści), nieznane rekordy → blank bez wyjątku; WMF: rect+pen/brush, polygon; integracja: DOCX z wektorowym EMF → SVG w `src`, brak atrybutu blank, eksport = oryginalny part EMF (nie SVG) |
 
 ## 9. Benchmarki
 
@@ -141,9 +148,14 @@ rastra skaluje się z rozmiarem (skan sygnatur). Brak natywnych alokacji (pure-m
   (od 2026-06-11, przez SkiaSharp — `TryRasterizeMetafileToPng`/`TryExtractEmfDib`/`TryFindDibGeneric`
   w `GraphicConversionService`). Pokrywa najczęstszy realny przypadek (EMF/WMF opakowujący bitmapę).
   Eksport nadal niesie oryginalny metafile (`data-original-src`) → Word renderuje wektor.
-- **Czysto wektorowe EMF/WMF (bez osadzonego rastra)** wciąż nie są rasteryzowane → **przezroczysty
-  blank** (niewidoczny, NIE placeholder); pełny podgląd dopiero w Word (pass-through). Pełny
-  interpreter/rasteryzer wektora EMF = roadmapa (sidecar out-of-process — patrz §4).
+- **Czysto wektorowe EMF/WMF** — od 2026-07-05 (ADR-0027) tłumaczone na SVG własnym pure-managed
+  parserem rekordów (`MetafileVectorTranslator`, strategia `vector-translate`): pióra/pędzle,
+  linie, prostokąty/elipsy, poly*, ścieżki, transformacje świata, StretchDIBits jako `<image>`.
+  Poza podzbiorem etapu 1: **tekst (ExtTextOut), clipping, ROP-y, pędzle wzorkowe, rekordy EMF+**
+  (pliki dual EMF+ niosą fallback EMF, który tłumaczymy) — takie rekordy są pomijane z licznikiem
+  w diagnostyce, a metafile bez żadnych obsługiwanych rekordów degraduje się do przezroczystego
+  blanku jak dotąd. SVG to WYŁĄCZNIE podgląd — do DOCX zawsze wraca oryginalny metafile.
+  Pełna wierność (EMF+/tekst) = ewentualny sidecar (roadmapa, §4).
 - **TIFF**: rasteryzowany do PNG tylko gdy SkiaSharp ma kodek na danej platformie (libtiff często
   nieobecny w obrazie kontenera) — inaczej przezroczysty blank + pass-through oryginału.
 - **VML**: tylko bezpieczny podzbiór kształtów (rect/roundrect/oval/line); paths/gradients/cienie/

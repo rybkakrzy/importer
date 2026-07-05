@@ -2146,30 +2146,39 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var container = _currentImageContainer ?? (OpenXmlPart?)_mainPart;
         if (container == null) return null;
 
-        var imagePartType = contentType switch
-        {
-            "image/png" => ImagePartType.Png,
-            "image/gif" => ImagePartType.Gif,
-            "image/bmp" => ImagePartType.Bmp,
-            "image/x-emf" or "image/emf" => ImagePartType.Emf,
-            "image/x-wmf" or "image/wmf" => ImagePartType.Wmf,
-            "image/svg+xml" => ImagePartType.Svg,
-            _ => ImagePartType.Jpeg
-        };
-
         // HARD GUARD: goły `a:blip` na SVG (bez rastrowego fallbacku) jest NIEPOPRAWNY w DOCX —
         // Word zgłasza uszkodzony plik. Placeholdery legacy niosą prawdziwy metafile w
         // `data-original-src` (obsłużone w ResolveImageSrc), więc tu SVG = brak fallbacku → pomiń
         // (kontrolowana strata, NIGDY uszkodzony dokument).
-        if (imagePartType == ImagePartType.Svg)
+        if (contentType == "image/svg+xml")
             return null;
+
+        // Part musi dostać PRAWDZIWY content type danych. Wcześniej wszystko spoza krótkiej listy
+        // (TIFF/ICO/WEBP/EMZ…) lądowało jako rzekomy Jpeg — obraz przeżywał pierwszy zapis z błędną
+        // deklaracją typu i przestawał się renderować po round-tripie.
+        PartTypeInfo? knownType = contentType switch
+        {
+            "image/png" => ImagePartType.Png,
+            "image/jpeg" or "image/jpg" => ImagePartType.Jpeg,
+            "image/gif" => ImagePartType.Gif,
+            "image/bmp" => ImagePartType.Bmp,
+            "image/tiff" or "image/tif" => ImagePartType.Tiff,
+            "image/x-icon" or "image/vnd.microsoft.icon" => ImagePartType.Icon,
+            "image/x-emf" or "image/emf" => ImagePartType.Emf,
+            "image/x-wmf" or "image/wmf" => ImagePartType.Wmf,
+            _ => (PartTypeInfo?)null
+        };
+        // Nieznany typ: zachowaj zadeklarowany image/* (np. image/webp, image/x-emz) zamiast
+        // fałszować Jpeg; wartości niebędące poprawnym typem obrazu → bezpieczny fallback Jpeg
+        // (zachowanie historyczne dla dziwnych wejść z edytora).
+        var isPlainImageMime = Regex.IsMatch(contentType, @"^image/[\w.+-]+$");
 
         ImagePart imagePart = container switch
         {
-            MainDocumentPart m => m.AddImagePart(imagePartType),
-            HeaderPart h => h.AddImagePart(imagePartType),
-            FooterPart f => f.AddImagePart(imagePartType),
-            _ => _mainPart!.AddImagePart(imagePartType)
+            MainDocumentPart m => knownType is { } t1 ? m.AddImagePart(t1) : m.AddImagePart(isPlainImageMime ? contentType : "image/jpeg"),
+            HeaderPart h => knownType is { } t2 ? h.AddImagePart(t2) : h.AddImagePart(isPlainImageMime ? contentType : "image/jpeg"),
+            FooterPart f => knownType is { } t3 ? f.AddImagePart(t3) : f.AddImagePart(isPlainImageMime ? contentType : "image/jpeg"),
+            _ => knownType is { } t4 ? _mainPart!.AddImagePart(t4) : _mainPart!.AddImagePart(isPlainImageMime ? contentType : "image/jpeg")
         };
 
         using (var stream = new MemoryStream(imageBytes))

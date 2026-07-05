@@ -11,6 +11,35 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-05 — Własny tłumacz wektorowy EMF/WMF → SVG, etap 1 (ADR-0027, +10 testów)
+### Changed
+- Nowy `Infrastructure/Services/MetafileVectorTranslator.cs` (internal, pure-managed): parser rekordów binarnych MS-EMF/MS-WMF → SVG. Podzbiór etapu 1: pióra/pędzle (CreatePen/ExtCreatePen/CreateBrushIndirect, stock objects, dash style, COLORREF), MoveTo/LineTo, Rectangle/Ellipse/RoundRect, Polygon/Polyline/PolyBezier(To) 16/32-bit, PolyPolygon (fill-rule z SetPolyFillMode), ścieżki (BeginPath/CloseFigure/Fill/Stroke/StrokeAndFillPath), transformacje świata (SetWorldTransform/ModifyWorldTransform — rotacja rect → polygon), StretchDIBits → `<image>` (istniejące SliceDib/DibToPng + Skia). WMF: slotowa tabela obiektów (fonty/palety/regiony zajmują sloty!), placeable bbox / SETWINDOWORG/EXT jako viewBox, odwrócona kolejność parametrów. Limity: 200k rekordów, 100k pkt/poly, 20k elementów, 2 MB; wyjątek → null.
+- `GraphicConversionService.ConvertMetafile`: nowa strategia **`vector-translate`** między `dib-rasterize` a blankiem; wynik przez `SanitizeSvg`; Status=Converted/Fidelity=Lossy; pominięte rekordy liczone w Warnings + `LostProperties`; `SliceDib`/`DibToPng` udostępnione internal.
+- Reader: `LoadImageFromPart` loguje „media part bez rastra web" tylko dla Fallback/Unsupported/Rejected (udana translacja SVG to nie problem); SVG nie podmienia bajtów w `_images` — oryginalny metafile zostaje do `data-original-src` (eksport = prawdziwy EMF/WMF, SVG tylko podgląd).
+### Verified
+- Nowe `MetafileVectorTranslationTests` **10/10**: EMF rect (kolory pióra/pędzla, grubość), POLYGON16, linia, ścieżka (M/L/Z, fill none), SetWorldTransform (translacja), header-only → nadal blank, nieznane rekordy → blank bez wyjątku, WMF rect+polygon, integracja DOCX (SVG w src, bez `data-legacy-graphic="blank"`, eksport = part `image/x-emf`, nie SVG).
+- Infrastructure.UnitTests **285/285** (stare testy blank-fallback bez zmian — tłumacz nie fabrykuje treści), Application **306/306**, build solucji 0 błędów.
+### Notes
+- Zero nowych zależności; pure-managed → identyczne zachowanie Windows/Linux/GCP. Poza etapem 1: tekst (ExtTextOut), clipping, ROP, pędzle wzorkowe, rekordy EMF+ (dual niesie fallback EMF). Decyzja i szczegóły: **ADR-0027** + `GRAPHICS_CONVERSION.md`.
+
+## 2026-07-05 — Import obrazów z DOCX: 6 potwierdzonych bugów naprawionych w istniejącym mechanizmie (+10 testów regresyjnych)
+### Changed
+- **Reader (`DocxToHtmlConverter`)**:
+  - **Kolizja rId między częściami pakietu** — `_images` był kluczowany samym rId, a rId-y są unikalne tylko w obrębie części (main/header/footer zaczynają od rId1); obraz nagłówka o kolidującym rId renderował obraz z body. Nowy klucz `ImageCacheKey(part, rId)` = `{part.Uri}|{rId}`; lookup i lazy-load w `ConvertDrawingToHtml`/`ConvertPictureToHtml` rozwiązują relacje względem `sourcePart ?? MainDocumentPart`.
+  - **`mc:AlternateContent` był dropowany w całości** (default w switchu → pusty string) — obrazy zakotwiczone z efektami/grupy/kanwy znikały bez śladu. Nowa gałąź `ConvertAlternateContentToHtml`: Choice-e w kolejności dokumentu, potem Fallback (w:pict VML); pierwsza gałąź dająca HTML wygrywa.
+  - **Zerowy `wp:extent` (cx/cy=0)** dawał `width:0px` — obraz w DOM, ale niewidoczny. Przy ≤0 wymiary intrinsic z nagłówka pliku (probe przez `ConvertForEditor`, wynik cache'owany po hashu).
+  - **`WebGraphicForLegacy` obejmuje teraz `GraphicKind.Unknown`** — EMZ/WMZ i formaty rozpoznawalne tylko przez Skia nie trafiają już do `src` jako nierenderowalny `data:{ct}` (ikona złamanego obrazka); w najgorszym razie przezroczysty blank + `data-original-src`.
+  - **Obraz linkowany (`r:link` bez `r:embed`)** — kontrolowane pominięcie z logiem zamiast cichego dropa; lazy-load loguje nieudane relacje zamiast `catch {}`.
+  - Opcjonalny `ILogger<DocxToHtmlConverter>` (NullLogger domyślnie): część DOCX, relId, deklarowany typ, wykryty format, rozmiar, status, strategie, powód błędu — bez danych binarnych.
+- **`GraphicConversionService`**: dekompresja **GZIP (EMZ/WMZ)** przed detekcją (`gzip-decompress` w `AttemptedStrategies`), bounded do `MaxInputBytes` (ochrona przed decompression bomb); `IsNonBrowserNativeContentType` w readerze obejmuje `emz`/`wmz`.
+- **Writer (`HtmlToDocxConverter.BuildImageDrawing`)**: koniec fałszowania content type partu — wcześniej wszystko spoza krótkiej listy szło jako `ImagePartType.Jpeg` (TIFF/ICO/WEBP przestawały się renderować po pierwszym autosave). Teraz: mapowania `image/tiff→Tiff`, `image/x-icon→Icon`, nieznane `image/*` (np. `image/webp`, `image/x-emz`) → `AddImagePart(contentType)` z zachowanym typem; nie-obrazowe MIME → historyczny fallback Jpeg.
+### Verified
+- Nowe `ImageImportRegressionTests` **10/10** (kolizja rId body vs header, Choice z drawingiem, Fallback z VML, EMZ z osadzonym PNG → PNG w src, EMZ czysty wektor → blank, gunzip w serwisie, zero-extent → intrinsic 20x20, writer TIFF/WEBP content type, r:link bez wyjątku).
+- Infrastructure.UnitTests **275/275**, Application.UnitTests **306/306**, `dotnet build D2ViewerEditor.sln` 0 błędów. Golden snapshoty bez zmian (poprawki nie zmieniają HTML dla wcześniej działających obrazów).
+### Notes
+- Zero nowych zależności (GZipStream = BCL, pure-managed; zgodne z zakazem LibreOffice/Office/COM — Linux/GCP safe). Testy na Linuxie: do potwierdzenia w CI/kontenerze (lokalny Docker niedostępny w tej sesji); zmiany nie dotykają niczego platform-specific.
+- Znane, świadome ograniczenia (bez zmian): czysty wektor EMF/WMF → przezroczysty blank (pass-through do DOCX), obrazy linkowane `r:link` nie są pobierane (SSRF), textboxy/oMath/wykresy w AlternateContent nadal nierenderowane (audyt), grupa z wieloma obrazami renderuje pierwszy blip.
+
 ## 2026-07-05 — Zwiększenie pokrycia testami: propagacja SectionHeadersFooters + brzegi ADR-0025/0026 (+16 testów, tylko testy)
 ### Changed
 - **Application.UnitTests (+4)**: `SaveDocumentCommandHandlerTests` — `PageSize`+`SectionHeadersFooters` przekazywane do `Convert` nietknięte (ta sama referencja) oraz null-default; `DownloadEditedDocumentCommandHandlerTests` — lista sekcji dochodzi do OBU ścieżek (`Convert` bez wersji bazowej i `ConvertPreservingPackage` z wersją bazową).
