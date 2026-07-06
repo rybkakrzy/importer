@@ -87,8 +87,11 @@ public class TabStopFidelityTests
     }
 
     [Test]
-    public void Read_BodyParagraphWithTabStops_KeepsFlexButCarriesDataTabStops()
+    public void Read_BodyParagraphWithTabStops_RendersPositionedSegmentsAtRealStops()
     {
+        // Body paragraphs must honour the real tab-stop positions (right stop = following segment's
+        // END aligned to the stop), not a flex row that spreads segments evenly and ignores where
+        // the stops sit. 9000 tw = 600 px @96 DPI.
         var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
@@ -106,8 +109,11 @@ public class TabStopFidelityTests
         var content = _reader.Convert(ms);
 
         content.Html.Should().Contain("data-tab-stops=\"9000:right\"");
-        content.Html.Should().Contain("display:flex", "body zostaje przy przybliżeniu flex");
-        content.Html.Should().NotContain("docx-tab-seg");
+        content.Html.Should().NotContain("display:flex", "body używa teraz pozycjonowania na realnych stopach");
+        content.Html.Should().Contain("docx-tab-seg");
+        content.Html.Should().Contain("data-tab-align=\"right\"");
+        content.Html.Should().Contain("left:600px");
+        content.Html.Should().Contain("translateX(-100%)");
     }
 
     [Test]

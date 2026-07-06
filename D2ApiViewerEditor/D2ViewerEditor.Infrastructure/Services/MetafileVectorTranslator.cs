@@ -195,7 +195,10 @@ internal static class MetafileVectorTranslator
                         canvas.Track(x1, y1);
                         canvas.Track(x2, y2);
                         if (path != null)
+                        {
+                            EnsurePathStart(path, st, canvas);
                             path.Append(CultureInfo.InvariantCulture, $"L {F(x2)} {F(y2)} ");
+                        }
                         else
                             canvas.Add($"<line x1='{F(x1)}' y1='{F(y1)}' x2='{F(x2)}' y2='{F(y2)}' fill='none'{StrokeAttrs(st.Pen)}/>");
                         st.X = x; st.Y = y;
@@ -415,6 +418,7 @@ internal static class MetafileVectorTranslator
                 var (sx, sy) = st.Apply(st.X, st.Y);
                 if (path != null)
                 {
+                    EnsurePathStart(path, st, canvas);
                     AppendBezierTriples(path, canvas, st, pts, 0);
                 }
                 else
@@ -432,6 +436,7 @@ internal static class MetafileVectorTranslator
             {
                 if (path != null)
                 {
+                    EnsurePathStart(path, st, canvas);
                     foreach (var (x, y) in pts)
                     {
                         var (ax, ay) = st.Apply(x, y);
@@ -457,6 +462,20 @@ internal static class MetafileVectorTranslator
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Gwarantuje, że ścieżka zaczyna się od moveto. GDI+ FillPath często ustawia bieżący
+    /// punkt przez MOVETOEX PRZED BEGINPATH, a wewnątrz nawiasu używa wyłącznie wariantów
+    /// „To" (PolyLineTo/PolyBezierTo). Bez wiodącego „M" ścieżka SVG jest niepoprawna i nic
+    /// nie rysuje (cały metafile wychodził wtedy jako pusty blank — np. wektorowe logo).
+    /// </summary>
+    private static void EnsurePathStart(StringBuilder path, GdiState st, SvgCanvas canvas)
+    {
+        if (path.Length != 0) return;
+        var (sx, sy) = st.Apply(st.X, st.Y);
+        canvas.Track(sx, sy);
+        path.Append(CultureInfo.InvariantCulture, $"M {F(sx)} {F(sy)} ");
     }
 
     private static void AppendBezierTriples(StringBuilder sb, SvgCanvas canvas, GdiState st,

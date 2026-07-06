@@ -1439,7 +1439,35 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         stream.CopyTo(memoryStream);
 
         var rawBytes = memoryStream.ToArray();
-        var contentType = imagePart.ContentType;
+        var contentType = NormalizeImageContentType(imagePart.ContentType);
+
+        // SVG is an ACTIVE format: even embedded via <img src="data:…"> browsers render it inertly,
+        // but the whole document HTML is trusted downstream, so we sanitise defensively (strip
+        // script/foreignObject/on*-handlers/external refs) before embedding. A part that is not
+        // valid SVG, cannot be sanitised, or exceeds the size guard is dropped (rejected) rather
+        // than embedded raw — no broken/unsafe image reaches the editor.
+        if (IsSvgContentType(contentType))
+        {
+            if (rawBytes.Length > MaxSvgBytes)
+            {
+                _log.LogWarning("SVG part pominięty (za duży): part={PartUri} size={Size}B limit={Limit}B",
+                    imagePart.Uri, rawBytes.Length, MaxSvgBytes);
+                return;
+            }
+            var sanitized = _graphics.SanitizeSvg(System.Text.Encoding.UTF8.GetString(rawBytes));
+            if (sanitized == null)
+            {
+                _log.LogWarning("SVG part pominięty (niepoprawny/niebezpieczny): part={PartUri}", imagePart.Uri);
+                return;
+            }
+            _images[cacheKey] = new DocumentImage
+            {
+                Id = relationshipId,
+                ContentType = "image/svg+xml",
+                Base64Data = System.Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(sanitized))
+            };
+            return;
+        }
 
         // Nie-natywne formaty (EMF/WMF/TIFF): konwersja pure-managed (bez LibreOffice/System.Drawing
         // → identyczne zachowanie na Windows i Linux/GCP). Gdy metafile zawiera osadzony/odczytywalny
@@ -1480,6 +1508,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             Base64Data = System.Convert.ToBase64String(rawBytes)
         };
     }
+
+    /// <summary>Górny limit rozmiaru SVG przyjmowanego do podglądu (anti-DoS).</summary>
+    private const int MaxSvgBytes = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// Normalizuje jednoznacznie rozpoznawalne, błędne typy MIME obrazów do formy standardowej.
+    /// Kluczowy przypadek: <c>img/svg+xml</c> (spotykane w danych źródłowych) → <c>image/svg+xml</c>,
+    /// bez którego przeglądarka nie rozpoznaje data-URI i obraz się nie renderuje. Świadomie wąskie:
+    /// nie „naprawiamy" dowolnych typów, tylko ten jeden literał.
+    /// </summary>
+    private static string NormalizeImageContentType(string? contentType)
+    {
+        if (string.IsNullOrWhiteSpace(contentType)) return string.Empty;
+        var ct = contentType.Trim();
+        if (ct.Equals("img/svg+xml", StringComparison.OrdinalIgnoreCase)
+            || ct.Equals("image/svg", StringComparison.OrdinalIgnoreCase))
+            return "image/svg+xml";
+        return ct;
+    }
+
+    private static bool IsSvgContentType(string? contentType)
+        => !string.IsNullOrEmpty(contentType)
+           && contentType.Contains("svg", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsNonBrowserNativeContentType(string? contentType)
     {
@@ -1626,14 +1677,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // jak w Wordzie. Flex (przybliżenie 50%/100%) zostaje dla body i braku pozycji.
         var effectiveTabStops = GetEffectiveTabStops(paraProps);
         var hasComplexField = paragraph.Descendants<FieldChar>().Any();
-        var usePositionedTabs = sourcePart is HeaderPart or FooterPart
-            && effectiveTabStops.Count > 0
+        // Positional tab rendering honours the REAL tab-stop positions (left aligns the following
+        // segment's start, right aligns its end, center centres it — the semantic difference Word
+        // draws). Applied to body paragraphs as well as header/footer: a flex row only spreads
+        // segments evenly and ignores where the stops actually sit, so left/right tabs in the body
+        // collapsed to equal gaps. Complex fields keep the legacy path (their runs are stateful).
+        var usePositionedTabs = effectiveTabStops.Count > 0
             && paragraph.Descendants<TabChar>().Any()
             && !hasComplexField;
 
-        // Left/center/right one-line layout: a paragraph with center or right/end tab stops
-        // becomes a flex row so its tab-separated segments spread across the width instead of
-        // collapsing into fixed gaps. Tab characters are preserved (round-trip stays intact).
+        // Fallback flex row only when there are tab characters but no resolvable stop positions
+        // (e.g. a center/right alignment tab with no w:tabs geometry). Tab characters are preserved
+        // either way (round-trip stays intact).
         var useFlexTabs = !usePositionedTabs && ParagraphHasAlignmentTab(paraProps);
         if (useFlexTabs)
             cssBuilder.Append("display:flex;align-items:baseline;width:100%;");
@@ -2698,8 +2753,148 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             if (html.Length > 0) return html.ToString();
         }
-        _log.LogDebug("mc:AlternateContent bez konwertowalnego obrazu (kształt/textbox) — element pominięty.");
+        // Żadna gałąź nie dała obrazu — ostatnia szansa: pole tekstowe w kształcie (drop treści
+        // = utrata danych). Pierwsza gałąź z txbxContent wygrywa (Choice i Fallback niosą TĘ SAMĄ
+        // treść, więc bierzemy jedną — bez duplikacji).
+        foreach (var branch in alternate.ChildElements)
+        {
+            if (branch is not (AlternateContentChoice or AlternateContentFallback)) continue;
+            var textBox = RenderTextBoxContent(branch, document, sourcePart);
+            if (!string.IsNullOrEmpty(textBox)) return textBox;
+        }
+
+        _log.LogDebug("mc:AlternateContent bez konwertowalnego obrazu ani pola tekstowego — element pominięty.");
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Renderuje treść pola tekstowego Worda (<c>w:txbxContent</c>, wspólne dla nowoczesnych
+    /// kształtów <c>wps:txbx</c> i legacy VML <c>v:textbox</c>) jako blok. Przybliżenie KR-06:
+    /// pozycja/obramowanie kształtu nie są w pełni odwzorowane, ale TREŚĆ tekstowa jest widoczna
+    /// i edytowalna zamiast być cicho tracona. Zwraca pusty string, gdy brak txbxContent.
+    /// </summary>
+    private string RenderTextBoxContent(OpenXmlElement container, WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        var txbx = container.Descendants<TextBoxContent>().FirstOrDefault();
+        if (txbx == null) return string.Empty;
+
+        var inner = new StringBuilder();
+        foreach (var child in txbx.Elements())
+        {
+            switch (child)
+            {
+                case Paragraph para:
+                    inner.Append(ConvertParagraphToHtml(para, document, sourcePart));
+                    break;
+                case Table table:
+                    inner.Append(ConvertTableToHtml(table, document, sourcePart));
+                    break;
+            }
+        }
+        if (inner.Length == 0) return string.Empty;
+
+        // Geometria (rozmiar + pozycja). Kotwiczony (wp:anchor) text box dostaje pozycję
+        // ABSOLUTNĄ z offsetów Worda (jak w MS Word), inline zostaje w przepływie. Pozycjonowanie
+        // jest inline-CSS (reader-side), więc działa też w podglądzie stopki/nagłówka (JS edytora
+        // nie musi go odtwarzać).
+        var layout = BuildTextBoxLayoutCss(container);
+        return $"<div class=\"docx-textbox\" data-textbox=\"1\" style=\"{layout}"
+             + "border:1px solid #ccc;padding:4px 6px;box-sizing:border-box;\">"
+             + inner + "</div>";
+    }
+
+    /// <summary>
+    /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu (linia lub prostokąt) jako
+    /// przybliżenie HTML: preset line/straightConnector → pozioma linia (border-top z grubości/
+    /// koloru <c>a:ln</c>); prostokąt z <c>a:solidFill</c> → kolorowy blok. Kotwica → pozycja
+    /// absolutna (jak w Wordzie). Zwraca pusty string dla nieobsługiwanej geometrii (drop bez zmian).
+    /// </summary>
+    private static string RenderVectorShapeAsHtml(Drawing drawing)
+    {
+        var preset = drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>()
+            .FirstOrDefault()?.Preset?.Value;
+
+        var extent = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
+        var widthPx = extent?.Cx != null ? (int)OoxmlUnits.EmuToPixels(extent.Cx.Value) : 0;
+        var heightPx = extent?.Cy != null ? (int)OoxmlUnits.EmuToPixels(extent.Cy.Value) : 0;
+
+        var outline = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Outline>().FirstOrDefault();
+        var lineColor = HexColorOrNull(outline?.Descendants<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>().FirstOrDefault()?.Val?.Value)
+                        ?? "000000";
+        var lineWidthPx = outline?.Width != null && outline.Width.Value > 0
+            ? Math.Max(1, (int)Math.Round(OoxmlUnits.EmuToPixels(outline.Width.Value)))
+            : 1;
+
+        var isLine = preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Line
+                     || preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.StraightConnector1;
+
+        var pos = BuildTextBoxLayoutCss(drawing); // reużycie: rozmiar + ewentualna pozycja absolutna
+        // BuildTextBoxLayoutCss dokłada width/min-height; dla linii chcemy własną wysokość/tło.
+
+        if (isLine)
+        {
+            // Pozioma linia: wysokość = grubość, tło = kolor; szerokość z extentu (fallback 100%).
+            var w = widthPx > 0 ? $"{widthPx}px" : "100%";
+            return $"<div class=\"docx-shape docx-line\" data-shape=\"line\" "
+                 + $"style=\"{StripSize(pos)}width:{w};height:{lineWidthPx}px;"
+                 + $"background:#{lineColor};margin:2px 0;\"></div>";
+        }
+
+        // Prostokąt z wypełnieniem — potrzebny widoczny rozmiar i tło.
+        if (preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle && widthPx > 0 && heightPx > 0)
+        {
+            var fill = HexColorOrNull(drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
+                .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
+            var bg = fill != null ? $"background:#{fill};" : string.Empty;
+            var border = $"border:{lineWidthPx}px solid #{lineColor};";
+            return $"<div class=\"docx-shape docx-rect\" data-shape=\"rect\" "
+                 + $"style=\"{pos}{bg}{border}box-sizing:border-box;\"></div>";
+        }
+
+        return string.Empty;
+    }
+
+    private static string? HexColorOrNull(string? value)
+        => !string.IsNullOrEmpty(value) && System.Text.RegularExpressions.Regex.IsMatch(value, "^[0-9A-Fa-f]{6}$")
+            ? value : null;
+
+    /// <summary>Usuwa deklaracje width/min-height z gotowego CSS geometrii (linia ma własne).</summary>
+    private static string StripSize(string css)
+        => System.Text.RegularExpressions.Regex.Replace(css, @"(?:min-height|width):[^;]+;", string.Empty);
+
+    /// <summary>
+    /// CSS geometrii pola tekstowego: rozmiar z <c>wp:extent</c>/VML, a dla kotwiczonego
+    /// <c>wp:anchor</c> — pozycja absolutna z offsetów (EMU→px) względem najbliższego
+    /// pozycjonowanego przodka (strona / pasmo nagłówka-stopki). Inline → blok w przepływie.
+    /// Przybliżenie: <c>relativeFrom</c> (page/margin/column/paragraph) nie jest w pełni
+    /// rozróżniane — offset stosowany bezpośrednio (najczęstszy przypadek page/margin).
+    /// </summary>
+    private static string BuildTextBoxLayoutCss(OpenXmlElement container)
+    {
+        var extent = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
+        var widthPx = extent?.Cx != null ? (int)OoxmlUnits.EmuToPixels(extent.Cx.Value) : 0;
+        var heightPx = extent?.Cy != null ? (int)OoxmlUnits.EmuToPixels(extent.Cy.Value) : 0;
+
+        var sizeCss = new StringBuilder();
+        if (widthPx > 0) sizeCss.Append($"width:{widthPx}px;");
+        if (heightPx > 0) sizeCss.Append($"min-height:{heightPx}px;");
+
+        var anchor = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
+        if (anchor == null)
+            return "display:inline-block;max-width:100%;vertical-align:top;margin:4px 0;" + sizeCss;
+
+        long ReadOffset(OpenXmlElement? pos) =>
+            pos?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text is string s
+            && long.TryParse(s, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
+
+        var leftPx = (int)OoxmlUnits.EmuToPixels(
+            ReadOffset(anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition>()));
+        var topPx = (int)OoxmlUnits.EmuToPixels(
+            ReadOffset(anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition>()));
+        var zIndex = anchor.BehindDoc?.Value == true ? "z-index:0;" : "z-index:1;";
+
+        return $"position:absolute;left:{leftPx}px;top:{topPx}px;{zIndex}" + sizeCss;
     }
 
     /// <summary>
@@ -3072,6 +3267,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
         if (blip?.Embed?.Value == null)
         {
+            // Kształt bez obrazu (wps:wsp) może nieść POLE TEKSTOWE (wps:txbx → w:txbxContent).
+            // Bez tego jego treść znikała bez śladu, a autosave tracił ją na stałe (KR-06).
+            var textBox = RenderTextBoxContent(drawing, document, sourcePart);
+            if (!string.IsNullOrEmpty(textBox)) return textBox;
+
+            // Kształt wektorowy bez obrazu i tekstu (linia/prostokąt) — częsty w stopkach jako
+            // separator/ramka. Wcześniej dropowany (brak blipa) → niewidoczny. Renderujemy
+            // przybliżenie: linia = border, prostokąt z wypełnieniem = kolorowy blok.
+            var shape = RenderVectorShapeAsHtml(drawing);
+            if (!string.IsNullOrEmpty(shape)) return shape;
+
             // r:link = obraz linkowany (plik poza pakietem DOCX) — nie mamy jego bajtów i nie
             // pobieramy zewnętrznych URL-i po stronie serwera (SSRF). Kontrolowane pominięcie z logiem.
             if (blip?.Link?.Value != null)
@@ -3232,7 +3438,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string ConvertPictureToHtml(Picture picture, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var imageData = picture.Descendants<DocumentFormat.OpenXml.Vml.ImageData>().FirstOrDefault();
-        if (imageData?.RelationshipId?.Value == null) return string.Empty;
+        if (imageData?.RelationshipId?.Value == null)
+        {
+            // Legacy VML pole tekstowe (v:textbox → w:txbxContent) bez obrazu — zachowaj treść.
+            return RenderTextBoxContent(picture, document, sourcePart);
+        }
 
         var relationshipId = imageData.RelationshipId.Value;
 
@@ -3439,22 +3649,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // SdtCell zawiera SdtContentCell, a w nim faktyczne TableCell — inaczej znikają dane.
             // gridCursor śledzi pozycję komórki w siatce (gridSpan przesuwa kursor; komórki
             // kontynuacji vMerge też zajmują kolumny, mimo że nie emitują <td>).
+            var rowCells = FlattenRowCells(row).ToList();
+
+            // Short row: the sum of the row's gridSpans is smaller than the table grid. Word merges
+            // the remainder into the last cell (a row that declares one cell for a fully-merged row
+            // has gridSpan=1, not N). Without this, `table-layout:fixed`+colgroup pins that cell to
+            // a single narrow column and the rest of the row renders as empty phantom columns —
+            // exactly the "merged content squeezed into the first column" defect.
+            var rowGridTotal = rowCells.Sum(GetGridSpan);
+            var deficit = renderCtx.GridColumnCount - rowGridTotal;
+
             var gridCursor = 0;
-            foreach (var cellLike in row.Elements())
+            for (var ci = 0; ci < rowCells.Count; ci++)
             {
-                if (cellLike is TableCell cell)
-                {
-                    AppendTableCellHtml(html, table, rows, rowIndex, cell, renderCtx, ref gridCursor, document, sourcePart);
-                }
-                else if (cellLike is SdtCell sdtCell)
-                {
-                    var sdtContent = sdtCell.GetFirstChild<SdtContentCell>();
-                    if (sdtContent != null)
-                    {
-                        foreach (var innerCell in sdtContent.Elements<TableCell>())
-                            AppendTableCellHtml(html, table, rows, rowIndex, innerCell, renderCtx, ref gridCursor, document, sourcePart);
-                    }
-                }
+                var extraColspan = (deficit > 0 && ci == rowCells.Count - 1) ? deficit : 0;
+                AppendTableCellHtml(html, table, rows, rowIndex, rowCells[ci], renderCtx,
+                    ref gridCursor, extraColspan, document, sourcePart);
             }
 
             html.Append("</tr>");
@@ -3560,6 +3770,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return gs is > 0 ? gs.Value : 1;
     }
 
+    /// <summary>Komórki wiersza w kolejności dokumentu, z rozpakowaniem komórek w SDT.</summary>
+    private static IEnumerable<TableCell> FlattenRowCells(TableRow row)
+    {
+        foreach (var cellLike in row.Elements())
+        {
+            if (cellLike is TableCell cell)
+                yield return cell;
+            else if (cellLike is SdtCell sdtCell
+                     && sdtCell.GetFirstChild<SdtContentCell>() is { } sdtContent)
+                foreach (var innerCell in sdtContent.Elements<TableCell>())
+                    yield return innerCell;
+        }
+    }
+
     private static int GetCellStartColumn(TableRow row, TableCell target)
     {
         var column = 0;
@@ -3631,7 +3855,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             css.Append($"padding:{ctx.DefaultPadding};");
         }
 
-        css.Append("vertical-align:top;");
+        // Wyrównanie pionowe komórki (top/middle/bottom). Emitowane raz z rozwiązaną wartością
+        // (domyślnie top jak w Wordzie) — wcześniej „top" szło bezwarunkowo, a rzeczywista wartość
+        // dopisywana była drugi raz niżej, zostawiając zduplikowaną deklarację w inline style.
+        var vAlign = props?.TableCellVerticalAlignment?.Val != null
+            ? GetTableVerticalAlignment(props.TableCellVerticalAlignment.Val.Value)
+            : "top";
+        css.Append($"vertical-align:{vAlign};");
 
         // Tło: bezpośrednie tcPr → regiony stylu warunkowego → tcPr stylu (cała tabela) →
         // tblPr shd (bezpośrednie lub ze stylu). Rozwiązuje themeFill/tint/shade i wzory pct.
@@ -3664,10 +3894,6 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     && int.TryParse(w.Width.Value, out var wtw) && wtw > 0)
                     css.Append($"width:{TwipsToPx(wtw)}px;");
             }
-
-            // Wyrównanie pionowe
-            if (props.TableCellVerticalAlignment?.Val != null)
-                css.Append($"vertical-align:{GetTableVerticalAlignment(props.TableCellVerticalAlignment.Val.Value)};");
 
             // Kierunek tekstu
             if (props.TextDirection?.Val != null)
@@ -4173,11 +4399,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         TableCell cell,
         TableRenderContext ctx,
         ref int gridCursor,
+        int extraColspan,
         WordprocessingDocument document,
         OpenXmlPart? sourcePart)
     {
         var cellProps = cell.TableCellProperties;
-        var gridSpan = GetGridSpan(cell);
+        // extraColspan absorbs the columns a short row leaves unfilled (see ConvertTableToHtml).
+        var gridSpan = GetGridSpan(cell) + Math.Max(0, extraColspan);
         var gridColStart = gridCursor;
         gridCursor += gridSpan; // komórka (także kontynuacja vMerge) zajmuje kolumny siatki
 

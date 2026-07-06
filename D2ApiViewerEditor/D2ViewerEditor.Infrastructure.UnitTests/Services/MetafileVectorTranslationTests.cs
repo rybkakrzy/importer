@@ -103,6 +103,51 @@ public class MetafileVectorTranslationTests
     }
 
     [Test]
+    public void Emf_MoveToBeforeBeginPath_PolyLineTo16_FillPath_RendersValidPath()
+    {
+        // Realny wzorzec GDI+ FillPath z logo (image2.emf, EMF+ = False): MOVETOEX PRZED
+        // BEGINPATH, ścieżka budowana wariantami "To" (PolyLineTo16/PolyBezierTo16). Wcześniej
+        // ścieżka zaczynała się od "L" bez wiodącego "M" → niepoprawny SVG → nic się nie
+        // renderowało (całe wektorowe logo wychodziło jako niewidoczne).
+        var emf = EmfWith(
+            Rec(39, 2, 0, 0x0000FF00, 0),           // CREATEBRUSHINDIRECT zielony
+            Rec(37, 2),                             // SELECTOBJECT brush
+            Rec(27, 10, 10),                        // MOVETOEX (PRZED BEGINPATH)
+            Rec(59),                                // BEGINPATH
+            Poly16Rec(89, 50, 10, 50, 50, 10, 50),  // POLYLINETO16 (warianty "To")
+            Rec(61),                                // CLOSEFIGURE
+            Rec(60),                                // ENDPATH
+            Rec(62));                               // FILLPATH
+
+        var result = new GraphicConversionService().ConvertForEditor(EmfSource(emf));
+
+        var svg = Encoding.UTF8.GetString(result.Web!.Data);
+        svg.Should().Contain("<path");
+        svg.Should().Contain("M 10 10", "wiodący moveto z bieżącej pozycji (MOVETOEX przed BEGINPATH)");
+        svg.Should().Contain("L 50 10");
+        svg.Should().Contain("Z");
+        svg.Should().Contain("fill=\"#00ff00\"");
+        result.Web.IsBlankFallback.Should().BeFalse();
+    }
+
+    [Test]
+    public void Emf_MoveToBeforeBeginPath_PolyBezierTo16_RendersCurveWithLeadingMove()
+    {
+        var emf = EmfWith(
+            Rec(27, 0, 0),                                  // MOVETOEX przed BEGINPATH
+            Rec(59),                                        // BEGINPATH
+            Poly16Rec(88, 10, 20, 30, 40, 50, 60),          // POLYBEZIERTO16 (3 pkt kontrolne)
+            Rec(60),                                        // ENDPATH
+            Rec(64));                                       // STROKEPATH
+
+        var result = new GraphicConversionService().ConvertForEditor(EmfSource(emf));
+
+        var svg = Encoding.UTF8.GetString(result.Web!.Data);
+        svg.Should().Contain("M 0 0", "krzywa musi mieć wiodący moveto");
+        svg.Should().Contain("C 10 20");
+    }
+
+    [Test]
     public void Emf_SetWorldTransform_TranslationIsApplied()
     {
         var emf = EmfWith(

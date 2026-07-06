@@ -272,6 +272,33 @@
   margin-bottom: 0;
 }
 
+/* Legacy grafiki wektorowe (EMF/WMF) bez rasteryzacji renderują się jako PRZEZROCZYSTY
+   pusty obraz o właściwym rozmiarze (podgląd niedostępny, oryginał wraca do DOCX). Bez
+   żadnego stylu były NIEWIDOCZNE (np. logo/linie w stopce). Pokazujemy je jako subtelny,
+   poprawnie wymiarowany placeholder — użytkownik widzi, że grafika istnieje i gdzie jest.
+   Element <img> pozostaje (round-trip do EMF nietknięty). */
+img[data-legacy-graphic='blank'] {
+  border: 1px dashed #b3b3b3;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      rgba(0, 0, 0, 0.03),
+      rgba(0, 0, 0, 0.03) 6px,
+      rgba(0, 0, 0, 0.06) 6px,
+      rgba(0, 0, 0, 0.06) 12px
+    );
+  box-sizing: border-box;
+}
+
+/* Word table cells default to zero paragraph spacing. The blanket `.editor-content p`
+   bottom margin above pushes single-line content upward, which visually defeats
+   vertical-align:middle/bottom on the cell and inflates dense tables. Inline margins the
+   backend emits for paragraphs that DO declare spacing still win (higher specificity). */
+.editor-content table td > p,
+.editor-content table th > p {
+  margin: 0;
+}
+
 .editor-content ul,
 .editor-content ol {
   margin: 10px 0;

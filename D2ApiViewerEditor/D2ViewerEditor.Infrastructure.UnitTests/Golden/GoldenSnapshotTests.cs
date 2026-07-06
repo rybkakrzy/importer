@@ -64,12 +64,16 @@ public class GoldenSnapshotTests
     }
 
     [Test]
-    public void TabStopLeftCenterRight_RendersFlexRow()
+    public void TabStopLeftCenterRight_RendersPositionedSegments()
     {
         var content = _converter.Convert(GoldenDocuments.TabStopLeftCenterRight());
 
-        content.Html.Should().Contain("display:flex");   // paragraph becomes a flex row
-        content.Html.Should().Contain("flex:1 1 0");      // tabs become growing spacers
+        // Segments are positioned at the real stops (center 4536 tw = 302 px, right 9072 tw = 604 px)
+        // rather than spread evenly by a flex row that ignores the declared geometry.
+        content.Html.Should().Contain("docx-tab-seg");
+        content.Html.Should().Contain("data-tab-align=\"center\"").And.Contain("translateX(-50%)");
+        content.Html.Should().Contain("data-tab-align=\"right\"").And.Contain("translateX(-100%)");
+        content.Html.Should().NotContain("display:flex");
         content.Html.Should().Contain("Lewy");
         content.Html.Should().Contain("Środek");
         content.Html.Should().Contain("Prawy");
