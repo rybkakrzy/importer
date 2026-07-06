@@ -11,6 +11,16 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-06 — Formanty (SDT / Content Controls): zachowanie TYPU i właściwości przez round-trip (ST-04, +4 testy)
+### Changed
+- **Reader (`DocxToHtmlConverter`)** — `BuildSdtDataAttrs`: obok `data-sdt-tag`/`data-sdt-alias` niesie PEŁNE `w:sdtPr` (base64 OuterXml) w `data-sdt-props` dla `sdt-block` i `sdt-inline`. Wcześniej czytane były tylko tag/alias → typ formantu ginął.
+- **Writer (`HtmlToDocxConverter.BuildSdtProperties`)** — odtwarza `SdtProperties` 1:1 z `data-sdt-props` (`new SdtProperties(xml)`), usuwając tylko `w:id` (Word nadaje nowe — brak kolizji). Fallback do tag/alias, gdy brak/uszkodzone. Skutek: dropDownList (opcje), date (format), comboBox, checkbox (w14), text/richText/picture, lock, placeholder, databinding **przeżywają eksport/autosave** zamiast degradować do generycznego formantu.
+### Verified
+- Nowe `SdtContentControlRoundTripTests` **4/4** (dropDownList: typ+tag+opcje; date: format; inline text: typ+tag+treść; duplikat id usuwany). Infrastructure **315/315**; `dotnet build` 0 błędów.
+### Notes
+- To zachowanie DANYCH (round-trip), NIE interaktywny UI — w edytorze formant nadal renderuje się jako edytowalna treść (checkbox nieklikalny, dropdown bez listy). Interaktywność = osobne zadanie frontu.
+- `SdtCell` (formant na poziomie komórki) nadal rozpakowywany do zwykłej `TableCell` — treść zostaje, opakowanie formantu na komórce nie round-tripuje (do zrobienia).
+
 ## 2026-07-06 — Numeracja stron: eksport pola (nie literał „{page}") + poprawny licznik „z N" per strona (+4 testy)
 ### Changed
 - **Eksport (`HtmlToDocxConverter`)** — pola PAGE/NUMPAGES w TREŚCI (body) wychodziły jako **literalny tekst „{page}"/„{pages}"** (placeholder readera), bo ścieżka body (`AppendInlineContent`) nie rozpoznawała `span.field-page`/`page-number`/`field-numpages` (obsługiwała je tylko ścieżka nagłówka/stopki). Dodano rozpoznawanie tych klas w `AppendInlineContent` → `w:fldSimple` PAGE/NUMPAGES. Dodatkowo `BuildFieldRun` nie używa już `{page}`/`{pages}` jako **zbuforowanej wartości** pola (Word pokazuje cache do przeliczenia) — placeholder/empty/nie-liczba → „1".

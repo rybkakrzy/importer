@@ -3315,6 +3315,26 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// </summary>
     private static SdtProperties BuildSdtProperties(HtmlNode node)
     {
+        // Pełne właściwości formantu (typ + parametry) zachowane przez reader w data-sdt-props
+        // (base64 OuterXml). Odtwarzamy je 1:1 — bez tego formant tracił typ (checkbox/dropdown/
+        // date/…) i stawał się generyczny przy każdym eksporcie/autosave.
+        var encoded = node.GetAttributeValue("data-sdt-props", "");
+        if (!string.IsNullOrEmpty(encoded))
+        {
+            try
+            {
+                var xml = System.Text.Encoding.UTF8.GetString(System.Convert.FromBase64String(encoded));
+                var restored = new SdtProperties(xml);
+                // w:id musi być unikalne w dokumencie — usuń, Word nada nowe (kolizje = uszkodzony plik).
+                restored.Elements<SdtId>().ToList().ForEach(e => e.Remove());
+                return restored;
+            }
+            catch
+            {
+                // Uszkodzone/niezgodne data-sdt-props — degradacja do tag/alias zamiast wysypki.
+            }
+        }
+
         var props = new SdtProperties();
         var tag = node.GetAttributeValue("data-sdt-tag", "");
         var alias = node.GetAttributeValue("data-sdt-alias", "");

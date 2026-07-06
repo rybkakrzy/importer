@@ -4306,6 +4306,32 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     #endregion
 
+    /// <summary>
+    /// Atrybuty data-* formantu (SDT). Oprócz czytelnych `data-sdt-tag`/`data-sdt-alias`
+    /// niesie PEŁNE właściwości `w:sdtPr` (base64 OuterXml) w `data-sdt-props`, żeby eksport
+    /// odtworzył typ formantu i jego właściwości (checkbox/dropDownList/comboBox/date/text/
+    /// richText/picture, opcje listy, format daty, lock, id, placeholder, databinding) zamiast
+    /// degradować formant do generycznego. Treść formantu jest edytowalna osobno.
+    /// </summary>
+    private static string BuildSdtDataAttrs(SdtProperties? props)
+    {
+        if (props == null) return string.Empty;
+        var sb = new StringBuilder();
+        var tag = props.Elements<Tag>().FirstOrDefault()?.Val?.Value ?? "";
+        var alias = props.Elements<SdtAlias>().FirstOrDefault()?.Val?.Value ?? "";
+        if (!string.IsNullOrEmpty(tag)) sb.Append($" data-sdt-tag=\"{System.Net.WebUtility.HtmlEncode(tag)}\"");
+        if (!string.IsNullOrEmpty(alias)) sb.Append($" data-sdt-alias=\"{System.Net.WebUtility.HtmlEncode(alias)}\"");
+
+        // Pełne właściwości jako base64 (bez problemów z cudzysłowami/escapowaniem XML w atrybucie).
+        var xml = props.OuterXml;
+        if (!string.IsNullOrEmpty(xml))
+        {
+            var b64 = System.Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(xml));
+            sb.Append($" data-sdt-props=\"{b64}\"");
+        }
+        return sb.ToString();
+    }
+
     private string ConvertSdtBlockToHtml(SdtBlock sdtBlock, WordprocessingDocument document)
     {
         var html = new StringBuilder();
@@ -4316,12 +4342,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // Atrybuty data-* przechowują podstawowe metadane (tag/alias) na potrzeby
             // ewentualnego round-trip.
             var props = sdtBlock.SdtProperties;
-            var tag = props?.Elements<Tag>().FirstOrDefault()?.Val?.Value ?? "";
-            var alias = props?.Elements<SdtAlias>().FirstOrDefault()?.Val?.Value ?? "";
-            var dataAttrs = new StringBuilder();
-            if (!string.IsNullOrEmpty(tag)) dataAttrs.Append($" data-sdt-tag=\"{System.Net.WebUtility.HtmlEncode(tag)}\"");
-            if (!string.IsNullOrEmpty(alias)) dataAttrs.Append($" data-sdt-alias=\"{System.Net.WebUtility.HtmlEncode(alias)}\"");
-            html.Append($"<div class=\"sdt-block\"{dataAttrs}>");
+            html.Append($"<div class=\"sdt-block\"{BuildSdtDataAttrs(props)}>");
 
             // Zbierz elementy i obsłuż kolejne paragrafy listy tak samo jak w body
             var elems = content.Elements().ToList();
@@ -4355,11 +4376,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (content == null) return string.Empty;
 
         var props = sdtRun.SdtProperties;
-        var tag = props?.Elements<Tag>().FirstOrDefault()?.Val?.Value ?? "";
-        var alias = props?.Elements<SdtAlias>().FirstOrDefault()?.Val?.Value ?? "";
-        var dataAttrs = new StringBuilder();
-        if (!string.IsNullOrEmpty(tag)) dataAttrs.Append($" data-sdt-tag=\"{System.Net.WebUtility.HtmlEncode(tag)}\"");
-        if (!string.IsNullOrEmpty(alias)) dataAttrs.Append($" data-sdt-alias=\"{System.Net.WebUtility.HtmlEncode(alias)}\"");
+        var dataAttrs = BuildSdtDataAttrs(props);
 
         var inner = new StringBuilder();
         foreach (var el in content.Elements())
