@@ -331,9 +331,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     startTableWidth: number;
   } | null = null;
 
-  // Strony dokumentu - pierwsza strona to edytor, pozostałe to overflow
-  pages = signal<string[]>(['']);
-
   // Multi-page MVP (Wariant A):
   // pełna treść HTML per strona; każda strona renderuje własny contenteditable
   pageContents = signal<string[]>(['<p></p>']);
@@ -433,13 +430,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   differentFirstPage = computed(() => this._differentFirstPage());
   differentOddEven = computed(() => this._differentOddEven());
 
-  // Computed: zawartość nagłówka/stopki per strona (reaktywna na zmiany sygnałów)
+  // Computed: zawartość nagłówka/stopki per strona (reaktywna na zmiany sygnałów).
+  // Iterujemy pageContents() — RZECZYWISTĄ listę stron. Wcześniej używano martwego
+  // sygnału `pages` (zawsze długości 1), więc nagłówek/stopka liczyły się tylko dla
+  // strony 0, a strony 2+ dostawały surowy fallback z nierozwiniętymi {page}/{pages}.
   headerContents = computed(() => {
-    const pagesArr = this.pages();
+    const pagesArr = this.pageContents();
     return pagesArr.map((_, i) => this._computeHeaderContent(i));
   });
   footerContents = computed(() => {
-    const pagesArr = this.pages();
+    const pagesArr = this.pageContents();
     return pagesArr.map((_, i) => this._computeFooterContent(i));
   });
 
@@ -4610,7 +4610,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     // Zamień placeholder na numer strony
     content = content.replace(/\{page\}/gi, String(pageIndex + 1));
-    content = content.replace(/\{pages\}/gi, String(this.pages().length));
+    content = content.replace(/\{pages\}/gi, String(this.pageContents().length));
     return content;
   }
 

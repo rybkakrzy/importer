@@ -11,6 +11,15 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-06 — Numeracja stron: eksport pola (nie literał „{page}") + poprawny licznik „z N" per strona (+4 testy)
+### Changed
+- **Eksport (`HtmlToDocxConverter`)** — pola PAGE/NUMPAGES w TREŚCI (body) wychodziły jako **literalny tekst „{page}"/„{pages}"** (placeholder readera), bo ścieżka body (`AppendInlineContent`) nie rozpoznawała `span.field-page`/`page-number`/`field-numpages` (obsługiwała je tylko ścieżka nagłówka/stopki). Dodano rozpoznawanie tych klas w `AppendInlineContent` → `w:fldSimple` PAGE/NUMPAGES. Dodatkowo `BuildFieldRun` nie używa już `{page}`/`{pages}` jako **zbuforowanej wartości** pola (Word pokazuje cache do przeliczenia) — placeholder/empty/nie-liczba → „1".
+- **GUI (`wysiwyg-editor.ts`)** — „numeracja tylko na 1 stronie / 1 z 1": `headerContents`/`footerContents` iterowały **martwy sygnał `pages`** (inicjowany długością 1, NIGDY nie ustawiany), więc nagłówek/stopka liczyły się tylko dla strony 0, a strony 2+ dostawały surowy fallback z nierozwiniętymi `{page}`/`{pages}`. Repointowano na `pageContents()` (rzeczywista lista stron); `{pages}` liczy `pageContents().length`; usunięto martwy sygnał `pages`.
+### Verified
+- Nowe `PageNumberFieldExportTests` **4/4** (body PAGE+NUMPAGES jako pola, page-number span → PAGE, cache ≠ placeholder, stopka nadal OK); Infrastructure **311/311**; `dotnet build` 0 błędów; GUI `ng test` (patrz niżej).
+### Notes
+- Wartość pola to nadal placeholder-liczba „1" w cache — realny numer wylicza Word/edytor przy renderze/przeliczeniu (brak twardej paginacji w modelu = ograniczenie stałe).
+
 ## 2026-07-06 — Wierność importu Word („Doc2"/ING): tab-stopy body, scalone wiersze nieregularne, v-align, SVG (+16 testów)
 ### Changed
 - `Infrastructure/Services/DocxToHtmlConverter.cs`:

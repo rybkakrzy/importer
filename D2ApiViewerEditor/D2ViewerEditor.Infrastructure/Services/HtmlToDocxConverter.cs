@@ -2475,6 +2475,24 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 continue;
             }
 
+            // Pola numeru strony w TREŚCI (nie tylko w stopce) — bez tego span.field-page/
+            // page-number/field-numpages wychodził jako LITERALNY tekst „{page}"/„{pages}"
+            // (placeholder readera) zamiast pola PAGE/NUMPAGES.
+            if (child.NodeType == HtmlNodeType.Element
+                && child.Name.Equals("span", StringComparison.OrdinalIgnoreCase))
+            {
+                if (child.HasClass("field-page") || child.HasClass("page-number"))
+                {
+                    paragraph.Append(BuildFieldRun(" PAGE ", child));
+                    continue;
+                }
+                if (child.HasClass("field-numpages"))
+                {
+                    paragraph.Append(BuildFieldRun(" NUMPAGES ", child));
+                    continue;
+                }
+            }
+
             var runs = CreateRunsFromNode(child, baseRunProps);
             foreach (var run in runs)
             {
@@ -3280,7 +3298,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             ApplyRunStyle(rPr, style);
             if (rPr.HasChildren) run.Append(rPr);
         }
-        run.Append(new Text(fieldNode.InnerText?.Trim() is { Length: > 0 } t ? t : "1") { Space = SpaceProcessingModeValues.Preserve });
+        // Cached field result. The reader's placeholders ({page}/{pages}) must NEVER become the
+        // cached text — Word shows the cached value until the field recalculates, so a leaked
+        // "{page}" would display literally. Fall back to "1" for placeholders/empty/non-numeric.
+        var inner = fieldNode.InnerText?.Trim() ?? string.Empty;
+        if (inner.Length == 0 || inner.Contains("{page", StringComparison.OrdinalIgnoreCase) || !inner.Any(char.IsDigit))
+            inner = "1";
+        run.Append(new Text(inner) { Space = SpaceProcessingModeValues.Preserve });
         return new SimpleField(run) { Instruction = instruction };
     }
 
