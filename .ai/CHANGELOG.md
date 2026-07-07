@@ -11,6 +11,19 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-07 — Edytor: ENTER na dole strony nie rozciąga już wizualnie kartki — natychmiastowa repaginacja + przewinięcie kursora (+5 testów)
+
+### Changed
+- `wysiwyg-editor.ts`: ENTER nie był obsługiwany specjalnie — po `insertParagraph` przeglądarki repaginacja szła przez **debounce** `_schedulePaginate` (250 ms, max 600), więc przez ~250 ms strona była wizualnie „rozciągnięta" (CSS: `.page{min-height;overflow:visible}` + `.editor-content{flex:1}` z domyślnym `min-height:auto` flex-itemu rośnie z treścią), a nowa strona pojawiała się z opóźnieniem. Dodatkowo `_restoreGlobalCaret` nie wołał `scrollIntoView`, więc przelana treść lądowała poza widokiem — użytkownik musiał ręcznie scrollować, by zobaczyć drugą stronę.
+- Fix A: `handleKeyboard` przy `Enter` (bez ctrl/meta/alt) woła `_flushPaginateSoon()` — koalescujący `requestAnimationFrame`, który po mutacji DOM wymusza repaginację NATYCHMIAST (`_flushPaginateNow` kasuje oczekujący debounce i woła `_repaginateNow`). Bez `preventDefault` (domyślny insertParagraph zostaje). Zwykłe pisanie nadal debounce'owane. Przytrzymany ENTER = 1 repaginacja/klatkę (guard `_paginateRafHandle`, sprzątany w `ngOnDestroy`).
+- Fix B: `_restoreGlobalCaret` po ustawieniu karetki woła `target.scrollIntoView({block:'nearest',inline:'nearest'})` — nowa strona wchodzi w widok bez ręcznego scrolla; `nearest` nie rusza widoku, gdy kursor jest już widoczny (brak skoków przy pisaniu w środku strony).
+
+### Verified
+- `wysiwyg-editor.pagination-overflow.spec` **14/14** (+5: flush kasuje debounce, ENTER→flush, Ctrl+Enter→brak flushu, koalescencja rAF, scrollIntoView); `enter-caret` 3/3, `page-break` 2/2, `wysiwyg-editor.spec` 31/31 — brak regresji. `ng test --include` (builder Angulara).
+
+### Notes
+- Zmiana wyłącznie we froncie: writer HTML→DOCX, kontrakty API i model nietknięte. Rozciąganie kartki to wciąż stan przejściowy między keystroke a repaginacją — dla zwykłego pisania (nie-ENTER) nadal istnieje w oknie debounce'a, ale ENTER (główny objaw zgłoszony przez użytkownika) jest teraz natychmiastowy.
+
 ## 2026-07-07 — Wektorowe EMF (logo w stopce) przestały wychodzić jako niewidoczny blank — mapowanie window/viewport w tłumaczu metafile (+1 test)
 
 ### Changed
@@ -23,7 +36,8 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ### Notes
 - Oryginalny EMF nadal jedzie do DOCX bez zmian (pass-through / `data-original-src`) — zmiana dotyczy WYŁĄCZNIE podglądu w edytorze; Word/eksport nietknięte.
-- Poza zakresem (świadomie): pojedynczy `EMR_ALPHABLEND` w tych logo (subtelny raster/cień) nierysowany; tryby mapowania metryczne (MM_LOMETRIC..HITWIPS) nieskalowane wprost (łapie je safety-net content-bbox); grupa `wpg:wgp` = pierwszy blip (istniejące ograniczenie).
+- Follow-up (ten sam dzień): logo renderowało się **CZARNE** (ścieżki widoczne, ale kolor prawdopodobnie w rekordzie, który pomijaliśmy). Dodano rendering **`EMR_ALPHABLEND` (typ 114)** → `<image>` z osadzonego DIB (Skia `DibToPng`), `SrcConstantAlpha`→`opacity` — logo Office często trzyma KOLOROWY raster w tym rekordzie, a ścieżki są czarną maską. Diagnostyka: `MetafileSvg.FillColors`/`HasEmbeddedImage`, w logu `fills=[...] embeddedImage=yes/no`; gdy wszystkie wypełnienia `#000000` i brak rastra → warning z markerem **`PODEJRZANE`** (eskalowany do WARNING w `WebGraphicForLegacy`, widoczny bez Debug).
+- Poza zakresem (świadomie): tryby mapowania metryczne (MM_LOMETRIC..HITWIPS) nieskalowane wprost (łapie je safety-net content-bbox); grupa `wpg:wgp` = pierwszy blip (istniejące ograniczenie).
 
 ## 2026-07-07 — Kształty DrawingML z własną/preset geometrią (a:custGeom, ellipse, roundRect) renderowane w edytorze — grafika z oryginału przestała znikać (+1 test)
 

@@ -272,7 +272,8 @@ public sealed class GraphicConversionService : IGraphicConversionService
         if (vector != null && SanitizeSvg(vector.Svg) is { } safeSvg)
         {
             warnings.Add($"{kind}: rekordy wektorowe przetłumaczone na SVG (etap 1 — podzbiór GDI). " +
-                $"rec={vector.RecordCount} win/vp={(vector.UsedWindowViewport ? "yes" : "no")} skipped={vector.SkippedRecords}.");
+                $"rec={vector.RecordCount} win/vp={(vector.UsedWindowViewport ? "yes" : "no")} skipped={vector.SkippedRecords} " +
+                $"fills=[{string.Join(",", vector.FillColors)}] embeddedImage={(vector.HasEmbeddedImage ? "yes" : "no")}.");
             if (vector.SkippedRecords > 0)
             {
                 warnings.Add($"{kind}: pominięto {vector.SkippedRecords} rekordów spoza podzbioru.");
@@ -283,6 +284,11 @@ public sealed class GraphicConversionService : IGraphicConversionService
             if (vector.ContentOutsideDeviceBounds)
                 warnings.Add($"{kind}: treść poza rclBounds — viewBox dopasowany do bbox treści " +
                     $"(mapowanie window/viewport niepełne). Profil: {MetafileVectorTranslator.Profile(kind, source.Data)}");
+            // „Logo wyszło czarne": wszystkie wypełnienia #000000 i brak osadzonego rastra → kolor
+            // prawdopodobnie żyje w nieobsłużonym rekordzie. Marker PODEJRZANE = log na poziomie Warning.
+            if (vector.FillColors.Count > 0 && vector.FillColors.All(c => c == "#000000") && !vector.HasEmbeddedImage)
+                warnings.Add($"{kind}: PODEJRZANE — wszystkie wypełnienia czarne (#000000), brak osadzonego rastra; " +
+                    $"logo może wyglądać na czarne. Profil: {MetafileVectorTranslator.Profile(kind, source.Data)}");
             return new GraphicConversionResult
             {
                 Web = new WebGraphicRepresentation

@@ -189,4 +189,75 @@ describe('WysiwygEditorComponent — przepełnienie strony tworzy nową stronę 
       expect(spy).toHaveBeenCalledTimes(1);
     });
   });
+
+  /**
+   * Regresja: „ENTER na dole strony rozciąga kartkę na ~250 ms (debounce), a nowa strona
+   * pojawia się dopiero po ręcznym scrollu". Fix: ENTER wymusza repaginację NATYCHMIAST
+   * (rAF po wstawieniu akapitu, z pominięciem debounce'a), a `_restoreGlobalCaret` przewija
+   * kursor do widoku — więc przelana treść od razu widać bez scrollowania.
+   */
+  describe('ENTER — natychmiastowa repaginacja + przewinięcie kursora do widoku', () => {
+    it('_flushPaginateNow repaginuje od razu i kasuje oczekujący debounce', () => {
+      vi.useFakeTimers();
+      const spy = vi.fn();
+      (component as any)._repaginateNow = spy;
+
+      (component as any)._schedulePaginate('input'); // ustawia timer debounce'a
+      (component as any)._flushPaginateNow();
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect((component as any)._paginateTimer).toBeNull();
+
+      // Skasowany debounce nie odpali repaginacji drugi raz.
+      vi.advanceTimersByTime(600);
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it('ENTER (keydown) wymusza natychmiastowy flush paginacji', () => {
+      const flush = vi.fn();
+      (component as any)._flushPaginateSoon = flush;
+
+      (component as any).handleKeyboard(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+      expect(flush).toHaveBeenCalledTimes(1);
+    });
+
+    it('Ctrl+Enter NIE wymusza flushu (nie koliduje ze skrótami)', () => {
+      const flush = vi.fn();
+      (component as any)._flushPaginateSoon = flush;
+
+      (component as any).handleKeyboard(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }));
+
+      expect(flush).not.toHaveBeenCalled();
+    });
+
+    it('_flushPaginateSoon koalescuje wiele ENTER w jedną repaginację na klatkę', () => {
+      const rafCbs: FrameRequestCallback[] = [];
+      const rafSpy = vi.spyOn(window, 'requestAnimationFrame')
+        .mockImplementation((cb: FrameRequestCallback) => { rafCbs.push(cb); return rafCbs.length; });
+      const flushNow = vi.fn();
+      (component as any)._flushPaginateNow = flushNow;
+
+      (component as any)._flushPaginateSoon();
+      (component as any)._flushPaginateSoon();
+      (component as any)._flushPaginateSoon();
+
+      expect(rafSpy).toHaveBeenCalledTimes(1); // trzy ENTER → jeden rAF
+      rafCbs[0](0);
+      expect(flushNow).toHaveBeenCalledTimes(1);
+
+      rafSpy.mockRestore();
+    });
+
+    it('_restoreGlobalCaret przewija kursor do widoku (scrollIntoView block:nearest)', () => {
+      const editor = pageWith('<p>alfa</p><p>beta</p>');
+      const scrollSpy = vi.fn();
+      (Array.from(editor.children) as HTMLElement[]).forEach(b => { b.scrollIntoView = scrollSpy; });
+
+      // Kursor w 2. bloku (treść przelana na kolejną stronę po ENTER).
+      (component as any)._restoreGlobalCaret({ block: 1, offset: 0 });
+
+      expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+    });
+  });
 });

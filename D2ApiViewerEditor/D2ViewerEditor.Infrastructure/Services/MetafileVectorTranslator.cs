@@ -39,6 +39,10 @@ internal static class MetafileVectorTranslator
         /// Sygnał, że mapowanie page→device było niepełne (np. tryb metryczny) — ryzyko złego kadru.
         /// </summary>
         public bool ContentOutsideDeviceBounds { get; init; }
+        /// <summary>Wyróżnione kolory wypełnień w SVG — diagnostyka „logo wyszło czarne" (fill=[#000000]).</summary>
+        public IReadOnlyList<string> FillColors { get; init; } = Array.Empty<string>();
+        /// <summary>Czy SVG zawiera osadzony raster (STRETCHDIBITS/ALPHABLEND) — może być właściwym obrazem logo.</summary>
+        public bool HasEmbeddedImage { get; init; }
     }
 
     /// <summary>Czytelne nazwy najważniejszych rekordów EMF (diagnostyka „dlaczego blank").</summary>
@@ -464,6 +468,34 @@ internal static class MetafileVectorTranslator
                             canvas.Track(ax + cxDest, ay + cyDest);
                             canvas.Add($"<image x='{F(ax)}' y='{F(ay)}' width='{F(cxDest)}' height='{F(cyDest)}' " +
                                        $"href='data:image/png;base64,{Convert.ToBase64String(png)}'/>");
+                        }
+                        else skipped++;
+                    }
+                    break;
+
+                case 114: // ALPHABLEND → <image> (źródłowy DIB z alfą; SrcConstantAlpha → opacity).
+                    // Logo Office często trzyma KOLOROWY raster w tym rekordzie, a wektorowe ścieżki
+                    // są tylko czarną maską/cieniem — bez tego cała grafika wychodzi CZARNA.
+                    if (nSize >= 108)
+                    {
+                        double xDest = I32(d, o + 24), yDest = I32(d, o + 28);
+                        double cxDest = I32(d, o + 32), cyDest = I32(d, o + 36);
+                        byte srcAlpha = d[o + 42];
+                        uint offBmi = U32(d, o + 84), cbBmi = U32(d, o + 88),
+                             offBits = U32(d, o + 92), cbBits = U32(d, o + 96);
+                        var dib = GraphicConversionService.SliceDib(d, o, offBmi, cbBmi, offBits, cbBits, nSize);
+                        var png = dib != null ? GraphicConversionService.DibToPng(dib) : null;
+                        if (png != null && cxDest > 0 && cyDest > 0)
+                        {
+                            var (ax, ay) = st.Apply(xDest, yDest);
+                            var (bx, by) = st.Apply(xDest + cxDest, yDest + cyDest);
+                            double ix = Math.Min(ax, bx), iy = Math.Min(ay, by);
+                            double iw = Math.Abs(bx - ax), ih = Math.Abs(by - ay);
+                            canvas.Track(ix, iy);
+                            canvas.Track(ix + iw, iy + ih);
+                            var op = srcAlpha < 255 ? $" opacity='{F(srcAlpha / 255.0)}'" : string.Empty;
+                            canvas.Add($"<image x='{F(ix)}' y='{F(iy)}' width='{F(iw)}' height='{F(ih)}' " +
+                                       $"href='data:image/png;base64,{Convert.ToBase64String(png)}'{op}/>");
                         }
                         else skipped++;
                     }
@@ -963,13 +995,18 @@ internal static class MetafileVectorTranslator
                   $"viewBox='{F(vbL)} {F(vbT)} {F(vbW)} {F(vbH)}' preserveAspectRatio='xMidYMid meet'>" +
                   canvas.Elements + "</svg>";
         if (svg.Length > MaxOutputChars + 512) return null;
+        var elements = canvas.Elements;
+        var fillColors = System.Text.RegularExpressions.Regex.Matches(elements, "fill='(#[0-9a-fA-F]{6})'")
+            .Select(m => m.Groups[1].Value.ToLowerInvariant()).Distinct().ToList();
         return new MetafileSvg
         {
             Svg = svg,
             SkippedRecords = skipped,
             RecordCount = recordCount,
             UsedWindowViewport = usedWindowViewport,
-            ContentOutsideDeviceBounds = contentOutsideBounds
+            ContentOutsideDeviceBounds = contentOutsideBounds,
+            FillColors = fillColors,
+            HasEmbeddedImage = elements.Contains("<image ", StringComparison.Ordinal)
         };
     }
 

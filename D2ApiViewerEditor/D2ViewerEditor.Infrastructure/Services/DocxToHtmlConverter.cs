@@ -117,10 +117,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Grafika NIEWIDOCZNA (blank/fallback) albo skonwertowana z ryzykiem (ostrzeżenia niosą profil
         // rekordów / brak dopasowania rclBounds) → WARNING z pełnym kontekstem: gdy KOLEJNY raz logo się
         // nie pokaże, log sam wyjaśni dlaczego (typ, rozmiar, wymiary, strategie, ostrzeżenia, straty).
+        var suspicious = diag.Warnings.Any(w => w.Contains("PODEJRZANE", StringComparison.Ordinal));
         if (failed || isBlank || diag.Warnings.Count > 0 || diag.LostProperties.Count > 0)
         {
-            var level = failed || isBlank ? Microsoft.Extensions.Logging.LogLevel.Warning
-                                          : Microsoft.Extensions.Logging.LogLevel.Debug;
+            var level = failed || isBlank || suspicious
+                ? Microsoft.Extensions.Logging.LogLevel.Warning
+                : Microsoft.Extensions.Logging.LogLevel.Debug;
             _log.Log(level,
                 "Grafika legacy: part={SourcePath} declaredType={ContentType} detected={Kind} size={Size}B " +
                 "wymiaryEMU={WEmu}x{HEmu} status={Status} blank={Blank} strategie=[{Strategies}] powód={Reason} " +

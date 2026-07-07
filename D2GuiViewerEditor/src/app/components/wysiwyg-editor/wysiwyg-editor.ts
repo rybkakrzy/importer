@@ -386,6 +386,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   // Paginator: debounce + safety flag
   private _paginateTimer: ReturnType<typeof setTimeout> | null = null;
+  private _paginateRafHandle: number | null = null;
   private _isRepaginating = false;
 
   // Bieżący rozmiar czcionki (dla nowego tekstu gdy nie ma zaznaczenia)
@@ -502,6 +503,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     if (this.pageCheckInterval) {
       clearInterval(this.pageCheckInterval);
+    }
+    if (this._paginateRafHandle !== null) {
+      cancelAnimationFrame(this._paginateRafHandle);
+      this._paginateRafHandle = null;
     }
     this._sectionResizeObserver?.disconnect();
   }
@@ -1777,6 +1782,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       } else {
         this.executeCommand('indent');
       }
+    }
+
+    // ENTER przy dolnej krawędzi strony rozciągał kartkę na czas debounce'a (~250 ms), zanim
+    // repaginacja przelała treść na kolejną stronę — użytkownik widział „wydłużoną" stronę i
+    // musiał ręcznie scrollować, żeby zobaczyć drugą kartkę. Po wstawieniu akapitu przez
+    // przeglądarkę wymuszamy repaginację NATYCHMIAST (z pominięciem debounce'a). NIE wołamy
+    // preventDefault — domyślny insertParagraph ma się wykonać; rAF czeka na mutację DOM.
+    // Zwykłe pisanie nadal korzysta z debounce'a (_schedulePaginate) dla wydajności.
+    if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      this._flushPaginateSoon();
     }
   }
 
@@ -3502,6 +3517,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Planuje NATYCHMIASTOWĄ repaginację na najbliższą klatkę (po mutacji DOM), koalescując
+   * wiele wywołań w jedną — przytrzymany ENTER nie kolejkuje repaginacji na każdy keydown.
+   * Używane przez obsługę ENTER, żeby strona nie została wizualnie rozciągnięta do końca
+   * okna debounce'a.
+   */
+  private _flushPaginateSoon(): void {
+    if (this._paginateRafHandle !== null) return;
+    this._paginateRafHandle = requestAnimationFrame(() => {
+      this._paginateRafHandle = null;
+      this._flushPaginateNow();
+    });
+  }
+
+  /** Wymusza repaginację od razu, kasując oczekujący debounce (_schedulePaginate). */
+  private _flushPaginateNow(): void {
+    if (this._paginateTimer) {
+      clearTimeout(this._paginateTimer);
+      this._paginateTimer = null;
+    }
+    this._paginateFirstScheduledAt = null;
+    this._repaginateNow();
+  }
+
+  /**
    * Główna paginacja: bierze zawartość każdej strony, łączy, dzieli na kartki A4
    * z zachowaniem reguły "block-atomic" (paragraf w całości na 1 stronie),
    * z wyjątkiem tabel — te dzielimy między wierszami.
@@ -4061,6 +4100,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         if (!target) return;
         this._placeCaretAtTextOffset(target, caret.offset);
         editor.focus();
+        // Po repaginacji treść mogła przelać się na kolejną stronę POZA widokiem — bez tego
+        // użytkownik musiał ręcznie scrollować, by ją zobaczyć. `block:'nearest'` nie rusza
+        // widoku, gdy kursor jest już widoczny (brak skoków przy pisaniu w środku strony).
+        target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
         this.editorContent = refs[i];
         this.activePageIndex.set(i);
         return;
