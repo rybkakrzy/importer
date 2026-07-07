@@ -43,6 +43,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     // left/center/right header-footer layout), tabs become flex-grow spacers.
     private bool _flexTabs;
 
+    // ── Geometria pierwszej sekcji (twips) ───────────────────────────────────────
+    // Potrzebna do rozwiązania kotwic wp:anchor (relativeFrom + wp:align) na pozycję
+    // ABSOLUTNĄ względem strony — tak jak liczy MS Word. Bez niej brany był surowy
+    // posOffset z pominięciem relativeFrom/align, przez co obiekty kotwiczone do
+    // marginesu/kolumny albo wyrównane do prawej lądowały za bardzo w lewo/za wysoko.
+    private long? _pageWidthTwips;
+    private long? _pageHeightTwips;
+    private long _marginLeftTwips;
+    private long _marginTopTwips;
+    private long _marginRightTwips;
+    private long _marginBottomTwips;
+
     // ── Liczniki numeracji list (semantyka Worda) ────────────────────────────────
     // Word utrzymuje licznik per ABSTRAKCYJNA definicja numeracji: różne w:num wskazujące ten sam
     // w:abstractNum KONTYNUUJĄ numerację (tak działa „Kontynuuj numerację"), chyba że dana instancja
@@ -97,15 +109,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             TargetWidthEmu = widthEmu > 0 ? widthEmu : null,
             TargetHeightEmu = heightEmu > 0 ? heightEmu : null
         });
-        if (result.Diagnostics.Status is GraphicConversionStatus.Fallback
-            or GraphicConversionStatus.Unsupported or GraphicConversionStatus.Rejected)
+        var diag = result.Diagnostics;
+        var isBlank = result.Web?.IsBlankFallback == true;
+        var failed = diag.Status is GraphicConversionStatus.Fallback
+            or GraphicConversionStatus.Unsupported or GraphicConversionStatus.Rejected;
+
+        // Grafika NIEWIDOCZNA (blank/fallback) albo skonwertowana z ryzykiem (ostrzeżenia niosą profil
+        // rekordów / brak dopasowania rclBounds) → WARNING z pełnym kontekstem: gdy KOLEJNY raz logo się
+        // nie pokaże, log sam wyjaśni dlaczego (typ, rozmiar, wymiary, strategie, ostrzeżenia, straty).
+        if (failed || isBlank || diag.Warnings.Count > 0 || diag.LostProperties.Count > 0)
         {
-            _log.LogWarning(
-                "Grafika bez pełnej konwersji web: part={SourcePath} declaredType={ContentType} detected={Kind} " +
-                "size={Size}B status={Status} strategie=[{Strategies}] powód={Reason}",
-                sourcePath, contentType, result.Diagnostics.InputKind, bytes.Length,
-                result.Diagnostics.Status, string.Join(",", result.Diagnostics.AttemptedStrategies),
-                result.Diagnostics.FailureReason);
+            var level = failed || isBlank ? Microsoft.Extensions.Logging.LogLevel.Warning
+                                          : Microsoft.Extensions.Logging.LogLevel.Debug;
+            _log.Log(level,
+                "Grafika legacy: part={SourcePath} declaredType={ContentType} detected={Kind} size={Size}B " +
+                "wymiaryEMU={WEmu}x{HEmu} status={Status} blank={Blank} strategie=[{Strategies}] powód={Reason} " +
+                "ostrzeżenia=[{Warnings}] straty=[{Lost}]",
+                sourcePath, contentType, diag.InputKind, bytes.Length,
+                widthEmu, heightEmu, diag.Status, isBlank,
+                string.Join(",", diag.AttemptedStrategies), diag.FailureReason,
+                string.Join(" | ", diag.Warnings), string.Join(" | ", diag.LostProperties));
         }
         return result.Web != null ? (result.Web.ToDataUrl(), result.Web.IsBlankFallback) : null;
     }
@@ -131,14 +154,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _themeMajorLatin = _themeMinorLatin = null;
         _themeMajorEastAsia = _themeMinorEastAsia = null;
         _themeMajorComplexScript = _themeMinorComplexScript = null;
+        _pageWidthTwips = _pageHeightTwips = null;
+        _marginLeftTwips = _marginTopTwips = _marginRightTwips = _marginBottomTwips = 0;
 
         using var document = WordprocessingDocument.Open(docxStream, false);
-        
+
         // Załaduj części pomocnicze
         _numberingPart = document.MainDocumentPart?.NumberingDefinitionsPart;
         _themePart = document.MainDocumentPart?.ThemePart;
         LoadThemeFonts();
         LoadNumberingPictureBullets();
+        LoadPageGeometry(document);
         
         // Załaduj style dokumentu
         var stylesLoaded = ExtractDocumentStyles(document);
@@ -291,6 +317,125 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// Zapamiętuje geometrię PIERWSZEJ sekcji (rozmiar strony + marginesy, w twipach) do
+    /// późniejszego rozwiązywania kotwic wp:anchor. Brakujące marginesy → domyślne 1440 twips
+    /// (1"), zgodnie z domyślną geometrią Worda przyjmowaną gdy sekcja nie deklaruje w:pgMar.
+    /// </summary>
+    private void LoadPageGeometry(WordprocessingDocument document)
+    {
+        var page = SectionPropertiesReader.ReadPageSettings(GetFirstSectionProperties(document));
+        _pageWidthTwips = page.PageWidthTwips;
+        _pageHeightTwips = page.PageHeightTwips;
+        _marginLeftTwips = page.LeftMarginTwips is { } l ? l : 1440;
+        _marginRightTwips = page.RightMarginTwips is { } r ? r : 1440;
+        _marginTopTwips = page.TopMarginTwips is { } t ? Math.Abs(t) : 1440;
+        _marginBottomTwips = page.BottomMarginTwips is { } b ? Math.Abs(b) : 1440;
+    }
+
+    /// <summary>
+    /// Rozwiązuje pozycję kotwiczonego obiektu (<c>wp:anchor</c>) na offset względem układu
+    /// współrzędnych edytora: X względem LEWEJ krawędzi strony, Y względem GÓRY obszaru treści
+    /// (pasmo body zaczyna się pod nagłówkiem — tak jak konsumuje to edytor). Uwzględnia
+    /// <c>relativeFrom</c> (page/margin/column/…) oraz <c>wp:align</c> (left/right/center/
+    /// inside/outside) — wcześniej brany był surowy <c>wp:posOffset</c>, więc obiekty kotwiczone
+    /// do marginesu/kolumny lub wyrównane do prawej były przesunięte w lewo/za wysoko względem
+    /// Worda. Zwraca EMU. Gdy nie znamy rozmiaru strony, degraduje do surowego offsetu.
+    /// </summary>
+    private (long xEmu, long yEmu) ResolveAnchorPosition(
+        DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor anchor, long widthEmu, long heightEmu)
+    {
+        long pageW = _pageWidthTwips is { } pw ? OoxmlUnits.TwipsToEmu(pw) : 0;
+        long pageH = _pageHeightTwips is { } ph ? OoxmlUnits.TwipsToEmu(ph) : 0;
+        long mLeft = OoxmlUnits.TwipsToEmu(_marginLeftTwips);
+        long mTop = OoxmlUnits.TwipsToEmu(_marginTopTwips);
+        long mRight = OoxmlUnits.TwipsToEmu(_marginRightTwips);
+        long mBottom = OoxmlUnits.TwipsToEmu(_marginBottomTwips);
+
+        var posH = anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition>();
+        var posV = anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition>();
+
+        // Poziomo: origin edytora = lewa krawędź strony (page-relative przechodzi wprost).
+        long xPage = ResolveAxis(
+            offsetText: posH?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text,
+            alignText: posH?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalAlignment>()?.Text,
+            relFrom: posH?.RelativeFrom?.InnerText,
+            objectSize: widthEmu, pageSize: pageW, marginStart: mLeft, marginEnd: mRight, horizontal: true);
+
+        // Pionowo: origin edytora = góra obszaru treści (≈ górny margines poniżej pasma
+        // nagłówka), więc odejmujemy górny margines od współrzędnej page-relative.
+        long yPage = ResolveAxis(
+            offsetText: posV?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text,
+            alignText: posV?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalAlignment>()?.Text,
+            relFrom: posV?.RelativeFrom?.InnerText,
+            objectSize: heightEmu, pageSize: pageH, marginStart: mTop, marginEnd: mBottom, horizontal: false);
+
+        return (xPage, yPage - mTop);
+    }
+
+    /// <summary>
+    /// Rozwiązuje jedną oś kotwicy na współrzędną PAGE-RELATIVE (EMU). <paramref name="relFrom"/>
+    /// wybiera układ odniesienia (baza + dostępna rozpiętość), po czym stosowany jest albo
+    /// jawny offset, albo wyrównanie (<c>wp:align</c>) w obrębie tej rozpiętości.
+    /// </summary>
+    private static long ResolveAxis(string? offsetText, string? alignText, string? relFrom,
+        long objectSize, long pageSize, long marginStart, long marginEnd, bool horizontal)
+    {
+        // Baza (lewa/górna krawędź układu odniesienia) i jego rozpiętość — wg relativeFrom.
+        long baseStart;
+        long extent;
+        switch (relFrom)
+        {
+            case "leftMargin":
+            case "topMargin":
+            case "insideMargin":
+                baseStart = 0;
+                extent = marginStart;
+                break;
+            case "rightMargin":
+            case "bottomMargin":
+            case "outsideMargin":
+                baseStart = pageSize > 0 ? pageSize - marginEnd : marginStart;
+                extent = marginEnd;
+                break;
+            case "page":
+                baseStart = 0;
+                extent = pageSize;
+                break;
+            // margin / column / character / text / line / paragraph i brak wartości → obszar treści.
+            default:
+                baseStart = marginStart;
+                extent = pageSize > 0 ? pageSize - marginStart - marginEnd : 0;
+                break;
+        }
+
+        if (long.TryParse(offsetText, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var offset))
+            return baseStart + offset;
+
+        // wp:align — bez jawnego offsetu. inside≈left/top, outside≈right/bottom (bez rozróżnienia
+        // stron parzystych/nieparzystych, którego edytor i tak nie modeluje).
+        if (extent > 0 && !string.IsNullOrEmpty(alignText))
+        {
+            switch (alignText)
+            {
+                case "right":
+                case "bottom":
+                case "outside":
+                    return baseStart + Math.Max(0, extent - objectSize);
+                case "center":
+                    return baseStart + Math.Max(0, (extent - objectSize) / 2);
+                case "left":
+                case "top":
+                case "inside":
+                default:
+                    return baseStart;
+            }
+        }
+
+        return baseStart;
+    }
+
+    /// <summary>
     /// Height (cm) of the header/footer band = printable margin minus the header/footer
     /// distance, mirroring Word's geometry. Defaults: margin 0, distance 720 twips (0.5").
     /// Callers apply their own fallback when the section declares no page margin.
@@ -317,16 +462,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // sectPr/headerReference — NOT HeaderParts.FirstOrDefault(), whose order is
         // undefined and may return an empty even/first part. Sections are scanned in
         // document order (first section wins — that's what the user sees on page 1;
-        // later sections inherit in Word when they declare no reference). Fall back to
-        // the first available part only when no section declares a reference.
+        // later sections inherit in Word when they declare no reference).
         var sectionProps = sections.FirstOrDefault(s =>
             ResolveHeaderPart(mainPart, s, HeaderFooterValues.Default) != null) ?? sections.FirstOrDefault();
-        var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default)
-                         ?? mainPart.HeaderParts.FirstOrDefault();
-        if (headerPart?.Header == null) return null;
 
-        var html = ConvertHeaderPartToHtml(headerPart, document);
-        if (string.IsNullOrWhiteSpace(html)) return null;
+        // Fall back to an arbitrary package part ONLY when the section declares no header
+        // reference at all (legacy docs with an implicit header). When the section opts into
+        // a first/even header but no default (titlePg with an empty default), the default
+        // header is intentionally empty — Word shows nothing on ordinary pages, so we must
+        // NOT leak the first/even part onto every page.
+        var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default);
+        if (headerPart == null && !SectionDeclaresAnyHeaderReference(sectionProps))
+            headerPart = mainPart.HeaderParts.FirstOrDefault();
+
+        var html = headerPart?.Header != null ? ConvertHeaderPartToHtml(headerPart, document) : null;
+        if (string.IsNullOrWhiteSpace(html)) html = null;
 
         // First-page header is honoured only when the section opts in via titlePg.
         string? firstPageHtml = null;
@@ -362,6 +512,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        // Nothing to report: no default header AND no first/even variant.
+        if (html == null && firstPageHtml == null && evenHtml == null) return null;
+
         // Band geometry follows the FIRST section's page margins — the same section whose
         // margins/page size the rest of DocumentContent reports.
         var page = SectionPropertiesReader.ReadPageSettings(sections.FirstOrDefault());
@@ -371,7 +524,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         return new HeaderFooterContent
         {
-            Html = html,
+            Html = html ?? string.Empty,
             Height = Math.Max(0.8, Math.Min(8, headerHeight)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,
@@ -395,12 +548,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // First section with a reference wins (document order).
         var sectionProps = sections.FirstOrDefault(s =>
             ResolveFooterPart(mainPart, s, HeaderFooterValues.Default) != null) ?? sections.FirstOrDefault();
-        var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default)
-                         ?? mainPart.FooterParts.FirstOrDefault();
-        if (footerPart?.Footer == null) return null;
 
-        var html = ConvertFooterPartToHtml(footerPart, document);
-        if (string.IsNullOrWhiteSpace(html)) return null;
+        // Fall back to an arbitrary package part ONLY when the section declares no footer
+        // reference at all (legacy docs). When the section opts into a first/even footer but
+        // no default (titlePg with an empty default), the default footer is intentionally
+        // empty — do NOT leak the first/even part onto every page.
+        var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default);
+        if (footerPart == null && !SectionDeclaresAnyFooterReference(sectionProps))
+            footerPart = mainPart.FooterParts.FirstOrDefault();
+
+        var html = footerPart?.Footer != null ? ConvertFooterPartToHtml(footerPart, document) : null;
+        if (string.IsNullOrWhiteSpace(html)) html = null;
 
         string? firstPageHtml = null;
         var differentFirstPage = false;
@@ -434,6 +592,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        // Nothing to report: no default footer AND no first/even variant.
+        if (html == null && firstPageHtml == null && evenHtml == null) return null;
+
         var page = SectionPropertiesReader.ReadPageSettings(sections.FirstOrDefault());
         double footerHeight = page.HasPageMargin
             ? ComputeBandHeightCm(page.BottomMarginTwips, page.FooterDistanceTwips)
@@ -441,7 +602,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         return new HeaderFooterContent
         {
-            Html = html,
+            Html = html ?? string.Empty,
             Height = Math.Max(0.8, Math.Min(8, footerHeight)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,
@@ -594,6 +755,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// True when the section declares at least one w:headerReference (of any type). Used to
+    /// decide whether the DEFAULT header may fall back to an arbitrary package part: a section
+    /// that references only a first/even header has an intentionally empty default header.
+    /// </summary>
+    private static bool SectionDeclaresAnyHeaderReference(SectionProperties? sectionProps)
+        => sectionProps?.Elements<HeaderReference>().Any() == true;
+
+    /// <summary>
+    /// True when the section declares at least one w:footerReference (of any type). See
+    /// <see cref="SectionDeclaresAnyHeaderReference"/> — a section that references only a
+    /// first/even footer has an intentionally empty default footer.
+    /// </summary>
+    private static bool SectionDeclaresAnyFooterReference(SectionProperties? sectionProps)
+        => sectionProps?.Elements<FooterReference>().Any() == true;
+
+    /// <summary>
     /// Document-level w:evenAndOddHeaders — when present (and not disabled) the section's
     /// even header/footer reference is shown on even pages. Stored in settings.xml.
     /// </summary>
@@ -637,6 +814,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             else if (element is Table table)
             {
                 inner.Append(ConvertTableToHtml(table, document, part));
+            }
+            else if (element is SdtBlock sdt)
+            {
+                // Formant (content control) na poziomie bloku bezpośrednio w stopce/nagłówku
+                // — np. `removeif_nondigitalversion` z klauzulą prawną. Bez tej gałęzi cała
+                // zawartość formantu znikała z podglądu (pętla obsługiwała tylko Paragraph/Table).
+                inner.Append(ConvertSdtBlockToHtml(sdt, document, part));
             }
         }
 
@@ -1682,9 +1866,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // draws). Applied to body paragraphs as well as header/footer: a flex row only spreads
         // segments evenly and ignores where the stops actually sit, so left/right tabs in the body
         // collapsed to equal gaps. Complex fields keep the legacy path (their runs are stateful).
+        // Inside a TABLE CELL the absolute segments are anchored to the paragraph while the stop
+        // positions describe page-scale geometry — in a narrow cell the segment escapes the cell
+        // and paints over the neighbouring column (and the cell's text-align stops applying).
+        // Word resolves tabs in cells against the cell's own text column, so fall back to the
+        // inline/flex rendering there; data-tab-stops still round-trips the stops unchanged.
+        var isInTableCell = paragraph.Ancestors<TableCell>().Any();
         var usePositionedTabs = effectiveTabStops.Count > 0
             && paragraph.Descendants<TabChar>().Any()
-            && !hasComplexField;
+            && !hasComplexField
+            && !isInTableCell;
 
         // Fallback flex row only when there are tab characters but no resolvable stop positions
         // (e.g. a center/right alignment tab with no w:tabs geometry). Tab characters are preserved
@@ -2813,13 +3004,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu (linia lub prostokąt) jako
-    /// przybliżenie HTML: preset line/straightConnector → pozioma linia (border-top z grubości/
-    /// koloru <c>a:ln</c>); prostokąt z <c>a:solidFill</c> → kolorowy blok. Kotwica → pozycja
-    /// absolutna (jak w Wordzie). Zwraca pusty string dla nieobsługiwanej geometrii (drop bez zmian).
+    /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu jako przybliżenie HTML:
+    /// preset line/straightConnector → pozioma linia (grubość/kolor z <c>a:ln</c>); prostokąt/
+    /// elipsa/zaokrąglony prostokąt z <c>a:solidFill</c> → kolorowy blok (z border-radius);
+    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „ING", ikona „!") → inline
+    /// <c>&lt;svg&gt;&lt;path&gt;</c> z wypełnieniem kształtu. Kotwica → pozycja absolutna (jak
+    /// w Wordzie). Zwraca pusty string dla nieobsługiwanej geometrii (drop bez zmian).
+    /// PODGLĄD-only: writer nie odtwarza tych kształtów do DOCX (tak samo jak istniejące
+    /// linie/prostokąty) — oryginał v1 jest nietykalny, a celem jest widoczność w edytorze.
     /// </summary>
-    private static string RenderVectorShapeAsHtml(Drawing drawing)
+    private string RenderVectorShapeAsHtml(Drawing drawing)
     {
+        var custom = drawing.Descendants<DocumentFormat.OpenXml.Drawing.CustomGeometry>().FirstOrDefault();
         var preset = drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>()
             .FirstOrDefault()?.Preset?.Value;
 
@@ -2849,18 +3045,139 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                  + $"background:#{lineColor};margin:2px 0;\"></div>";
         }
 
-        // Prostokąt z wypełnieniem — potrzebny widoczny rozmiar i tło.
-        if (preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle && widthPx > 0 && heightPx > 0)
+        // Kolor wypełnienia BIERZEMY z properties kształtu (spPr/a:solidFill), nie z pierwszego
+        // solidFill w poddrzewie — ten mógłby należeć do a:ln (obrys) lub ukrytej linii w extLst.
+        var fillHex = GetShapeFillHex(drawing, custom);
+        var strokeHex = HexColorOrNull(outline?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>()
+            .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
+
+        // Custom geometry (a:custGeom) — dowolna ścieżka wektorowa (logo/wordmark, ikona
+        // ostrzeżenia „!"). Wcześniej dropowana w całości (RenderVectorShape zwracał ""), więc
+        // grafika z oryginału NIE rysowała się w edytorze. Tłumaczymy ścieżkę na inline SVG.
+        if (custom != null && widthPx > 0 && heightPx > 0)
         {
-            var fill = HexColorOrNull(drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
-                .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
-            var bg = fill != null ? $"background:#{fill};" : string.Empty;
-            var border = $"border:{lineWidthPx}px solid #{lineColor};";
-            return $"<div class=\"docx-shape docx-rect\" data-shape=\"rect\" "
-                 + $"style=\"{pos}{bg}{border}box-sizing:border-box;\"></div>";
+            var svg = BuildCustomGeometrySvg(custom, widthPx, heightPx, fillHex, strokeHex, lineWidthPx);
+            if (!string.IsNullOrEmpty(svg))
+                return $"<div class=\"docx-shape docx-custgeom\" data-shape=\"custom\" "
+                     + $"style=\"{StripSize(pos)}width:{widthPx}px;height:{heightPx}px;\">{svg}</div>";
+        }
+
+        // Prostokąt / elipsa / zaokrąglony prostokąt z wypełnieniem — potrzebny widoczny rozmiar i tło.
+        var isBlock = preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Rectangle
+                      || preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Ellipse
+                      || preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.RoundRectangle;
+        if (isBlock && widthPx > 0 && heightPx > 0)
+        {
+            var bg = fillHex != null ? $"background:#{fillHex};" : string.Empty;
+            // Obrys tylko gdy a:ln faktycznie ma wypełnienie (noFill → brak ramki, jak w Wordzie).
+            var border = strokeHex != null ? $"border:{lineWidthPx}px solid #{strokeHex};" : string.Empty;
+            var radius = preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Ellipse
+                ? "border-radius:50%;"
+                : preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.RoundRectangle
+                    ? "border-radius:12%;"
+                    : string.Empty;
+            var shapeName = preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Ellipse ? "ellipse" : "rect";
+            return $"<div class=\"docx-shape docx-{shapeName}\" data-shape=\"{shapeName}\" "
+                 + $"style=\"{pos}{bg}{border}{radius}box-sizing:border-box;\"></div>";
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Kolor wypełnienia kształtu z jego <c>spPr/a:solidFill</c> (nie z obrysu ani ukrytej linii).
+    /// Obsługuje jawny <c>a:srgbClr</c>. Wypełnienie motywowe (<c>a:schemeClr</c>) bez mapowania —
+    /// kształt i tak pozostaje widoczny (fallback czarny w SVG / brak tła w bloku).
+    /// </summary>
+    private string? GetShapeFillHex(Drawing drawing, DocumentFormat.OpenXml.Drawing.CustomGeometry? custom)
+    {
+        var geom = (OpenXmlElement?)custom
+            ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>().FirstOrDefault();
+        var spPr = geom?.Parent; // wps:spPr / pic:spPr — element właściwości kształtu
+        var fill = spPr?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>().FirstOrDefault()
+                   ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
+                       .FirstOrDefault(f => f.Parent is not DocumentFormat.OpenXml.Drawing.Outline);
+        return HexColorOrNull(fill?.RgbColorModelHex?.Val?.Value);
+    }
+
+    /// <summary>
+    /// Tłumaczy <c>a:custGeom</c> (ścieżki DrawingML) na inline <c>&lt;svg&gt;&lt;path&gt;</c>.
+    /// Obsługiwane komendy: moveTo/lnTo/cubicBezTo/quadBezTo/close — pokrywają kształty
+    /// wielokątne i krzywe (glify logo). Współrzędne literalne w przestrzeni <c>a:path w/h</c>
+    /// (guides/formuły pomijane — rzadkie w eksportowanych ścieżkach). Zwraca "" gdy brak ścieżki.
+    /// </summary>
+    private static string BuildCustomGeometrySvg(DocumentFormat.OpenXml.Drawing.CustomGeometry custom,
+        int widthPx, int heightPx, string? fillHex, string? strokeHex, int strokeWidthPx)
+    {
+        var pathList = custom.GetFirstChild<DocumentFormat.OpenXml.Drawing.PathList>();
+        if (pathList == null) return string.Empty;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        long spaceW = 0, spaceH = 0;
+        var d = new StringBuilder();
+
+        static bool TryPt(DocumentFormat.OpenXml.Drawing.Point? p,
+            System.Globalization.CultureInfo inv, out double x, out double y)
+        {
+            x = y = 0;
+            if (p?.X?.Value == null || p.Y?.Value == null) return false;
+            return double.TryParse(p.X.Value, System.Globalization.NumberStyles.Float, inv, out x)
+                && double.TryParse(p.Y.Value, System.Globalization.NumberStyles.Float, inv, out y);
+        }
+        string F(double v) => v.ToString(inv);
+
+        foreach (var path in pathList.Elements<DocumentFormat.OpenXml.Drawing.Path>())
+        {
+            if (path.Width?.Value is long w && w > spaceW) spaceW = w;
+            if (path.Height?.Value is long h && h > spaceH) spaceH = h;
+
+            foreach (var cmd in path.ChildElements)
+            {
+                switch (cmd)
+                {
+                    case DocumentFormat.OpenXml.Drawing.MoveTo mv when TryPt(mv.Point, inv, out var x, out var y):
+                        d.Append('M').Append(F(x)).Append(' ').Append(F(y)).Append(' ');
+                        break;
+                    case DocumentFormat.OpenXml.Drawing.LineTo ln when TryPt(ln.Point, inv, out var x, out var y):
+                        d.Append('L').Append(F(x)).Append(' ').Append(F(y)).Append(' ');
+                        break;
+                    case DocumentFormat.OpenXml.Drawing.CubicBezierCurveTo cb:
+                    {
+                        var p = cb.Elements<DocumentFormat.OpenXml.Drawing.Point>().ToList();
+                        if (p.Count == 3 && TryPt(p[0], inv, out var x1, out var y1)
+                            && TryPt(p[1], inv, out var x2, out var y2) && TryPt(p[2], inv, out var ex, out var ey))
+                            d.Append('C').Append(F(x1)).Append(' ').Append(F(y1)).Append(' ')
+                                .Append(F(x2)).Append(' ').Append(F(y2)).Append(' ')
+                                .Append(F(ex)).Append(' ').Append(F(ey)).Append(' ');
+                        break;
+                    }
+                    case DocumentFormat.OpenXml.Drawing.QuadraticBezierCurveTo qb:
+                    {
+                        var p = qb.Elements<DocumentFormat.OpenXml.Drawing.Point>().ToList();
+                        if (p.Count == 2 && TryPt(p[0], inv, out var x1, out var y1)
+                            && TryPt(p[1], inv, out var ex, out var ey))
+                            d.Append('Q').Append(F(x1)).Append(' ').Append(F(y1)).Append(' ')
+                                .Append(F(ex)).Append(' ').Append(F(ey)).Append(' ');
+                        break;
+                    }
+                    case DocumentFormat.OpenXml.Drawing.CloseShapePath:
+                        d.Append("Z ");
+                        break;
+                }
+            }
+        }
+
+        if (d.Length == 0 || spaceW <= 0 || spaceH <= 0) return string.Empty;
+
+        var fill = fillHex != null ? $"#{fillHex}" : "#000000";
+        var stroke = strokeHex != null
+            ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
+            : string.Empty;
+        // preserveAspectRatio=none: proporcje extentu == proporcje przestrzeni ścieżki (Word je
+        // dopasowuje), więc rozciągamy dokładnie do rozmiaru z wp:extent.
+        return $"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {spaceW} {spaceH}\" "
+             + $"width=\"{widthPx}\" height=\"{heightPx}\" preserveAspectRatio=\"none\" "
+             + $"style=\"display:block;\"><path d=\"{d.ToString().Trim()}\" fill=\"{fill}\"{stroke}/></svg>";
     }
 
     private static string? HexColorOrNull(string? value)
@@ -2878,11 +3195,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Przybliżenie: <c>relativeFrom</c> (page/margin/column/paragraph) nie jest w pełni
     /// rozróżniane — offset stosowany bezpośrednio (najczęstszy przypadek page/margin).
     /// </summary>
-    private static string BuildTextBoxLayoutCss(OpenXmlElement container)
+    private string BuildTextBoxLayoutCss(OpenXmlElement container)
     {
         var extent = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
-        var widthPx = extent?.Cx != null ? (int)OoxmlUnits.EmuToPixels(extent.Cx.Value) : 0;
-        var heightPx = extent?.Cy != null ? (int)OoxmlUnits.EmuToPixels(extent.Cy.Value) : 0;
+        var widthEmu = extent?.Cx?.Value ?? 0;
+        var heightEmu = extent?.Cy?.Value ?? 0;
+        var widthPx = widthEmu > 0 ? (int)OoxmlUnits.EmuToPixels(widthEmu) : 0;
+        var heightPx = heightEmu > 0 ? (int)OoxmlUnits.EmuToPixels(heightEmu) : 0;
 
         var sizeCss = new StringBuilder();
         if (widthPx > 0) sizeCss.Append($"width:{widthPx}px;");
@@ -2892,15 +3211,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (anchor == null)
             return "display:inline-block;max-width:100%;vertical-align:top;margin:4px 0;" + sizeCss;
 
-        long ReadOffset(OpenXmlElement? pos) =>
-            pos?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text is string s
-            && long.TryParse(s, System.Globalization.NumberStyles.Integer,
-                System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
-
-        var leftPx = (int)OoxmlUnits.EmuToPixels(
-            ReadOffset(anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition>()));
-        var topPx = (int)OoxmlUnits.EmuToPixels(
-            ReadOffset(anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition>()));
+        // Kotwica → pozycja absolutna z uwzględnieniem relativeFrom + wp:align (jak w Wordzie).
+        var (xEmu, yEmu) = ResolveAnchorPosition(anchor, widthEmu, heightEmu);
+        var leftPx = (int)OoxmlUnits.EmuToPixels(xEmu);
+        var topPx = (int)OoxmlUnits.EmuToPixels(yEmu);
         var zIndex = anchor.BehindDoc?.Value == true ? "z-index:0;" : "z-index:1;";
 
         return $"position:absolute;left:{leftPx}px;top:{topPx}px;{zIndex}" + sizeCss;
@@ -3378,17 +3692,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (anchor != null)
         {
             var behind = anchor.BehindDoc?.Value == true;
-            var posH = anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition>();
-            var posV = anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition>();
-            long xEmu = 0, yEmu = 0;
-            if (posH?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text is string xText
-                && long.TryParse(xText, System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture, out var xParsed))
-                xEmu = xParsed;
-            if (posV?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text is string yText
-                && long.TryParse(yText, System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture, out var yParsed))
-                yEmu = yParsed;
+            // Rozwiązanie kotwicy do offsetu w układzie edytora: uwzględnia relativeFrom
+            // (page/margin/column/…) oraz wp:align (right/center/…), a nie tylko surowy posOffset.
+            var (xEmu, yEmu) = ResolveAnchorPosition(anchor, widthEmu, heightEmu);
             posAttrs = $" data-pos-mode=\"{(behind ? "behind" : "front")}\""
                 + $" data-x-emu=\"{xEmu}\" data-y-emu=\"{yEmu}\"";
         }
@@ -3673,11 +3979,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var rowGridTotal = rowCells.Sum(GetGridSpan);
             var deficit = renderCtx.GridColumnCount - rowGridTotal;
 
+            // Legacy horizontal merge (w:hMerge): the restart cell owns the merged region and the
+            // following continue cells only reserve grid columns. Fold their spans into the restart
+            // cell's colspan and skip them — rendering them as separate <td> squeezes the merged
+            // content into the first narrow column with empty phantom cells to its right.
+            var renderPlan = BuildRowRenderPlan(rowCells);
+
             var gridCursor = 0;
-            for (var ci = 0; ci < rowCells.Count; ci++)
+            for (var ci = 0; ci < renderPlan.Count; ci++)
             {
-                var extraColspan = (deficit > 0 && ci == rowCells.Count - 1) ? deficit : 0;
-                AppendTableCellHtml(html, table, rows, rowIndex, rowCells[ci], renderCtx,
+                var extraColspan = renderPlan[ci].HMergeExtraSpan
+                    + ((deficit > 0 && ci == renderPlan.Count - 1) ? deficit : 0);
+                AppendTableCellHtml(html, table, rows, rowIndex, renderPlan[ci].Cell, renderCtx,
                     ref gridCursor, extraColspan, document, sourcePart);
             }
 
@@ -3782,6 +4095,40 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var gs = cell.TableCellProperties?.GridSpan?.Val?.Value;
         return gs is > 0 ? gs.Value : 1;
+    }
+
+    /// <summary>
+    /// Plan renderowania komórek wiersza z obsługą legacy <c>w:hMerge</c>: komórka restart
+    /// pochłania kolumny siatki (gridSpan) kolejnych komórek continue, a same continue nie
+    /// emitują <c>&lt;td&gt;</c> — analogicznie do kontynuacji vMerge. Continue bez
+    /// poprzedzającego restart renderuje się normalnie (dokument niepoprawny; nie gubimy treści).
+    /// </summary>
+    private static List<(TableCell Cell, int HMergeExtraSpan)> BuildRowRenderPlan(List<TableCell> rowCells)
+    {
+        var plan = new List<(TableCell, int)>(rowCells.Count);
+        for (var i = 0; i < rowCells.Count; i++)
+        {
+            var cell = rowCells[i];
+            var extra = 0;
+            if (GetHMerge(cell) == MergedCellValues.Restart)
+            {
+                while (i + 1 < rowCells.Count && GetHMerge(rowCells[i + 1]) == MergedCellValues.Continue)
+                {
+                    extra += GetGridSpan(rowCells[i + 1]);
+                    i++;
+                }
+            }
+            plan.Add((cell, extra));
+        }
+        return plan;
+    }
+
+    private static MergedCellValues? GetHMerge(TableCell cell)
+    {
+        var hMerge = cell.TableCellProperties?.HorizontalMerge;
+        if (hMerge == null) return null;
+        // Pominięty val oznacza "continue" (ECMA-376) — tak samo jak przy vMerge.
+        return hMerge.Val?.Value ?? MergedCellValues.Continue;
     }
 
     /// <summary>Komórki wiersza w kolejności dokumentu, z rozpakowaniem komórek w SDT.</summary>
@@ -4346,7 +4693,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return sb.ToString();
     }
 
-    private string ConvertSdtBlockToHtml(SdtBlock sdtBlock, WordprocessingDocument document)
+    private string ConvertSdtBlockToHtml(SdtBlock sdtBlock, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         var html = new StringBuilder();
         var content = sdtBlock.SdtContentBlock;
@@ -4370,7 +4717,24 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 }
                 else
                 {
-                    html.Append(ConvertElementToHtml(el, document));
+                    // sourcePart musi być przekazany, żeby obrazy w formancie osadzonym
+                    // w nagłówku/stopce rozwiązywały się względem właściwej części pakietu
+                    // (rId są unikalne per część — inaczej podmiana/utrata obrazu).
+                    switch (el)
+                    {
+                        case Paragraph para:
+                            html.Append(ConvertParagraphToHtml(para, document, sourcePart));
+                            break;
+                        case Table table:
+                            html.Append(ConvertTableToHtml(table, document, sourcePart));
+                            break;
+                        case SdtBlock nested:
+                            html.Append(ConvertSdtBlockToHtml(nested, document, sourcePart));
+                            break;
+                        default:
+                            html.Append(ConvertElementToHtml(el, document));
+                            break;
+                    }
                     i++;
                 }
             }

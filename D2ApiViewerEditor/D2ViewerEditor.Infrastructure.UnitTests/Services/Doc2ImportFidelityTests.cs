@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -213,6 +213,88 @@ public class Doc2ImportFidelityTests
         html.Should().NotContain("colspan");
     }
 
+    [Test]
+    public void HMergeRow_FoldsContinueCellsIntoRestartColspan()
+    {
+        // Legacy w:hMerge (restart + continue continue) — the mechanism gridSpan does not cover.
+        // The merged region must render as ONE wide cell, not content pinned to the first
+        // narrow column with empty phantom cells to the right.
+        var table = ThreeColTable(
+            Row(Cell("H1"), Cell("H2"), Cell("H3")),
+            Row(HMergeCell("MERGED", MergedCellValues.Restart),
+                HMergeCell("", MergedCellValues.Continue),
+                HMergeCell("", MergedCellValues.Continue)));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("<td colspan=\"3\"");
+        html.Should().Contain("MERGED");
+        // 3 komórki nagłówka + 1 scalona — kontynuacje nie emitują <td>.
+        System.Text.RegularExpressions.Regex.Matches(html, "<td").Count.Should().Be(4);
+    }
+
+    [Test]
+    public void HMergeContinue_WithOmittedVal_IsTreatedAsContinue()
+    {
+        // Pominięty w:val na w:hMerge = "continue" (ECMA-376) — jak przy vMerge.
+        var table = ThreeColTable(
+            Row(Cell("H1"), Cell("H2"), Cell("H3")),
+            Row(HMergeCell("AB", MergedCellValues.Restart), HMergeCell("", null), Cell("C")));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("<td colspan=\"2\"");
+        html.Should().Contain("AB").And.Contain("C");
+        System.Text.RegularExpressions.Regex.Matches(html, "<td").Count.Should().Be(5);
+    }
+
+    [Test]
+    public void HMergeContinue_WithoutRestart_RendersNormally_NoContentLoss()
+    {
+        var table = ThreeColTable(
+            Row(Cell("A"), HMergeCell("ORPHAN", MergedCellValues.Continue), Cell("C")));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("ORPHAN");
+        System.Text.RegularExpressions.Regex.Matches(html, "<td").Count.Should().Be(3);
+    }
+
+    private static TableCell HMergeCell(string text, MergedCellValues? val)
+    {
+        var hMerge = val == null ? new HorizontalMerge() : new HorizontalMerge { Val = val };
+        return new TableCell(
+            new TableCellProperties(hMerge),
+            new Paragraph(new Run(new Text(text))));
+    }
+
+    // ---- Tabs inside table cells: no absolutely-positioned segments -------------------
+
+    [Test]
+    public void TabInsideTableCell_DoesNotUsePositionedSegments()
+    {
+        // Absolutne segmenty tabów (left:{stop}px na position:relative akapicie) w wąskiej
+        // komórce wyjeżdżają poza komórkę i nakładają się na sąsiednią kolumnę (nagłówki
+        // "Waluta"/"Termin spłaty" z dokumentu ING). W komórce tab renderuje się inline,
+        // a stopy przeżywają w data-tab-stops (round-trip bez zmian).
+        var cellPara = new Paragraph(
+            new ParagraphProperties(new Tabs(new TabStop { Val = TabStopValues.Right, Position = 9000 })),
+            new Run(new Text("Waluta")), new Run(new TabChar()), new Run(new Text("PLN")));
+        var table = ThreeColTable(
+            Row(new TableCell(new TableCellProperties(), cellPara), Cell("B"), Cell("C")));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().NotContain("docx-tab-seg");
+        html.Should().NotContain("position:absolute");
+        html.Should().Contain("data-tab-stops=\"9000:right\"");
+        html.Should().Contain("Waluta").And.Contain("PLN");
+    }
+
     private static Table ThreeColTable(params TableRow[] rows)
     {
         var t = new Table(
@@ -290,14 +372,16 @@ public class Doc2ImportFidelityTests
     [Test]
     public void AnchoredTextBox_IsAbsolutelyPositionedFromWordOffsets()
     {
-        // wp:anchor offset 914400 EMU = 1 in = 96 px (poziom i pion).
+        // Poziomo: page-relative 914400 EMU = 1 in = 96 px od lewej krawędzi strony.
+        // Pionowo: obszar treści zaczyna się o górny margines (domyślnie 1 in) poniżej
+        // krawędzi strony, więc page-relative 2 in (1828800) ląduje 1 in (96 px) niżej.
         const string body = @"<w:p><w:r>
   <w:drawing>
     <wp:anchor behindDoc=""0"" relativeHeight=""1"" allowOverlap=""1"" simplePos=""0""
       locked=""0"" layoutInCell=""1"">
       <wp:simplePos x=""0"" y=""0""/>
       <wp:positionH relativeFrom=""page""><wp:posOffset>914400</wp:posOffset></wp:positionH>
-      <wp:positionV relativeFrom=""page""><wp:posOffset>914400</wp:posOffset></wp:positionV>
+      <wp:positionV relativeFrom=""page""><wp:posOffset>1828800</wp:posOffset></wp:positionV>
       <wp:extent cx=""1828800"" cy=""457200""/>
       <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
         <wps:wsp><wps:txbx><w:txbxContent>
@@ -339,6 +423,42 @@ public class Doc2ImportFidelityTests
         html.Should().Contain("background:#FF6600;");
         html.Should().Contain("width:576px;");   // 5486400 EMU = 576 px
         html.Should().Contain("height:2px;");     // 19050 EMU ≈ 2 px
+    }
+
+    [Test]
+    public void CustomGeometryShape_WithoutImage_RendersAsInlineSvgPath()
+    {
+        // Kształt DrawingML z własną ścieżką (a:custGeom) — np. wordmark „ING" / ikona „!".
+        // Wcześniej dropowany w całości (RenderVectorShape zwracał ""), więc grafika z
+        // oryginału NIE rysowała się w edytorze. Teraz → inline <svg><path> z kolorem kształtu.
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""817245"" cy=""276860""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp><wps:spPr>
+        <a:custGeom><a:pathLst>
+          <a:path w=""100"" h=""50"">
+            <a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo>
+            <a:lnTo><a:pt x=""100"" y=""0""/></a:lnTo>
+            <a:lnTo><a:pt x=""100"" y=""50""/></a:lnTo>
+            <a:close/>
+          </a:path>
+        </a:pathLst></a:custGeom>
+        <a:solidFill><a:srgbClr val=""000066""/></a:solidFill>
+        <a:ln><a:noFill/></a:ln>
+      </wps:spPr></wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        using var ms = DocxFromRawBody(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-custgeom");
+        html.Should().Contain("<svg").And.Contain("viewBox=\"0 0 100 50\"");
+        html.Should().Contain("<path d=\"M0 0 L100 0 L100 50 Z\"");
+        html.Should().Contain("fill=\"#000066\"");
+        // a:ln = noFill → brak obrysu (jak w Wordzie).
+        html.Should().NotContain("stroke=");
     }
 
     [Test]
@@ -421,6 +541,40 @@ public class Doc2ImportFidelityTests
         decoded.Should().NotContain("script");
         decoded.Should().NotContain("onload");
         decoded.Should().NotContain("onclick");
+    }
+
+    [Test]
+    public void SvgLogoBuiltFromDefsAndUse_KeepsVisibleContentInDataUri()
+    {
+        // Regresja „puste białe logo": SVG złożone z <defs>+<use href='#id'> (typowy eksport
+        // logo korporacyjnego) traciło wszystkie <use> w sanityzacji — w edytorze zostawał
+        // obraz o poprawnych wymiarach bez żadnej widocznej treści.
+        var svg =
+            "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' viewBox='0 0 100 40'>"
+            + "<defs><path id='lion' d='M10 10 C 20 0, 40 0, 50 10 Z' fill='#ff6200'/></defs>"
+            + "<use xlink:href='#lion'/></svg>";
+        using var ms = DocxWithSvg(svg, "image/svg+xml");
+
+        var result = _reader.Convert(ms);
+
+        result.Html.Should().Contain("data:image/svg+xml;base64,");
+        var decoded = DecodeSingleImage(result);
+        decoded.Should().Contain("<use").And.Contain("#lion");
+    }
+
+    [Test]
+    public void SvgWithUtf8Bom_IsAcceptedAndEmbedded()
+    {
+        // Prefiks BOM w bajtach partu wywalał parser XML → cały poprawny SVG był pomijany,
+        // a obraz znikał z edytora bez śladu.
+        var svg = "\uFEFF<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'>"
+                  + "<rect width='10' height='10' fill='red'/></svg>";
+        using var ms = DocxWithSvg(svg, "image/svg+xml");
+
+        var result = _reader.Convert(ms);
+
+        result.Images.Should().ContainSingle();
+        result.Html.Should().Contain("data:image/svg+xml;base64,");
     }
 
     [Test]

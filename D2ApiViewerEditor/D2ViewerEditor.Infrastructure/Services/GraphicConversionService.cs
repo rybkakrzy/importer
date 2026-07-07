@@ -271,12 +271,18 @@ public sealed class GraphicConversionService : IGraphicConversionService
         var vector = MetafileVectorTranslator.Translate(kind, source.Data, w, h);
         if (vector != null && SanitizeSvg(vector.Svg) is { } safeSvg)
         {
-            warnings.Add($"{kind}: rekordy wektorowe przetłumaczone na SVG (etap 1 — podzbiór GDI).");
+            warnings.Add($"{kind}: rekordy wektorowe przetłumaczone na SVG (etap 1 — podzbiór GDI). " +
+                $"rec={vector.RecordCount} win/vp={(vector.UsedWindowViewport ? "yes" : "no")} skipped={vector.SkippedRecords}.");
             if (vector.SkippedRecords > 0)
             {
                 warnings.Add($"{kind}: pominięto {vector.SkippedRecords} rekordów spoza podzbioru.");
                 lost.Add("Rekordy GDI spoza podzbioru etapu 1 (tekst, clipping, ROP, EMF+).");
             }
+            // Treść po zmapowaniu nie trafiła w rclBounds → viewBox z bbox treści. Grafika BĘDZIE
+            // widoczna, ale kadr/proporcje mogą odbiegać — jawny sygnał w diagnostyce dla logu.
+            if (vector.ContentOutsideDeviceBounds)
+                warnings.Add($"{kind}: treść poza rclBounds — viewBox dopasowany do bbox treści " +
+                    $"(mapowanie window/viewport niepełne). Profil: {MetafileVectorTranslator.Profile(kind, source.Data)}");
             return new GraphicConversionResult
             {
                 Web = new WebGraphicRepresentation
@@ -294,7 +300,10 @@ public sealed class GraphicConversionService : IGraphicConversionService
 
         // Brak osadzonego rastra i nic do przetłumaczenia → przezroczysty, niewidoczny element
         // zachowujący wymiary/układ. Oryginał zachowany do eksportu (data-original-src).
+        // Profil rekordów w diagnostyce: gdy KOLEJNE logo znów wyjdzie puste, log pokaże DOKŁADNIE
+        // z jakich rekordów zbudowany jest metafile (np. czego brakuje tłumaczowi).
         lost.Add("Podgląd wektorowego metafile (renderowany w Word z zachowanego oryginału).");
+        lost.Add($"Profil rekordów: {MetafileVectorTranslator.Profile(kind, source.Data)}");
         return BlankFallback(kind, source, options, cacheKey, sw, attempted, warnings, lost,
             GraphicConversionStatus.Fallback,
             $"{kind} czysto wektorowy bez osadzonego rastra i bez rekordów obsługiwanych przez tłumacz SVG.",
@@ -357,15 +366,28 @@ public sealed class GraphicConversionService : IGraphicConversionService
     public string? SanitizeSvg(string svgXml)
     {
         if (string.IsNullOrWhiteSpace(svgXml)) return null;
+        // Realne pliki logo bywają zapisane z BOM (U+FEFF) — parser XML czytający string
+        // odrzuca go jako nieprawidłowe dane na poziomie root i cały SVG był tracony.
+        svgXml = svgXml.TrimStart('\uFEFF', '\u200B', ' ', '\t', '\r', '\n');
         XElement root;
         try { root = SafeParse(svgXml); }
         catch { return null; }
         if (!root.Name.LocalName.Equals("svg", StringComparison.OrdinalIgnoreCase)) return null;
 
-        // Usuń niebezpieczne elementy.
+        // Usuń niebezpieczne elementy. <use> celowo NIE jest na liście: use z wewnętrznym
+        // odnośnikiem (#id) wskazuje treść tego samego (już sanityzowanego) dokumentu i jest
+        // podstawą typowych logo (<defs>+<use>) — wycinanie wszystkich use zostawiało
+        // niewidoczne defs, czyli pusty biały obraz o poprawnych wymiarach.
         var killTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "script", "foreignObject", "iframe", "use", "set", "animate", "animateTransform", "handler" };
+            { "script", "foreignObject", "iframe", "set", "animate", "animateTransform", "handler" };
         root.Descendants().Where(e => killTags.Contains(e.Name.LocalName)).ToList().ForEach(e => e.Remove());
+
+        // <use> bez bezpiecznego wewnętrznego href (zewnętrzny URL/data:/brak) = wektor ataku
+        // (ładowanie obcych dokumentów) — usuwany w całości.
+        root.Descendants()
+            .Where(e => e.Name.LocalName.Equals("use", StringComparison.OrdinalIgnoreCase)
+                        && !HasInternalFragmentHref(e))
+            .ToList().ForEach(e => e.Remove());
 
         foreach (var el in root.DescendantsAndSelf())
         {
@@ -388,6 +410,12 @@ public sealed class GraphicConversionService : IGraphicConversionService
         var result = root.ToString(SaveOptions.DisableFormatting);
         return string.IsNullOrWhiteSpace(result) ? null : result;
     }
+
+    /// <summary>Czy element ma odnośnik href/xlink:href wskazujący WEWNĄTRZ dokumentu (#id).</summary>
+    private static bool HasInternalFragmentHref(XElement el) =>
+        el.Attributes().Any(a =>
+            a.Name.LocalName.Equals("href", StringComparison.OrdinalIgnoreCase)
+            && a.Value.Trim().StartsWith("#", StringComparison.Ordinal));
 
     // ---- cache key ----------------------------------------------------------------
 
@@ -804,7 +832,10 @@ public sealed class GraphicConversionService : IGraphicConversionService
     {
         var settings = new XmlReaderSettings
         {
-            DtdProcessing = DtdProcessing.Prohibit,   // blokuje DTD/encje (XXE/billion laughs)
+            // Ignore (nie Prohibit): DTD jest POMIJANY bez przetwarzania — XXE/billion-laughs nadal
+            // niemożliwe (encje pozostają niezdefiniowane → parser rzuca → odrzucenie), a łagodny
+            // DOCTYPE (standard w SVG z eksportu Illustratora) nie wyrzuca całego, legalnego logo.
+            DtdProcessing = DtdProcessing.Ignore,
             XmlResolver = null,                        // brak rozwiązywania zewnętrznych zasobów
             MaxCharactersFromEntities = 0,
             IgnoreComments = true,

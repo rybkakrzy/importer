@@ -124,6 +124,42 @@ public class SdtContentControlRoundTripTests
         props.Elements<Tag>().First().Val!.Value.Should().Be("X");
     }
 
+    [Test]
+    public void BlockContentControl_InFooter_ContentIsNotDropped()
+    {
+        using var ms = DocxWithFooterSdt(
+            new SdtBlock(
+                new SdtProperties(new Tag { Val = "removeif_nondigitalversion" }),
+                new SdtContentBlock(new Paragraph(new Run(new Text(
+                    "Dokument wygenerowany elektronicznie, nie wymaga pieczeci ani podpisu."))))));
+
+        var footer = _reader.Convert(ms).Footer;
+        footer.Should().NotBeNull();
+        footer!.Html.Should().Contain("Dokument wygenerowany elektronicznie");
+        footer.Html.Should().Contain("sdt-block");
+        footer.Html.Should().Contain("data-sdt-tag=\"removeif_nondigitalversion\"");
+    }
+
+    private static MemoryStream DocxWithFooterSdt(OpenXmlElement footerChild)
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var footerPart = main.AddNewPart<FooterPart>();
+            footerPart.Footer = new Footer(footerChild);
+            footerPart.Footer.Save();
+            var rid = main.GetIdOfPart(footerPart);
+
+            var sectPr = new SectionProperties(
+                new FooterReference { Type = HeaderFooterValues.Default, Id = rid });
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text("body"))), sectPr));
+            main.Document.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
     private SdtBlock RoundTripFirstSdt(string html)
     {
         var bytes = _writer.Convert(html);

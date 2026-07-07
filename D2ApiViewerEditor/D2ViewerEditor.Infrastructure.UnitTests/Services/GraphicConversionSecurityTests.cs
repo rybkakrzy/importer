@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using D2ViewerEditor.Domain.Models;
 using D2ViewerEditor.Infrastructure.Services;
 using FluentAssertions;
@@ -44,11 +44,74 @@ public class GraphicConversionSecurityTests
     public void SanitizeSvg_KeepsSafeDataHrefAndFragment()
     {
         var svg = "<svg xmlns='http://www.w3.org/2000/svg'><image href='data:image/png;base64,AAAA'/><use href='#g'/></svg>";
-        // 'use' jest usuwany (wektor ataku), ale data: href na image musi przetrwać.
+        // Wewnętrzny <use href='#id'> jest bezpieczny (wskazuje już-sanityzowaną treść tego samego
+        // dokumentu) i MUSI przetrwać — typowe logo to <defs>+<use>; data: href na image także.
         var clean = _svc.SanitizeSvg(svg);
         clean.Should().NotBeNull();
         clean!.Should().Contain("data:image/png;base64,AAAA");
-        clean.Should().NotContain("<use"); // 'use' na liście zakazanych
+        clean.Should().Contain("<use");
+    }
+
+    [Test]
+    public void SanitizeSvg_LogoBuiltFromDefsAndUse_KeepsVisibleContent()
+    {
+        // Regresja: logo (np. korporacyjne) zbudowane wyłącznie z <defs>+<use> renderowało się
+        // jako pusty biały obraz, bo sanitizer wycinał WSZYSTKIE <use> zostawiając niewidoczne defs.
+        var svg =
+            "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' viewBox='0 0 100 40'>" +
+            "<defs><path id='lion' d='M10 10 C 20 0, 40 0, 50 10 Z' fill='#ff6200'/></defs>" +
+            "<use xlink:href='#lion'/><use href='#lion' x='50'/>" +
+            "</svg>";
+
+        var clean = _svc.SanitizeSvg(svg);
+
+        clean.Should().NotBeNull();
+        clean!.Should().Contain("<defs");
+        System.Text.RegularExpressions.Regex.Matches(clean, "<use").Count.Should().Be(2);
+    }
+
+    [Test]
+    public void SanitizeSvg_UseWithExternalHref_IsRemoved()
+    {
+        var svg =
+            "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>" +
+            "<use xlink:href='http://evil.example/doc.svg#x'/>" +
+            "<use href='data:image/svg+xml;base64,AAAA'/>" +
+            "<use/>" +
+            "<rect width='10' height='10'/>" +
+            "</svg>";
+
+        var clean = _svc.SanitizeSvg(svg);
+
+        clean.Should().NotBeNull();
+        clean!.Should().NotContain("<use");
+        clean.Should().NotContain("evil.example");
+        clean.Should().Contain("<rect");
+    }
+
+    [Test]
+    public void SanitizeSvg_Utf8BomPrefix_IsAccepted()
+    {
+        // Realne pliki logo z Windows bywają zapisane z BOM — U+FEFF na początku stringa
+        // wywalał parser XML i cały (poprawny) SVG był odrzucany, a obraz znikał z edytora.
+        var svg = "\uFEFF<svg xmlns='http://www.w3.org/2000/svg'><rect width='10' height='10'/></svg>";
+        var clean = _svc.SanitizeSvg(svg);
+        clean.Should().NotBeNull();
+        clean!.Should().Contain("<rect");
+    }
+
+    [Test]
+    public void SanitizeSvg_BenignIllustratorDoctype_IsAccepted()
+    {
+        // Starsze eksporty (Illustrator) niosą DOCTYPE bez encji — DtdProcessing.Ignore pomija go
+        // zamiast odrzucać cały plik.
+        var svg =
+            "<?xml version='1.0' encoding='utf-8'?>" +
+            "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\">" +
+            "<svg xmlns='http://www.w3.org/2000/svg'><rect width='10' height='10'/></svg>";
+        var clean = _svc.SanitizeSvg(svg);
+        clean.Should().NotBeNull();
+        clean!.Should().Contain("<rect");
     }
 
     [Test]
@@ -59,7 +122,8 @@ public class GraphicConversionSecurityTests
             "<!DOCTYPE svg [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]>" +
             "<svg xmlns='http://www.w3.org/2000/svg'><text>&xxe;</text></svg>";
 
-        // DtdProcessing.Prohibit → parsowanie rzuca → null (odrzucone), bez odczytu pliku.
+        // DtdProcessing.Ignore → DTD pomijany bez przetwarzania, encja pozostaje niezdefiniowana
+        // → parser rzuca → null (odrzucone), bez odczytu pliku.
         _svc.SanitizeSvg(xxe).Should().BeNull();
     }
 

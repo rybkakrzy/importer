@@ -65,6 +65,39 @@ public class DocxToHtmlConverterSectionReferenceTests
         return ms;
     }
 
+    /// <summary>
+    /// Word's "Different first page" with an EMPTY default: the section declares titlePg and a
+    /// first-page header/footer reference, but NO default reference. The first-page content must
+    /// stay on page 1 only; ordinary pages get an empty default (not the first-page content
+    /// leaking through the FirstOrDefault() package-part fallback).
+    /// </summary>
+    private static MemoryStream BuildDocxWithFirstPageOnlyReferences()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+
+            // Only first-page parts exist in the package — the FirstOrDefault() fallback would
+            // grab these and render them as the default on every page (the bug being guarded).
+            var firstHeader = AddHeader(mainPart, "FIRST-ONLY-HEADER");
+            var firstFooter = AddFooter(mainPart, "FIRST-ONLY-FOOTER");
+
+            var sectPr = new SectionProperties();
+            sectPr.Append(new HeaderReference { Type = HeaderFooterValues.First, Id = mainPart.GetIdOfPart(firstHeader) });
+            sectPr.Append(new FooterReference { Type = HeaderFooterValues.First, Id = mainPart.GetIdOfPart(firstFooter) });
+            sectPr.Append(new TitlePage());
+            sectPr.Append(new PageMargin { Top = 1417, Bottom = 1417, Left = 1417, Right = 1417, Header = 708, Footer = 708 });
+            body.Append(sectPr);
+
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
     private static HeaderPart AddHeader(MainDocumentPart mainPart, string text)
     {
         var part = mainPart.AddNewPart<HeaderPart>();
@@ -169,5 +202,33 @@ public class DocxToHtmlConverterSectionReferenceTests
 
         content.Footer!.DifferentOddEven.Should().BeTrue();
         content.Footer.EvenHtml.Should().Contain("EVEN-FOOTER");
+    }
+
+    [Test]
+    public void Header_FirstPageOnly_KeepsFirstPageContentOffOrdinaryPages()
+    {
+        using var stream = BuildDocxWithFirstPageOnlyReferences();
+
+        var content = _converter.Convert(stream);
+
+        // First page gets the content...
+        content.Header!.DifferentFirstPage.Should().BeTrue();
+        content.Header.FirstPageHtml.Should().Contain("FIRST-ONLY-HEADER");
+        // ...but the default (ordinary pages) must be empty, NOT the first-page content.
+        content.Header.Html.Should().NotContain("FIRST-ONLY-HEADER");
+        content.Header.Html.Should().BeEmpty();
+    }
+
+    [Test]
+    public void Footer_FirstPageOnly_KeepsFirstPageContentOffOrdinaryPages()
+    {
+        using var stream = BuildDocxWithFirstPageOnlyReferences();
+
+        var content = _converter.Convert(stream);
+
+        content.Footer!.DifferentFirstPage.Should().BeTrue();
+        content.Footer.FirstPageHtml.Should().Contain("FIRST-ONLY-FOOTER");
+        content.Footer.Html.Should().NotContain("FIRST-ONLY-FOOTER");
+        content.Footer.Html.Should().BeEmpty();
     }
 }

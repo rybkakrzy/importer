@@ -2,7 +2,26 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
-## Ostatnia aktualizacja (2026-07-05)
+## Ostatnia aktualizacja (2026-07-07)
+
+- **Kotwiczone obiekty (wp:anchor) — pozycja jak w Wordzie (ADR-0029).**
+   - Reader rozwiązuje kotwicę do współrzędnych edytora przez `ResolveAnchorPosition`/`ResolveAxis`: X = lewa krawędź strony (page-relative), Y = góra obszaru treści (page-relative − górny margines). Uwzględnia `relativeFrom` (page/margin/column/leftMargin/rightMargin/insideMargin/outsideMargin/…) i `wp:align` (right/center/left/inside/outside; rozmiar z `wp:extent`). Geometria 1. sekcji w polach instancji (`LoadPageGeometry`, brak `w:pgMar` → 1440 twips). Wpięte w `ConvertDrawingToHtml` (obrazy → `data-x-emu`/`data-y-emu`) i `BuildTextBoxLayoutCss`/`RenderVectorShapeAsHtml` (pola tekstowe/kształty → inline `position:absolute`).
+   - Writer: pionowa kotwica `RelativeFrom=Margin` (poziomo `Page`) → round-trip idempotentny (reader dodaje i odejmuje ten sam górny margines) i poprawny render w Wordzie. Front NIE zmieniany (restore czyta gotowe współrzędne).
+   - Testy: nowy `DocxAnchorPositionFidelityTests` 8/8; zaktualizowane `Doc2ImportFidelityTests.AnchoredTextBox…` i `ImageFloatingRoundTripTests`; Infrastructure 339/339, build solucji 0 błędów.
+   - **Do rozważenia dalej:** dokładniejszy Y (pomiar realnego pasma nagłówka zamiast założenia „≈ górny margines"), `wp:align` pionowy center/bottom, rozróżnienie inside/outside dla stron parzystych, `wrapSquare`/`wrapTight` (opływanie tekstem) zamiast obecnego front/behind.
+
+- **SVG „puste białe logo" w nagłówku (Doc2/ING) — sanitizer naprawiony u źródła.**
+   - `GraphicConversionService.SanitizeSvg`: (1) wewnętrzny `<use href="#id">` ZOSTAJE (wcześniej wycinany bezwarunkowo — logo z `<defs>`+`<use>` = pusty biały obraz o poprawnych wymiarach), zewnętrzny/data:/bez href usuwany (`HasInternalFragmentHref`); (2) UTF-8 BOM trimowany przed parsowaniem (wcześniej cały SVG odrzucany); (3) `SafeParse`: `DtdProcessing.Prohibit`→`Ignore` (DOCTYPE Illustratora przechodzi; XXE nadal null — encje niezdefiniowane rzucają).
+   - Testy: `GraphicConversionSecurityTests` +4 i zaktualizowany `SanitizeSvg_KeepsSafeDataHrefAndFragment` (poprzednio pilnował usuwania use), `Doc2ImportFidelityTests` +2 E2E (defs/use w data-URI, BOM). SVG-testy 25/25; Infrastructure 325/328 w czystym worktree (3 faile = WIP hMerge/tab-in-cell z sesji tabelowej, niezwiązane).
+   - **Triage gdy logo nadal puste po wdrożeniu:** logi backendu „SVG part pominięty…" / „Media part bez rastra web…"; w DOM edytora `data-legacy-graphic="blank"` na `<img>` ⇒ metafile EMF+ (poza etapem 1 ADR-0027 — patrz kandydaci etapu 2: parsowanie EMF+ z GDICOMMENT). Najlepiej pozyskać źródłowy DOCX i przepuścić przez `tools/docx-diagnostics/inspect-docx`.
+   - Ograniczenie bez zmian: writer dropuje SVG na eksporcie HTML→DOCX (utrata na 1. autosave; roadmapa `asvg:svgBlip`/rasteryzacja SVG→PNG).
+
+- **Tabele Doc2/ING — druga runda (screenshot edytor vs Word):**
+   - `w:hMerge` (legacy scalanie poziome) obsłużony w readerze: `BuildRowRenderPlan` + `GetHMerge` w `DocxToHtmlConverter` (restart pochłania continue jako colspan; continue pomijane jak kontynuacje vMerge; pominięty val = continue; sierota renderowana normalnie). Fix „deficytu kolumn" z 2026-07-06 zostaje — dotyczył KRÓTKICH wierszy, ten dokument używał hMerge.
+   - Taby POZYCYJNE wyłączone wewnątrz komórek tabel (`usePositionedTabs && !paragraph.Ancestors<TableCell>().Any()`) — absolutne segmenty wyjeżdżały poza wąską komórkę (nałożone nagłówki) i wyłączały text-align komórki. W komórce: inline spacer/flex jak dawniej; `data-tab-stops` dalej round-tripuje.
+   - Testy: `Doc2ImportFidelityTests` 24/24 (+4). Infrastructure 321/322.
+   - **Wyjaśnione:** fail `SanitizeSvg_KeepsSafeDataHrefAndFragment` pochodził z RÓWNOLEGŁEJ sesji SVG w tym samym drzewie (produkcja już zachowywała `<use>`, test chwilowo stary) — domknięte wpisem „SVG puste białe logo" wyżej, test zaktualizowany, komplet zielony.
+   - Jeśli tabela ING nadal odbiega: kandydaci = warunkowe formatowanie TEKSTU ze stylu tabeli (jc/bold nagłówka ze stylu — znane ograniczenie ADR-0026) oraz reguła „tab skacze do NASTĘPNEGO stopu za bieżącą pozycją x" (k-ty tab → k-ty stop).
 
 - **Własny tłumacz wektorowy EMF/WMF → SVG, etap 1 (ADR-0027).**
    - Nowy `MetafileVectorTranslator` (Infrastructure, internal, pure-managed — zero zależności) tłumaczy podzbiór rekordów GDI na SVG; wpięty jako strategia `vector-translate` w `GraphicConversionService.ConvertMetafile` po `dib-rasterize`, przed blankiem. SVG tylko podgląd — eksport zawsze niesie oryginalny metafile (data-original-src / pass-through), `LoadImageFromPart` nie podmienia bajtów na SVG.

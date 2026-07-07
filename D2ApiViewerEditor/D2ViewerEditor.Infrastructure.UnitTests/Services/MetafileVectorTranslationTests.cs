@@ -161,6 +161,35 @@ public class MetafileVectorTranslationTests
         svg.Should().Contain("y=\"7\"");
     }
 
+    [Test]
+    public void Emf_WindowViewportMapping_ScalesLogicalCoordsIntoDeviceBounds()
+    {
+        // Regresja logo ze stopki (image1/2.emf): metafile definiuje MAPOWANIE window→viewport
+        // (SETWINDOW*/SETVIEWPORT*), a współrzędne rysowania są LOGICZNE. Bez zastosowania tego
+        // mapowania prostokąt 500..1500 (logiczny) ląduje POZA viewBox = rclBounds 0..200
+        // (urządzenie) i całe logo wychodzi jako przezroczysty blank — mimo obsługiwanych rekordów.
+        // Window 0..2000 × 0..1000 → viewport 0..200 × 0..100 ⇒ skala 0.1.
+        var emf = EmfWith(
+            Rec(9, 2000, 1000),             // SETWINDOWEXTEX cx,cy
+            Rec(10, 0, 0),                  // SETWINDOWORGEX
+            Rec(11, 200, 100),              // SETVIEWPORTEXTEX cx,cy
+            Rec(12, 0, 0),                  // SETVIEWPORTORGEX
+            Rec(39, 2, 0, 0x0000FF00, 0),   // CREATEBRUSHINDIRECT zielony
+            Rec(37, 2),                     // SELECTOBJECT brush
+            Rec(43, 500, 250, 1500, 750));  // RECTANGLE (logiczne) → device 50,25..150,75
+
+        var result = new GraphicConversionService().ConvertForEditor(EmfSource(emf));
+
+        result.Web!.IsBlankFallback.Should().BeFalse("mapowanie window/viewport wnosi treść do viewBox");
+        var svg = Encoding.UTF8.GetString(result.Web.Data);
+        svg.Should().Contain("viewBox=\"0 0 200 100\"", "framing pozostaje w jednostkach urządzenia (rclBounds)");
+        // Prostokąt osiowy → <rect> w przestrzeni URZĄDZENIA: (500..1500 × 250..750) × 0.1 = 50,25,100×50.
+        svg.Should().Contain("x=\"50\"").And.Contain("y=\"25\"")
+           .And.Contain("width=\"100\"").And.Contain("height=\"50\"");
+        svg.Should().NotContain("1500", "surowe współrzędne logiczne nie mogą trafić do SVG");
+        svg.Should().Contain("fill=\"#00ff00\"");
+    }
+
     // ---- regresje: kiedy tłumacz NIE może fabrykować treści ------------------------------
 
     [Test]
@@ -185,6 +214,10 @@ public class MetafileVectorTranslationTests
 
         var result = act.Should().NotThrow().Subject;
         result.Web!.IsBlankFallback.Should().BeTrue();
+        // Diagnostyka blanku niesie PROFIL rekordów — żeby log wyjaśnił, z czego zbudowany był
+        // metafile, który nie dał się narysować (kolejne „niewidoczne logo" da się zdiagnozować z logu).
+        string.Join(" ", result.Diagnostics.LostProperties)
+            .Should().Contain("Profil rekordów").And.Contain("EXTTEXTOUTA");
     }
 
     // ---- WMF ------------------------------------------------------------------------------

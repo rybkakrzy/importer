@@ -11,6 +11,92 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-07 — Wektorowe EMF (logo w stopce) przestały wychodzić jako niewidoczny blank — mapowanie window/viewport w tłumaczu metafile (+1 test)
+
+### Changed
+- `MetafileVectorTranslator` (strategia `vector-translate` w `GraphicConversionService`): tłumacz EMF ignorował mapowanie **page→device** (`SETWINDOWEXTEX/ORGEX`, `SETVIEWPORTEXTEX/ORGEX` były na liście „silent"), a `viewBox` SVG brał z `rclBounds` nagłówka (jednostki URZĄDZENIA). Współrzędne rysowania są LOGICZNE, więc dla metafile z niejednostkowym mapowaniem window/viewport (typowe logo Office, np. stopka wyciągu ING = 2× klasyczny EMF ze ścieżek `BEGINPATH`/`POLYBEZIERTO16`/`LINETO`/`FILLPATH`) ścieżki lądowały **poza viewBox** → SVG poprawny, ale wizualnie pusty → logo widoczne w Wordzie, niewidoczne w edytorze.
+- Fix: `GdiState.Apply` po world-transformie stosuje teraz mapowanie window→viewport (`(p−winOrg)·(vpExt/winExt)+vpOrg`), aktywne tylko gdy metafile faktycznie zdefiniował OBA zakresy (inaczej tożsamość — zero zmian dla metafile bez tych rekordów). Dodane obsłużone rekordy EMR 9/10/11/12. Safety-net w `BuildSvg`: jeśli mimo mapowania treść nie przecina `rclBounds` (np. nieobsłużony tryb metryczny), `viewBox` bierze bounding box realnie narysowanej treści — grafika nie wyjdzie pusta.
+
+### Verified
+- Nowy `MetafileVectorTranslationTests.Emf_WindowViewportMapping_ScalesLogicalCoordsIntoDeviceBounds` (prostokąt logiczny 500..1500 przy skali 0.1 → device 50..150 w viewBox `0 0 200 100`, `IsBlankFallback == false`).
+- `MetafileVectorTranslationTests` + `GraphicConversionServiceTests` + `ImageImportRegressionTests` + integracja: 51/51. Pełny `Infrastructure.UnitTests`: **341/341**.
+
+### Notes
+- Oryginalny EMF nadal jedzie do DOCX bez zmian (pass-through / `data-original-src`) — zmiana dotyczy WYŁĄCZNIE podglądu w edytorze; Word/eksport nietknięte.
+- Poza zakresem (świadomie): pojedynczy `EMR_ALPHABLEND` w tych logo (subtelny raster/cień) nierysowany; tryby mapowania metryczne (MM_LOMETRIC..HITWIPS) nieskalowane wprost (łapie je safety-net content-bbox); grupa `wpg:wgp` = pierwszy blip (istniejące ograniczenie).
+
+## 2026-07-07 — Kształty DrawingML z własną/preset geometrią (a:custGeom, ellipse, roundRect) renderowane w edytorze — grafika z oryginału przestała znikać (+1 test)
+
+### Changed
+- Reader (`DocxToHtmlConverter.RenderVectorShapeAsHtml`): kształt `wps:wsp` bez obrazu i bez pola tekstowego z **`a:custGeom`** (dowolna ścieżka wektorowa — np. wordmark „ING", ikona ostrzeżenia „!") był dotąd dropowany w całości (metoda zwracała `""`), więc grafika z dokumentu oryginalnego **nie rysowała się w edytorze**. Teraz ścieżka jest tłumaczona na inline `<svg><path>` (`BuildCustomGeometrySvg`: komendy moveTo/lnTo/cubicBezTo/quadBezTo/close, współrzędne literalne w przestrzeni `a:path w/h`, `viewBox`+`preserveAspectRatio=none` = dokładne dopasowanie do `wp:extent`).
+- Rozszerzono blok preset-geometrii o **elipsę** (`border-radius:50%`) i **zaokrąglony prostokąt** (`border-radius:12%`) obok istniejącego prostokąta/linii.
+- Kolor wypełnienia brany precyzyjnie z properties kształtu (`spPr/a:solidFill`) przez nowy `GetShapeFillHex` — nie z pierwszego `a:solidFill` w poddrzewie (mógł należeć do obrysu `a:ln` lub ukrytej linii w `extLst`). Obrys emitowany tylko gdy `a:ln` ma realne wypełnienie (`noFill` → brak ramki, jak w Wordzie).
+
+### Verified
+- Nowy `Doc2ImportFidelityTests.CustomGeometryShape_WithoutImage_RendersAsInlineSvgPath`; pełne `Infrastructure.UnitTests` **340/340**.
+- Harness na realnym szablonie ING (`szablon 1`): wordmark „ING" (`custGeom` navy `000066`) renderuje się jako `<svg>` (wcześniej: 0 kształtów w body); podgląd potwierdzony wizualnie (headless Chrome). Round-trip HTML→DOCX (`HtmlToDocxConverter.Convert`) nie rzuca na inline `<svg>`.
+
+### Notes
+- PODGLĄD-only: writer (jak przy istniejących liniach/prostokątach) NIE odtwarza tych kształtów z powrotem do DOCX — na 1. autosave kształt znika z v2 (oryginał v1 nietykalny; do rozważenia round-trip przez `data-original-*`). Wypełnienie motywowe (`a:schemeClr`) bez mapowania → fallback czarny (kształt nadal widoczny). Wypełnienie regułą nonzero (zgodnie ze spec DrawingML) — litery z zamkniętymi „oczkami" mogłyby wymagać evenodd.
+
+## 2026-07-07 — Kotwiczone obiekty (wp:anchor): pozycja liczona jak w Wordzie (relativeFrom + wp:align) — logo/pole tekstowe trafiają na właściwe miejsce (+8 testów)
+
+### Changed
+- Reader (`DocxToHtmlConverter`): kotwice `wp:anchor` rozwiązywane przez nowy `ResolveAnchorPosition`/`ResolveAxis` z uwzględnieniem **`relativeFrom`** (page/margin/column/leftMargin/…) oraz **`wp:align`** (right/center/left/inside/outside) — wcześniej brany był surowy `wp:posOffset` z pominięciem obu, więc obiekty kotwiczone do marginesu/kolumny lub wyrównane do prawej lądowały o cały margines za bardzo w lewo / za wysoko. Dotyczy obu ścieżek: obrazów (`ConvertDrawingToHtml` → `data-x-emu`/`data-y-emu`) i pól tekstowych/kształtów (`BuildTextBoxLayoutCss`, `RenderVectorShapeAsHtml` → inline `position:absolute`). Origin edytora: X = lewa krawędź strony, Y = góra obszaru treści (odjęty górny margines).
+- Geometria pierwszej sekcji (rozmiar strony + marginesy w twipach) zapamiętywana w polach instancji (`LoadPageGeometry`) — potrzebna do przeliczenia align/relativeFrom na piksele.
+- Writer (`HtmlToDocxConverter`): pionowa kotwica eksportowana jako `RelativeFrom=Margin` (góra obszaru treści) zamiast `Page` — spójne z pionowym originem edytora i poprawne w Wordzie (dotąd obiekt renderował się o górny margines za wysoko). Poziom zostaje `Page`.
+- `OoxmlUnits.TwipsToEmu` (+`EmuPerTwip=635`).
+
+### Verified
+- Nowy `DocxAnchorPositionFidelityTests` 8/8 (page/margin/column offset; align right/center; page-align-right; vertical content-relative; page-Y odejmuje margines; brak offsetu/align → baza). Zaktualizowane: `Doc2ImportFidelityTests.AnchoredTextBox…` (page-Y 2″ → 1″ poniżej treści), `ImageFloatingRoundTripTests` (idempotentny round-trip po zmianie writer V→Margin). Infrastructure **339/339**, solucja build 0 błędów.
+
+### Notes
+- Round-trip idempotentny: writer H=Page/V=Margin ↔ reader dodaje i odejmuje ten sam górny margines. Frontend bez zmian (restore czyta gotowe współrzędne edytora). Przybliżenia: pionowe `wp:align` center/bottom rzadkie i słabo określone przy rosnącym obszarze treści (traktowane jak offset/top); inside/outside bez rozróżnienia stron parzystych. Decyzja: **ADR-0029**.
+
+## 2026-07-07 — „Inne na pierwszej stronie" (titlePg): stopka/nagłówek pierwszej strony nie wyciekają na kolejne strony (+2 testy)
+### Changed
+- `DocxToHtmlConverter.ExtractHeader`/`ExtractFooter`: fallback `mainPart.HeaderParts/FooterParts.FirstOrDefault()` używany TYLKO gdy sekcja nie deklaruje ŻADNEJ referencji nagłówka/stopki. Gdy sekcja ma `titlePg` + referencję `first` (i BRAK referencji `default`), domyślny nagłówek/stopka jest CELOWO pusty (Word nic nie pokazuje na zwykłych stronach) — wcześniej fallback wciągał część pierwszej strony jako domyślną i renderował ją na WSZYSTKICH stronach (np. adres ING w stopce widoczny na str. 2, choć w Wordzie tylko na str. 1).
+- Metoda zwraca teraz `HeaderFooterContent` także gdy domyślny wariant jest pusty, ale istnieje `FirstPageHtml`/`EvenHtml` (`Html = string.Empty`, `DifferentFirstPage = true`); `null` tylko gdy nie ma ani domyślnego, ani first/even.
+- Nowe pomocnicze `SectionDeclaresAnyHeaderReference`/`SectionDeclaresAnyFooterReference`.
+- Front bez zmian — `wysiwyg-editor` już rozwiązuje `differentFirstPage` (str. 0 = `firstPageHtml`, reszta = `html`).
+### Verified
+- `DocxToHtmlConverterSectionReferenceTests` 10/10 (+2: `Header_FirstPageOnly...`/`Footer_FirstPageOnly...`), Infrastructure build 0 błędów.
+- Uwaga: 3 pre-existing faile `ImageFloatingRoundTripTests` pochodzą z RÓWNOLEGŁEGO WIP kotwic (`ResolveAnchorPosition`) w drzewie roboczym — nie z tej zmiany (potwierdzone: przechodzą na czystym HEAD konwertera).
+### Notes
+- Round-trip (writer) poza zakresem tej poprawki — dotyczy importu/renderu. Wielosekcyjne `ExtractHeaderOwnedBySection`/`ExtractFooterOwnedBySection` nie mają tego fallbacku (już rozwiązują tylko własny `default`), więc bez zmian.
+
+## 2026-07-07 — SVG „puste białe logo": sanitizer wycinał wewnętrzne `<use>` + odrzucał BOM/DOCTYPE (+6 testów)
+### Changed
+- **`GraphicConversionService.SanitizeSvg`** — trzy przyczyny, dla których legalne logo SVG (przypadek: nagłówek Doc2/ING) traciło treść lub cały plik:
+  1. `<use>` był na liście `killTags` i wycinany BEZWARUNKOWO — logo zbudowane z `<defs>`+`<use href="#id">` (typowy eksport korporacyjny) renderowało się jako pusty biały obraz o poprawnych wymiarach (defs są niewidoczne). Teraz `<use>` z wewnętrznym odnośnikiem `#id` (href/xlink:href) ZOSTAJE (wskazuje już-sanityzowaną treść tego samego dokumentu); `<use>` z zewnętrznym URL/data:/bez href — usuwany w całości (`HasInternalFragmentHref`).
+  2. Bajty z prefiksem **UTF-8 BOM** (częste w plikach z Windows) — U+FEFF na początku stringa wywala parser XML → poprawny SVG odrzucany → obraz znikał; `TrimStart('﻿','​',…)` przed parsowaniem.
+  3. **DOCTYPE** (standard w SVG z eksportu Illustratora) — `DtdProcessing.Prohibit` rzucał na sam DOCTYPE → odrzucenie; zmiana na `DtdProcessing.Ignore` w `SafeParse`: DTD pomijany bez przetwarzania, XXE/billion-laughs nadal niemożliwe (encje pozostają niezdefiniowane → parser rzuca → null, potwierdzone testem).
+### Verified
+- `GraphicConversionSecurityTests` (w tym nowe: defs+use zachowane, use zewnętrzny usuwany, BOM przyjęty, DOCTYPE Illustratora przyjęty, XXE nadal null) + `Doc2ImportFidelityTests` (nowe: logo defs/use w data-URI z `<use>`, SVG z BOM osadzony) — testy SVG **25/25**; pełne Infrastructure **325/328** w czystym worktree (3 faile = testy hMerge/tab-in-cell równoległej sesji wymagające jej WIP `LoadPageGeometry`, niezwiązane).
+### Notes
+- Objaw u użytkownika (biały pusty obraz logo w nagłówku edytora przy poprawnym widoku w Wordzie) pasuje 1:1 do przyczyny (1); (2)/(3) dawały twardsze zniknięcie obrazu. Jeżeli po wdrożeniu logo nadal puste — sprawdzić w logach backendu wpisy „SVG part pominięty…"/„Media part bez rastra web…" oraz atrybut `data-legacy-graphic="blank"` w DOM (wtedy to EMF+/metafile poza etapem 1 tłumacza ADR-0027).
+- Ograniczenie bez zmian: writer nadal dropuje obraz SVG przy eksporcie HTML→DOCX (utrata na 1. autosave; roadmapa `asvg:svgBlip`/rasteryzacja).
+
+## 2026-07-07 — Formant blokowy w nagłówku/stopce: treść znikała z podglądu (+1 test)
+### Changed
+- **Reader (`DocxToHtmlConverter.ConvertHeaderFooterToHtml`)** — pętla po elementach nagłówka/stopki obsługiwała tylko `Paragraph`/`Table`, więc formant blokowy (`SdtBlock`) osadzony BEZPOŚREDNIO w stopce (np. klauzula prawna `removeif_nondigitalversion`) był po cichu pomijany → cała treść formantu znikała z podglądu edytora (Word ją pokazywał). Dodana gałąź `SdtBlock` → `ConvertSdtBlockToHtml(sdt, document, part)`.
+- **`ConvertSdtBlockToHtml`** — przyjmuje teraz opcjonalny `OpenXmlPart? sourcePart` i przekazuje go do konwersji dzieci (Paragraph/Table/zagnieżdżony SdtBlock), żeby obrazy w formancie osadzonym w nagłówku/stopce rozwiązywały rId względem właściwej części pakietu (rId unikalne per część). Ścieżki body/komórki tabeli bez zmian (sourcePart=null jak dotąd).
+### Verified
+- `SdtContentControlRoundTripTests` **5/5** (nowy `BlockContentControl_InFooter_ContentIsNotDropped`); `dotnet build` Infrastructure 0 błędów (build równoległy potrafi zgłaszać fałszywe CS0103 — `-m:1` czysty).
+### Notes
+- Formant inline w akapicie stopki (`SdtRun`) już działał — obsługuje go `ConvertParagraphToHtml`. Luką był wyłącznie poziom bloku w nagłówku/stopce.
+- To render treści; interaktywność formantu (klikalny checkbox/dropdown) nadal osobne zadanie frontu. QR-kod w nagłówku = osobny wątek importu obrazów.
+
+## 2026-07-07 — Tabele (Doc2/ING follow-up): legacy w:hMerge + taby w komórkach bez pozycjonowania absolutnego (+4 testy)
+### Changed
+- **Reader (`DocxToHtmlConverter`) — legacy scalanie poziome `w:hMerge`** — dotąd obsługiwany był wyłącznie `w:gridSpan`; komórki scalone mechanizmem legacy (`hMerge` restart + continue) renderowały się jako OSOBNE `<td>` (treść ściśnięta w pierwszej wąskiej kolumnie, reszta puste widma — wiersz „Umowa wieloproduktowa…"). Nowy `BuildRowRenderPlan`: restart pochłania `gridSpan` kolejnych continue jako `colspan`, continue nie emitują `<td>` (analogicznie do kontynuacji vMerge); pominięty `w:val` = continue (ECMA-376); continue-sierota bez restartu renderuje się normalnie (bez utraty treści). Round-trip: writer i tak emituje `gridSpan` z colspan — reprezentacja równoważna dla Worda.
+- **Reader — taby w komórkach tabel bez segmentów absolutnych** — rozszerzenie renderingu pozycyjnego tabów na body (2026-07-06) objęło też akapity WEWNĄTRZ komórek: segment `position:absolute;left:{stop}px` jest kotwiczony do akapitu, a pozycje stopów opisują geometrię strony → w wąskiej komórce segment wyjeżdżał poza komórkę i malował się po sąsiedniej kolumnie (nałożone nagłówki „Waluta"/„Termin spłaty kredytu"), a `text-align` komórki przestawał działać (rozjechane wyśrodkowanie nagłówków i wartości). `usePositionedTabs` wyklucza teraz akapity z przodkiem `TableCell` — w komórce tab renderuje się inline/flex jak przed regresją; `data-tab-stops` nadal niesie stopy (eksport bez zmian).
+### Verified
+- `Doc2ImportFidelityTests` **24/24** (+4: hMerge restart+2×continue → jeden `<td colspan="3">` i brak widm; pominięty val=continue; continue-sierota bez utraty treści; tab w komórce → brak `docx-tab-seg`/`position:absolute`, `data-tab-stops` zachowane). Infrastructure **321/322**, build 0 błędów.
+### Notes
+- Jedyny fail pełnego przebiegu: `SanitizeSvg_KeepsSafeDataHrefAndFragment` (`GraphicConversionSecurityTests`) — PRE-EXISTING na HEAD (sanitizer SVG zachowuje `<use href="#g">`, test oczekuje usunięcia; obszar nietknięty tą zmianą). Do wyjaśnienia osobno.
+- Pionowe centrowanie komórek i `td>p{margin:0}` naprawione już 2026-07-06; ta zmiana przywraca działanie POZIOMEGO wyrównania w komórkach z tabami. Warunkowe formatowanie TEKSTU ze stylu tabeli (np. centrowanie nagłówka ze stylu) pozostaje znanym ograniczeniem (ADR-0026).
+
 ## 2026-07-06 — Audyt import/edycja/eksport DOCX: fixy edytora (font/page-break/geometria) + zachowanie wartości pól + narzędzia diagnostyczne (ADR-0028)
 ### Changed
 - **Podział strony (edytor)** — `insertPageBreak` wstawia semantyczny, NIEDRUKOWALNY marker `<div class="page-break" contenteditable="false"></div>` bez inline-grafiki; SCSS: domyślnie zero wysokości/bez linii/etykiety, subtelna podpowiedź tylko w trybie „znaki formatowania" (`.editor-content.show-formatting-marks`, sygnał `showFormattingMarks`). Eksport bez zmian (writer i tak mapował `div.page-break` → `w:br type=page`, nigdy drawing/picture/shape) — potwierdzone.

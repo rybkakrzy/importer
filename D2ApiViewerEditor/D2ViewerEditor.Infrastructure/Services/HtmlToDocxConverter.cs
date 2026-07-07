@@ -2343,7 +2343,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             { RelativeFrom = DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalRelativePositionValues.Page },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalPosition(
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset(yEmu.ToString(System.Globalization.CultureInfo.InvariantCulture)))
-            { RelativeFrom = DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalRelativePositionValues.Page },
+            // Horizontal offset is page-relative (editor origin = left page edge), but the
+            // editor's vertical origin is the TOP OF THE TEXT AREA (the body band starts one
+            // margin below the page edge). Emitting Y relative to the top text margin keeps the
+            // offset consistent both ways and makes Word place the object where the editor shows
+            // it — a page-relative Y would render one top-margin too high.
+            { RelativeFrom = DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalRelativePositionValues.Margin },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapNone(),

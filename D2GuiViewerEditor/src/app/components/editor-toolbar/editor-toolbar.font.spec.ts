@@ -65,15 +65,30 @@ describe('EditorToolbarComponent — font combobox (items 6 & 7)', () => {
     expect(component.fontFamilies()).toBe(provider.displayNames());
   });
 
-  it('shows the effective font and never blanks on focus', () => {
+  it('clears the field on focus so the datalist shows the full list', () => {
     component.editorState = stateWithFont('Arial');
     expect(component.selectedFontFamily()).toBe('Arial');
     expect(component.fontInputValue()).toBe('Arial');
 
     const input = fakeInput('Arial');
     component.onFontFocus({ target: input } as unknown as FocusEvent);
-    // Focus must keep the visible value (the old <select> blanked it).
+    // The visible text is cleared: otherwise the native datalist filters its
+    // options down to the current font and no other font can be picked.
+    expect(input.value).toBe('');
+    // The effective font (the signal) is preserved for restore on blur.
     expect(component.fontInputValue()).toBe('Arial');
+  });
+
+  it('restores the current font on blur when nothing was picked', () => {
+    component.editorState = stateWithFont('Arial');
+    const input = fakeInput('Arial');
+    component.onFontFocus({ target: input } as unknown as FocusEvent);
+    expect(input.value).toBe('');
+
+    // User clicks away without choosing anything.
+    component.onFontBlur({ target: input } as unknown as FocusEvent);
+    expect(input.value).toBe('Arial');
+    expect(component.selectedFontFamily()).toBe('Arial');
   });
 
   it('commits a typed font on Enter and emits it normalised', () => {

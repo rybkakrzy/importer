@@ -30,6 +30,7 @@ public static class OoxmlUnits
     public const int TwipsPerPoint = 20;           // 1 pt = 20 twips
     public const int EmuPerPoint = 12700;          // 914400 / 72
     public const int EmuPerPixel = 9525;           // 914400 / 96 (exact at 96 DPI)
+    public const int EmuPerTwip = 635;             // 914400 / 1440 (exact)
     public const int HalfPointsPerPoint = 2;       // font size / spacing are in half-points
 
     // --- Twips ---------------------------------------------------------------
@@ -41,6 +42,8 @@ public static class OoxmlUnits
     public static double TwipsToInches(double twips) => twips / TwipsPerInch;
 
     public static double TwipsToCm(double twips) => twips / TwipsPerInch * CmPerInch;
+
+    public static long TwipsToEmu(long twips) => twips * EmuPerTwip;
 
     public static double PointsToTwips(double points) => points * TwipsPerPoint;
 

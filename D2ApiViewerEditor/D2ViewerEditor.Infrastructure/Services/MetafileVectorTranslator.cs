@@ -30,7 +30,102 @@ internal static class MetafileVectorTranslator
     {
         public required string Svg { get; init; }
         public int SkippedRecords { get; init; }
+        /// <summary>Liczba przetworzonych rekordów metafile (diagnostyka).</summary>
+        public int RecordCount { get; init; }
+        /// <summary>Czy zastosowano mapowanie window→viewport (metafile zdefiniował oba zakresy).</summary>
+        public bool UsedWindowViewport { get; init; }
+        /// <summary>
+        /// Treść po zmapowaniu NIE pokryła się z rclBounds → viewBox wzięto z bbox treści (safety-net).
+        /// Sygnał, że mapowanie page→device było niepełne (np. tryb metryczny) — ryzyko złego kadru.
+        /// </summary>
+        public bool ContentOutsideDeviceBounds { get; init; }
     }
+
+    /// <summary>Czytelne nazwy najważniejszych rekordów EMF (diagnostyka „dlaczego blank").</summary>
+    private static readonly Dictionary<uint, string> EmrNames = new()
+    {
+        [1] = "HEADER", [9] = "SETWINDOWEXTEX", [10] = "SETWINDOWORGEX", [11] = "SETVIEWPORTEXTEX",
+        [12] = "SETVIEWPORTORGEX", [14] = "EOF", [17] = "SETMAPMODE", [19] = "SETPOLYFILLMODE",
+        [27] = "MOVETOEX", [35] = "SETWORLDTRANSFORM", [36] = "MODIFYWORLDTRANSFORM", [37] = "SELECTOBJECT",
+        [38] = "CREATEPEN", [39] = "CREATEBRUSHINDIRECT", [40] = "DELETEOBJECT", [42] = "ELLIPSE",
+        [43] = "RECTANGLE", [44] = "ROUNDRECT", [54] = "LINETO", [59] = "BEGINPATH", [60] = "ENDPATH",
+        [61] = "CLOSEFIGURE", [62] = "FILLPATH", [63] = "STROKEANDFILLPATH", [64] = "STROKEPATH",
+        [70] = "GDICOMMENT", [81] = "STRETCHDIBITS", [84] = "EXTTEXTOUTA", [85] = "POLYBEZIER16",
+        [86] = "POLYGON16", [87] = "POLYLINE16", [88] = "POLYBEZIERTO16", [89] = "POLYLINETO16",
+        [91] = "POLYPOLYGON16", [95] = "EXTCREATEPEN", [98] = "SETICMMODE", [114] = "ALPHABLEND", [115] = "SETLAYOUT",
+    };
+
+    /// <summary>
+    /// Zwięzły profil rekordów metafile do LOGU, gdy tłumaczenie nie dało widocznej treści.
+    /// Read-only skan (bez rysowania) — np. „EMF rec=210 win/vp=yes world=no [MOVETOEX:74,LINETO:74,
+    /// POLYBEZIERTO16:74,FILLPATH:3,BEGINPATH:3,#95:1,...]". Każdy wyjątek → krótka informacja.
+    /// </summary>
+    public static string Profile(GraphicKind kind, byte[] data)
+    {
+        try
+        {
+            return kind switch
+            {
+                GraphicKind.Emf => ProfileEmf(data),
+                GraphicKind.Wmf => ProfileWmf(data),
+                _ => $"{kind} (brak profilera)"
+            };
+        }
+        catch (Exception ex)
+        {
+            return $"{kind} profil-niedostępny: {ex.GetType().Name}";
+        }
+    }
+
+    private static string ProfileEmf(byte[] d)
+    {
+        if (d.Length < 88) return "EMF za krótki";
+        uint headerSize = U32(d, 4);
+        if (headerSize < 88 || headerSize > (uint)d.Length) return "EMF zły nagłówek";
+
+        var hist = new Dictionary<uint, int>();
+        bool win = false, vp = false, world = false;
+        int o = (int)headerSize, guard = 0, total = 0;
+        while (o + 8 <= d.Length && guard++ < MaxRecords)
+        {
+            uint iType = U32(d, o);
+            uint nSize = U32(d, o + 4);
+            if (nSize < 8 || nSize % 4 != 0 || (long)o + nSize > d.Length) break;
+            hist[iType] = hist.GetValueOrDefault(iType) + 1;
+            total++;
+            if (iType == 9) win = true;
+            else if (iType == 11) vp = true;
+            else if (iType is 35 or 36) world = true;
+            if (iType == 14) break; // EOF
+            o += (int)nSize;
+        }
+        return $"EMF rec={total} win/vp={(win && vp ? "yes" : "no")} world={(world ? "yes" : "no")} [{FormatHist(hist)}]";
+    }
+
+    private static string ProfileWmf(byte[] d)
+    {
+        int o = d.Length >= 22 && U32(d, 0) == 0x9AC6CDD7 ? 22 : 0;
+        if (o + 18 > d.Length) return "WMF za krótki";
+        o += 18;
+        var hist = new Dictionary<uint, int>();
+        int guard = 0, total = 0;
+        while (o + 6 <= d.Length && guard++ < MaxRecords)
+        {
+            uint sizeWords = U32(d, o);
+            ushort func = U16(d, o + 4);
+            long byteSize = (long)sizeWords * 2;
+            if (sizeWords < 3 || o + byteSize > d.Length) break;
+            hist[func] = hist.GetValueOrDefault(func) + 1;
+            total++;
+            if (func == 0x0000) break; // META_EOF
+            o += (int)byteSize;
+        }
+        return $"WMF rec={total} [{FormatHist(hist)}]";
+    }
+
+    private static string FormatHist(Dictionary<uint, int> hist) =>
+        string.Join(",", hist.OrderByDescending(kv => kv.Value).Take(16)
+            .Select(kv => $"{(EmrNames.TryGetValue(kv.Key, out var n) ? n : $"#{kv.Key}")}:{kv.Value}"));
 
     public static MetafileSvg? Translate(GraphicKind kind, byte[] data, int widthPx, int heightPx)
     {
@@ -74,10 +169,29 @@ internal static class MetafileVectorTranslator
         // World transform (konwencja wektora wierszowego: p' = p·M).
         public double M11 = 1, M12, M21, M22 = 1, Dx, Dy;
 
+        // Mapowanie page→device (SETWINDOW*/SETVIEWPORT*, tryb anizotropowy). Współrzędne
+        // rysowania są LOGICZNE; bez tego mapowania lądują poza viewBox (= rclBounds z nagłówka,
+        // w jednostkach URZĄDZENIA) i cała grafika wychodzi pusta — np. wektorowe logo w stopce.
+        public double WinOrgX, WinOrgY, VpOrgX, VpOrgY;
+        public double WinExtX = 1, WinExtY = 1, VpExtX = 1, VpExtY = 1;
+        public bool HasWindowExt, HasViewportExt;
+
         public bool IsAxisAligned => M12 == 0 && M21 == 0;
 
         public (double X, double Y) Apply(double x, double y)
-            => (x * M11 + y * M21 + Dx, x * M12 + y * M22 + Dy);
+        {
+            // 1) world transform: logical → page
+            double px = x * M11 + y * M21 + Dx;
+            double py = x * M12 + y * M22 + Dy;
+            // 2) page → device (window/viewport). Tylko gdy metafile faktycznie zdefiniował OBA
+            //    zakresy — inaczej tożsamość (zero zmian dla metafile bez tych rekordów).
+            if (HasWindowExt && HasViewportExt && WinExtX != 0 && WinExtY != 0)
+            {
+                px = (px - WinOrgX) * (VpExtX / WinExtX) + VpOrgX;
+                py = (py - WinOrgY) * (VpExtY / WinExtY) + VpOrgY;
+            }
+            return (px, py);
+        }
 
         public void SetTransform(double m11, double m12, double m21, double m22, double dx, double dy)
         { M11 = m11; M12 = m12; M21 = m21; M22 = m22; Dx = dx; Dy = dy; }
@@ -149,9 +263,9 @@ internal static class MetafileVectorTranslator
 
         // Rekordy wyłącznie stanowe/nieistotne dla etapu 1 — pomijane BEZ liczenia jako strata
         // (nie niosą treści graficznej): mapmode/viewport/bk/text-color/save-restore/komentarze.
+        // SETWINDOW*/SETVIEWPORT* są teraz obsługiwane jawnie (mapowanie page→device) — NIE cichą.
         var silent = new HashSet<uint>
         {
-            9, 10, 11, 12,        // SETWINDOWEXTEX/ORGEX, SETVIEWPORTEXTEX/ORGEX (viewBox z nagłówka)
             17, 18, 20, 21, 22,   // SETMAPMODE, SETBKMODE, SETROP2, SETSTRETCHBLTMODE, SETTEXTALIGN
             24, 25, 33, 34, 58,   // SETTEXTCOLOR, SETBKCOLOR, SAVEDC, RESTOREDC, SETMITERLIMIT
             70, 98, 115           // GDICOMMENT (w tym kontener EMF+), SETICMMODE, SETLAYOUT
@@ -168,6 +282,19 @@ internal static class MetafileVectorTranslator
 
             switch (iType)
             {
+                case 9:  // SETWINDOWEXTEX (SizeL: cx, cy)
+                    if (nSize >= 16) { st.WinExtX = I32(d, o + 8); st.WinExtY = I32(d, o + 12); st.HasWindowExt = true; }
+                    break;
+                case 10: // SETWINDOWORGEX (PointL: x, y)
+                    if (nSize >= 16) { st.WinOrgX = I32(d, o + 8); st.WinOrgY = I32(d, o + 12); }
+                    break;
+                case 11: // SETVIEWPORTEXTEX (SizeL: cx, cy)
+                    if (nSize >= 16) { st.VpExtX = I32(d, o + 8); st.VpExtY = I32(d, o + 12); st.HasViewportExt = true; }
+                    break;
+                case 12: // SETVIEWPORTORGEX (PointL: x, y)
+                    if (nSize >= 16) { st.VpOrgX = I32(d, o + 8); st.VpOrgY = I32(d, o + 12); }
+                    break;
+
                 case 19: // SETPOLYFILLMODE
                     if (nSize >= 12) st.FillRule = U32(d, o + 8) == 2 ? "nonzero" : "evenodd";
                     break;
@@ -350,7 +477,8 @@ internal static class MetafileVectorTranslator
             o += (int)nSize;
         }
 
-        return BuildSvg(canvas, haveVb, bLeft, bTop, bRight - bLeft, bBottom - bTop, widthPx, heightPx, skipped);
+        return BuildSvg(canvas, haveVb, bLeft, bTop, bRight - bLeft, bBottom - bTop, widthPx, heightPx, skipped,
+            recordCount: guard, usedWindowViewport: st.HasWindowExt && st.HasViewportExt);
     }
 
     /// <summary>Punkty rekordu poly EMF: licznik na +24, punkty od +28 (POINTL s32 lub POINTS16 s16).</summary>
@@ -739,7 +867,7 @@ internal static class MetafileVectorTranslator
             o += (int)byteSize;
         }
 
-        return BuildSvg(canvas, haveVb, vbL, vbT, vbW, vbH, widthPx, heightPx, skipped);
+        return BuildSvg(canvas, haveVb, vbL, vbT, vbW, vbH, widthPx, heightPx, skipped, recordCount: guard);
     }
 
     private static void AddSlot(List<object?> slots, object obj)
@@ -807,11 +935,20 @@ internal static class MetafileVectorTranslator
     }
 
     private static MetafileSvg? BuildSvg(SvgCanvas canvas, bool haveVb,
-        double vbL, double vbT, double vbW, double vbH, int widthPx, int heightPx, int skipped)
+        double vbL, double vbT, double vbW, double vbH, int widthPx, int heightPx, int skipped,
+        int recordCount = 0, bool usedWindowViewport = false)
     {
         if (!canvas.HasContent) return null;
 
-        if (!haveVb || vbW <= 0 || vbH <= 0)
+        // rclBounds z nagłówka jest w jednostkach URZĄDZENIA. Jeśli mimo mapowania window/viewport
+        // treść i tak nie pokrywa się z tym prostokątem (np. nieobsłużony tryb mapowania metrycznego),
+        // użyj bounding boxa realnie narysowanej treści — inaczej grafika wyszłaby pusta.
+        bool contentIntersectsBounds = haveVb && vbW > 0 && vbH > 0
+            && canvas.MaxX >= vbL && canvas.MinX <= vbL + vbW
+            && canvas.MaxY >= vbT && canvas.MinY <= vbT + vbH;
+        bool contentOutsideBounds = haveVb && !contentIntersectsBounds;
+
+        if (!contentIntersectsBounds)
         {
             // viewBox z bounding boxa realnie narysowanej treści (padding 1 j.).
             vbL = canvas.MinX - 1;
@@ -826,7 +963,14 @@ internal static class MetafileVectorTranslator
                   $"viewBox='{F(vbL)} {F(vbT)} {F(vbW)} {F(vbH)}' preserveAspectRatio='xMidYMid meet'>" +
                   canvas.Elements + "</svg>";
         if (svg.Length > MaxOutputChars + 512) return null;
-        return new MetafileSvg { Svg = svg, SkippedRecords = skipped };
+        return new MetafileSvg
+        {
+            Svg = svg,
+            SkippedRecords = skipped,
+            RecordCount = recordCount,
+            UsedWindowViewport = usedWindowViewport,
+            ContentOutsideDeviceBounds = contentOutsideBounds
+        };
     }
 
     private static void ApplyStockObject(GdiState st, uint index)

@@ -14,6 +14,25 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0029: Kotwiczone obiekty (wp:anchor) pozycjonowane jak w Wordzie — relativeFrom + wp:align
+
+- Date: 2026-07-07
+- Status: Accepted
+
+### Context
+Obiekty pływające (logo, pola tekstowe z adresem) w dokumentach ING renderowały się w edytorze w innym miejscu niż w MS Word — zwykle o cały margines za bardzo w lewo / za wysoko, albo wyrównane do lewej zamiast do prawej. Przyczyna: reader (`ConvertDrawingToHtml`, `BuildTextBoxLayoutCss`) brał surowy `wp:posOffset`, ignorując `relativeFrom` (page/margin/column/…) oraz `wp:align` (right/center/…). Offset kotwiczony do marginesu/kolumny startuje od obszaru treści, nie od krawędzi strony; a wyrównanie bez jawnego offsetu (klasyczny letterhead: logo do prawego marginesu) zeruje się do lewego górnego rogu. Dodatkowo writer eksportował pionową kotwicę jako `RelativeFrom=Page`, mimo że edytor traktuje Y względem góry obszaru treści.
+
+### Decision
+- Reader rozwiązuje kotwicę do współrzędnych **układu edytora**: X = lewa krawędź strony (page-relative wprost), Y = góra obszaru treści (od page-relative odjęty górny margines, bo pasmo body zaczyna się pod nagłówkiem). `ResolveAxis` wybiera bazę + rozpiętość wg `relativeFrom`, po czym stosuje jawny offset ALBO wyrównanie `wp:align` w obrębie tej rozpiętości. Rozmiar obiektu do `align` brany z `wp:extent`. Geometria pierwszej sekcji trzymana w polach instancji (`LoadPageGeometry`); brak marginesów → domyślne 1440 twips (jak w Wordzie).
+- Writer emituje pionową kotwicę jako `RelativeFrom=Margin` (góra tekstu), poziomą jako `Page`. Dzięki temu round-trip jest idempotentny (reader dodaje i odejmuje ten sam górny margines), a wyeksportowany plik renderuje się w Wordzie tam, gdzie pokazuje go edytor.
+
+### Consequences
+- Logo i pola tekstowe kotwiczone do marginesu/kolumny oraz wyrównane do prawej trafiają na właściwe miejsce; brak zmian we froncie (restore czyta gotowe `data-x-emu`/`data-y-emu`). Poprawiony też eksport (dawniej obiekt o górny margines za wysoko w Wordzie).
+- Ograniczenia/przybliżenia: pionowe `wp:align` center/bottom słabo określone przy rosnącym obszarze treści (traktowane jak offset/top); `inside`/`outside` bez rozróżnienia stron parzystych/nieparzystych (edytor tego nie modeluje); Y względem góry treści to przybliżenie (pasmo nagłówka ≈ górny margines).
+
+### Alternatives considered
+- Liczenie pozycji w froncie z geometrii DOM (`pageMarginPx`) — odrzucone: reader zna dokładne twipsy i rozmiar `wp:extent`, więc rozwiązanie po stronie serwera jest prostsze i wspólne dla obrazów oraz pól tekstowych (te ostatnie nie przechodzą przez JS pływających obrazów). Pozostawienie writer V=Page — odrzucone (łamie idempotencję i zawyża pozycję w Wordzie).
+
 ## ADR-0028: Wspólne źródło fontów, moduł jednostek, semantyczny marker podziału strony, zachowanie wartości pól
 
 - Date: 2026-07-06

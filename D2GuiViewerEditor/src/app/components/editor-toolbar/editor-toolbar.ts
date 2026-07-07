@@ -457,10 +457,22 @@ export class EditorToolbarComponent {
    */
   onFontFocus(event: FocusEvent): void {
     this.fontEditing = true;
-    // Preselect the whole name so typing replaces it; keep it visible.
-    (event.target as HTMLInputElement).select();
+    // Clear the field so the native datalist shows the FULL list. If we left the
+    // current font name in place, the browser would filter the options down to
+    // that single entry and no other font could be picked without backspacing.
+    // The current font is restored on blur (see onFontBlur) if nothing is chosen.
+    (event.target as HTMLInputElement).value = '';
     // Let the parent snapshot the editor selection before focus moves here.
     this.preserveSelection.emit();
+  }
+
+  /** Restore the visible font when the field is left empty (no pick made). */
+  onFontBlur(event: FocusEvent): void {
+    const input = event.target as HTMLInputElement;
+    this.fontEditing = false;
+    if (!input.value.trim()) {
+      input.value = this.fontInputValue();
+    }
   }
 
   onFontKeydown(event: KeyboardEvent): void {
