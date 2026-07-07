@@ -39,6 +39,8 @@ import {
   SignDocumentRequest
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { FontProviderService } from '../../services/font-provider.service';
+import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 import { DocumentStorageService, DeliveryStatus } from '../../services/document-storage.service';
 import { DocumentClassificationBadgeComponent } from '../document-classification-badge/document-classification-badge';
 import { TablePropertiesPanelComponent } from '../table-properties-panel/table-properties-panel';
@@ -93,6 +95,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   private router = inject(Router);
   readonly buildInfo = inject(BuildInfoService);
   private readonly msal = inject(MsalService);
+  private readonly fontProvider = inject(FontProviderService);
 
   /** Pełna nazwa zalogowanego użytkownika (MSAL active account). Pusta w trybie bez auth
    *  (dev bypass) → powitanie ukrywane w szablonie. */
@@ -257,26 +260,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   miniToolbarX = signal(0);
   miniToolbarY = signal(0);
 
-  readonly commonFonts = [
-    'Calibri', 'Arial', 'Arial Narrow', 'Times New Roman', 'Cambria',
-    'Georgia', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Helvetica',
-    'Courier New', 'Lucida Console', 'Palatino Linotype', 'Garamond', 'Book Antiqua'
-  ];
+  /** Shared font list — identical to the main toolbar, incl. corporate font (item 7). */
+  readonly commonFonts = this.fontProvider.displayNames;
 
-  /** Czcionka do pokazania w mini-toolbarze — czyta currentStyle i normalizuje
-   *  do najbliższej pozycji z commonFonts (tak jak robi to main toolbar). */
-  readonly miniToolbarFontFamily = computed(() => {
-    const raw = this.editorState()?.currentStyle?.fontFamily;
-    if (!raw) return 'Calibri';
-    const incoming = raw.trim().toLowerCase();
-    // Exact match
-    const exact = this.commonFonts.find(f => f.toLowerCase() === incoming);
-    if (exact) return exact;
-    // Prefix/includes — od najdłuższych, żeby "Calibri Light" > "Calibri"
-    const byLength = [...this.commonFonts].sort((a, b) => b.length - a.length);
-    const partial = byLength.find(f => incoming.includes(f.toLowerCase()));
-    return partial ?? raw;
-  });
+  /** Font shown in the mini-toolbar — normalised via the shared provider so it
+   *  matches exactly what the main toolbar shows for the same selection. */
+  readonly miniToolbarFontFamily = computed(() =>
+    this.fontProvider.normalize(this.editorState()?.currentStyle?.fontFamily),
+  );
 
   // Menu Narzędzia
   showToolsMenu = signal(false);
@@ -558,7 +549,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /** Konwersja cm ↔ px (96 DPI). */
-  private static readonly CM_TO_PX = 37.795;
+  private static readonly CM_TO_PX = CSS_PX_PER_CM;
 
   // Menu Widok
   showViewMenu = signal(false);
@@ -2831,8 +2822,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   getMarginStyles(): { [key: string]: string } {
     const m = this.pageSettings().margins;
-    // 1 cm = 37.8 px (przy 96 DPI)
-    const cmToPx = 37.8;
+    const cmToPx = CSS_PX_PER_CM;
     return {
       'padding-top': `${m.top * cmToPx}px`,
       'padding-bottom': `${m.bottom * cmToPx}px`,
@@ -3567,7 +3557,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   /**
    * Odczytuje wci\u0119cie (margin-left/right) z pierwszego bloku w zaznaczeniu
-   * i zapisuje do `currentBlockIndent`. Warto\u015bci w cm (px / 37.795).
+   * i zapisuje do `currentBlockIndent`. Warto\u015bci w cm (px / CSS_PX_PER_CM).
    */
   private updateCurrentBlockIndent(): void {
     const blocks = this.getSelectedBlocks();
@@ -3634,8 +3624,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       else if (textAlign === 'justify') this.paragraphData.alignment = 'justify';
       else this.paragraphData.alignment = 'left';
 
-      // Wcięcia (px -> cm, 1cm ≈ 37.8px)
-      const pxToCm = (px: number) => Math.round(px / 37.8 * 10) / 10;
+      // Indents (px -> cm), rounded to 0.1 cm.
+      const pxToCm = (px: number) => Math.round((px / CSS_PX_PER_CM) * 10) / 10;
       this.paragraphData.indentLeft = pxToCm(parseFloat(style.paddingLeft) || 0);
       this.paragraphData.indentRight = pxToCm(parseFloat(style.paddingRight) || 0);
 
@@ -3692,7 +3682,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
     if (block) {
       const el = block as HTMLElement;
-      const cmToPx = (cm: number) => cm * 37.8;
+      const cmToPx = (cm: number) => cm * CSS_PX_PER_CM;
 
       // Wyrównanie
       el.style.textAlign = this.paragraphData.alignment;
@@ -4374,7 +4364,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
             if (fixedWidth > 0) {
               lastTable.style.width = '';
               lastTable.style.tableLayout = 'fixed';
-              const widthPx = fixedWidth * 37.8;
+              const widthPx = fixedWidth * CSS_PX_PER_CM;
               lastTable.querySelectorAll('td, th').forEach((cell) => {
                 (cell as HTMLElement).style.width = widthPx + 'px';
               });

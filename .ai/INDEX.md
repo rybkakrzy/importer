@@ -61,6 +61,7 @@ Preferowane zasady:
 | `BENCHMARKS.md` | Benchmarki wydajności/pamięci (BenchmarkDotNet) + fidelity-checks DOCX (R-15..R-21), perf harness frontu, jak uruchomić, progi, CI |
 | `FIDELITY_REPORT.md` | Zgodność odwzorowania DOCX→HTML z Wordem (macierz wierności, testy, kolejne kroki) |
 | `AUDIT_WORD_COMPATIBILITY.md` | Pełny audyt zgodności z MS Word (2026-07-05): ~60 problemów z klasyfikacją potwierdzone/potencjalne, ryzykiem, warstwą i etapami napraw (utrata danych → struktura → paginacja → tabele/listy → formatowanie → zaawansowane) |
+| `COMPLIANCE_MATRIX.md` | Macierz zgodności 9 obszarów promptu audytowego (ADR-0028) + funkcje tabel/kształtów/pól z poziomami full/partial/preserved-not-editable/unsupported/data-loss-risk; narzędzia `tools/docx-diagnostics` |
 | `sequence-document-lifecycle.md` | Diagram sekwencji cyklu pracy z dokumentem (snapshot 2026-05-26, aktualizowany punktowo) |
 | `external-api-browser-open-diagram.md` | Diagram komunikacji: ingest przez External API + otwarcie w przeglądarce (snapshot z erratą 2026-07-05) |
 | `confluence-documentation.md` | Dokumentacja projektowa zsyntetyzowana z `.ai` (do Confluence) |

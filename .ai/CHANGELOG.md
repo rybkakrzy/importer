@@ -11,6 +11,22 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-06 — Audyt import/edycja/eksport DOCX: fixy edytora (font/page-break/geometria) + zachowanie wartości pól + narzędzia diagnostyczne (ADR-0028)
+### Changed
+- **Podział strony (edytor)** — `insertPageBreak` wstawia semantyczny, NIEDRUKOWALNY marker `<div class="page-break" contenteditable="false"></div>` bez inline-grafiki; SCSS: domyślnie zero wysokości/bez linii/etykiety, subtelna podpowiedź tylko w trybie „znaki formatowania" (`.editor-content.show-formatting-marks`, sygnał `showFormattingMarks`). Eksport bez zmian (writer i tak mapował `div.page-break` → `w:br type=page`, nigdy drawing/picture/shape) — potwierdzone.
+- **Wybór fontu (główny toolbar)** — natywny `<select>` (zerował `selectedIndex=-1` na mousedown → pole białło) zastąpiony **comboboxem** `<input list>`+`<datalist>`: pokazuje efektywny font, pozwala wpisać i wyszukać, NIE znika na focusie, commit dopiero na Enter/change/blur, Escape przywraca, stan **mieszany** (puste) dla zaznaczenia wielu fontów (`EditorState.fontMixed` + skan `computeFontMixed`). Usunięte debug `console.log` (updateBlockFormatFromState, updateFormattingState, applyDocumentStyle).
+- **Wspólne źródło fontów (item 7)** — nowy `FontProviderService` (providedIn root): jedna lista dla toolbara głównego i kontekstowego, z **fontem firmowym** czytanym z `--corporate-font-family`, wspólna normalizacja nazw. `editor-toolbar` i `document-editor` (mini-toolbar) czytają tę samą `displayNames`.
+- **Jednostki/geometria (item 1)** — nowy `core/utils/units.util.ts` (jedyne źródło `CSS_PX_PER_CM=37.8` + `cmToPx/pxToCm/twipsToPx/ptToPx`); linijka używała **37.795**, strona **37.8** → dryf usunięty. Zoom potwierdzony jako czysto wizualny (`transform:scale`), nie zmienia modelu ani eksportu.
+- **Reader: wartości pól (KR-05/KR-08, item 3)** — złożone pola inne niż PAGE/NUMPAGES nie gubią już wartości cache (`if (fieldSeparated && fieldValueHandled) continue;`); DATE (simple i complex) zachowuje datę z dokumentu zamiast `DateTime.Now`.
+- **Narzędzia diagnostyczne** — nowe `tools/docx-diagnostics/` (zero-dependency Node ESM): `inspect-docx` (struktura + pola + relacje + elementy z ryzykiem utraty, JSON+konsola, exit 1/2) i `compare-docx` (diff strukturalny źródło↔eksport, klasyfikacja equal/…/lost, exit 1 na regresje). Własny czytnik ZIP (zlib) + writer w fixtures.
+### Verified
+- GUI: nowe specy `wysiwyg-editor.page-break` 2, `editor-toolbar.font` 6, `font-provider.service` 4, `units.util` 5 — zielone; pełne GUI **334/335** (jedyny fail pre-existing `spec-layout-shell`); `ng build` OK.
+- Backend: nowe `FieldValuePreservationTests` 3; Infrastructure **318/318**; `dotnet build` całej solucji 0 błędów.
+- Narzędzia: `tools/docx-diagnostics` self-test **8/8**; `inspect-docx`/`compare-docx` uruchomione end-to-end na syntetycznych fixture'ach (exit codes potwierdzone).
+### Notes
+- Font firmowy testowany deterministycznie przez podklasę providera (CSS var w jsdom). „Mieszany" font: skan zaznaczenia działa w przeglądarce; w jsdom degraduje do „nie-mieszany".
+- Round-trip KODU pola (nie tylko wartości) dla TOC/REF nadal poza zakresem (wartość zachowana jako tekst = „unlink field" jak w Word) — patrz `AUDIT_WORD_COMPATIBILITY.md` KR-05.
+
 ## 2026-07-06 — Formanty (SDT / Content Controls): zachowanie TYPU i właściwości przez round-trip (ST-04, +4 testy)
 ### Changed
 - **Reader (`DocxToHtmlConverter`)** — `BuildSdtDataAttrs`: obok `data-sdt-tag`/`data-sdt-alias` niesie PEŁNE `w:sdtPr` (base64 OuterXml) w `data-sdt-props` dla `sdt-block` i `sdt-inline`. Wcześniej czytane były tylko tag/alias → typ formantu ginął.

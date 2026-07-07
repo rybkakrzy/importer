@@ -1,0 +1,256 @@
+{
+  "sections": [
+    {
+      "sectionIndex": 0,
+      "orientation": "portrait",
+      "columns": 1,
+      "titlePage": false,
+      "headerReferences": [],
+      "footerReferences": [
+        {
+          "relationshipId": "rId1",
+          "type": "default",
+          "target": "footer1.xml",
+          "xmlFile": "word/footer1.xml",
+          "missing": false
+        }
+      ]
+    },
+    {
+      "sectionIndex": 1,
+      "orientation": "landscape",
+      "columns": 1,
+      "titlePage": false,
+      "headerReferences": [],
+      "footerReferences": [
+        {
+          "relationshipId": "rId1",
+          "type": "default",
+          "target": "footer1.xml",
+          "xmlFile": "word/footer1.xml",
+          "missing": false
+        }
+      ]
+    }
+  ],
+  "pageSettings": [
+    {
+      "sectionIndex": 0,
+      "physicalPageWidth": {
+        "twips": 11906,
+        "cm": 21.001,
+        "pt": 595.3
+      },
+      "physicalPageHeight": {
+        "twips": 16838,
+        "cm": 29.7,
+        "pt": 841.9
+      },
+      "orientation": "portrait",
+      "margins": {
+        "top": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "right": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "bottom": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "left": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "header": {
+          "twips": 708,
+          "cm": 1.249,
+          "pt": 35.4
+        },
+        "footer": {
+          "twips": 708,
+          "cm": 1.249,
+          "pt": 35.4
+        },
+        "gutter": {
+          "twips": 0,
+          "cm": 0,
+          "pt": 0
+        }
+      },
+      "contentAreaWidth": {
+        "twips": 9072,
+        "cm": 16.002,
+        "pt": 453.6
+      },
+      "contentAreaHeight": {
+        "twips": 14004,
+        "cm": 24.702,
+        "pt": 700.2
+      }
+    },
+    {
+      "sectionIndex": 1,
+      "physicalPageWidth": {
+        "twips": 16838,
+        "cm": 29.7,
+        "pt": 841.9
+      },
+      "physicalPageHeight": {
+        "twips": 11906,
+        "cm": 21.001,
+        "pt": 595.3
+      },
+      "orientation": "landscape",
+      "margins": {
+        "top": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "right": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "bottom": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "left": {
+          "twips": 1417,
+          "cm": 2.499,
+          "pt": 70.9
+        },
+        "header": {
+          "twips": 708,
+          "cm": 1.249,
+          "pt": 35.4
+        },
+        "footer": {
+          "twips": 708,
+          "cm": 1.249,
+          "pt": 35.4
+        },
+        "gutter": {
+          "twips": 0,
+          "cm": 0,
+          "pt": 0
+        }
+      },
+      "contentAreaWidth": {
+        "twips": 14004,
+        "cm": 24.702,
+        "pt": 700.2
+      },
+      "contentAreaHeight": {
+        "twips": 9072,
+        "cm": 16.002,
+        "pt": 453.6
+      }
+    }
+  ],
+  "headers": [],
+  "footers": [
+    {
+      "file": "word/footer1.xml",
+      "type": "footer",
+      "text": "Strona: 1 z 1. Przedluzenie tekstu stopki",
+      "fields": [
+        "page-number",
+        "page-count"
+      ],
+      "tableCount": 0,
+      "imageCount": 0,
+      "drawingCount": 0,
+      "shapeCount": 0,
+      "relationships": []
+    }
+  ],
+  "footerReferences": [
+    {
+      "relationshipId": "rId1",
+      "type": "default",
+      "target": "footer1.xml",
+      "xmlFile": "word/footer1.xml",
+      "missing": false,
+      "sectionIndex": 0
+    },
+    {
+      "relationshipId": "rId1",
+      "type": "default",
+      "target": "footer1.xml",
+      "xmlFile": "word/footer1.xml",
+      "missing": false,
+      "sectionIndex": 1
+    }
+  ],
+  "fields": [
+    {
+      "kind": "page-number",
+      "instruction": "PAGE",
+      "form": "complex",
+      "part": "word/footer1.xml"
+    },
+    {
+      "kind": "page-count",
+      "instruction": "NUMPAGES",
+      "form": "complex",
+      "part": "word/footer1.xml"
+    }
+  ],
+  "tables": [
+    {
+      "index": 0,
+      "rows": 2,
+      "gridColumns": 2,
+      "gridSpan": 1,
+      "vMerge": 1,
+      "nested": false,
+      "styled": false,
+      "part": "word/document.xml"
+    }
+  ],
+  "paragraphSpacing": [
+    {
+      "before": "120",
+      "after": "120",
+      "line": "360",
+      "lineRule": "auto"
+    }
+  ],
+  "drawings": [],
+  "shapes": [],
+  "relationships": [
+    {
+      "id": "rId1",
+      "type": "footer",
+      "target": "footer1.xml",
+      "external": false
+    },
+    {
+      "id": "rId2",
+      "type": "image",
+      "target": "media/logo.png",
+      "external": false
+    }
+  ],
+  "unsupportedElements": [
+    {
+      "element": "w:footnoteReference",
+      "count": 1,
+      "part": "word/document.xml",
+      "note": "footnotes (KR-02) — content lost on autosave",
+      "risk": "data-loss"
+    }
+  ],
+  "warnings": [],
+  "manualPageBreaks": 1
+}

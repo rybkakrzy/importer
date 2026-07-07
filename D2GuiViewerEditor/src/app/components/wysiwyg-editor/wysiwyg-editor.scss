@@ -571,24 +571,41 @@ body.image-moving * {
   margin: 20px 0;
 }
 
-/* Podział strony */
+/* Manual page break — a SEMANTIC, non-printing marker, not a graphic.
+   The real page boundary is produced by pagination (content starts on a new
+   page) and by the writer (w:br type=page). By default the marker takes no
+   space and shows no line/label, so it never reads as an inserted image in the
+   content. It stays non-selectable/non-focusable. */
 .editor-content .page-break {
   page-break-after: always;
-  border-top: 2px dashed #999;
-  margin: 30px 0;
+  display: block;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  user-select: none;
+}
+
+/* Opt-in "formatting marks" mode: reveal a subtle, clearly non-content hint of
+   where the manual break sits. Still hidden on print. */
+.editor-content.show-formatting-marks .page-break {
+  height: auto;
+  margin: 12px 0;
+  border-top: 1px dashed #b8c4d0;
   position: relative;
 }
 
-.editor-content .page-break::after {
+.editor-content.show-formatting-marks .page-break::after {
   content: 'Podział strony';
   position: absolute;
-  top: -10px;
+  top: -0.7em;
   left: 50%;
   transform: translateX(-50%);
-  background: white;
-  padding: 0 10px;
-  color: #999;
-  font-size: 9pt;
+  background: #fff;
+  padding: 0 8px;
+  color: #9aa7b4;
+  font-size: 8pt;
+  letter-spacing: 0.02em;
 }
 
 /* Marker przerwy sekcji DOCX (div.docx-section-break z geometrią sekcji w data-*).
@@ -639,12 +656,15 @@ body.image-moving * {
     box-shadow: none;
   }
   
-  .editor-content .page-break {
+  .editor-content .page-break,
+  .editor-content.show-formatting-marks .page-break {
     border: none;
+    margin: 0;
+    height: 0;
     page-break-after: always;
   }
-  
-  .editor-content .page-break::after {
+
+  .editor-content.show-formatting-marks .page-break::after {
     display: none;
   }
 }

@@ -1977,6 +1977,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         bool inField = false;
         string fieldInstruction = "";
         bool fieldSeparated = false;
+        // True only when we emitted our own dynamic placeholder (PAGE/NUMPAGES);
+        // for every other field the cached value runs must render as text so the
+        // document's value survives import + autosave (KR-05/KR-08).
+        bool fieldValueHandled = false;
 
         foreach (var child in paragraph.Elements())
         {
@@ -1998,23 +2002,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     inField = true;
                     fieldInstruction = "";
                     fieldSeparated = false;
+                    fieldValueHandled = false;
                 }
                 else if (fctVal == FieldCharValues.Separate)
                 {
                     fieldSeparated = true;
-                    // Emit field placeholder based on instruction
+                    fieldValueHandled = false;
+                    // Emit a dynamic placeholder ONLY for page-number fields; the
+                    // editor fills those in live. Everything else (DATE/TIME, REF,
+                    // TOC, MERGEFIELD, …) keeps its cached value (rendered from the
+                    // runs after the separator) so no field value is lost.
                     var instr = fieldInstruction.Trim().ToUpperInvariant();
                     if (instr.Contains("PAGE") && !instr.Contains("NUMPAGES") && !instr.Contains("SECTIONPAGES"))
                     {
                         html.Append(FieldSpan("field-page", "{page}", run));
+                        fieldValueHandled = true;
                     }
                     else if (instr.Contains("NUMPAGES") || instr.Contains("SECTIONPAGES"))
                     {
                         html.Append(FieldSpan("field-numpages", "{pages}", run));
-                    }
-                    else if (instr.Contains("DATE") || instr.Contains("TIME"))
-                    {
-                        html.Append(FieldSpan("field-date", DateTime.Now.ToString("dd.MM.yyyy"), run));
+                        fieldValueHandled = true;
                     }
                 }
                 else if (fctVal == FieldCharValues.End)
@@ -2048,8 +2055,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     continue;
                 }
                 
-                // Po separatorze - to jest wyświetlana wartość pola, pomijamy
-                if (fieldSeparated) continue;
+                // After the separator these runs are the field's displayed value.
+                // Skip them only when we already emitted a dynamic placeholder;
+                // otherwise render them so the cached value is preserved (KR-05).
+                if (fieldSeparated && fieldValueHandled) continue;
             }
 
             // Normalny run
@@ -3241,11 +3250,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             return FieldSpan("field-page", "{page}", fieldRun);
         if (instruction.Contains("NUMPAGES") || instruction.Contains("SECTIONPAGES"))
             return FieldSpan("field-numpages", "{pages}", fieldRun);
+
+        // Prefer the value cached in the document (Word shows the last computed
+        // result). Only DATE/TIME with an empty cache falls back to today's date
+        // so the field is not blank — never overwrite a stored date (KR-08).
+        var text = string.Join("", simpleField.Descendants<Text>().Select(t => t.Text));
+        if (!string.IsNullOrEmpty(text))
+            return EscapeHtml(text);
         if (instruction.Contains("DATE") || instruction.Contains("TIME"))
             return FieldSpan("field-date", DateTime.Now.ToString("dd.MM.yyyy"), fieldRun);
-
-        var text = string.Join("", simpleField.Descendants<Text>().Select(t => t.Text));
-        return !string.IsNullOrEmpty(text) ? EscapeHtml(text) : "";
+        return "";
     }
 
     /// <summary>

@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PageMargins } from '../../models/document.model';
+import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 
 /**
  * Komponent linijki (ruler) w stylu MS Word.
@@ -20,7 +21,7 @@ import { PageMargins } from '../../models/document.model';
  *   <d2-ruler mode="vertical"   .../>    ← linijka obok kartki
  *
  * Wymiary A4: portrait 21 × 29.7 cm, landscape 29.7 × 21 cm
- * 1 cm ≈ 37.795 px @ 96 DPI
+ * 1 cm = CSS_PX_PER_CM px @ 96 DPI (shared units.util constant)
  */
 @Component({
   selector: 'd2-ruler',
@@ -75,7 +76,7 @@ export class RulerComponent implements OnChanges {
    */
   @Output() dragGuideChange = new EventEmitter<{ active: boolean; axis: 'horizontal' | 'vertical'; offsetPx: number }>();
 
-  readonly CM_TO_PX = 37.795;
+  readonly CM_TO_PX = CSS_PX_PER_CM;
 
   // ────── Geometria ──────
 

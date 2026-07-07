@@ -31,6 +31,7 @@ import {
 } from '../../models/document.model';
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
 import { syncTableColgroup } from '../../core/utils/table-grid.util';
+import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 
 /**
  * Geometria pojedynczej strony w edytorze (cm). Sekcja 1 pochodzi z inputów
@@ -156,18 +157,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return this.pageGeometries()[index] ?? this.baseGeometry();
   }
 
-  // Helpery szablonu — px przy 96 DPI (37.8 px/cm), spójnie z resztą komponentu.
+  // Template helpers — px at 96 DPI via the shared CSS_PX_PER_CM constant.
   pageWidthPx(index: number): number {
-    return this.geometryFor(index).widthCm * 37.8;
+    return this.geometryFor(index).widthCm * CSS_PX_PER_CM;
   }
   pageMinHeightPx(index: number): number {
-    return this.geometryFor(index).heightCm * 37.8;
+    return this.geometryFor(index).heightCm * CSS_PX_PER_CM;
   }
   isLandscapePage(index: number): boolean {
     return this.geometryFor(index).orientation === 'landscape';
   }
   pageMarginPx(index: number, side: 'top' | 'bottom' | 'left' | 'right'): number {
-    return this.geometryFor(index).margins[side] * 37.8;
+    return this.geometryFor(index).margins[side] * CSS_PX_PER_CM;
   }
   /**
    * Geometria pasma nagłówka/stopki jak w Wordzie: pasmo zaczyna się `headerDistance`
@@ -189,10 +190,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const margin = side === 'header' ? geo.margins.top : geo.margins.bottom;
     return Math.max(0, margin - this._bandCmFor(geo, side));
   }
-  headerOffsetPx(index: number): number { return this._distanceCmFor(this.geometryFor(index), 'header') * 37.8; }
-  footerOffsetPx(index: number): number { return this._distanceCmFor(this.geometryFor(index), 'footer') * 37.8; }
-  headerBandPx(index: number): number { return this._bandCmFor(this.geometryFor(index), 'header') * 37.8; }
-  footerBandPx(index: number): number { return this._bandCmFor(this.geometryFor(index), 'footer') * 37.8; }
+  headerOffsetPx(index: number): number { return this._distanceCmFor(this.geometryFor(index), 'header') * CSS_PX_PER_CM; }
+  footerOffsetPx(index: number): number { return this._distanceCmFor(this.geometryFor(index), 'footer') * CSS_PX_PER_CM; }
+  headerBandPx(index: number): number { return this._bandCmFor(this.geometryFor(index), 'header') * CSS_PX_PER_CM; }
+  footerBandPx(index: number): number { return this._bandCmFor(this.geometryFor(index), 'footer') * CSS_PX_PER_CM; }
   /** Tryb tylko-do-odczytu (Krok 2) — blokuje edycję contenteditable. */
   @Input() readOnly = false;
   @Input() showMarginGuides = false;
@@ -538,8 +539,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const pageIndex = Math.max(0, Number(page.getAttribute('data-page-number') ?? '1') - 1);
     const expectedWidthPx = this.pageWidthPx(pageIndex);
     const scale = pr.width > 0 ? pr.width / expectedWidthPx : 1;
-    const topCm = ((br.top - pr.top) / scale) / 37.8;
-    const bottomCm = ((br.bottom - pr.top) / scale) / 37.8;
+    const topCm = ((br.top - pr.top) / scale) / CSS_PX_PER_CM;
+    const bottomCm = ((br.bottom - pr.top) / scale) / CSS_PX_PER_CM;
     this.sectionGeometryChange.emit({ section, topCm, bottomCm });
   }
 
@@ -2605,7 +2606,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     
     if (style.fontFamily) {
       styles.push(`font-family: "${style.fontFamily}"`);
-      console.log('[applyDocumentStyle] Ustawiam font-family:', style.fontFamily);
     }
     
     if (style.fontSize) {
@@ -3022,10 +3022,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Wstawia podział strony
+   * Inserts a manual page break as a SEMANTIC, non-printing marker.
+   *
+   * The marker carries no inline graphic styling on purpose: the writer maps
+   * `div.page-break` to a real OOXML page break (`w:br w:type="page"`), never a
+   * drawing/picture/shape, and the paginator splits pages on this marker. Any
+   * visible hint is opt-in via the "formatting marks" mode (see SCSS), so the
+   * break is never presented as an image the user could focus or edit.
    */
   insertPageBreak(): void {
-    this.insertHtml('<div class="page-break" style="page-break-after:always;border-top:2px dashed #ccc;margin:20px 0;"></div>');
+    this.insertHtml('<div class="page-break" contenteditable="false"></div>');
+  }
+
+  /**
+   * When on, page-break markers show a subtle non-printing hint (Word-like
+   * "formatting marks"). Off by default so breaks render as a real page
+   * boundary rather than a graphic in the content flow.
+   */
+  readonly showFormattingMarks = signal(false);
+
+  toggleFormattingMarks(force?: boolean): void {
+    this.showFormattingMarks.update(v => (force === undefined ? !v : force));
   }
 
   /**
@@ -3158,24 +3175,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       }
     }
 
-    // Debug log — szczegółowy, żeby diagnozować mismatch toolbar vs DOM.
-    {
-      const dbg: Record<string, unknown> = { fontSize, fontFamily, blockFormat: currentBlockFormat };
-      if (selection && selection.rangeCount > 0) {
-        const r = selection.getRangeAt(0);
-        const sc = r.startContainer;
-        dbg['range'] = {
-          collapsed: r.collapsed,
-          startContainerType: sc.nodeType === Node.TEXT_NODE ? 'TEXT' : sc.nodeType === Node.ELEMENT_NODE ? `EL(${(sc as Element).tagName})` : sc.nodeType,
-          startOffset: r.startOffset,
-          startContainerParent: sc.parentElement ? `<${sc.parentElement.tagName.toLowerCase()} style="${sc.parentElement.getAttribute('style') ?? ''}">` : null,
-        };
-      }
-      console.log('[updateFormattingState]', dbg);
-    }
+    // Detect a selection that spans more than one font family so the toolbar can
+    // show a mixed (blank) state instead of an arbitrary single font (item 6).
+    const fontMixed = this.computeFontMixed(selection);
 
     this.editorState.update(state => ({
       ...state,
+      fontMixed,
       currentFormatting: formatting,
       currentStyle: {
         fontFamily: fontFamily,
@@ -3186,6 +3192,48 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }));
 
     this.stateChange.emit(this.editorState());
+  }
+
+  /**
+   * True when a non-collapsed selection covers text runs with more than one
+   * distinct font family. Bounded scan; any failure degrades to "not mixed".
+   */
+  private computeFontMixed(selection: Selection | null): boolean {
+    if (!selection || selection.rangeCount === 0) return false;
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) return false;
+
+    try {
+      const root = range.commonAncestorContainer;
+      const walker = document.createTreeWalker(
+        root.nodeType === Node.ELEMENT_NODE ? root : root.parentNode ?? root,
+        NodeFilter.SHOW_TEXT,
+      );
+      const families = new Set<string>();
+      let scanned = 0;
+      let current = walker.nextNode();
+      while (current && scanned < 400) {
+        if (
+          (current.textContent ?? '').trim().length > 0 &&
+          range.intersectsNode(current) &&
+          current.parentElement
+        ) {
+          const family = window
+            .getComputedStyle(current.parentElement)
+            .fontFamily.replace(/['"]/g, '')
+            .split(',')[0]
+            .trim()
+            .toLowerCase();
+          if (family) families.add(family);
+          if (families.size > 1) return true;
+          scanned++;
+        }
+        current = walker.nextNode();
+      }
+      return families.size > 1;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -3486,15 +3534,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // i treść spływa na kolejną stronę zamiast rozciągać format strony.
       const measuredBands = this._measureBandHeightsPx(refs);
       const availableFor = (geo: PageGeometry, pageIdx: number): number => {
-        const headerBand = Math.max(this._bandCmFor(geo, 'header') * 37.8,
+        const headerBand = Math.max(this._bandCmFor(geo, 'header') * CSS_PX_PER_CM,
           pageIdx === 0 ? measuredBands.headerFirst : measuredBands.headerRest);
-        const footerBand = Math.max(this._bandCmFor(geo, 'footer') * 37.8,
+        const footerBand = Math.max(this._bandCmFor(geo, 'footer') * CSS_PX_PER_CM,
           pageIdx === 0 ? measuredBands.footerFirst : measuredBands.footerRest);
-        const offsets = (this._distanceCmFor(geo, 'header') + this._distanceCmFor(geo, 'footer')) * 37.8;
-        return Math.max(100, geo.heightCm * 37.8 - headerBand - footerBand - offsets);
+        const offsets = (this._distanceCmFor(geo, 'header') + this._distanceCmFor(geo, 'footer')) * CSS_PX_PER_CM;
+        return Math.max(100, geo.heightCm * CSS_PX_PER_CM - headerBand - footerBand - offsets);
       };
       const contentWidthPx = (geo: PageGeometry): number =>
-        Math.max(2, geo.widthCm - geo.margins.left - geo.margins.right) * 37.8;
+        Math.max(2, geo.widthCm - geo.margins.left - geo.margins.right) * CSS_PX_PER_CM;
 
       const baseGeo = this.baseGeometry();
       let curGeo = baseGeo;
@@ -4626,9 +4674,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Oblicza dostępną wysokość dla treści głównej (bez nagłówka i stopki)
    */
   getContentAreaHeight(): number {
-    const pageHeight = this.baseGeometry().heightCm * 37.8;
-    const headerHeightPx = this._headerHeight() * 37.8;
-    const footerHeightPx = this._footerHeight() * 37.8;
+    const pageHeight = this.baseGeometry().heightCm * CSS_PX_PER_CM;
+    const headerHeightPx = this._headerHeight() * CSS_PX_PER_CM;
+    const footerHeightPx = this._footerHeight() * CSS_PX_PER_CM;
     return pageHeight - headerHeightPx - footerHeightPx;
   }
 

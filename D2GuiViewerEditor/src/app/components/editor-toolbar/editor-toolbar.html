@@ -68,19 +68,25 @@
 
   <div class="toolbar-separator"></div>
 
-  <!-- Grupa: Czcionka -->
+  <!-- Grupa: Czcionka (typeable + searchable combobox — item 6) -->
   <div class="toolbar-group">
-    <select 
+    <input
+      type="text"
       class="toolbar-select font-family-select"
-      [value]="selectedFontFamily()"
-      (mousedown)="onFontFamilyMousedown($event)"
-      (change)="onFontFamilyChange($event)"
-      (blur)="onFontFamilyBlur($event)"
-      title="Czcionka">
-      @for (font of fontFamilies; track font) {
-        <option [value]="font" [style.font-family]="font">{{ font }}</option>
+      list="d2-toolbar-font-list"
+      [value]="fontInputValue()"
+      [attr.placeholder]="fontMixed() ? '—' : 'Czcionka'"
+      autocomplete="off"
+      spellcheck="false"
+      (focus)="onFontFocus($event)"
+      (change)="onFontCommit($event)"
+      (keydown)="onFontKeydown($event)"
+      title="Czcionka (wpisz lub wybierz)">
+    <datalist id="d2-toolbar-font-list">
+      @for (font of fontFamilies(); track font) {
+        <option [value]="font"></option>
       }
-    </select>
+    </datalist>
   </div>
 
   <!-- Grupa: Rozmiar czcionki -->

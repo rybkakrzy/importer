@@ -211,6 +211,8 @@ export interface EditorState {
   wordCount: number;
   fontSize?: number;
   fontFamily?: string;
+  /** True when the current selection spans more than one font family (item 6). */
+  fontMixed?: boolean;
   currentFormatting: TextFormatting;
   currentStyle: Partial<ParagraphStyle>;
 }

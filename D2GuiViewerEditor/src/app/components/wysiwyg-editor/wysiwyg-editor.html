@@ -39,6 +39,7 @@
             <div
               #pageEditor
               class="editor-content"
+              [class.show-formatting-marks]="showFormattingMarks()"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="true"
               [attr.data-page-index]="$index"
@@ -58,6 +59,7 @@
             <div
               #pageEditor
               class="editor-content"
+              [class.show-formatting-marks]="showFormattingMarks()"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="true"
               [attr.data-page-index]="$index"

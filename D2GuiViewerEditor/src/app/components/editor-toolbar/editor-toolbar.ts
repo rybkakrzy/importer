@@ -1,16 +1,18 @@
-import { 
-  Component, 
-  EventEmitter, 
-  Input, 
+import {
+  Component,
+  EventEmitter,
+  Input,
   Output,
   signal,
   computed,
   effect,
+  inject,
   HostListener
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { EditorCommand, EditorState, HeadingLevel, DocumentStyle } from '../../models/document.model';
+import { FontProviderService } from '../../services/font-provider.service';
 
 /** Domyślne style Word */
 const DEFAULT_WORD_STYLES: DocumentStyle[] = [
@@ -138,6 +140,7 @@ const DEFAULT_WORD_STYLES: DocumentStyle[] = [
   styleUrl: './editor-toolbar.scss'
 })
 export class EditorToolbarComponent {
+  private readonly fontProvider = inject(FontProviderService);
   private _editorState: EditorState | null = null;
 
   @HostListener('document:click', ['$event'])
@@ -208,20 +211,19 @@ export class EditorToolbarComponent {
     }));
   });
 
-  // Dostępne czcionki
-  fontFamilies = [
-    'Calibri',
-    'Calibri Light',
-    'Arial',
-    'Times New Roman',
-    'Georgia',
-    'Verdana',
-    'Tahoma',
-    'Trebuchet MS',
-    'Comic Sans MS',
-    'Courier New',
-    'Impact'
-  ];
+  /** Shared font list (main + contextual toolbars, incl. corporate font — item 7). */
+  readonly fontFamilies = this.fontProvider.displayNames;
+
+  /** True when the current selection spans more than one font family (item 6). */
+  readonly fontMixed = signal(false);
+
+  /** Value shown in the font combobox — blank on a mixed selection. */
+  readonly fontInputValue = computed(() =>
+    this.fontMixed() ? '' : this.selectedFontFamily(),
+  );
+
+  /** True while the user is actively editing the font input (guards read-back). */
+  private fontEditing = false;
 
   // Dostępne rozmiary czcionki
   fontSizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
@@ -317,22 +319,14 @@ export class EditorToolbarComponent {
       }
     }
 
-    // Aktualizuj czcionkę.
-    // Dopasowanie najpierw exact, dopiero potem prefix — w przeciwnym razie
-    // „Calibri Light" przez .includes("Calibri") fałszywie normalizuje się do "Calibri".
-    if (state.currentStyle.fontFamily) {
-      const incoming = state.currentStyle.fontFamily.trim().toLowerCase();
-      let matchedFont = this.fontFamilies.find(f => f.toLowerCase() === incoming);
-      if (!matchedFont) {
-        // Posortuj listę od najdłuższych nazw, żeby „Calibri Light" zwyciężyło nad „Calibri".
-        const byLength = [...this.fontFamilies].sort((a, b) => b.length - a.length);
-        matchedFont = byLength.find(f => incoming.includes(f.toLowerCase()));
-      }
-      if (matchedFont) {
-        this.selectedFontFamily.set(matchedFont);
-      } else if (state.currentStyle.fontFamily) {
-        // Font spoza listy (np. Tahoma) — pokaż surową nazwę zamiast trzymać starą.
-        this.selectedFontFamily.set(state.currentStyle.fontFamily);
+    // Update the font name from the caret/selection. Skip while the user is
+    // typing in the combobox, otherwise a selectionChange read-back would stomp
+    // the draft. Normalisation is delegated to the shared provider (item 7).
+    if (!this.fontEditing) {
+      this.fontMixed.set(!!state.fontMixed);
+      const rawFont = state.currentStyle.fontFamily ?? state.fontFamily;
+      if (!state.fontMixed && rawFont) {
+        this.selectedFontFamily.set(this.fontProvider.normalize(rawFont));
       }
     }
 
@@ -353,9 +347,6 @@ export class EditorToolbarComponent {
     const fontSize = state.currentStyle?.fontSize || 11;
     const isBold = state.currentFormatting?.bold || false;
     const isItalic = state.currentFormatting?.italic || false;
-
-    // Debug log
-    console.log('[updateBlockFormatFromState] fontSize:', fontSize, 'bold:', isBold, 'italic:', isItalic, 'blockFormat:', blockFormat);
 
     let format = 'paragraph';
 
@@ -411,7 +402,6 @@ export class EditorToolbarComponent {
       }
     }
 
-    console.log('[updateBlockFormatFromState] Wybrany format:', format);
     this.selectedBlockFormat.set(format);
   }
 
@@ -459,44 +449,56 @@ export class EditorToolbarComponent {
   }
 
   /**
-   * Zmienia rodzinę czcionki (ngModel)
+   * Font combobox (item 6). Backed by an `<input list=…>` + `<datalist>` so the
+   * user can read the effective font, type a name, and search — without the
+   * value ever blanking on focus (the old native `<select>` blanked because it
+   * reset `selectedIndex` to -1 on mousedown). The document font is NEVER
+   * overwritten until the user confirms (change/Enter/blur with a real value).
    */
-  onFontFamilySelect(fontFamily: string): void {
-    this.selectedFontFamily.set(fontFamily);
-    this.fontFamilyChange.emit(fontFamily);
+  onFontFocus(event: FocusEvent): void {
+    this.fontEditing = true;
+    // Preselect the whole name so typing replaces it; keep it visible.
+    (event.target as HTMLInputElement).select();
+    // Let the parent snapshot the editor selection before focus moves here.
+    this.preserveSelection.emit();
   }
 
-  /**
-   * Reset selectedIndex „na wejściu" do dropdown’a — dzięki temu (change)
-   * odpali się nawet gdy user wybierze tę samą wartość, która już jest
-   * zaznaczona (typowy use-case: zaaplikuj font Arial na drugim fragmencie,
-   * gdy toolbar nadal pokazuje „Arial" po pierwszym).
-   */
-  onFontFamilyMousedown(event: MouseEvent): void {
-    const select = event.currentTarget as HTMLSelectElement;
-    select.selectedIndex = -1;
-  }
-
-  /**
-   * Jeśli user otworzył dropdown i zamknął bez wyboru (Escape / click obok),
-   * przywróć wizualnie aktualnie zapisaną czcionkę — inaczej select zostanie pusty.
-   */
-  onFontFamilyBlur(event: Event): void {
-    const select = event.currentTarget as HTMLSelectElement;
-    if (!select.value) {
-      select.value = this.selectedFontFamily();
+  onFontKeydown(event: KeyboardEvent): void {
+    const input = event.target as HTMLInputElement;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      this.commitFont(input.value, input);
+      input.blur();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      // Cancel — restore the current effective font, do not overwrite.
+      input.value = this.fontInputValue();
+      input.blur();
     }
   }
 
-  /**
-   * Zmienia rodzinę czcionki (event)
-   */
-  onFontFamilyChange(event: Event): void {
-    const select = event.target as HTMLSelectElement;
-    if (!select.value) {
+  /** Fires on datalist pick or on blur after a change. */
+  onFontCommit(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    this.fontEditing = false;
+    this.commitFont(input.value, input);
+  }
+
+  private commitFont(raw: string, input: HTMLInputElement): void {
+    this.fontEditing = false;
+    const value = raw.trim();
+    if (!value) {
+      // Empty input → keep the current font (no silent overwrite).
+      input.value = this.fontInputValue();
       return;
     }
-    this.onFontFamilySelect(select.value);
+    const canonical = this.fontProvider.normalize(value);
+    input.value = canonical;
+    if (this.fontMixed() || canonical !== this.selectedFontFamily()) {
+      this.selectedFontFamily.set(canonical);
+      this.fontMixed.set(false);
+      this.fontFamilyChange.emit(canonical);
+    }
   }
 
   /**

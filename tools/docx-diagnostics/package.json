@@ -1,0 +1,17 @@
+{
+  "name": "d2-docx-diagnostics",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-dependency DOCX fidelity diagnostics (inspect-docx / compare-docx) for D2 ViewerEditor.",
+  "engines": { "node": ">=18" },
+  "bin": {
+    "inspect-docx": "./inspect-docx.mjs",
+    "compare-docx": "./compare-docx.mjs"
+  },
+  "scripts": {
+    "inspect-docx": "node inspect-docx.mjs",
+    "compare-docx": "node compare-docx.mjs",
+    "test": "node lib/__tests__/run.mjs"
+  }
+}

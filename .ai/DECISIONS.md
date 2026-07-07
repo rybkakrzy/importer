@@ -14,6 +14,29 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0028: Wspólne źródło fontów, moduł jednostek, semantyczny marker podziału strony, zachowanie wartości pól
+
+- Date: 2026-07-06
+- Status: Accepted
+
+### Context
+Audyt import/edycja/eksport DOCX (prompt „Principal SWE") wskazał konkretne wady edytora i konwersji: (1) pole wyboru fontu w głównym toolbarze białło na focusie (natywny `<select>` + `selectedIndex=-1`); (2) toolbar główny i kontekstowy trzymały DWIE różne listy fontów, bez fontu firmowego; (3) podział strony renderowany jako widoczna kreskowana grafika z etykietą; (4) magiczna stała px/cm rozjechana (linijka 37.795 vs strona 37.8); (5) reader gubił wartość cache pól złożonych ≠ PAGE/NUMPAGES i nadpisywał DATE datą serwera. Brakowało też narzędzi diagnostycznych do porównań round-trip.
+
+### Decision
+- **`FontProviderService` (providedIn root)** jako jedyne źródło listy fontów i normalizacji nazw, z fontem firmowym z `--corporate-font-family`. Oba toolbary czytają tę samą `displayNames`.
+- **Combobox fontu** (`<input list>`+`<datalist>`) zamiast natywnego selecta: wpisywanie/wyszukiwanie, brak znikania na focusie, commit dopiero po zatwierdzeniu, stan mieszany (`EditorState.fontMixed`).
+- **`core/utils/units.util.ts`** — jedyne miejsce konwersji jednostek (`CSS_PX_PER_CM=37.8`). Zoom pozostaje czysto wizualnym `transform:scale` (nie dotyka modelu/eksportu).
+- **Podział strony = semantyczny niedrukowalny marker** (`div.page-break`, `contenteditable=false`), grafika tylko opcjonalnie w trybie „znaki formatowania". Eksport bez zmian (już `w:br type=page`).
+- **Reader zachowuje wartości pól** (KR-05): tylko PAGE/NUMPAGES dostają dynamiczny placeholder, reszta (w tym DATE) renderuje wartość cache jako tekst; koniec `DateTime.Now` dla DATE (KR-08).
+- **`tools/docx-diagnostics/`** — zero-dependency Node ESM `inspect-docx`/`compare-docx` (własny czytnik ZIP na `zlib`), zamiast dodawania zależności JS DOCX.
+
+### Consequences
+- Font firmowy dostępny w obu toolbarach; jedna normalizacja. Combobox spełnia kryteria item 6. Linijka i strona nie dryfują. Podział strony nie jest już grafiką ani w edytorze, ani w DOCX. Wartości pól (TOC/REF/MERGEFIELD/DATE) nie znikają przy pierwszym autosave.
+- Ograniczenie: round-trip KODU pola (nie wartości) nadal poza zakresem — wartość wraca jako statyczny tekst („unlink field"). Skan „mieszanego" fontu nie działa w jsdom (degraduje do false). Narzędzia diagnostyczne oparte na regex (wystarczające dla diagnostyki, nie pełny parser OOXML).
+
+### Alternatives considered
+- Native `<select>` z hackami na blanking — odrzucone (nie da typeahead/wyszukiwania). Dodanie biblioteki DOCX/JS-zip do narzędzi — odrzucone (repo trzyma się zero-dependency). Precyzyjne 37.7953 px/cm wszędzie — odrzucone (łamie istniejące testy na 37.8; korzyść 0,01%).
+
 ## ADR-0001: `.ai/` jako pamięć projektu dla agentów AI
 
 - Date: 2026-05-23
