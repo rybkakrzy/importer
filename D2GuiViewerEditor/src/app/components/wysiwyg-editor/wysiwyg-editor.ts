@@ -32,6 +32,22 @@ import {
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
 import { syncTableColgroup } from '../../core/utils/table-grid.util';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
+import {
+  EMU_PER_PX,
+  computeAnchorBadgePosition,
+  findAnchorParagraph,
+  isFloatingElement,
+  isPointerOnEdge,
+  viewportDeltaToLayout,
+} from '../../core/utils/floating-anchor.util';
+
+/** Ikona kotwicy (Material Symbols „anchor", Apache 2.0) — znacznik akapitu-kotwicy jak w Wordzie. */
+const ANCHOR_BADGE_SVG =
+  '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" focusable="false" aria-hidden="true">'
+  + '<path d="M17 15l1.55 1.55c-.96 1.69-3.33 3.04-5.55 3.37V11h3V9h-3V7.82C14.16 7.4 15 6.3 15 5'
+  + 'c0-1.65-1.35-3-3-3S9 3.35 9 5c0 1.3.84 2.4 2 2.82V9H8v2h3v8.92c-2.22-.33-4.59-1.68-5.55-3.37'
+  + 'L7 15l-4-3v3c0 3.88 4.92 7 9 7s9-3.12 9-7v-3l-4 3zM12 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1'
+  + ' .45-1 1-1z"/></svg>';
 
 /**
  * Geometria pojedynczej strony w edytorze (cm). Sekcja 1 pochodzi z inputów
@@ -319,6 +335,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     axis: 'x' | 'y' | 'both';
   } | null = null;
 
+  // Zaznaczone pole tekstowe (div.docx-textbox) — klasa tb-selected steruje obramowaniem
+  // edycyjnym (SCSS), a zaznaczenie pokazuje znacznik kotwicy przy akapicie-kotwicy.
+  private selectedTextBox: HTMLElement | null = null;
+  /** Textbox z klasą tb-edge (kursor „move" na pasie krawędzi) — do sprzątania. */
+  private edgeCursorTextBox: HTMLElement | null = null;
+  /** Znacznik kotwicy (overlay w .page — poza contenteditable, nie serializuje się). */
+  private anchorBadge: HTMLElement | null = null;
+  /** Element pływający, dla którego znacznik jest widoczny. */
+  private anchorBadgeTarget: HTMLElement | null = null;
+  private _anchorBadgeRafHandle: number | null = null;
+
   // Stan resize tabeli
   private tableResizeState: {
     type: 'col' | 'row' | 'table';
@@ -508,6 +535,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       cancelAnimationFrame(this._paginateRafHandle);
       this._paginateRafHandle = null;
     }
+    if (this._anchorBadgeRafHandle !== null) {
+      cancelAnimationFrame(this._anchorBadgeRafHandle);
+      this._anchorBadgeRafHandle = null;
+    }
+    this.hideAnchorBadge();
     this._sectionResizeObserver?.disconnect();
   }
 
@@ -647,6 +679,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     });
     editor.addEventListener('mousemove', (e) => {
       this.handleTableResizeCursor(e);
+      this.updateTextBoxEdgeCursor(e);
     });
   }
 
@@ -660,6 +693,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     this.clearSelectedImage();
+
+    // Klik poza polem tekstowym (puste miejsce edytora) — schowaj obramowanie
+    // edycyjne i znacznik kotwicy poprzedniego zaznaczenia.
+    if (!target.closest('.docx-textbox')) {
+      this.clearSelectedTextBox();
+    }
   }
 
   private handleEditorMouseDown(event: MouseEvent): void {
@@ -677,6 +716,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Sprawdź czy kliknięto na wrapper obrazu lub jego zawartość
     const wrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
     if (!wrapper) {
+      this.handleTextBoxMouseDown(event, target);
       return;
     }
 
@@ -795,9 +835,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (isFloating) {
       const startLeft = parseInt(wrapper.style.left || '0', 10);
       const startTop = parseInt(wrapper.style.top || '0', 10);
+      // Delty kursora są w px viewportu — przy zoomie (transform: scale) trzeba je
+      // sprowadzić do px układu strony, inaczej obraz ucieka szybciej/wolniej niż kursor.
+      const floatPage = wrapper.closest('.page') as HTMLElement | null;
+      const floatScale = floatPage ? this._pageVisualScale(floatPage) : 1;
       const onFloatingMove = (moveEvent: MouseEvent) => {
-        const dx = moveEvent.clientX - startX;
-        const dy = moveEvent.clientY - startY;
+        const dx = viewportDeltaToLayout(moveEvent.clientX - startX, floatScale);
+        const dy = viewportDeltaToLayout(moveEvent.clientY - startY, floatScale);
         if (!this.imageMoveState!.isDragging && Math.hypot(dx, dy) > 3) {
           this.imageMoveState!.isDragging = true;
           wrapper.classList.add('image-dragging');
@@ -1231,18 +1275,208 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this.selectedImageWrapper && this.selectedImageWrapper !== wrapper) {
       this.selectedImageWrapper.classList.remove('selected');
     }
+    this.clearSelectedTextBox();
 
     this.selectedImageWrapper = wrapper;
     this.selectedImageWrapper.classList.add('selected');
     this.emitImageSelectionState();
+
+    // Kotwica jak w Wordzie: widoczna tylko dla elementu PŁYWAJĄCEGO (front/behind);
+    // obraz inline płynie z tekstem i kotwicy nie ma.
+    const mode = wrapper.dataset['posMode'];
+    if (mode === 'front' || mode === 'behind') {
+      this.showAnchorBadgeFor(wrapper);
+    } else {
+      this.hideAnchorBadge();
+    }
   }
 
   private clearSelectedImage(): void {
     if (this.selectedImageWrapper) {
+      if (this.anchorBadgeTarget === this.selectedImageWrapper) this.hideAnchorBadge();
       this.selectedImageWrapper.classList.remove('selected');
       this.selectedImageWrapper = null;
       this.imageSelectionChange.emit(null);
     }
+  }
+
+  // ======= POLA TEKSTOWE (div.docx-textbox) =======
+
+  /**
+   * Zaznaczenie / start przeciągania pola tekstowego. Wnętrze pola pozostaje zwykłą
+   * treścią contenteditable (klik = edycja tekstu, jak w Wordzie); drag rusza wyłącznie
+   * z pasa krawędzi pływającego pola, żeby nie kraść kliknięć przeznaczonych dla tekstu.
+   */
+  private handleTextBoxMouseDown(event: MouseEvent, target: HTMLElement): void {
+    const textbox = target.closest('.docx-textbox') as HTMLElement | null;
+    if (!textbox) return;
+
+    this.selectTextBox(textbox);
+    if (!isFloatingElement(textbox)) return;
+
+    const rect = textbox.getBoundingClientRect();
+    if (!isPointerOnEdge(event.clientX, event.clientY, rect)) return;
+
+    event.preventDefault();
+    this.startTextBoxDrag(event, textbox);
+  }
+
+  private selectTextBox(textbox: HTMLElement): void {
+    if (this.selectedTextBox && this.selectedTextBox !== textbox) {
+      this.selectedTextBox.classList.remove('tb-selected');
+    }
+    this.clearSelectedImage();
+
+    this.selectedTextBox = textbox;
+    textbox.classList.add('tb-selected');
+
+    if (isFloatingElement(textbox)) {
+      this.showAnchorBadgeFor(textbox);
+    } else {
+      this.hideAnchorBadge();
+    }
+  }
+
+  private clearSelectedTextBox(): void {
+    if (this.selectedTextBox) {
+      if (this.anchorBadgeTarget === this.selectedTextBox) this.hideAnchorBadge();
+      this.selectedTextBox.classList.remove('tb-selected');
+      this.selectedTextBox = null;
+    }
+  }
+
+  /**
+   * Przeciąganie pływającego pola tekstowego. Delty kursora (px viewportu) są dzielone
+   * przez aktualną skalę zoomu strony — bez tego przy zoomie ≠ 100% pole „uciekało"
+   * szybciej/wolniej niż kursor. Kotwica pozostaje przy TYM SAMYM akapicie (pozycja divu
+   * w DOM się nie zmienia) — drag aktualizuje wyłącznie offsety; to przewidywalna reguła
+   * bez skoków pozycji przy zmianie kotwicy.
+   */
+  private startTextBoxDrag(event: MouseEvent, textbox: HTMLElement): void {
+    const page = textbox.closest('.page') as HTMLElement | null;
+    const scale = page ? this._pageVisualScale(page) : 1;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = parseInt(textbox.style.left || '0', 10);
+    const startTop = parseInt(textbox.style.top || '0', 10);
+    let dragging = false;
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const dx = viewportDeltaToLayout(moveEvent.clientX - startX, scale);
+      const dy = viewportDeltaToLayout(moveEvent.clientY - startY, scale);
+      if (!dragging && Math.hypot(dx, dy) > 3) {
+        dragging = true;
+        textbox.classList.add('tb-dragging');
+      }
+      if (dragging) {
+        textbox.style.left = `${Math.max(0, Math.round(startLeft + dx))}px`;
+        textbox.style.top = `${Math.max(0, Math.round(startTop + dy))}px`;
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!dragging) return;
+      textbox.classList.remove('tb-dragging');
+
+      const xPx = parseInt(textbox.style.left || '0', 10);
+      const yPx = parseInt(textbox.style.top || '0', 10);
+      textbox.setAttribute('data-x-emu', String(xPx * EMU_PER_PX));
+      textbox.setAttribute('data-y-emu', String(yPx * EMU_PER_PX));
+      if (!textbox.dataset['posMode']) textbox.dataset['posMode'] = 'front';
+
+      this.onContentChange();
+      this._scheduleAnchorBadgeRefresh();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  /**
+   * Kursor „move" na pasie krawędzi pływającego pola tekstowego (klasa tb-edge — usuwana
+   * przy serializacji). Wnętrze zachowuje kursor tekstowy.
+   */
+  private updateTextBoxEdgeCursor(event: MouseEvent): void {
+    const target = event.target as HTMLElement | null;
+    const textbox = (target?.closest?.('.docx-textbox') ?? null) as HTMLElement | null;
+
+    if (this.edgeCursorTextBox && this.edgeCursorTextBox !== textbox) {
+      this.edgeCursorTextBox.classList.remove('tb-edge');
+      this.edgeCursorTextBox = null;
+    }
+    if (!textbox || !isFloatingElement(textbox)) return;
+
+    const onEdge = isPointerOnEdge(event.clientX, event.clientY, textbox.getBoundingClientRect());
+    textbox.classList.toggle('tb-edge', onEdge);
+    this.edgeCursorTextBox = textbox;
+  }
+
+  // ======= ZNACZNIK KOTWICY =======
+
+  /** Aktualna skala wizualna strony (transform zoomu): szerokość rect / szerokość layoutu. */
+  private _pageVisualScale(page: HTMLElement): number {
+    const rect = page.getBoundingClientRect();
+    return page.offsetWidth > 0 && rect.width > 0 ? rect.width / page.offsetWidth : 1;
+  }
+
+  /**
+   * Pokazuje znacznik kotwicy przy akapicie-kotwicy zaznaczonego elementu pływającego.
+   * Znacznik jest dzieckiem .page (POZA contenteditable → nigdy nie trafia do getContent),
+   * pozycjonowanym w px układu strony — transform zoomu i scroll przesuwają go razem
+   * z treścią bez przeliczeń. `pointer-events:none` + `aria-label`: element czysto
+   * informacyjny, nie przechwytuje kliknięć ani fokusu.
+   */
+  private showAnchorBadgeFor(el: HTMLElement): void {
+    const editorRoot = el.closest(
+      '.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display'
+    ) as HTMLElement | null;
+    if (!editorRoot) { this.hideAnchorBadge(); return; }
+
+    const paragraph = findAnchorParagraph(el, editorRoot);
+    const page = (paragraph ?? el).closest('.page') as HTMLElement | null;
+    if (!paragraph || !page) { this.hideAnchorBadge(); return; }
+
+    if (!this.anchorBadge) {
+      const badge = document.createElement('div');
+      badge.className = 'anchor-badge';
+      badge.setAttribute('role', 'img');
+      badge.setAttribute('aria-label', 'Kotwica: element jest przypięty do tego akapitu');
+      badge.setAttribute('contenteditable', 'false');
+      badge.innerHTML = ANCHOR_BADGE_SVG;
+      this.anchorBadge = badge;
+    }
+    if (this.anchorBadge.parentElement !== page) page.appendChild(this.anchorBadge);
+    this.anchorBadgeTarget = el;
+
+    const pos = computeAnchorBadgePosition(
+      paragraph.getBoundingClientRect(), page.getBoundingClientRect(), page.offsetWidth);
+    this.anchorBadge.style.left = `${pos.leftPx}px`;
+    this.anchorBadge.style.top = `${pos.topPx}px`;
+  }
+
+  private hideAnchorBadge(): void {
+    this.anchorBadge?.remove();
+    this.anchorBadgeTarget = null;
+  }
+
+  /** Repozycjonowanie znacznika po zmianach treści/układu (koalescencja przez rAF). */
+  private _scheduleAnchorBadgeRefresh(): void {
+    if (this._anchorBadgeRafHandle !== null || !this.anchorBadgeTarget) return;
+    this._anchorBadgeRafHandle = requestAnimationFrame(() => {
+      this._anchorBadgeRafHandle = null;
+      this.refreshAnchorBadge();
+    });
+  }
+
+  /** Po edycji/repaginacji: element usunięty → znacznik znika; przesunięty → jedzie za akapitem. */
+  private refreshAnchorBadge(): void {
+    const target = this.anchorBadgeTarget;
+    if (!target) return;
+    if (!target.isConnected) {
+      this.hideAnchorBadge();
+      return;
+    }
+    this.showAnchorBadgeFor(target);
   }
 
   /**
@@ -1594,6 +1828,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.saveToUndoStack();
     this.updateState();
     this.updateFormattingState(); // Aktualizuj też stan formatowania
+    // Znacznik kotwicy podąża za akapitem-kotwicą po każdej zmianie treści
+    // (usunięcie elementu → znacznik znika; zmiana układu → repozycjonowanie).
+    this._scheduleAnchorBadgeRefresh();
   }
 
   /**
@@ -3708,6 +3945,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         setTimeout(() => this._restoreGlobalCaret(caret), 0);
       }
       this.calculatePages();
+      // Repaginacja przenosi bloki między stronami — znacznik kotwicy musi pojechać
+      // za akapitem-kotwicą (albo zniknąć, jeśli element wypadł z DOM).
+      this._scheduleAnchorBadgeRefresh();
     } finally {
       this._isRepaginating = false;
     }
@@ -4182,6 +4422,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * wiersze bez wysokości wracają do Worda jako auto, jak w oryginale. */
   private _serializeSingleEditor(editor: HTMLDivElement): string {
     const clone = editor.cloneNode(true) as HTMLDivElement;
+
+    // Stany UI pól tekstowych (zaznaczenie/drag/kursor krawędzi) są edycyjne — nie mogą
+    // trafić do zapisu. Sama klasa docx-textbox + data-* zostają (kontrakt writera).
+    clone.querySelectorAll('.docx-textbox').forEach(tb => {
+      tb.classList.remove('tb-selected', 'tb-dragging', 'tb-edge');
+    });
+    // Defensywnie: znacznik kotwicy nigdy nie powinien być w contenteditable, ale gdyby
+    // trafił (np. przez wklejenie) — usuń przy serializacji.
+    clone.querySelectorAll('.anchor-badge').forEach(b => b.remove());
 
     clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;

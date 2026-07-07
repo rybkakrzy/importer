@@ -9,6 +9,9 @@ using D2ViewerEditor.Infrastructure.Conversion;
 using HtmlAgilityPack;
 using OoxmlPageSize = DocumentFormat.OpenXml.Wordprocessing.PageSize;
 using Microsoft.Extensions.Options;
+using A = DocumentFormat.OpenXml.Drawing;
+using Wp = DocumentFormat.OpenXml.Drawing.Wordprocessing;
+using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -118,6 +121,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _firstSectionProps = null;
             _emittedSectionProps.Clear();
             _numIdByHtmlList.Clear();
+            _pendingTextBoxDrawings.Clear();
             _hasSectionMarkers = false;
             _headerBandCm = header?.Height;
             _footerBandCm = footer?.Height;
@@ -538,7 +542,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 case "header":
                 case "footer":
                 {
-                    // kontener — zejdź w dzieci
+                    // Pole tekstowe (np. adres w stopce ING) — do bufora, przypinane do
+                    // następnego akapitu; pozostałe kontenery — zejdź w dzieci.
+                    if (IsTextBoxNode(child))
+                    {
+                        FlushPending();
+                        BufferTextBoxDrawing(child);
+                        break;
+                    }
                     FlushPending();
                     ConvertHtmlToHeaderFooter(child, parent);
                     break;
@@ -557,6 +568,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         FlushPending();
+
+        // Pola tekstowe bez akapitu-następnika (np. textbox jako ostatni element pasma) —
+        // domykający akapit staje się ich akapitem-kotwicą.
+        FlushPendingTextBoxesInto(parent);
 
         // Header/Footer MUSZĄ zawierać co najmniej jeden block-level (np. Paragraph),
         // inaczej Word odmówi otwarcia dokumentu.
@@ -883,6 +898,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             }
         }
 
+        // Pola tekstowe bez akapitu-następnika (textbox na samym końcu treści) —
+        // dopisz akapit-kotwicę, żeby drawing nie przepadł.
+        FlushPendingTextBoxesInto(body);
+
         if (!body.Elements<Paragraph>().Any() && !body.Elements<Table>().Any())
         {
             body.Append(new Paragraph());
@@ -934,7 +953,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 break;
 
             case "div":
-                if (IsSectionBreakNode(node))
+                if (IsTextBoxNode(node))
+                {
+                    // Pole tekstowe Worda — NIE spłaszczaj do zwykłych akapitów (tak ginęła
+                    // cała ramka przy pierwszym autosave). Drawing czeka w buforze i zostanie
+                    // przypięty do NASTĘPNEGO akapitu (reader emituje div bezpośrednio przed
+                    // akapitem-kotwicą — patrz DocxToHtmlConverter.HoistTextBox).
+                    BufferTextBoxDrawing(node);
+                }
+                else if (IsSectionBreakNode(node))
                 {
                     elements.Add(CreateSectionBreakParagraph(node));
                 }
@@ -1034,6 +1061,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (props.HasChildren)
             paragraph.Append(props);
 
+        // Pola tekstowe zbuforowane przez poprzedzające je div.docx-textbox — ten akapit
+        // jest ich akapitem-kotwicą (run z drawingiem na początku treści akapitu).
+        AttachPendingTextBoxes(paragraph);
+
         AppendInlineContent(paragraph, node);
 
         return paragraph;
@@ -1056,6 +1087,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         paragraph.Append(props);
+        AttachPendingTextBoxes(paragraph);
         AppendInlineContent(paragraph, node);
 
         return paragraph;
@@ -2351,7 +2383,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             { RelativeFrom = DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalRelativePositionValues.Margin },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent { Cx = widthEmu, Cy = heightEmu },
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
-            new DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapNone(),
+            // Oryginalny tryb zawijania z data-wrap (reader); brak → WrapNone jak dotąd.
+            BuildAnchorWrapElement(node),
             BuildImageDocProperties((uint)_imageCounter, $"Image{_imageCounter}", altText),
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
                 new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks { NoChangeAspect = true }),
@@ -2370,6 +2403,273 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         };
 
         return new Drawing(anchor);
+    }
+
+    /// <summary>Pola tekstowe oczekujące na przypięcie do najbliższego następnego akapitu.</summary>
+    private readonly List<Drawing> _pendingTextBoxDrawings = new();
+
+    /// <summary>
+    /// Czy węzeł to pole tekstowe Worda wyemitowane przez DocxToHtmlConverter
+    /// (<c>div.docx-textbox</c> / <c>data-textbox="1"</c>).
+    /// </summary>
+    private static bool IsTextBoxNode(HtmlNode node)
+        => node.NodeType == HtmlNodeType.Element
+           && node.Name.Equals("div", StringComparison.OrdinalIgnoreCase)
+           && (node.HasClass("docx-textbox") || node.GetAttributeValue("data-textbox", "") == "1");
+
+    /// <summary>
+    /// Buforuje drawing pola tekstowego napotkanego na poziomie blokowym. Model kotwicy:
+    /// reader emituje div bezpośrednio PRZED akapitem-kotwicą, więc drawing zostaje
+    /// przypięty do NASTĘPNEGO konwertowanego akapitu (<see cref="AttachPendingTextBoxes"/>).
+    /// Dzięki temu relacja „obiekt ↔ akapit" przeżywa pełny round-trip bez sztucznych ID.
+    /// </summary>
+    private void BufferTextBoxDrawing(HtmlNode node)
+    {
+        var drawing = BuildTextBoxDrawing(node);
+        if (drawing != null) _pendingTextBoxDrawings.Add(drawing);
+    }
+
+    /// <summary>
+    /// Przypina zbuforowane pola tekstowe do akapitu (run z drawingiem na początku treści —
+    /// dla obiektu pływającego pozycja runa w akapicie nie wpływa na układ, a początek
+    /// jest deterministyczny dla round-tripu).
+    /// </summary>
+    private void AttachPendingTextBoxes(Paragraph paragraph)
+    {
+        if (_pendingTextBoxDrawings.Count == 0) return;
+        foreach (var drawing in _pendingTextBoxDrawings)
+            paragraph.Append(new Run(drawing));
+        _pendingTextBoxDrawings.Clear();
+    }
+
+    /// <summary>
+    /// Awaryjny flush: treść skończyła się bez akapitu-następnika (textbox jako ostatni
+    /// element) — tworzony jest akapit-kotwica, żeby drawing nie przepadł.
+    /// </summary>
+    private void FlushPendingTextBoxesInto(OpenXmlElement parent)
+    {
+        if (_pendingTextBoxDrawings.Count == 0) return;
+        var paragraph = new Paragraph();
+        AttachPendingTextBoxes(paragraph);
+        parent.Append(paragraph);
+    }
+
+    private Run? BuildTextBoxRun(HtmlNode node)
+    {
+        var drawing = BuildTextBoxDrawing(node);
+        return drawing != null ? new Run(drawing) : null;
+    }
+
+    /// <summary>
+    /// Odtwarza pole tekstowe Worda z <c>div.docx-textbox</c> jako <c>wps:wsp</c> z
+    /// <c>w:txbxContent</c> (format DrawingML, Word 2010+). Kotwiczone (data-pos-mode
+    /// front/behind albo position:absolute) → <c>wp:anchor</c> w konwencji edytora — te same
+    /// osie co obrazy: X = PositionOffset od lewej krawędzi strony (relativeFrom=page),
+    /// Y = od górnego marginesu (relativeFrom=margin); pozostałe → <c>wp:inline</c>.
+    /// Rozmiar z data-width/height-emu (fallback: width/min-height px ze stylu),
+    /// obramowanie data-border-* → <c>a:ln</c>. Null, gdy pole nie ma treści.
+    /// </summary>
+    private Drawing? BuildTextBoxDrawing(HtmlNode node)
+    {
+        var content = BuildTextBoxContent(node);
+        if (content == null) return null;
+
+        var style = node.GetAttributeValue("style", "");
+        var widthEmu = ParseLongAttribute(node, "data-width-emu")
+            ?? (CssPxValue(style, "width") ?? 200) * OoxmlUnits.EmuPerPixel;
+        var heightEmu = ParseLongAttribute(node, "data-height-emu")
+            ?? (CssPxValue(style, "min-height") ?? CssPxValue(style, "height") ?? 50) * OoxmlUnits.EmuPerPixel;
+        if (widthEmu <= 0) widthEmu = 200 * OoxmlUnits.EmuPerPixel;
+        if (heightEmu <= 0) heightEmu = 50 * OoxmlUnits.EmuPerPixel;
+
+        _imageCounter++;
+        var docPrName = $"TextBox{_imageCounter}";
+
+        var spPr = new Wps.ShapeProperties(
+            new A.Transform2D(
+                new A.Offset { X = 0, Y = 0 },
+                new A.Extents { Cx = widthEmu, Cy = heightEmu }),
+            new A.PresetGeometry(new A.AdjustValueList()) { Preset = A.ShapeTypeValues.Rectangle });
+
+        int.TryParse(node.GetAttributeValue("data-border-width", "0"), out var borderWidthPx);
+        var borderColor = node.GetAttributeValue("data-border-color", "").TrimStart('#');
+        if (borderWidthPx > 0 && Regex.IsMatch(borderColor, "^[0-9A-Fa-f]{6}$"))
+        {
+            var dashStyle = node.GetAttributeValue("data-border-style", "solid") switch
+            {
+                "dashed" => A.PresetLineDashValues.Dash,
+                "dotted" => A.PresetLineDashValues.Dot,
+                _ => A.PresetLineDashValues.Solid
+            };
+            spPr.Append(new A.Outline(
+                new A.SolidFill(new A.RgbColorModelHex { Val = borderColor.ToUpperInvariant() }),
+                new A.PresetDash { Val = dashStyle })
+            { Width = borderWidthPx * OoxmlUnits.EmuPerPixel });
+        }
+
+        var wsp = new Wps.WordprocessingShape(
+            new Wps.NonVisualDrawingShapeProperties { TextBox = true },
+            spPr,
+            new Wps.TextBoxInfo2(content),
+            new Wps.TextBodyProperties());
+
+        var graphic = new A.Graphic(new A.GraphicData(wsp)
+        { Uri = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape" });
+
+        var posMode = node.GetAttributeValue("data-pos-mode", "");
+        var isFloating = posMode == "front" || posMode == "behind"
+            || style.Contains("position:absolute", StringComparison.OrdinalIgnoreCase);
+
+        if (!isFloating)
+        {
+            return new Drawing(new Wp.Inline(
+                new Wp.Extent { Cx = widthEmu, Cy = heightEmu },
+                new Wp.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
+                BuildImageDocProperties((uint)_imageCounter, docPrName, null),
+                new Wp.NonVisualGraphicFrameDrawingProperties(),
+                graphic));
+        }
+
+        var xEmu = ParseLongAttribute(node, "data-x-emu")
+            ?? (CssPxValue(style, "left") ?? 0) * OoxmlUnits.EmuPerPixel;
+        var yEmu = ParseLongAttribute(node, "data-y-emu")
+            ?? (CssPxValue(style, "top") ?? 0) * OoxmlUnits.EmuPerPixel;
+        var behind = posMode == "behind";
+
+        var anchor = new Wp.Anchor(
+            new Wp.SimplePosition { X = 0L, Y = 0L },
+            new Wp.HorizontalPosition(
+                new Wp.PositionOffset(xEmu.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            { RelativeFrom = Wp.HorizontalRelativePositionValues.Page },
+            // Pionowo Margin — origin Y edytora to góra obszaru treści (spójnie z obrazami;
+            // reader dodaje i odejmuje ten sam górny margines → round-trip idempotentny).
+            new Wp.VerticalPosition(
+                new Wp.PositionOffset(yEmu.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            { RelativeFrom = Wp.VerticalRelativePositionValues.Margin },
+            new Wp.Extent { Cx = widthEmu, Cy = heightEmu },
+            new Wp.EffectExtent { LeftEdge = 0, TopEdge = 0, RightEdge = 0, BottomEdge = 0 },
+            BuildAnchorWrapElement(node),
+            BuildImageDocProperties((uint)_imageCounter, docPrName, null),
+            new Wp.NonVisualGraphicFrameDrawingProperties(),
+            graphic)
+        {
+            DistanceFromTop = 0U,
+            DistanceFromBottom = 0U,
+            DistanceFromLeft = 0U,
+            DistanceFromRight = 0U,
+            SimplePos = false,
+            RelativeHeight = (uint)(251_660_288 + _imageCounter),
+            BehindDoc = behind,
+            Locked = false,
+            LayoutInCell = true,
+            AllowOverlap = true
+        };
+
+        return new Drawing(anchor);
+    }
+
+    /// <summary>
+    /// Treść pola tekstowego (<c>w:txbxContent</c>) z dzieci div.docx-textbox. Bufor
+    /// zagnieżdżonych textboxów jest izolowany — pole w polu degraduje do drawingu inline
+    /// wewnątrz treści, zamiast „uciec" do akapitów body.
+    /// </summary>
+    private TextBoxContent? BuildTextBoxContent(HtmlNode node)
+    {
+        var saved = _pendingTextBoxDrawings.ToList();
+        _pendingTextBoxDrawings.Clear();
+        var content = new TextBoxContent();
+        try
+        {
+            foreach (var child in node.ChildNodes)
+            {
+                if (child.NodeType == HtmlNodeType.Text)
+                {
+                    var text = System.Net.WebUtility.HtmlDecode(child.InnerText);
+                    if (!string.IsNullOrWhiteSpace(text)) content.Append(CreateParagraph(text));
+                    continue;
+                }
+                if (child.NodeType != HtmlNodeType.Element) continue;
+
+                switch (child.Name.ToLower())
+                {
+                    case "p":
+                        content.Append(ConvertParagraphElement(child));
+                        break;
+                    case "h1": case "h2": case "h3": case "h4": case "h5": case "h6":
+                        content.Append(ConvertHeadingElement(child, int.Parse(child.Name[1..])));
+                        break;
+                    case "table":
+                        content.Append(ConvertTableElement(child));
+                        break;
+                    case "ul":
+                    case "ol":
+                        foreach (var el in ConvertListElement(child, child.Name.ToLower() == "ol"))
+                            content.Append(el);
+                        break;
+                    case "div" when IsTextBoxNode(child):
+                    {
+                        var run = BuildTextBoxRun(child);
+                        if (run != null) content.Append(new Paragraph(run));
+                        break;
+                    }
+                    default:
+                    {
+                        var para = new Paragraph();
+                        AppendInlineContent(para, child);
+                        content.Append(para);
+                        break;
+                    }
+                }
+            }
+
+            // Zagnieżdżone textboxy zbuforowane przez dzieci — nie mogą czekać na akapit body.
+            if (_pendingTextBoxDrawings.Count > 0)
+            {
+                var trailing = new Paragraph();
+                AttachPendingTextBoxes(trailing);
+                content.Append(trailing);
+            }
+        }
+        finally
+        {
+            _pendingTextBoxDrawings.Clear();
+            _pendingTextBoxDrawings.AddRange(saved);
+        }
+
+        if (!content.HasChildren) return null;
+        // w:txbxContent wymaga co najmniej jednego akapitu (sama tabela nie wystarcza Wordowi).
+        if (!content.Elements<Paragraph>().Any()) content.Append(new Paragraph());
+        return content;
+    }
+
+    /// <summary>
+    /// Element wrap* dla <c>wp:anchor</c> z <c>data-wrap</c> (round-trip z readera).
+    /// wrapTight/wrapThrough wymagają wrapPolygon, którego HTML nie niesie — przybliżenie
+    /// przez wrapSquare (Word nadal opływa obiekt); brak/none → WrapNone (front/behind).
+    /// </summary>
+    private static OpenXmlElement BuildAnchorWrapElement(HtmlNode node)
+        => node.GetAttributeValue("data-wrap", "") switch
+        {
+            "square" or "tight" or "through" => new Wp.WrapSquare { WrapText = Wp.WrapTextValues.BothSides },
+            "topAndBottom" => new Wp.WrapTopBottom(),
+            _ => new Wp.WrapNone(),
+        };
+
+    private static long? ParseLongAttribute(HtmlNode node, string attribute)
+        => long.TryParse(node.GetAttributeValue(attribute, ""), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var value) ? value : null;
+
+    /// <summary>Wartość CSS w px dla danej właściwości z inline style (np. width/left/top).</summary>
+    private static long? CssPxValue(string style, string property)
+    {
+        if (string.IsNullOrEmpty(style)) return null;
+        var match = Regex.Match(style,
+            $@"(?:^|;)\s*{Regex.Escape(property)}\s*:\s*(-?\d+(?:\.\d+)?)px",
+            RegexOptions.IgnoreCase);
+        return match.Success && double.TryParse(match.Groups[1].Value,
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v)
+            ? (long)Math.Round(v)
+            : null;
     }
 
     /// <summary>
@@ -2469,6 +2769,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         foreach (var child in node.ChildNodes)
         {
+            // Pole tekstowe wewnątrz akapitu/li (div w <li> jest poprawnym flow content —
+            // reader nie hoistuje go przed element listy) → drawing inline w tym akapicie.
+            if (child.NodeType == HtmlNodeType.Element && IsTextBoxNode(child))
+            {
+                var tbRun = BuildTextBoxRun(child);
+                if (tbRun != null) paragraph.Append(tbRun);
+                continue;
+            }
+
             // Inline content control (formant) zachowany z odczytu DOCX — owijamy ponownie w SdtRun.
             if (child.NodeType == HtmlNodeType.Element
                 && child.Name.Equals("span", StringComparison.OrdinalIgnoreCase)
@@ -3386,11 +3695,28 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Złóż run-y z dzieci span-a w tym samym kontekście co AppendInlineContent.
         foreach (var child in node.ChildNodes)
         {
+            // Pola numeru strony wewnątrz formantu (galeria Worda „Strona X z Y") muszą
+            // wrócić jako pola — CreateRunsFromNode zrobiłoby z nich literalny „{page}".
+            if (child.NodeType == HtmlNodeType.Element
+                && child.Name.Equals("span", StringComparison.OrdinalIgnoreCase))
+            {
+                if (child.HasClass("field-page") || child.HasClass("page-number"))
+                {
+                    content.Append(BuildFieldRun(" PAGE ", child));
+                    continue;
+                }
+                if (child.HasClass("field-numpages"))
+                {
+                    content.Append(BuildFieldRun(" NUMPAGES ", child));
+                    continue;
+                }
+            }
+
             foreach (var run in CreateRunsFromNode(child, inheritedProps))
                 content.Append(run);
         }
 
-        if (!content.Elements<Run>().Any())
+        if (!content.Elements<Run>().Any() && !content.Elements<SimpleField>().Any())
             content.Append(new Run(new Text("") { Space = SpaceProcessingModeValues.Preserve }));
 
         sdt.Append(content);

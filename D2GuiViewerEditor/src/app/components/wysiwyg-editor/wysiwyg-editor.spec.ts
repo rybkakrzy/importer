@@ -488,4 +488,22 @@ describe('WysiwygEditorComponent — nagłówki/stopki per sekcja', () => {
     const footer = (component as any)._computeFooterContent(1);
     expect(footer).toBe('Strona 2');
   });
+
+  it('stopka: tekst obok numeru strony (w tym formanty sdt-inline) trafia do treści strony', () => {
+    // Kształt HTML z readera: tytuł w formancie + dynamiczny numer + klauzula w formancie.
+    component.footerContent = {
+      html: '<p><span class="sdt-inline" data-sdt-tag="DocTitle">Nazwa dokumentu</span>'
+        + 'Strona <span class="field-page">{page}</span> z <span class="field-numpages">{pages}</span>'
+        + '<span class="sdt-inline" data-sdt-tag="Classification">Poufne</span></p>',
+      height: 1.27
+    };
+
+    const footer = (component as any)._computeFooterContent(0) as string;
+    expect(footer).toContain('Nazwa dokumentu');
+    expect(footer).toContain('Poufne');
+    expect(footer).toContain('Strona <span class="field-page">1</span>');
+    expect(footer).not.toContain('{page}');
+    expect(footer.indexOf('Nazwa dokumentu')).toBeLessThan(footer.indexOf('field-page'));
+    expect(footer.indexOf('field-page')).toBeLessThan(footer.indexOf('Poufne'));
+  });
 });

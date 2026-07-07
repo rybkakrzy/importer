@@ -615,6 +615,57 @@ body.image-moving * {
   display: none;
 }
 
+/* Pole tekstowe Worda (div.docx-textbox). Obramowanie EDYCYJNE = outline (poza box-modelem,
+   zero wpływu na wymiary) — widoczne tylko przy hover / zaznaczeniu / fokusie w środku /
+   przeciąganiu. Obramowanie DOKUMENTOWE (a:ln z pliku) przychodzi jako inline `border:` z
+   readera i NIE jest tu ruszane — outline rysuje się obok niego, a stan nieaktywny go nie
+   ukrywa. */
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display) .docx-textbox {
+  &:hover,
+  &:focus-within {
+    outline: 1px dashed #8ab4f8;
+    outline-offset: 0;
+  }
+
+  &.tb-selected,
+  &.tb-dragging {
+    outline: 1px solid #4472c4;
+    outline-offset: 0;
+  }
+
+  /* Pas krawędzi pływającego pola — uchwyt przenoszenia (klasa nadawana z JS,
+     usuwana przy serializacji). */
+  &.tb-edge {
+    cursor: move;
+  }
+
+  &.tb-dragging {
+    cursor: move;
+    user-select: none;
+  }
+}
+
+/* Znacznik kotwicy (jak w Wordzie) — overlay w .page, przy akapicie-kotwicy zaznaczonego
+   elementu pływającego. Czysto informacyjny: nie łapie kliknięć ani fokusu, nie przesuwa
+   układu (position:absolute), skaluje się i scrolluje razem ze stroną. */
+.anchor-badge {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  z-index: 30;
+  pointer-events: none;
+  user-select: none;
+  color: #4472c4;
+
+  svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+    opacity: 0.85;
+  }
+}
+
 /* Pola (numer strony / liczba stron / data) — dziedziczą rozmiar i krój z otoczenia (stopka/
    nagłówek/akapit), nie dostają domyślnego rozmiaru edytora. Bez tego numer strony bywał większy
    niż reszta stopki. */

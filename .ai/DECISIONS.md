@@ -14,6 +14,29 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0030: Model kotwicy elementów pływających = pozycja w DOM; pola tekstowe round-tripują jako wps:wsp
+
+- Date: 2026-07-07
+- Status: Accepted
+
+### Context
+Pola tekstowe (`div.docx-textbox`) nie miały żadnej obsługi w writerze — spłaszczane do akapitów przy 1. autosave (utrata ramki/pozycji/kotwicy). Relacja „obiekt ↔ akapit-kotwicy" nie była nigdzie jawnie modelowana, a blokowy `div` emitowany WEWNĄTRZ `<p>` był re-parentowany przez parser przeglądarki (wypadał z akapitu i rozcinał go). Typ zawijania (wrapSquare/topAndBottom) degradował do WrapNone. Edytor nie pokazywał kotwicy i nie pozwalał przesuwać textboxów; drag pływających obrazów ignorował zoom.
+
+### Decision
+- Kotwica = **relacja pozycyjna w DOM**, bez sztucznych identyfikatorów akapitów: pływający obraz leży WEWNĄTRZ akapitu-kotwicy (span w `<p>` — legalne), pole tekstowe jest hoistowane bezpośrednio PRZED akapit-kotwicę (reader), a writer przypina jego `wp:anchor` do NASTĘPNEGO akapitu (`BufferTextBoxDrawing`/`AttachPendingTextBoxes`). Round-trip jest idempotentny (test: 2 cykle bez wzrostu liczby akapitów) i odporny na parser HTML.
+- Metadane kotwicy jawnie w `data-*` (`data-pos-mode/x-emu/y-emu/width-emu/height-emu/wrap`, jednostki EMU, osie ADR-0029) — wspólny kontrakt obrazów i textboxów; writer odtwarza `wps:wsp`+`w:txbxContent` (pływające → `wp:anchor` H=page/V=margin, inline → `wp:inline`), `data-wrap` → `wrapSquare`/`wrapTopBottom`.
+- Obramowanie EDYCYJNE textboxa przeniesione z treści (`border:1px solid #ccc` u readera) do SCSS edytora jako `outline` na hover/zaznaczenie/fokus/drag; obramowanie DOKUMENTOWE (`a:ln` kształtu) jest częścią treści (inline `border` + `data-border-*` → round-trip do `a:ln`).
+- Znacznik kotwicy w edytorze = overlay w `.page` (poza contenteditable), pozycjonowany w px układu strony (zoom/scroll bez przeliczeń), czysto informacyjny (pointer-events:none, aria-label). Drag zachowuje kotwicę (zmieniają się tylko offsety) — reguła przewidywalna, bez skoków.
+
+### Consequences
+- Pola tekstowe (np. adres ING w stopce) przeżywają autosave z pozycją, rozmiarem, ramką i kotwicą; Word odzyskuje opływanie tekstem dla wrap=square/topAndBottom.
+- Ograniczenia: `wps:wsp` bez `mc:AlternateContent`+VML fallback (Word < 2010); wrapTight/Through ≈ wrapSquare (HTML nie niesie wrapPolygon); usunięcie akapitu-kotwicy usuwa obraz w nim zawarty (jak Word), textbox-brat dopina się do kolejnego akapitu; inline textbox w akapicie z tekstem po jednym cyklu ląduje we własnym akapicie przed kotwicą (wizualnie bez zmian — parser i tak go wyjmował).
+
+### Alternatives considered
+- Stabilne ID akapitów (`w14:paraId` → `data-para-id`) — odrzucone: wymaga generowania/utrzymania ID w obu konwerterach i edytorze (duplikacja przy kopiuj/wklej, dryf przy split/merge akapitów); relacja pozycyjna daje tę samą semantykę bez nowego stanu.
+- Emisja textboxa w `<p>` z naprawą po stronie edytora — odrzucone: parser przeglądarki już zdążył rozciąć akapit zanim JS się uruchomi.
+- Serializacja pozycji wyłącznie w inline CSS (stan sprzed zmiany) — odrzucone: sanityzacja/parser gubi kontekst, brak jednostek dokumentowych (EMU) i trybu zawijania.
+
 ## ADR-0029: Kotwiczone obiekty (wp:anchor) pozycjonowane jak w Wordzie — relativeFrom + wp:align
 
 - Date: 2026-07-07

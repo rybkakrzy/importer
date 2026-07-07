@@ -158,6 +158,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _themeMajorComplexScript = _themeMinorComplexScript = null;
         _pageWidthTwips = _pageHeightTwips = null;
         _marginLeftTwips = _marginTopTwips = _marginRightTwips = _marginBottomTwips = 0;
+        _pendingTextBoxes.Clear();
 
         using var document = WordprocessingDocument.Open(docxStream, false);
 
@@ -1908,6 +1909,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (!isListItem && HasPageBreakBefore(paraProps))
             html.Append("<div class=\"page-break\"></div>");
 
+        // Punkt wstawienia dla pól tekstowych hoistowanych PRZED akapit (patrz HoistTextBox):
+        // wszystko dopisane przez dzieci trafia ZA ten indeks, a bufor _pendingTextBoxes
+        // zostanie wstrzyknięty dokładnie tutaj — div ląduje jako bezpośredni poprzedni
+        // brat swojego akapitu-kotwicy.
+        var pendingTextBoxesBefore = _pendingTextBoxes.Count;
+        var openTagIndex = html.Length;
+
         if (isListItem)
         {
             html.Append($"<li{classAttr}{dataStyleAttr}{tabStopsAttr} style=\"{cssStyle}\">");
@@ -1959,6 +1967,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
 
         html.Append(isListItem ? "</li>" : $"</{tag}>");
+
+        // Pola tekstowe wyrenderowane w runach TEGO akapitu: emitowane przed <p>/<h*>
+        // (blokowy div w <p> jest re-parentowany przez przeglądarkę i rozcina akapit).
+        // Wyjątek: <li> — div wewnątrz li jest poprawnym flow content, zostaje w środku
+        // (hoisting przed <li> wypchnąłby go poza listę).
+        if (_pendingTextBoxes.Count > pendingTextBoxesBefore)
+        {
+            var hoisted = string.Concat(_pendingTextBoxes.Skip(pendingTextBoxesBefore));
+            _pendingTextBoxes.RemoveRange(pendingTextBoxesBefore, _pendingTextBoxes.Count - pendingTextBoxesBefore);
+            if (isListItem)
+                html.Insert(html.Length - "</li>".Length, hoisted);
+            else
+                html.Insert(openTagIndex, hoisted);
+        }
+
         return html.ToString();
     }
 
@@ -2167,98 +2190,143 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string ConvertComplexFieldParagraphContent(Paragraph paragraph, WordprocessingDocument document, OpenXmlPart? sourcePart)
     {
         var html = new StringBuilder();
-        bool inField = false;
-        string fieldInstruction = "";
-        bool fieldSeparated = false;
+        AppendComplexFieldContent(paragraph.Elements(), html, new ComplexFieldState(), document, sourcePart);
+        return html.ToString();
+    }
+
+    /// <summary>
+    /// Stan maszyny pól złożonych (fldChar Begin/Separate/End), współdzielony między poziomem
+    /// akapitu a zawartością formantów inline — pole może żyć w całości wewnątrz SdtRun
+    /// (galeria Worda „Strona X z Y") albo rozciągać się przez granicę formantu.
+    /// </summary>
+    private sealed class ComplexFieldState
+    {
+        public bool InField;
+        public string Instruction = string.Empty;
+        public bool Separated;
         // True only when we emitted our own dynamic placeholder (PAGE/NUMPAGES);
         // for every other field the cached value runs must render as text so the
         // document's value survives import + autosave (KR-05/KR-08).
-        bool fieldValueHandled = false;
+        public bool ValueHandled;
+    }
 
-        foreach (var child in paragraph.Elements())
+    private void AppendComplexFieldContent(IEnumerable<OpenXmlElement> elements, StringBuilder html,
+        ComplexFieldState state, WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        foreach (var child in elements)
         {
-            if (child is not Run run)
+            switch (child)
             {
-                if (child is Hyperlink hyperlink)
+                case Run run:
+                    AppendComplexFieldRun(run, html, state, document, sourcePart);
+                    break;
+                case Hyperlink hyperlink:
                     html.Append(ConvertHyperlinkToHtml(hyperlink, document));
-                else if (child is SimpleField simpleField)
+                    break;
+                case SimpleField simpleField:
                     html.Append(ConvertSimpleFieldToHtml(simpleField));
-                continue;
+                    break;
+                case SdtRun sdtRun:
+                    AppendComplexFieldSdtRun(sdtRun, html, state, document, sourcePart);
+                    break;
             }
+        }
+    }
 
-            var fieldChar = run.GetFirstChild<FieldChar>();
-            if (fieldChar != null)
+    /// <summary>
+    /// Formant inline w akapicie z polami złożonymi. Wrapper sdt-inline jest taki sam jak w
+    /// <see cref="ConvertSdtRunToHtml"/>, ale treść przechodzi przez maszynę pól: pole PAGE
+    /// wewnątrz formantu dostaje dynamiczny placeholder, a tekst formantu jest zachowany.
+    /// Wcześniej cały SdtRun był tu pomijany — ze stopki „tekst obok numeru strony" zostawał
+    /// wyłącznie numer strony (a formant z polem w środku znikał w całości).
+    /// </summary>
+    private void AppendComplexFieldSdtRun(SdtRun sdtRun, StringBuilder html,
+        ComplexFieldState state, WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        var content = sdtRun.GetFirstChild<SdtContentRun>();
+        if (content == null) return;
+
+        html.Append($"<span class=\"sdt-inline\"{BuildSdtDataAttrs(sdtRun.SdtProperties)}>");
+        var innerStart = html.Length;
+        AppendComplexFieldContent(content.Elements(), html, state, document, sourcePart);
+        // Pusty formant — wstaw &nbsp; żeby kursor miał się gdzie ustawić (jak ConvertSdtRunToHtml).
+        if (html.Length == innerStart) html.Append("&nbsp;");
+        html.Append("</span>");
+    }
+
+    private void AppendComplexFieldRun(Run run, StringBuilder html, ComplexFieldState state,
+        WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        var fieldChar = run.GetFirstChild<FieldChar>();
+        if (fieldChar != null)
+        {
+            var fctVal = fieldChar.FieldCharType?.Value;
+            if (fctVal == FieldCharValues.Begin)
             {
-                var fctVal = fieldChar.FieldCharType?.Value;
-                if (fctVal == FieldCharValues.Begin)
+                state.InField = true;
+                state.Instruction = string.Empty;
+                state.Separated = false;
+                state.ValueHandled = false;
+            }
+            else if (fctVal == FieldCharValues.Separate)
+            {
+                state.Separated = true;
+                state.ValueHandled = false;
+                // Emit a dynamic placeholder ONLY for page-number fields; the
+                // editor fills those in live. Everything else (DATE/TIME, REF,
+                // TOC, MERGEFIELD, …) keeps its cached value (rendered from the
+                // runs after the separator) so no field value is lost.
+                var instr = state.Instruction.Trim().ToUpperInvariant();
+                if (instr.Contains("PAGE") && !instr.Contains("NUMPAGES") && !instr.Contains("SECTIONPAGES"))
                 {
-                    inField = true;
-                    fieldInstruction = "";
-                    fieldSeparated = false;
-                    fieldValueHandled = false;
+                    html.Append(FieldSpan("field-page", "{page}", run));
+                    state.ValueHandled = true;
                 }
-                else if (fctVal == FieldCharValues.Separate)
+                else if (instr.Contains("NUMPAGES") || instr.Contains("SECTIONPAGES"))
                 {
-                    fieldSeparated = true;
-                    fieldValueHandled = false;
-                    // Emit a dynamic placeholder ONLY for page-number fields; the
-                    // editor fills those in live. Everything else (DATE/TIME, REF,
-                    // TOC, MERGEFIELD, …) keeps its cached value (rendered from the
-                    // runs after the separator) so no field value is lost.
-                    var instr = fieldInstruction.Trim().ToUpperInvariant();
-                    if (instr.Contains("PAGE") && !instr.Contains("NUMPAGES") && !instr.Contains("SECTIONPAGES"))
+                    html.Append(FieldSpan("field-numpages", "{pages}", run));
+                    state.ValueHandled = true;
+                }
+            }
+            else if (fctVal == FieldCharValues.End)
+            {
+                if (!state.Separated)
+                {
+                    // Pole bez separatora - spróbuj zinterpretować
+                    var instrEnd = state.Instruction.Trim().ToUpperInvariant();
+                    if (instrEnd.Contains("PAGE") && !instrEnd.Contains("NUMPAGES"))
                     {
                         html.Append(FieldSpan("field-page", "{page}", run));
-                        fieldValueHandled = true;
                     }
-                    else if (instr.Contains("NUMPAGES") || instr.Contains("SECTIONPAGES"))
+                    else if (instrEnd.Contains("NUMPAGES") || instrEnd.Contains("SECTIONPAGES"))
                     {
                         html.Append(FieldSpan("field-numpages", "{pages}", run));
-                        fieldValueHandled = true;
                     }
                 }
-                else if (fctVal == FieldCharValues.End)
-                {
-                    if (!fieldSeparated)
-                    {
-                        // Pole bez separatora - spróbuj zinterpretować
-                        var instrEnd = fieldInstruction.Trim().ToUpperInvariant();
-                        if (instrEnd.Contains("PAGE") && !instrEnd.Contains("NUMPAGES"))
-                        {
-                            html.Append(FieldSpan("field-page", "{page}", run));
-                        }
-                        else if (instrEnd.Contains("NUMPAGES") || instrEnd.Contains("SECTIONPAGES"))
-                        {
-                            html.Append(FieldSpan("field-numpages", "{pages}", run));
-                        }
-                    }
-                    inField = false;
-                    fieldInstruction = "";
-                    fieldSeparated = false;
-                }
-                continue;
+                state.InField = false;
+                state.Instruction = string.Empty;
+                state.Separated = false;
             }
-
-            if (inField)
-            {
-                var fieldCode = run.GetFirstChild<FieldCode>();
-                if (fieldCode != null)
-                {
-                    fieldInstruction += fieldCode.Text;
-                    continue;
-                }
-                
-                // After the separator these runs are the field's displayed value.
-                // Skip them only when we already emitted a dynamic placeholder;
-                // otherwise render them so the cached value is preserved (KR-05).
-                if (fieldSeparated && fieldValueHandled) continue;
-            }
-
-            // Normalny run
-            html.Append(ConvertRunToHtml(run, document, sourcePart));
+            return;
         }
 
-        return html.ToString();
+        if (state.InField)
+        {
+            var fieldCode = run.GetFirstChild<FieldCode>();
+            if (fieldCode != null)
+            {
+                state.Instruction += fieldCode.Text;
+                return;
+            }
+
+            // After the separator these runs are the field's displayed value.
+            // Skip them only when we already emitted a dynamic placeholder;
+            // otherwise render them so the cached value is preserved (KR-05).
+            if (state.Separated && state.ValueHandled) return;
+        }
+
+        // Normalny run
+        html.Append(ConvertRunToHtml(run, document, sourcePart));
     }
 
     /// <summary>
@@ -2945,15 +3013,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             if (branch is not (AlternateContentChoice or AlternateContentFallback)) continue;
 
+            // Pole tekstowe nie wraca jako HTML runa — ląduje w buforze hoistingu
+            // (HoistTextBox) i emituje się przed akapitem. Gałąź, która je zbuforowała,
+            // JEST skonsumowana — bez tego sprawdzenia Fallback (i pętla ratunkowa niżej)
+            // dublowałyby tę samą treść.
+            var pendingBefore = _pendingTextBoxes.Count;
             var html = new StringBuilder();
             foreach (var drawing in branch.Descendants<Drawing>())
                 html.Append(ConvertDrawingToHtml(drawing, document, sourcePart));
-            if (html.Length == 0)
+            if (html.Length == 0 && _pendingTextBoxes.Count == pendingBefore)
             {
                 foreach (var pict in branch.Descendants<Picture>())
                     html.Append(ConvertPictureToHtml(pict, document, sourcePart));
             }
-            if (html.Length > 0) return html.ToString();
+            if (html.Length > 0 || _pendingTextBoxes.Count > pendingBefore) return html.ToString();
         }
         // Żadna gałąź nie dała obrazu — ostatnia szansa: pole tekstowe w kształcie (drop treści
         // = utrata danych). Pierwsza gałąź z txbxContent wygrywa (Choice i Fallback niosą TĘ SAMĄ
@@ -2962,7 +3035,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             if (branch is not (AlternateContentChoice or AlternateContentFallback)) continue;
             var textBox = RenderTextBoxContent(branch, document, sourcePart);
-            if (!string.IsNullOrEmpty(textBox)) return textBox;
+            if (!string.IsNullOrEmpty(textBox)) return HoistTextBox(textBox);
         }
 
         _log.LogDebug("mc:AlternateContent bez konwertowalnego obrazu ani pola tekstowego — element pominięty.");
@@ -3000,10 +3073,92 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // jest inline-CSS (reader-side), więc działa też w podglądzie stopki/nagłówka (JS edytora
         // nie musi go odtwarzać).
         var layout = BuildTextBoxLayoutCss(container);
-        return $"<div class=\"docx-textbox\" data-textbox=\"1\" style=\"{layout}"
-             + "border:1px solid #ccc;padding:4px 6px;box-sizing:border-box;\">"
+
+        // Jawne metadane kotwicy (data-*) — wspólny kontrakt readera, edytora i writera
+        // (ten sam co dla obrazów: data-pos-mode / data-x-emu / data-y-emu w układzie
+        // edytora — X od lewej krawędzi strony, Y od góry obszaru treści). Bez nich
+        // writer nie był w stanie odtworzyć wps:wsp i pole tekstowe GINĘŁO przy zapisie.
+        var extent = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
+        var widthEmu = extent?.Cx?.Value ?? 0;
+        var heightEmu = extent?.Cy?.Value ?? 0;
+        var attrs = new StringBuilder();
+        if (widthEmu > 0) attrs.Append($" data-width-emu=\"{widthEmu}\"");
+        if (heightEmu > 0) attrs.Append($" data-height-emu=\"{heightEmu}\"");
+
+        var anchor = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
+        if (anchor != null)
+        {
+            var behind = anchor.BehindDoc?.Value == true;
+            var (xEmu, yEmu) = ResolveAnchorPosition(anchor, widthEmu, heightEmu);
+            attrs.Append($" data-pos-mode=\"{(behind ? "behind" : "front")}\"");
+            attrs.Append($" data-x-emu=\"{xEmu}\" data-y-emu=\"{yEmu}\"");
+            var wrap = ReadAnchorWrapMode(anchor);
+            if (wrap != null) attrs.Append($" data-wrap=\"{wrap}\"");
+        }
+
+        // Obramowanie DOKUMENTOWE kształtu (a:ln kształtu, nie runów tekstu) — należy do
+        // treści pliku, więc idzie jako realny CSS border + data-border-* (round-trip do
+        // a:ln). Dawne bezwarunkowe `border:1px solid #ccc` było obramowaniem EDYCYJNYM
+        // zapieczonym w treść — przeniesione do SCSS edytora (outline przy hover/zaznaczeniu).
+        var borderCss = string.Empty;
+        var shapeOutline = container.Descendants<DocumentFormat.OpenXml.Drawing.Outline>()
+            .FirstOrDefault(o => !o.Ancestors<TextBoxContent>().Any());
+        if (shapeOutline != null && shapeOutline.GetFirstChild<DocumentFormat.OpenXml.Drawing.NoFill>() == null)
+        {
+            var hex = HexColorOrNull(shapeOutline.Descendants<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>()
+                .FirstOrDefault()?.Val?.Value);
+            if (hex != null)
+            {
+                var px = shapeOutline.Width?.Value is { } w && w > 0
+                    ? Math.Max(1, (int)Math.Round(OoxmlUnits.EmuToPixels(w)))
+                    : 1;
+                var dash = shapeOutline.GetFirstChild<DocumentFormat.OpenXml.Drawing.PresetDash>()?.Val?.Value;
+                var borderStyle = "solid";
+                if (dash != null && dash == DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Dash) borderStyle = "dashed";
+                else if (dash != null && dash == DocumentFormat.OpenXml.Drawing.PresetLineDashValues.Dot) borderStyle = "dotted";
+                borderCss = $"border:{px}px {borderStyle} #{hex};";
+                attrs.Append($" data-border-width=\"{px}\" data-border-color=\"#{hex}\" data-border-style=\"{borderStyle}\"");
+            }
+        }
+
+        return $"<div class=\"docx-textbox\" data-textbox=\"1\"{attrs} style=\"{layout}"
+             + borderCss
+             + "padding:4px 6px;box-sizing:border-box;\">"
              + inner + "</div>";
     }
+
+    /// <summary>
+    /// Tryb zawijania tekstu kotwiczonego obiektu (dziecko wrap* w <c>wp:anchor</c>) —
+    /// serializowany do <c>data-wrap</c>, żeby writer mógł odtworzyć oryginalny element
+    /// zamiast degradować wszystko do WrapNone (Word przestawał opływać obiekt tekstem).
+    /// Null = WrapNone / brak (domyślne front/behind edytora).
+    /// </summary>
+    private static string? ReadAnchorWrapMode(DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor anchor)
+    {
+        if (anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapSquare>() != null) return "square";
+        if (anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapTight>() != null) return "tight";
+        if (anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapThrough>() != null) return "through";
+        if (anchor.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.WrapTopBottom>() != null) return "topAndBottom";
+        return null;
+    }
+
+    /// <summary>
+    /// Odracza wstawienie pola tekstowego do HTML: zamiast zwracać div w treści RUNA
+    /// (blokowy <c>div</c> w <c>&lt;p&gt;</c> jest re-parentowany przez parser przeglądarki —
+    /// wypada z akapitu i ROZCINA go, niszcząc relację kotwicy przy pierwszym renderze),
+    /// buforuje go — <see cref="ConvertParagraphToHtml"/> emituje div bezpośrednio PRZED
+    /// akapitem-kotwicą. Model kotwicy: „pole tekstowe kotwiczy do NASTĘPNEGO akapitu";
+    /// writer przypina je z powrotem do tego akapitu (patrz HtmlToDocxConverter).
+    /// </summary>
+    private string HoistTextBox(string textBoxHtml)
+    {
+        if (string.IsNullOrEmpty(textBoxHtml)) return string.Empty;
+        _pendingTextBoxes.Add(textBoxHtml);
+        return string.Empty;
+    }
+
+    /// <summary>Pola tekstowe oczekujące na emisję przed akapitem-kotwicą (patrz <see cref="HoistTextBox"/>).</summary>
+    private readonly List<string> _pendingTextBoxes = new();
 
     /// <summary>
     /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu jako przybliżenie HTML:
@@ -3600,7 +3755,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // Kształt bez obrazu (wps:wsp) może nieść POLE TEKSTOWE (wps:txbx → w:txbxContent).
             // Bez tego jego treść znikała bez śladu, a autosave tracił ją na stałe (KR-06).
             var textBox = RenderTextBoxContent(drawing, document, sourcePart);
-            if (!string.IsNullOrEmpty(textBox)) return textBox;
+            if (!string.IsNullOrEmpty(textBox)) return HoistTextBox(textBox);
 
             // Kształt wektorowy bez obrazu i tekstu (linia/prostokąt) — częsty w stopkach jako
             // separator/ramka. Wcześniej dropowany (brak blipa) → niewidoczny. Renderujemy
@@ -3699,6 +3854,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var (xEmu, yEmu) = ResolveAnchorPosition(anchor, widthEmu, heightEmu);
             posAttrs = $" data-pos-mode=\"{(behind ? "behind" : "front")}\""
                 + $" data-x-emu=\"{xEmu}\" data-y-emu=\"{yEmu}\"";
+            // Oryginalny tryb zawijania (wrapSquare/wrapTight/…) — edytor renderuje
+            // przybliżenie front/behind, ale writer musi odtworzyć prawdziwy wrap*,
+            // inaczej po pierwszym autosave Word przestaje opływać obiekt tekstem.
+            var wrap = ReadAnchorWrapMode(anchor);
+            if (wrap != null) posAttrs += $" data-wrap=\"{wrap}\"";
         }
 
         // Optional border (a:ln) — width in EMU → px, color from solidFill srgbClr, dash style.
@@ -3763,7 +3923,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (imageData?.RelationshipId?.Value == null)
         {
             // Legacy VML pole tekstowe (v:textbox → w:txbxContent) bez obrazu — zachowaj treść.
-            return RenderTextBoxContent(picture, document, sourcePart);
+            return HoistTextBox(RenderTextBoxContent(picture, document, sourcePart));
         }
 
         var relationshipId = imageData.RelationshipId.Value;
