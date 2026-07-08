@@ -113,12 +113,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this._content() === value) {
       return;
     }
-    
+
     this._content.set(value);
     if (!this._isInternalUpdate) {
-      this._captureDocumentDefaults(value);
+      const unwrapped = this._captureDocumentDefaults(value);
       // Rozbij na strony po znacznikach <div class="page-break">
-      const splitPages = this._splitHtmlIntoPages(value || '<p></p>');
+      const splitPages = this._splitHtmlIntoPages(unwrapped ?? value ?? '<p></p>');
       const pages = splitPages.length ? splitPages : ['<p></p>'];
       this.pageContents.set(pages);
       this.pageGeometries.set(this._deriveGeometriesForPages(pages));
@@ -442,6 +442,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   documentDefaultFontSize = signal<string | null>(null);
   documentDefaultFontFamily = signal<string | null>(null);
+  /** Domyślna interlinia dokumentu (line-height kontenera z docDefaults readera). */
+  documentDefaultLineHeight = signal<string | null>(null);
+  /** Domyślny odstęp PO akapicie (data-default-after-tw kontenera) — CSS var --doc-par-margin. */
+  documentDefaultParagraphSpacing = signal<string | null>(null);
+
+  /**
+   * Atrybuty wrappera .document-content przechwycone przy setContent. Paginacja rozwija
+   * wrapper, więc getContent() owija nimi scaloną treść z powrotem — bez tego zapis gubił
+   * domyślny font i data-default-* (writer regenerował pakiet z hardkodowanymi 11pt/259).
+   */
+  private _documentContainerAttrs: { name: string; value: string }[] | null = null;
   private _differentFirstPage = signal<boolean>(false);
   private _differentOddEven = signal<boolean>(false);
   editingSection = signal<'header' | 'footer' | 'body'>('body');
@@ -3606,14 +3617,50 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * i zapamiętuje, by zastosować na contenteditable strony — wrapper jest rozwijany przy paginacji,
    * więc inaczej default ginie. Brak wrappera/stylu → bez zmian (null = CSS edytora).
    */
-  private _captureDocumentDefaults(html: string): void {
-    if (!html) return;
+  private _captureDocumentDefaults(html: string): string | null {
+    if (!html) return null;
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
     const container = tmp.querySelector('.document-content') as HTMLElement | null;
-    if (!container) return;
+    if (!container) {
+      this._documentContainerAttrs = null;
+      return null;
+    }
     if (container.style.fontSize) this.documentDefaultFontSize.set(container.style.fontSize);
     if (container.style.fontFamily) this.documentDefaultFontFamily.set(container.style.fontFamily);
+    this.documentDefaultLineHeight.set(container.style.lineHeight || null);
+    const afterTw = parseInt(container.getAttribute('data-default-after-tw') ?? '', 10);
+    this.documentDefaultParagraphSpacing.set(
+      Number.isFinite(afterTw) && afterTw >= 0 ? `${afterTw / 20}pt` : null
+    );
+
+    // Zapamiętaj atrybuty wrappera i ROZWIŃ go od razu: strony nigdy nie niosą kontenera
+    // (paginacja i tak by go rozwinęła), a getContent() owija scaloną treść z powrotem —
+    // symetryczny kontrakt z readerem/writerem. Rozwijamy tylko, gdy wrapper faktycznie
+    // opakowuje całą treść (jedyne dziecko-element).
+    this._documentContainerAttrs = Array.from(container.attributes).map(a => ({
+      name: a.name,
+      value: a.value,
+    }));
+    if (container.parentElement === tmp && tmp.children.length === 1) {
+      return container.innerHTML;
+    }
+    return null;
+  }
+
+  /** Owija HTML zapisu przechwyconym wrapperem .document-content (jeśli był w źródle). */
+  private _wrapWithDocumentContainer(html: string): string {
+    if (!this._documentContainerAttrs || !html) return html;
+    const div = document.createElement('div');
+    for (const { name, value } of this._documentContainerAttrs) {
+      try {
+        div.setAttribute(name, value);
+      } catch {
+        /* nieprawidłowa nazwa atrybutu — pomiń */
+      }
+    }
+    div.innerHTML = html;
+    return div.outerHTML;
   }
 
   private _splitHtmlIntoPages(html: string): string[] {
@@ -4403,13 +4450,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const refs = this.pageEditorRefs?.toArray() ?? [];
     if (refs.length === 0) {
       const fallback = this.editorContent?.nativeElement;
-      return fallback ? this._serializeSingleEditor(fallback) : '';
+      return fallback ? this._wrapWithDocumentContainer(this._serializeSingleEditor(fallback)) : '';
     }
 
     const parts = refs.map(r => this._serializeSingleEditor(r.nativeElement));
     const merged = parts.filter(p => p && p.trim().length > 0).join('');
-    // Scal fragmenty tej samej logicznej tabeli rozdzielonej przez paginację (R-17).
-    return this._mergeSplitTables(merged);
+    // Scal fragmenty tej samej logicznej tabeli rozdzielonej przez paginację (R-17),
+    // po czym przywróć wrapper .document-content (domyślne wartości dokumentu do writera).
+    return this._wrapWithDocumentContainer(this._mergeSplitTables(merged));
   }
 
   /** Serializuje pojedynczy edytor strony do HTML (z odwijaniem image-wrapperów).
@@ -4463,8 +4511,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Ustawia zawartość HTML — rozbija na strony po znacznikach <div class="page-break">.
    */
   setContent(html: string): void {
-    this._captureDocumentDefaults(html);
-    const pages = this._splitHtmlIntoPages(html || '<p></p>');
+    const unwrapped = this._captureDocumentDefaults(html);
+    const pages = this._splitHtmlIntoPages(unwrapped ?? html ?? '<p></p>');
     this.pageContents.set(pages);
     // Pages already carry their own page-break markers (see _splitHtmlIntoPages); plain join
     // avoids doubling them.

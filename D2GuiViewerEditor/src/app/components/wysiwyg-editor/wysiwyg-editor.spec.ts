@@ -257,6 +257,50 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
     expect(component.documentDefaultFontSize()).toBeNull();
     expect(component.documentDefaultFontFamily()).toBeNull();
   });
+
+  it('_captureDocumentDefaults czyta interlinię i odstęp akapitu (data-default-after-tw)', () => {
+    const html = '<div class="document-content" data-default-after-tw="160" data-default-line="278"'
+      + ' data-default-line-rule="auto" style="font-size:12pt;line-height:1.158;">'
+      + '<p>Treść</p></div>';
+
+    (component as any)._captureDocumentDefaults(html);
+
+    expect(component.documentDefaultLineHeight()).toBe('1.158');
+    expect(component.documentDefaultParagraphSpacing()).toBe('8pt'); // 160tw / 20
+  });
+
+  // Wrapper .document-content niesie domyślne wartości dokumentu (font, data-default-*)
+  // do writera. Paginacja go rozwija, więc getContent() musi go ODTWORZYĆ — bez tego
+  // pierwszy zapis regenerował pakiet z hardkodowanymi 11pt / after=160 / line=259
+  // (tekst malał, a tabele ze stylem Worda puchły w Wordzie).
+  it('getContent odtwarza wrapper .document-content z pełnymi atrybutami', () => {
+    const wrapped = '<div class="document-content" data-default-after-tw="160" data-default-line="278"'
+      + ' data-default-line-rule="auto" style="font-family:\'Calibri\',sans-serif;font-size:12pt;line-height:1.158;">'
+      + '<p>Strona 1</p></div>';
+
+    const inner = (component as any)._captureDocumentDefaults(wrapped);
+    expect(inner).toBe('<p>Strona 1</p>'); // wrapper rozwinięty od razu przy imporcie
+
+    mockPages('<p>Strona 1</p>', '<p>Strona 2</p>');
+    const saved = component.getContent();
+
+    const tmp = document.createElement('div');
+    tmp.innerHTML = saved;
+    const container = tmp.querySelector('.document-content') as HTMLElement;
+    expect(container).not.toBeNull();
+    expect(container.getAttribute('data-default-after-tw')).toBe('160');
+    expect(container.getAttribute('data-default-line')).toBe('278');
+    expect(container.style.fontSize).toBe('12pt');
+    expect(container.style.lineHeight).toBe('1.158');
+    expect(tmp.querySelectorAll('.document-content').length).toBe(1); // bez zagnieżdżeń
+    expect(container.innerHTML).toContain('Strona 1');
+    expect(container.innerHTML).toContain('Strona 2');
+  });
+
+  it('getContent bez przechwyconego wrappera zwraca treść bez zmian (zero regresji)', () => {
+    mockPages('<p>A</p>');
+    expect(component.getContent()).not.toContain('document-content');
+  });
 });
 
 /**

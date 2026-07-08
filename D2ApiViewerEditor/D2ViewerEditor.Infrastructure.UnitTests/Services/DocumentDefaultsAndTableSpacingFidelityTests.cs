@@ -1,0 +1,341 @@
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
+using DocumentFormat.OpenXml.Wordprocessing;
+using D2ViewerEditor.Infrastructure.Services;
+using FluentAssertions;
+using NUnit.Framework;
+
+namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
+
+/// <summary>
+/// Wierność domyślnych odstępów/interlinii dokumentu i odstępów akapitów w tabelach
+/// (scenariusz „qutable": dokument z docDefaults sz=24/after=160/line=278 i tabelą
+/// ze stylem „Tabela – Siatka", którego w:pPr zeruje spacing w komórkach).
+///
+/// Naprawione wady:
+/// 1. Writer regenerował styles.xml z hardkodowanymi 11pt / after=160 / line=259 —
+///    po 1. zapisie tekst malał (12→11pt), interlinia się zmieniała, a akapity w komórkach
+///    (bez definicji stylu tabeli w nowym pakiecie) dostawały pełne odstępy docDefaults
+///    i wiersze tabel puchły ~2×. Teraz reader emituje data-default-* + font na kontenerze,
+///    a writer odtwarza z nich docDefaults.
+/// 2. Reader nie aplikował w:pPr stylu tabeli do akapitów komórek — teraz rozwiązany
+///    spacing (docDefaults + łańcuch stylu tabeli) idzie INLINE na akapitach komórek.
+/// 3. Writer emitował tblBorders val=none dla tabel ze stylem (nadpisując linie stylu).
+/// 4. tblGrid dryfował o kilka twips na każdym zapisie (px→twips) — teraz data-w-tw.
+/// 5. Kolejność dzieci pPr/tcPr/tcBorders wg schematu (spacing przed jc, tcW przed
+///    gridSpan, top→left→bottom→right) — wcześniej naruszenia walidacji OOXML.
+/// </summary>
+[TestFixture]
+public class DocumentDefaultsAndTableSpacingFidelityTests
+{
+    private DocxToHtmlConverter _reader = null!;
+    private HtmlToDocxConverter _writer = null!;
+
+    [SetUp]
+    public void Setup()
+    {
+        _reader = new DocxToHtmlConverter();
+        _writer = new HtmlToDocxConverter();
+    }
+
+    // ---------- helpers ----------
+
+    /// <summary>DOCX à la qutable: docDefaults 12pt + after=160/line=278, tabela ze stylem
+    /// zerującym spacing w pPr, gridSpan, vAlign=center i jc=center.</summary>
+    private static MemoryStream BuildQutableLikeDocx()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(
+                new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                        new FontSize { Val = "24" })),
+                    new ParagraphPropertiesDefault(new ParagraphPropertiesBaseStyle(
+                        new SpacingBetweenLines { After = "160", Line = "278", LineRule = LineSpacingRuleValues.Auto }))),
+                new Style(
+                    new StyleParagraphProperties(
+                        new SpacingBetweenLines { After = "0", Line = "240", LineRule = LineSpacingRuleValues.Auto }),
+                    new StyleTableProperties(new TableBorders(
+                        new TopBorder { Val = BorderValues.Single, Size = 4 },
+                        new LeftBorder { Val = BorderValues.Single, Size = 4 },
+                        new BottomBorder { Val = BorderValues.Single, Size = 4 },
+                        new RightBorder { Val = BorderValues.Single, Size = 4 },
+                        new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4 },
+                        new InsideVerticalBorder { Val = BorderValues.Single, Size = 4 })))
+                {
+                    Type = StyleValues.Table,
+                    StyleId = "Tabela-Siatka",
+                    StyleName = new StyleName { Val = "Table Grid" }
+                });
+            stylesPart.Styles.Save();
+
+            // Akapit body bez własnego spacingu (dziedziczy docDefaults).
+            body.Append(new Paragraph(new Run(new Text("Lorem ipsum"))));
+
+            var table = new Table();
+            table.Append(new TableProperties(
+                new TableStyle { Val = "Tabela-Siatka" },
+                new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto }));
+            table.Append(new TableGrid(
+                new GridColumn { Width = "3020" },
+                new GridColumn { Width = "3021" },
+                new GridColumn { Width = "3021" }));
+
+            static TableCell Cell(string text, bool center = false, int span = 1)
+            {
+                var props = new TableCellProperties(
+                    new TableCellWidth { Width = (3020 * span).ToString(), Type = TableWidthUnitValues.Dxa });
+                if (span > 1) props.Append(new GridSpan { Val = span });
+                if (center) props.Append(new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center });
+                var para = center
+                    ? new Paragraph(new ParagraphProperties(new Justification { Val = JustificationValues.Center }),
+                        new Run(new Text(text)))
+                    : new Paragraph(new Run(new Text(text)));
+                return new TableCell(props, para);
+            }
+
+            // Wiersz z trHeight + centrowaniem, wiersz z gridSpan=2, wiersz pełny.
+            var r1 = new TableRow(new TableRowProperties(new TableRowHeight { Val = 684 }));
+            r1.Append(Cell("A", center: true));
+            r1.Append(Cell("B", center: true));
+            r1.Append(Cell("C", center: true));
+            table.Append(r1);
+            var r2 = new TableRow();
+            r2.Append(Cell("D"));
+            r2.Append(Cell("E", center: true, span: 2));
+            table.Append(r2);
+            var r3 = new TableRow();
+            r3.Append(Cell("F"));
+            r3.Append(Cell("G"));
+            r3.Append(Cell("H"));
+            table.Append(r3);
+
+            body.Append(table);
+            body.Append(new SectionProperties(new PageSize { Width = 11906, Height = 16838 }));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
+    private static string ContainerTag(string html)
+    {
+        var start = html.IndexOf("<div class=\"document-content\"", StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0, "reader powinien emitować kontener document-content");
+        var end = html.IndexOf('>', start);
+        return html.Substring(start, end - start + 1);
+    }
+
+    // ---------- reader ----------
+
+    [Test]
+    public void Read_DocDefaults_EmitsContainerDataAttributesAndLineHeight()
+    {
+        using var docx = BuildQutableLikeDocx();
+        var container = ContainerTag(_reader.Convert(docx).Html);
+
+        container.Should().Contain("data-default-after-tw=\"160\"");
+        container.Should().Contain("data-default-line=\"278\"");
+        container.Should().Contain("data-default-line-rule=\"auto\"");
+        container.Should().Contain("font-size:12pt;");
+        container.Should().Contain("line-height:1.158;"); // 278/240
+    }
+
+    [Test]
+    public void Read_TableStyleParagraphSpacing_AppliedInlineToCellParagraphs()
+    {
+        using var docx = BuildQutableLikeDocx();
+        var html = _reader.Convert(docx).Html;
+
+        // Akapit w komórce: styl tabeli zeruje after i ustawia pojedynczą interlinię.
+        var cellParagraph = System.Text.RegularExpressions.Regex.Match(
+            html, "<td[^>]*><p style=\"([^\"]*)\"");
+        cellParagraph.Success.Should().BeTrue();
+        cellParagraph.Groups[1].Value.Should().Contain("margin-bottom:0pt;");
+        cellParagraph.Groups[1].Value.Should().Contain("line-height:1;");
+
+        // Akapit BODY nie dostaje inline spacingu (interlinia dziedziczy z kontenera).
+        var bodyParagraph = System.Text.RegularExpressions.Regex.Match(
+            html, "<p style=\"([^\"]*)\"><span[^>]*>Lorem ipsum");
+        bodyParagraph.Success.Should().BeTrue();
+        bodyParagraph.Groups[1].Value.Should().NotContain("margin-bottom");
+    }
+
+    [Test]
+    public void Read_TableGridColumns_CarryExactTwips()
+    {
+        using var docx = BuildQutableLikeDocx();
+        var html = _reader.Convert(docx).Html;
+
+        html.Should().Contain("data-w-tw=\"3020\"");
+        html.Should().Contain("data-w-tw=\"3021\"");
+    }
+
+    // ---------- writer ----------
+
+    [Test]
+    public void Write_ContainerDefaults_RestoredIntoDocDefaults()
+    {
+        var html = "<div class=\"document-content\" data-default-after-tw=\"160\" data-default-line=\"278\"" +
+                   " data-default-line-rule=\"auto\" style=\"font-family:'Calibri',sans-serif;font-size:12pt;line-height:1.158;\">" +
+                   "<p style=\"\">Tekst</p></div>";
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var docDefaults = doc.MainDocumentPart!.StyleDefinitionsPart!.Styles!.DocDefaults!;
+        docDefaults.RunPropertiesDefault!.RunPropertiesBaseStyle!.GetFirstChild<FontSize>()!
+            .Val!.Value.Should().Be("24"); // 12pt = 24 half-points
+        var spacing = docDefaults.ParagraphPropertiesDefault!.ParagraphPropertiesBaseStyle!
+            .GetFirstChild<SpacingBetweenLines>()!;
+        spacing.After!.Value.Should().Be("160");
+        spacing.Line!.Value.Should().Be("278");
+        spacing.LineRule!.Value.Should().Be(LineSpacingRuleValues.Auto);
+    }
+
+    [Test]
+    public void Write_WithoutContainer_KeepsConfiguredFallbackDefaults()
+    {
+        var bytes = _writer.Convert("<p>Tekst</p>");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var docDefaults = doc.MainDocumentPart!.StyleDefinitionsPart!.Styles!.DocDefaults!;
+        docDefaults.RunPropertiesDefault!.RunPropertiesBaseStyle!.GetFirstChild<FontSize>()!
+            .Val!.Value.Should().Be("22"); // fallback 11pt jak dotąd
+        docDefaults.ParagraphPropertiesDefault!.ParagraphPropertiesBaseStyle!
+            .GetFirstChild<SpacingBetweenLines>()!.Line!.Value.Should().Be("259");
+    }
+
+    [Test]
+    public void Write_StyledTableWithoutCssBorder_DoesNotEmitTblBordersOverride()
+    {
+        var html = "<table data-tbl-style=\"Tabela-Siatka\" style=\"border-collapse:collapse;width:auto;\">" +
+                   "<tr><td style=\"border-top:0.7px solid #000000;\"><p>x</p></td></tr></table>";
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var tblPr = doc.MainDocumentPart!.Document.Body!.Descendants<TableProperties>().First();
+        tblPr.GetFirstChild<TableBorders>().Should().BeNull(
+            "bezpośrednie tblBorders val=none nadpisywałoby obramowania stylu tabeli w Wordzie");
+        tblPr.GetFirstChild<TableStyle>()!.Val!.Value.Should().Be("Tabela-Siatka");
+    }
+
+    [Test]
+    public void Write_NoBordersMarker_StillEmitsExplicitNone()
+    {
+        var html = "<table data-no-borders=\"1\" data-tbl-style=\"Tabela-Siatka\" style=\"border-collapse:collapse;\">" +
+                   "<tr><td><p>x</p></td></tr></table>";
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var borders = doc.MainDocumentPart!.Document.Body!.Descendants<TableProperties>().First()
+            .GetFirstChild<TableBorders>();
+        borders.Should().NotBeNull("jawny brak obramowań oryginału musi wrócić jako val=none");
+        borders!.TopBorder!.Val!.Value.Should().Be(BorderValues.None);
+    }
+
+    [Test]
+    public void Write_ColgroupWithExactTwips_ProducesExactGridAndCellWidths()
+    {
+        var html = "<table style=\"border-collapse:collapse;width:604px;table-layout:fixed;\">" +
+                   "<colgroup><col style=\"width:201px;\" data-w-tw=\"3020\" /><col style=\"width:201px;\" data-w-tw=\"3021\" /></colgroup>" +
+                   "<tr><td style=\"width:201px;\"><p>a</p></td><td style=\"width:201px;\"><p>b</p></td></tr>" +
+                   "<tr><td colspan=\"2\" style=\"width:402px;\"><p>scalona</p></td></tr></table>";
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var grid = doc.MainDocumentPart!.Document.Body!.Descendants<TableGrid>().First();
+        grid.Elements<GridColumn>().Select(c => c.Width!.Value).Should().Equal("3020", "3021");
+
+        var cells = doc.MainDocumentPart.Document.Body!.Descendants<TableCell>().ToList();
+        cells[0].TableCellProperties!.TableCellWidth!.Width!.Value.Should().Be("3020");
+        cells[1].TableCellProperties!.TableCellWidth!.Width!.Value.Should().Be("3021");
+        cells[2].TableCellProperties!.TableCellWidth!.Width!.Value.Should().Be("6041"); // suma spanowanych
+    }
+
+    [Test]
+    public void Write_ManualColumnResize_PxFallbackWins()
+    {
+        // Po ręcznym resize edytor usuwa data-w-tw — px decyduje.
+        var html = "<table style=\"border-collapse:collapse;\">" +
+                   "<colgroup><col style=\"width:300px;\" /></colgroup>" +
+                   "<tr><td style=\"width:300px;\"><p>a</p></td></tr></table>";
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var grid = doc.MainDocumentPart!.Document.Body!.Descendants<TableGrid>().First();
+        grid.Elements<GridColumn>().First().Width!.Value.Should().Be("4500"); // 300px × 15
+    }
+
+    // ---------- round-trip + schemat ----------
+
+    [Test]
+    public void RoundTrip_QutableScenario_IsStableAndSchemaValid()
+    {
+        using var docx = BuildQutableLikeDocx();
+        var pass1 = _reader.Convert(docx);
+        var export1 = _writer.Convert(pass1.Html, pass1.Metadata, pass1.Header, pass1.Footer, pass1.Margins, pass1.PageSize);
+
+        using (var exported = WordprocessingDocument.Open(new MemoryStream(export1), false))
+        {
+            // docDefaults przeżyły regenerację pakietu.
+            var styles = exported.MainDocumentPart!.StyleDefinitionsPart!.Styles!;
+            styles.DocDefaults!.RunPropertiesDefault!.RunPropertiesBaseStyle!
+                .GetFirstChild<FontSize>()!.Val!.Value.Should().Be("24");
+            styles.DocDefaults.ParagraphPropertiesDefault!.ParagraphPropertiesBaseStyle!
+                .GetFirstChild<SpacingBetweenLines>()!.Line!.Value.Should().Be("278");
+
+            // Akapity komórek niosą jawny spacing stylu tabeli (after=0/line=240) — wiersze
+            // nie puchną w Wordzie mimo braku definicji stylu w regenerowanym pakiecie.
+            var cellParagraphSpacing = exported.MainDocumentPart.Document.Body!
+                .Descendants<TableCell>().First()
+                .Descendants<SpacingBetweenLines>().FirstOrDefault();
+            cellParagraphSpacing.Should().NotBeNull();
+            cellParagraphSpacing!.After!.Value.Should().Be("0");
+            cellParagraphSpacing.Line!.Value.Should().Be("240");
+
+            // Siatka dokładnie jak w oryginale (bez dryfu px→twips).
+            exported.MainDocumentPart.Document.Body!.Descendants<TableGrid>().First()
+                .Elements<GridColumn>().Select(c => c.Width!.Value)
+                .Should().Equal("3020", "3021", "3021");
+
+            // Scalenie i centrowanie przeżyły.
+            exported.MainDocumentPart.Document.Body!.Descendants<GridSpan>()
+                .Select(g => (int)g.Val!.Value!).Should().Contain(2);
+            exported.MainDocumentPart.Document.Body!.Descendants<TableCellVerticalAlignment>()
+                .Any(v => v.Val!.Value == TableVerticalAlignmentValues.Center).Should().BeTrue();
+
+            // Zero błędów schematu (Office 2013 — profil z atrybutami tblLook).
+            var validator = new OpenXmlValidator(FileFormatVersions.Office2013);
+            validator.Validate(exported).Should().BeEmpty();
+        }
+
+        // Drugi cykl: siatka nadal identyczna (stabilność, nie tylko pierwsze przejście).
+        var pass2 = _reader.Convert(new MemoryStream(export1));
+        var export2 = _writer.Convert(pass2.Html, pass2.Metadata, pass2.Header, pass2.Footer, pass2.Margins, pass2.PageSize);
+        using var exported2 = WordprocessingDocument.Open(new MemoryStream(export2), false);
+        exported2.MainDocumentPart!.Document.Body!.Descendants<TableGrid>().First()
+            .Elements<GridColumn>().Select(c => c.Width!.Value)
+            .Should().Equal("3020", "3021", "3021");
+    }
+
+    [Test]
+    public void Write_CenteredParagraphWithSpacing_PPrChildrenInSchemaOrder()
+    {
+        var html = "<p style=\"margin-bottom:0pt;line-height:1;text-align:center;\">x</p>";
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var pPr = doc.MainDocumentPart!.Document.Body!.Descendants<ParagraphProperties>().First();
+        var names = pPr.ChildElements.Select(e => e.LocalName).ToList();
+        names.IndexOf("spacing").Should().BeLessThan(names.IndexOf("jc"),
+            "schemat CT_PPrBase wymaga w:spacing przed w:jc");
+    }
+}

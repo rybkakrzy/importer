@@ -14,6 +14,27 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0031: Domyślne wartości dokumentu (docDefaults) round-tripują przez kontener `.document-content`; spacing stylu tabeli zapiekany inline w komórkach
+
+- Date: 2026-07-08
+- Status: Accepted
+
+### Context
+Zapis z edytora (autosave / „Zakończ") idzie przez pełną regenerację pakietu (`HtmlToDocxConverter.Convert`), która budowała styles.xml z hardkodowanymi wartościami: docDefaults 11pt / `after=160` / `line=259` i bez definicji stylów tabel. Dokument 12pt z `line=278` i tabelą „Tabela – Siatka" po PIERWSZYM zapisie: tekst malał do 11pt, interlinia się zmieniała, a akapity w komórkach — pozbawione `w:pPr` stylu tabeli (`after=0/line=240`), którego definicja nie istniała w nowym pakiecie — dostawały pełne odstępy docDefaults i wiersze tabel puchły ~2× w Wordzie („tabele po zapisie totalnie się psują"). Dodatkowo GUI rozwijało wrapper `.document-content` przy paginacji i nie odtwarzało go w `getContent()`, więc writer w produkcyjnym zapisie nigdy nie widział nawet fontu dokumentu. Siatka kolumn dryfowała o kilka twips na każdym zapisie (px→twips), a writer emitował `tblBorders val=none` nadpisując obramowania stylu.
+
+### Decision
+1. **Kontrakt kontenera**: reader emituje na `.document-content` domyślne wartości dokumentu — inline `font-family`/`font-size`/`line-height` + `data-default-before/after-tw`, `data-default-line`, `data-default-line-rule` (docDefaults/pPrDefault nadpisane per właściwość przez domyślny styl akapitowy `w:default="1"`, jak w Wordzie). Writer (`CaptureDocumentDefaults`) odtwarza z nich docDefaults + Normal; bez kontenera zostają dotychczasowe fallbacki konfiguracyjne.
+2. **GUI domyka pętlę**: `_captureDocumentDefaults` przechwytuje wszystkie atrybuty wrappera i rozwija go przy imporcie; `getContent()` owija scaloną treść z powrotem. Interlinia/odstęp akapitu stosowane wizualnie przez `line-height` na `.editor-content` i CSS var `--doc-par-margin` (fallback 10px).
+3. **Spacing akapitów w komórkach tabel = rozwiązany INLINE** (docDefaults + łańcuch `w:pPr` stylu tabeli po basedOn) — świadome formatowanie bezpośrednie: dzięki temu eksport jest odporny na brak definicji stylu tabeli w regenerowanym pakiecie. Akapity BODY inline'u nie dostają (interlinia z kontenera; `w:spacing` wraca z docDefaults writera).
+4. **Tabele**: `data-w-tw` na `<col>` niesie dokładne twips `w:tblGrid` (writer preferuje je nad px dla gridCol i tcW; ręczny resize kolumny w edytorze usuwa atrybut); tabela z `data-tbl-style` bez CSS `border:` nie dostaje `tblBorders` (styl rządzi liniami; jawny `data-no-borders="1"` = zamierzone none).
+5. **Zgodność ze schematem**: dzieci `pPr`/`tcPr` sortowane wg CT_PPrBase/CT_TcPr (`NormalizeParagraphPropertiesOrder`/`NormalizeTableCellPropertiesOrder`), `tcBorders` w kolejności top→left→bottom→right; finalny CSS akapitu deduplikowany (regexy writera biorą pierwsze wystąpienie właściwości).
+
+### Consequences
+Round-trip qutable (12pt/278 + Tabela–Siatka + gridSpan/vAlign/jc/trHeight): eksport zachowuje rozmiar/interlinię/odstępy, komórki niosą `w:spacing after=0 line=240`, tblGrid `3020/3021/3021` bez dryfu, walidator OOXML (Office2013) 0 błędów (było 52). Edytor renderuje odstępy między akapitami i interlinię z dokumentu zamiast sztywnych 10px. Pozostałości: `data-no-borders` pojawia się od 2. otwarcia regenerowanego pakietu (brak definicji stylu tabeli — obramowania i tak zapieczone per komórka); definicje stylów tabel wracają w pełni tylko przez `ConvertPreservingPackage` (dziś Download) — docelowo Save powinien dostać pass-through (wymaga masterId w `POST /document/save`, zmiana kontraktu do ustalenia).
+
+### Alternatives considered
+(a) Inline'owanie docDefaults spacing na KAŻDYM akapicie body — odrzucone: masywny churn HTML/goldenów i zamiana formatowania stylowego na bezpośrednie w całym dokumencie; kontener załatwia to samo bez churnu. (b) Emisja definicji stylu tabeli do regenerowanego styles.xml — odrzucone: rekonstrukcja stylu z resolved CSS jest stratna i dubluje pass-through; inline spacing komórek pokrywa jedyną realną stratę. (c) Przeniesienie Save na ConvertPreservingPackage — właściwe docelowo, ale to zmiana kontraktu API (masterId w request) — zostawione jako następny krok.
+
 ## ADR-0030: Model kotwicy elementów pływających = pozycja w DOM; pola tekstowe round-tripują jako wps:wsp
 
 - Date: 2026-07-07

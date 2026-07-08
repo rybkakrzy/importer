@@ -32,6 +32,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     // Domyślne wartości z docDefaults/rPrDefault (stosowane, gdy run/style ich nie nadpisują)
     private string? _defaultFontFamily;
     private double? _defaultFontSizePt;
+    // Domyślne odstępy akapitowe dokumentu: docDefaults/pPrDefault, nadpisywane przez domyślny
+    // styl akapitowy (w:default="1"). Surowe wartości OOXML wracają do writera przez data-default-*
+    // na kontenerze .document-content (writer odtwarza z nich docDefaults — bez tego każdy zapis
+    // podmieniał odstępy/interlinię dokumentu na hardkodowane 160/259 i rozmiar na 11pt).
+    private string? _defaultSpacingBeforeTw;
+    private string? _defaultSpacingAfterTw;
+    private string? _defaultSpacingLine;
+    private string? _defaultSpacingLineRule; // "auto" | "exact" | "atLeast"
+    // CSS bazowy zbudowany z powyższych — baza dla akapitów w KOMÓRKACH TABEL (styl tabeli
+    // może go nadpisać własnym w:pPr); akapity body dziedziczą interlinię z kontenera.
+    private string _defaultParagraphSpacingCss = "";
+    // Aktywne domyślne odstępy akapitów bieżącej tabeli (docDefaults + w:pPr stylu tabeli).
+    // Ustawiane na czas konwersji tabeli (zagnieżdżenia: save/restore).
+    private string? _tableParagraphDefaultCss;
     // Cache dla fontów motywu: major/minor -> nazwa kroju
     private string? _themeMajorLatin;
     private string? _themeMinorLatin;
@@ -153,6 +167,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _themePart = null;
         _defaultFontFamily = null;
         _defaultFontSizePt = null;
+        _defaultSpacingBeforeTw = _defaultSpacingAfterTw = null;
+        _defaultSpacingLine = _defaultSpacingLineRule = null;
+        _defaultParagraphSpacingCss = "";
+        _tableParagraphDefaultCss = null;
         _themeMajorLatin = _themeMinorLatin = null;
         _themeMajorEastAsia = _themeMinorEastAsia = null;
         _themeMajorComplexScript = _themeMinorComplexScript = null;
@@ -969,8 +987,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = new StringBuilder();
         var containerCss = BuildDefaultContainerCss();
 
-        if (containerCss.Length > 0)
-            html.Append($"<div class=\"document-content\" style=\"{containerCss}\">");
+        // Interlinia domyślna dokumentu na kontenerze (dziedziczy na akapity bez własnej) +
+        // surowe wartości docDefaults w data-default-* — writer odtwarza z nich docDefaults
+        // pakietu. Bez tego pierwszy zapis podmieniał odstępy/interlinię/rozmiar dokumentu
+        // na hardkodowane wartości edytora (11pt / after=160 / line=259).
+        var containerAttrs = new StringBuilder();
+        if (_defaultSpacingBeforeTw != null)
+            containerAttrs.Append($" data-default-before-tw=\"{_defaultSpacingBeforeTw}\"");
+        if (_defaultSpacingAfterTw != null)
+            containerAttrs.Append($" data-default-after-tw=\"{_defaultSpacingAfterTw}\"");
+        if (_defaultSpacingLine != null)
+            containerAttrs.Append($" data-default-line=\"{_defaultSpacingLine}\"" +
+                $" data-default-line-rule=\"{_defaultSpacingLineRule}\"");
+        var containerLineHeight = ExtractCssProperty(_defaultParagraphSpacingCss, "line-height");
+        var bodyContainerCss = containerLineHeight != null
+            ? containerCss + $"line-height:{containerLineHeight};"
+            : containerCss;
+
+        if (bodyContainerCss.Length > 0 || containerAttrs.Length > 0)
+            html.Append($"<div class=\"document-content\"{containerAttrs} style=\"{bodyContainerCss}\">");
         else
             html.Append("<div class=\"document-content\">");
 
@@ -1328,6 +1363,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var defaultStyle = _rawStyles.Values.FirstOrDefault(s =>
             s.Type?.Value == StyleValues.Paragraph && s.Default?.Value == true);
+
+        // Odstępy z domyślnego stylu akapitowego (typowy Word trzyma je w Normal, nie w
+        // docDefaults) nadpisują per właściwość wartości z pPrDefault.
+        var styleSpacing = defaultStyle?.StyleParagraphProperties?.GetFirstChild<SpacingBetweenLines>();
+        if (styleSpacing != null)
+            CaptureDefaultParagraphSpacing(styleSpacing);
+        _defaultParagraphSpacingCss = BuildDefaultParagraphSpacingCss();
+
         if (defaultStyle?.StyleRunProperties == null) return;
 
         var name = GetFontName(defaultStyle.StyleRunProperties.GetFirstChild<RunFonts>());
@@ -1348,6 +1391,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private void LoadDocDefaults(StyleDefinitionsPart stylesPart)
     {
         var docDefaults = stylesPart.Styles?.DocDefaults;
+
+        // Domyślne odstępy akapitowe dokumentu (w:pPrDefault/w:pPr/w:spacing) — np. Word 2013+
+        // zapisuje tu after=160 line=278. Round-trip przez data-default-* na kontenerze.
+        var pPrDefault = docDefaults?.ParagraphPropertiesDefault?.ParagraphPropertiesBaseStyle;
+        var defaultSpacing = pPrDefault?.GetFirstChild<SpacingBetweenLines>();
+        if (defaultSpacing != null)
+            CaptureDefaultParagraphSpacing(defaultSpacing);
+
         var rPrDefault = docDefaults?.RunPropertiesDefault?.RunPropertiesBaseStyle;
         if (rPrDefault == null) return;
 
@@ -1362,6 +1413,53 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             _defaultFontSizePt = OoxmlUnits.HalfPointsToPoints(sz);
         }
+    }
+
+    /// <summary>
+    /// Zapamiętuje domyślne odstępy akapitowe (per właściwość — późniejsze źródło nadpisuje
+    /// tylko to, co samo definiuje: docDefaults → domyślny styl akapitowy, jak w Wordzie).
+    /// </summary>
+    private void CaptureDefaultParagraphSpacing(SpacingBetweenLines spacing)
+    {
+        if (spacing.Before?.Value != null) _defaultSpacingBeforeTw = spacing.Before.Value;
+        if (spacing.After?.Value != null) _defaultSpacingAfterTw = spacing.After.Value;
+        if (spacing.Line?.Value != null)
+        {
+            _defaultSpacingLine = spacing.Line.Value;
+            var rule = spacing.LineRule?.Value;
+            _defaultSpacingLineRule = rule == LineSpacingRuleValues.Exact ? "exact"
+                : rule == LineSpacingRuleValues.AtLeast ? "atLeast"
+                : "auto";
+        }
+    }
+
+    /// <summary>
+    /// CSS odstępów akapitowych z zapamiętanych domyślnych wartości dokumentu — ta sama
+    /// gramatyka co dla direct pPr (margin-top/bottom w pt, line-height mnożnik lub pt
+    /// z markerem --w-line-rule), więc writer odtwarza w:spacing bez osobnej ścieżki.
+    /// </summary>
+    private string BuildDefaultParagraphSpacingCss()
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var css = new StringBuilder();
+        if (_defaultSpacingBeforeTw != null && int.TryParse(_defaultSpacingBeforeTw, out var beforeTw))
+            css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeTw)));
+        if (_defaultSpacingAfterTw != null && int.TryParse(_defaultSpacingAfterTw, out var afterTw))
+            css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterTw)));
+        if (_defaultSpacingLine != null && int.TryParse(_defaultSpacingLine, out var lineTw))
+        {
+            if (_defaultSpacingLineRule == "exact" || _defaultSpacingLineRule == "atLeast")
+            {
+                css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineTw)));
+                if (_defaultSpacingLineRule == "atLeast")
+                    css.Append("--w-line-rule:atLeast;");
+            }
+            else
+            {
+                css.Append(string.Format(inv, "line-height:{0:0.###};", lineTw / 240.0));
+            }
+        }
+        return css.ToString();
     }
 
     /// <summary>
@@ -1428,6 +1526,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
 
         return string.Concat(order.Select(p => $"{p}:{props[p]};"));
+    }
+
+    /// <summary>Wartość pojedynczej właściwości z inline CSS (ostatnie wystąpienie) lub null.</summary>
+    private static string? ExtractCssProperty(string css, string property)
+    {
+        if (string.IsNullOrEmpty(css)) return null;
+        string? value = null;
+        foreach (Match m in Regex.Matches(css, $@"(?<![\w-]){Regex.Escape(property)}\s*:\s*([^;]+);"))
+            value = m.Groups[1].Value.Trim();
+        return value;
     }
 
     /// <summary>
@@ -1842,8 +1950,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // mógł je potraktować tak samo jak nagłówki (prawdziwy bold zamiast cienkiej Calibri Light).
         var docClass = GetDocStyleClass(styleId);
 
-        // Buduj CSS: najpierw styl z definicji (z dziedziczeniem), potem inline
+        // Buduj CSS: domyślne odstępy komórki tabeli (docDefaults + w:pPr stylu tabeli),
+        // potem styl z definicji (z dziedziczeniem), potem inline — DeduplicateCss na końcu
+        // zostawia wartość najbardziej szczegółowego źródła (ostatnia wygrywa).
+        var isInTableCell = paragraph.Ancestors<TableCell>().Any();
         var cssBuilder = new StringBuilder();
+        if (isInTableCell && !string.IsNullOrEmpty(_tableParagraphDefaultCss))
+        {
+            cssBuilder.Append(_tableParagraphDefaultCss);
+        }
         if (styleId != null && _styles.TryGetValue(styleId, out var styleCss))
         {
             cssBuilder.Append(styleCss);
@@ -1874,7 +1989,6 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // and paints over the neighbouring column (and the cell's text-align stops applying).
         // Word resolves tabs in cells against the cell's own text column, so fall back to the
         // inline/flex rendering there; data-tab-stops still round-trips the stops unchanged.
-        var isInTableCell = paragraph.Ancestors<TableCell>().Any();
         var usePositionedTabs = effectiveTabStops.Count > 0
             && paragraph.Descendants<TabChar>().Any()
             && !hasComplexField
@@ -1893,7 +2007,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? $" data-tab-stops=\"{SerializeTabStops(effectiveTabStops)}\""
             : string.Empty;
 
-        var cssStyle = cssBuilder.ToString();
+        // Dedup finalnego CSS: styl + direct pPr potrafiły zostawić duplikaty tej samej
+        // właściwości (przeglądarka bierze ostatnią, ale regexy writera brały PIERWSZĄ —
+        // nadpisanie stylu przez direct pPr ginęło na eksporcie).
+        var cssStyle = DeduplicateCss(cssBuilder.ToString());
         var classAttr = docClass != null ? $" class=\"{docClass}\"" : string.Empty;
         // data-style-id pozwala eksporterowi HTML→DOCX odtworzyć oryginalny styleId (np. Title, Subtitle),
         // nawet jeśli wizualny tag to <p>.
@@ -4036,7 +4153,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // When a fixed-layout table declares no explicit width, fall back to the grid sum
         // so the fixed layout has a width to distribute across the columns.
         if (useFixedLayout && tableWidth == "auto" && gridColumnsPx.Count > 0)
-            tableWidth = $"{gridColumnsPx.Sum()}px";
+            tableWidth = $"{gridColumnsPx.Sum(c => c.Px)}px";
 
         var layoutCss = useFixedLayout ? "table-layout:fixed;" : string.Empty;
         var colgroupHtml = BuildColgroupHtml(gridColumnsPx);
@@ -4091,6 +4208,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         html.Append($"<table{tblBordersMarker}{styleAttrs}{cellSpacingAttr} style=\"{collapseCss}width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
         html.Append(colgroupHtml);
+
+        // Akapity w komórkach dostają INLINE rozwiązane domyślne odstępy (docDefaults + w:pPr
+        // stylu tabeli) — patrz TableStyleContext.ParagraphDefaultCss. Zagnieżdżona tabela
+        // rozwiązuje własny styl, stąd save/restore.
+        var prevTableParagraphDefaults = _tableParagraphDefaultCss;
+        _tableParagraphDefaultCss = renderCtx.Style.ParagraphDefaultCss;
 
         for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
         {
@@ -4159,6 +4282,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             html.Append("</tr>");
         }
 
+        _tableParagraphDefaultCss = prevTableParagraphDefaults;
+
         html.Append("</table>");
         return html.ToString();
     }
@@ -4185,29 +4310,32 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Reads tblGrid column widths (twips) and converts them to CSS pixels.
     /// Columns without an explicit width contribute 0 (browser distributes remainder).
     /// </summary>
-    private List<int> ReadTableGridColumnsPx(Table table)
+    private List<(int Px, int Tw)> ReadTableGridColumnsPx(Table table)
     {
-        var result = new List<int>();
+        var result = new List<(int Px, int Tw)>();
         var grid = table.GetFirstChild<TableGrid>();
         if (grid == null) return result;
 
         foreach (var col in grid.Elements<GridColumn>())
         {
             if (col.Width?.Value != null && int.TryParse(col.Width.Value, out var twips))
-                result.Add(TwipsToPx(twips));
+                result.Add((TwipsToPx(twips), twips));
             else
-                result.Add(0);
+                result.Add((0, 0));
         }
         return result;
     }
 
-    private static string BuildColgroupHtml(List<int> columnsPx)
+    private static string BuildColgroupHtml(List<(int Px, int Tw)> columns)
     {
-        if (columnsPx.Count == 0) return string.Empty;
+        if (columns.Count == 0) return string.Empty;
 
+        // data-w-tw niesie dokładne twips z w:tblGrid — eksport preferuje je nad px, więc
+        // siatka nie dryfuje przy każdym zapisie (3020tw → 201px → 3015tw…). Ręczny resize
+        // kolumny w edytorze usuwa atrybut (syncTableColgroup) i wraca fallback px.
         var sb = new StringBuilder("<colgroup>");
-        foreach (var px in columnsPx)
-            sb.Append(px > 0 ? $"<col style=\"width:{px}px;\" />" : "<col />");
+        foreach (var (px, tw) in columns)
+            sb.Append(px > 0 ? $"<col style=\"width:{px}px;\" data-w-tw=\"{tw}\" />" : "<col />");
         sb.Append("</colgroup>");
         return sb.ToString();
     }
@@ -4563,6 +4691,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public Shading? WholeTableCellShading;   // w:tcPr/w:shd stylu — tło każdej komórki
         public TableCellBorders? WholeTableCellBorders; // w:tcPr/w:tcBorders stylu
         public string DefaultCellPaddingCss = "";
+        // Domyślne odstępy akapitów w komórkach: docDefaults dokumentu nadpisane przez
+        // w:pPr łańcucha stylu tabeli (np. „Tabela – Siatka" zeruje after i interlinię).
+        // Emitowane INLINE na akapitach komórek — dzięki temu zapis (regeneracja pakietu
+        // bez definicji stylu tabeli) nie nadyma wierszy w Wordzie odstępami z docDefaults.
+        public string ParagraphDefaultCss = "";
         public Dictionary<TableStyleOverrideValues, TableStyleProperties> Conditional = new();
     }
 
@@ -4686,7 +4819,44 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var rightPad = PadSide(m => GetDxaValue(m.TableCellRightMargin), wordDefaultCellMarginTwips);
         ctx.DefaultCellPaddingCss = $"{TwipsToPx(topPad)}px {TwipsToPx(rightPad)}px {TwipsToPx(bottomPad)}px {TwipsToPx(leftPad)}px";
 
+        // Odstępy akapitów w komórkach: baza = docDefaults dokumentu, nadpisana per właściwość
+        // przez w:pPr stylu tabeli (od bazy łańcucha do najbardziej pochodnego — jak Word).
+        var cellParagraphCss = new StringBuilder(_defaultParagraphSpacingCss);
+        for (var i = chain.Count - 1; i >= 0; i--)
+        {
+            var styleSpacing = chain[i].StyleParagraphProperties?.GetFirstChild<SpacingBetweenLines>();
+            if (styleSpacing != null)
+                cellParagraphCss.Append(SpacingCss(styleSpacing));
+        }
+        ctx.ParagraphDefaultCss = DeduplicateCss(cellParagraphCss.ToString());
+
         return ctx;
+    }
+
+    /// <summary>CSS z pojedynczego w:spacing (ta sama semantyka co w ConvertParagraphPropertiesToCss).</summary>
+    private string SpacingCss(SpacingBetweenLines spacing)
+    {
+        var css = new StringBuilder();
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
+            css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeVal)));
+        if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
+            css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
+        if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
+        {
+            var lineRule = spacing.LineRule?.Value;
+            if (lineRule == LineSpacingRuleValues.Exact || lineRule == LineSpacingRuleValues.AtLeast)
+            {
+                css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
+                if (lineRule == LineSpacingRuleValues.AtLeast)
+                    css.Append("--w-line-rule:atLeast;");
+            }
+            else
+            {
+                css.Append(string.Format(inv, "line-height:{0:0.###};", lineVal / 240.0));
+            }
+        }
+        return css.ToString();
     }
 
     /// <summary>

@@ -104,6 +104,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private double? _headerBandCm;
     private double? _footerBandCm;
 
+    // Domyślne wartości dokumentu z kontenera .document-content (reader emituje inline
+    // font-family/font-size + data-default-*). Odtwarzane w docDefaults/Normal generowanego
+    // pakietu; brak kontenera → dotychczasowe wartości z konfiguracji (zero regresji).
+    private string? _docDefaultFontFamily;
+    private double? _docDefaultFontSizePt;
+    private string? _docDefaultSpacingBeforeTw;
+    private string? _docDefaultSpacingAfterTw;
+    private string? _docDefaultSpacingLine;
+    private string? _docDefaultSpacingLineRule;
+
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
@@ -125,17 +135,26 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _hasSectionMarkers = false;
             _headerBandCm = header?.Height;
             _footerBandCm = footer?.Height;
+            _docDefaultFontFamily = null;
+            _docDefaultFontSizePt = null;
+            _docDefaultSpacingBeforeTw = _docDefaultSpacingAfterTw = null;
+            _docDefaultSpacingLine = _docDefaultSpacingLineRule = null;
 
             var body = new Body();
             _mainPart.Document.Body = body;
 
+            // Parsuj HTML PRZED stylami — kontener .document-content niesie domyślny font
+            // (inline style) i odstępy akapitowe dokumentu (data-default-*), które muszą
+            // trafić do docDefaults generowanego pakietu. Wcześniej każdy zapis podmieniał
+            // je na hardkodowane 11pt / after=160 / line=259 (tekst malał, wiersze tabel
+            // ze stylem Worda puchły, bo styl tabeli nie istnieje w regenerowanym pakiecie).
+            var htmlDoc = new HtmlDocument();
+            htmlDoc.LoadHtml(html);
+            CaptureDocumentDefaults(htmlDoc);
+
             // Dodaj style dokumentu
             AddDocumentStyles(document);
 
-            // Parsuj HTML i konwertuj na elementy Word
-            var htmlDoc = new HtmlDocument();
-            htmlDoc.LoadHtml(html);
-            
             ConvertHtmlToBody(htmlDoc.DocumentNode, body);
 
             // Ustaw metadane
@@ -682,6 +701,66 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
+    /// Odczytuje domyślne wartości dokumentu z kontenera .document-content wygenerowanego
+    /// przez DocxToHtmlConverter: inline font-family/font-size oraz data-default-* z odstępami
+    /// akapitowymi docDefaults oryginału. Bez kontenera pola zostają null (fallback konfiguracja).
+    /// </summary>
+    private void CaptureDocumentDefaults(HtmlDocument htmlDoc)
+    {
+        var container = htmlDoc.DocumentNode.SelectSingleNode("//div[contains(@class,'document-content')]");
+        if (container == null) return;
+
+        var style = container.GetAttributeValue("style", "");
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        // Pierwszy krój z listy font-family (reader emituje 'Nazwa',fallback).
+        var fontMatch = Regex.Match(style, @"font-family:\s*'?([^;',]+)");
+        if (fontMatch.Success && !string.IsNullOrWhiteSpace(fontMatch.Groups[1].Value))
+            _docDefaultFontFamily = fontMatch.Groups[1].Value.Trim();
+
+        var sizeMatch = Regex.Match(style, @"font-size:\s*([\d.]+)pt");
+        if (sizeMatch.Success && double.TryParse(sizeMatch.Groups[1].Value, System.Globalization.NumberStyles.Float, inv, out var pt) && pt > 0)
+            _docDefaultFontSizePt = pt;
+
+        string? Attr(string name)
+        {
+            var v = container.GetAttributeValue(name, "");
+            return string.IsNullOrWhiteSpace(v) ? null : v;
+        }
+        if (Attr("data-default-before-tw") is { } beforeTw && int.TryParse(beforeTw, out _))
+            _docDefaultSpacingBeforeTw = beforeTw;
+        if (Attr("data-default-after-tw") is { } afterTw && int.TryParse(afterTw, out _))
+            _docDefaultSpacingAfterTw = afterTw;
+        if (Attr("data-default-line") is { } line && int.TryParse(line, out _))
+        {
+            _docDefaultSpacingLine = line;
+            _docDefaultSpacingLineRule = Attr("data-default-line-rule");
+        }
+    }
+
+    /// <summary>Domyślne odstępy akapitowe pakietu: z kontenera dokumentu albo fallback Worda.</summary>
+    private SpacingBetweenLines BuildDefaultSpacing()
+    {
+        if (_docDefaultSpacingAfterTw == null && _docDefaultSpacingBeforeTw == null && _docDefaultSpacingLine == null)
+            return new SpacingBetweenLines { After = "160", Line = "259", LineRule = LineSpacingRuleValues.Auto };
+
+        var spacing = new SpacingBetweenLines();
+        if (_docDefaultSpacingBeforeTw != null) spacing.Before = _docDefaultSpacingBeforeTw;
+        if (_docDefaultSpacingAfterTw != null) spacing.After = _docDefaultSpacingAfterTw;
+        if (_docDefaultSpacingLine != null)
+        {
+            spacing.Line = _docDefaultSpacingLine;
+            spacing.LineRule = _docDefaultSpacingLineRule switch
+            {
+                "exact" => LineSpacingRuleValues.Exact,
+                "atLeast" => LineSpacingRuleValues.AtLeast,
+                _ => LineSpacingRuleValues.Auto
+            };
+        }
+        return spacing;
+    }
+
+    /// <summary>
     /// Dodaje domyślne style do dokumentu z dokładnym odwzorowaniem
     /// </summary>
     private void AddDocumentStyles(WordprocessingDocument document)
@@ -689,11 +768,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var stylesPart = _mainPart!.AddNewPart<StyleDefinitionsPart>();
         var styles = new Styles();
 
-        // Firmowa czcionka — z konfiguracji (sekcja DocumentDefaults w appsettings.json).
-        var bodyFont = string.IsNullOrWhiteSpace(_defaults.FontFamily) ? "Calibri" : _defaults.FontFamily;
+        // Domyślny krój/rozmiar: z kontenera dokumentu (reader emituje je z docDefaults
+        // oryginału), a gdy brak — firmowa czcionka z konfiguracji (DocumentDefaults).
+        var bodyFont = _docDefaultFontFamily
+            ?? (string.IsNullOrWhiteSpace(_defaults.FontFamily) ? "Calibri" : _defaults.FontFamily);
         var headingFont = string.IsNullOrWhiteSpace(_defaults.HeadingFontFamily) ? bodyFont : _defaults.HeadingFontFamily;
         // Rozmiar w DOCX jest podawany w pół-punktach (1pt = 2 jednostki).
-        var halfPt = ((int)Math.Round(_defaults.FontSizePt * 2)).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var fontSizePt = _docDefaultFontSizePt ?? _defaults.FontSizePt;
+        var halfPt = ((int)Math.Round(fontSizePt * 2)).ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         // Domyślne właściwości dokumentu
         var docDefaults = new DocDefaults(
@@ -706,9 +788,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 )
             ),
             new ParagraphPropertiesDefault(
-                new ParagraphPropertiesBaseStyle(
-                    new SpacingBetweenLines { After = "160", Line = "259", LineRule = LineSpacingRuleValues.Auto }
-                )
+                new ParagraphPropertiesBaseStyle(BuildDefaultSpacing())
             )
         );
         styles.Append(docDefaults);
@@ -722,9 +802,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         };
         normalStyle.Append(new StyleName { Val = "Normal" });
         normalStyle.Append(new PrimaryStyle());
-        normalStyle.Append(new StyleParagraphProperties(
-            new SpacingBetweenLines { After = "160", Line = "259", LineRule = LineSpacingRuleValues.Auto }
-        ));
+        normalStyle.Append(new StyleParagraphProperties(BuildDefaultSpacing()));
         normalStyle.Append(new StyleRunProperties(
             new RunFonts { Ascii = bodyFont, HighAnsi = bodyFont },
             new FontSize { Val = halfPt }
@@ -1057,6 +1135,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             props.Append(tabs);
         }
+
+        // pStyle/tabs dokładane są PO ApplyParagraphStyle — przywróć kolejność schematu
+        // (pStyle pierwsze, tabs przed spacing/jc).
+        NormalizeParagraphPropertiesOrder(props);
 
         if (props.HasChildren)
             paragraph.Append(props);
@@ -1620,7 +1702,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             );
         }
 
-        tableProps.Append(defaultBorders);
+        // Tabela ze stylem Worda (data-tbl-style) i BEZ jawnego CSS-owego obramowania na
+        // <table>: NIE emituj tblBorders — bezpośrednie val=none NADPISYWAŁO obramowania
+        // stylu (Tabela – Siatka traciła linie w Wordzie), a przy ponownym otwarciu reader
+        // znakował tabelę data-no-borders i strata się utrwalała. Jawny brak obramowań
+        // oryginału niesie data-no-borders="1" — wtedy val=none jest zamierzone.
+        var noBordersMarker = node.GetAttributeValue("data-no-borders", "") == "1";
+        if (borderMatch.Success || noBordersMarker || string.IsNullOrEmpty(tblStyleId))
+            tableProps.Append(defaultBorders);
 
         // Reader emituje table-layout:fixed dla tabel z geometrią kolumn z tblGrid —
         // wymuszanie Autofit gubiło układ Worda przy każdym zapisie (autosave!).
@@ -1691,8 +1780,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             for (int i = 0; i < gridColCount; i++)
             {
                 var col = new GridColumn();
-                if (i < colWidthsTwips.Count && colWidthsTwips[i] > 0)
-                    col.Width = colWidthsTwips[i].ToString();
+                if (i < colWidthsTwips.Count && colWidthsTwips[i].Tw > 0)
+                    col.Width = colWidthsTwips[i].Tw.ToString();
                 grid.Append(col);
             }
             table.Append(grid);
@@ -1780,14 +1869,45 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                             activeRowSpans[gridCursor] = (rowspan - 1, colspan);
                             spansStartedThisRow.Add(gridCursor);
                         }
+                        var cellStartColumn = gridCursor;
                         gridCursor += colspan;
 
                         // Parsuj style komórki
                         var cellStyle = cellNode.GetAttributeValue("style", "");
                         ApplyCellStyle(cellProps, cellStyle);
+
+                        // Gdy wszystkie kolumny siatki pod komórką mają DOKŁADNE twips
+                        // (data-w-tw, bez ręcznego resize), tcW = ich suma — spójne z
+                        // w:tblGrid i bez dryfu zaokrągleń px→twips per zapis.
+                        if (cellStartColumn + colspan <= colWidthsTwips.Count)
+                        {
+                            var spanned = colWidthsTwips.GetRange(cellStartColumn, colspan);
+                            var tcW = cellProps.GetFirstChild<TableCellWidth>();
+                            // Nie ruszamy szerokości procentowych (inna semantyka niż dxa).
+                            var isPct = tcW?.Type?.Value == TableWidthUnitValues.Pct;
+                            if (!isPct && spanned.All(c => c.Exact && c.Tw > 0))
+                            {
+                                var exactWidth = spanned.Sum(c => c.Tw).ToString();
+                                if (tcW != null)
+                                {
+                                    tcW.Width = exactWidth;
+                                    tcW.Type = TableWidthUnitValues.Dxa;
+                                }
+                                else
+                                {
+                                    cellProps.Append(new TableCellWidth { Width = exactWidth, Type = TableWidthUnitValues.Dxa });
+                                }
+                            }
+                        }
                         
                         // Obramowania komórki
                         ApplyCellBorders(cellProps, cellStyle);
+
+                        // Kolejność dzieci tcPr wg schematu (CT_TcPr) — elementy zbierane są
+                        // z kilku miejsc (colspan/vMerge → ApplyCellStyle → ApplyCellBorders)
+                        // i bez sortowania tcW lądował za gridSpan, a tcMar/vAlign przed
+                        // tcBorders (błędy walidacji OOXML).
+                        NormalizeTableCellPropertiesOrder(cellProps);
 
                         cell.Append(cellProps);
 
@@ -1852,6 +1972,37 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
+    /// Porządkuje dzieci w:tcPr zgodnie ze schematem OOXML (CT_TcPr). Sort stabilny.
+    /// </summary>
+    private static void NormalizeTableCellPropertiesOrder(TableCellProperties props)
+    {
+        if (!props.HasChildren) return;
+
+        static int Rank(OpenXmlElement el) => el switch
+        {
+            ConditionalFormatStyle => 0,
+            TableCellWidth => 1,
+            GridSpan => 2,
+            HorizontalMerge => 3,
+            VerticalMerge => 4,
+            TableCellBorders => 5,
+            Shading => 6,
+            NoWrap => 7,
+            TableCellMargin => 8,
+            TextDirection => 9,
+            TableCellFitText => 10,
+            TableCellVerticalAlignment => 11,
+            HideMark => 12,
+            _ => 13
+        };
+
+        var ordered = props.ChildElements.OrderBy(Rank).ToList();
+        props.RemoveAllChildren();
+        foreach (var child in ordered)
+            props.Append(child);
+    }
+
+    /// <summary>
     /// Komórka kontynuacji scalenia pionowego (w:vMerge bez w:val = continue) —
     /// odpowiednik komórki, którą HTML pomija pod komórką z rowspan.
     /// </summary>
@@ -1865,23 +2016,32 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
-    /// Szerokości kolumn (twips) z &lt;colgroup&gt; tabeli — reader emituje je z w:tblGrid
-    /// (px). Kolumna bez szerokości daje 0 (Word rozłoży resztę).
+    /// Szerokości kolumn (twips) z &lt;colgroup&gt; tabeli. Preferowane dokładne twips z
+    /// data-w-tw (reader emituje je z w:tblGrid; Exact=true) — konwersja px→twips zaokrągla,
+    /// więc siatka dryfowała o kilka twips przy KAŻDYM zapisie (3020→3015→…). Ręczny resize
+    /// kolumny w edytorze usuwa data-w-tw i wraca fallback px (Exact=false).
+    /// Kolumna bez szerokości daje 0 (Word rozłoży resztę).
     /// </summary>
-    private static List<int> ReadColgroupWidthsTwips(HtmlNode tableNode)
+    private static List<(int Tw, bool Exact)> ReadColgroupWidthsTwips(HtmlNode tableNode)
     {
-        var result = new List<int>();
+        var result = new List<(int Tw, bool Exact)>();
         var cols = tableNode.SelectNodes("./colgroup/col");
         if (cols == null) return result;
 
         foreach (var col in cols)
         {
+            var twAttr = col.GetAttributeValue("data-w-tw", "");
+            if (int.TryParse(twAttr, out var exactTw) && exactTw > 0)
+            {
+                result.Add((exactTw, true));
+                continue;
+            }
             var style = col.GetAttributeValue("style", "");
             var m = Regex.Match(style, @"width:\s*([\d.]+)px");
             result.Add(m.Success
-                ? (int)Math.Round(OoxmlUnits.PixelsToTwips(
-                    double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)))
-                : 0);
+                ? ((int)Math.Round(OoxmlUnits.PixelsToTwips(
+                    double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture))), false)
+                : (0, false));
         }
         return result;
     }
@@ -1980,12 +2140,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         if (string.IsNullOrEmpty(style)) return;
         
-        // Parsuj poszczególne strony
+        // Parsuj poszczególne strony — kolejność wg schematu CT_TcBorders:
+        // top → left → bottom → right (inna kolejność = błąd walidacji OOXML).
         var borders = new TableCellBorders();
         bool hasBorders = false;
-        
-        var sides = new[] { ("border-top", typeof(TopBorder)), ("border-bottom", typeof(BottomBorder)), 
-                            ("border-left", typeof(LeftBorder)), ("border-right", typeof(RightBorder)) };
+
+        var sides = new[] { ("border-top", typeof(TopBorder)), ("border-left", typeof(LeftBorder)),
+                            ("border-bottom", typeof(BottomBorder)), ("border-right", typeof(RightBorder)) };
         
         foreach (var (prefix, borderType) in sides)
         {
@@ -2024,8 +2185,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 var color = NormalizeColor(borderAll.Groups[3].Value);
                 
                 borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
                 borders.Append(new LeftBorder { Val = bStyle, Size = size, Color = color });
+                borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
                 borders.Append(new RightBorder { Val = bStyle, Size = size, Color = color });
                 hasBorders = true;
             }
@@ -3126,6 +3287,47 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         // Obramowania paragrafu
         ApplyParagraphBorders(props, style);
+
+        // Kolejność dzieci pPr wg schematu (CT_PPrBase): jc musi być PO spacing/ind.
+        // Dotąd jc szło pierwsze i naruszenie ujawniało się dopiero, gdy akapit miał
+        // jednocześnie wyrównanie i odstępy (np. wyśrodkowana komórka tabeli ze
+        // spacingiem ze stylu tabeli) — Word potrafi taki plik zgłosić jako uszkodzony.
+        NormalizeParagraphPropertiesOrder(props);
+    }
+
+    /// <summary>
+    /// Porządkuje dzieci w:pPr zgodnie ze schematem OOXML (EG_PPrBase). Sort stabilny —
+    /// elementy o tej samej randze zachowują kolejność wstawienia.
+    /// </summary>
+    private static void NormalizeParagraphPropertiesOrder(ParagraphProperties props)
+    {
+        if (!props.HasChildren) return;
+
+        static int Rank(OpenXmlElement el) => el switch
+        {
+            ParagraphStyleId => 0,
+            KeepNext => 1,
+            KeepLines => 2,
+            PageBreakBefore => 3,
+            WidowControl => 5,
+            NumberingProperties => 6,
+            ParagraphBorders => 8,
+            Shading => 9,
+            Tabs => 10,
+            SpacingBetweenLines => 11,
+            Indentation => 12,
+            ContextualSpacing => 13,
+            Justification => 15,
+            OutlineLevel => 18,
+            ParagraphMarkRunProperties => 19,
+            SectionProperties => 20,
+            _ => 14 // nieznane zostają między contextualSpacing a jc (kolejność wstawienia)
+        };
+
+        var ordered = props.ChildElements.OrderBy(Rank).ToList();
+        props.RemoveAllChildren();
+        foreach (var child in ordered)
+            props.Append(child);
     }
 
     /// <summary>
@@ -3146,6 +3348,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 _ => JustificationValues.Left
             };
             props.Append(new Justification { Val = align });
+            NormalizeParagraphPropertiesOrder(props);
         }
     }
 

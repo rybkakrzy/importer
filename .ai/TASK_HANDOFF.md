@@ -2,6 +2,16 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-07-08)
+
+- **Domyślne odstępy/interlinia dokumentu + tabele nie psują się po zapisie (ADR-0031).**
+   - Kontrakt: reader emituje na `.document-content` font + `data-default-before/after-tw`/`data-default-line`/`data-default-line-rule` + `line-height`; writer (`CaptureDocumentDefaults`) odtwarza z nich docDefaults/Normal regenerowanego pakietu; GUI (`_captureDocumentDefaults`/`_wrapWithDocumentContainer`) rozwija wrapper przy imporcie i owija treść z powrotem w `getContent()` — bez tego writer w produkcyjnym zapisie nie widzi domyślnych wartości dokumentu.
+   - Akapity w KOMÓRKACH tabel niosą inline rozwiązany spacing (docDefaults + `w:pPr` łańcucha stylu tabeli, `TableStyleContext.ParagraphDefaultCss`) — eksport odporny na brak definicji stylu tabeli w regenerowanym pakiecie (wiersze nie puchną w Wordzie). Akapity body inline'u NIE dostają (interlinia z kontenera).
+   - Tabele: `<col data-w-tw>` = dokładne twips tblGrid (writer preferuje nad px dla gridCol/tcW; suma spanowanych kolumn dla scaleń; % nietykane; `syncTableColgroup` usuwa atrybut przy zmianie szerokości); tabela z `data-tbl-style` bez CSS `border:` → writer NIE emituje tblBorders (val=none nadpisywało styl); `data-no-borders="1"` → jawne none jak dotąd.
+   - Schemat OOXML: `NormalizeParagraphPropertiesOrder` (po `ApplyParagraphStyle`/`Extras` i po dołożeniu pStyle/tabs w `ConvertParagraphElement`), `NormalizeTableCellPropertiesOrder` (przed `cell.Append(cellProps)`), tcBorders top→left→bottom→right. Walidator (Office2013) na eksporcie qutable: 0 błędów.
+   - Testy: `DocumentDefaultsAndTableSpacingFidelityTests` 11/11 (Infrastructure 370/370; goldeny simple/merged-cells-table zregenerowane — diff tylko `data-w-tw`); GUI +4 specy (369/370, fail = pre-existing layout-shell); `ng build` + build sln OK.
+   - **Do rozważenia dalej (najwyższa dźwignia):** przełączyć ścieżkę Save/autosave na `ConvertPreservingPackage` (dziś tylko DownloadEdited) — pełny powrót definicji stylów tabel/motywu; wymaga `masterId` w `POST /document/save` (zmiana kontraktu — uzgodnić). Mniejsze: `tcMar` dryf 108→105 tw (kosmetyka), wrapper `<span>` wokół `&nbsp;` pustych akapitów po 1. zapisie (idempotentne), definicja stylu tabeli w regenerowanym pakiecie (odrzucone w ADR-0031 jako stratne — patrz alternatywy).
+
 ## Ostatnia aktualizacja (2026-07-07)
 
 - **Kotwiczenie elementów pływających jak w Wordzie — pełny round-trip textboxów + znacznik kotwicy (ADR-0030).**

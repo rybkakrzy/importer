@@ -43,6 +43,13 @@ export function syncTableColgroup(table: HTMLTableElement): void {
 
   Array.from(baseRow.cells).forEach((cell, i) => {
     const w = Math.round(cell.getBoundingClientRect().width);
-    if (w > 0) (colgroup!.children[i] as HTMLElement).style.width = `${w}px`;
+    if (w > 0) {
+      const col = colgroup!.children[i] as HTMLElement;
+      const newWidth = `${w}px`;
+      if (col.style.width !== newWidth) {
+        col.style.width = newWidth;
+        col.removeAttribute('data-w-tw');
+      }
+    }
   });
 }

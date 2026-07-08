@@ -264,8 +264,10 @@
   font-weight: 600;
 }
 
+/* Domyślny odstęp PO akapicie: z docDefaults dokumentu (--doc-par-margin ustawiane przez
+   wysiwyg-editor z data-default-after-tw kontenera), fallback = dotychczasowe 10px. */
 .editor-content p {
-  margin: 0 0 10px 0;
+  margin: 0 0 var(--doc-par-margin, 10px) 0;
 }
 
 .editor-content > p:last-child {
