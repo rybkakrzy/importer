@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocument;
+using D2ViewerEditor.Domain.Entities;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
 using FluentAssertions;
@@ -10,6 +11,8 @@ namespace D2ViewerEditor.Application.UnitTests.Features.Documents.Commands;
 [TestFixture]
 public class SaveDocumentCommandHandlerTests
 {
+    private const string DocxMime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
     private IHtmlToDocxConverter _converter;
     private SaveDocumentCommandHandler _handler;
 
@@ -241,5 +244,137 @@ public class SaveDocumentCommandHandlerTests
             Arg.Any<HeaderFooterContent?>(), Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(),
             Arg.Is<PageSize?>(p => p == null),
             Arg.Is<IReadOnlyList<SectionHeaderFooter>?>(s => s == null));
+    }
+
+    // ---------- pass-through (ADR-0031 follow-up): zapis z MasterId zachowuje pakiet oryginału ----------
+
+    private static Document DocxWithBaseVersion(out string storagePath)
+    {
+        var doc = new Document(Guid.NewGuid(), "doc.docx", DocxMime, "User", metadata: null);
+        storagePath = "documents/v1";
+        doc.AddVersion(Guid.NewGuid(), storagePath, 123, "User");
+        return doc;
+    }
+
+    private static SaveDocumentCommand CmdWithMaster(Guid masterId) =>
+        new(Html: "<p>Test</p>", OriginalFileName: "test.docx", Metadata: null,
+            Header: null, Footer: null, MasterId: masterId);
+
+    [Test]
+    public async Task Handle_WithMasterId_AndDocxBaseVersion_UsesPassThrough_NotRegeneration()
+    {
+        // Arrange — dokument DOCX z wersją bazową: zapis MUSI iść przez ConvertPreservingPackage,
+        // żeby styles.xml/theme/numbering oryginału (w tym definicje stylów tabel) przeżyły zapis.
+        var repo = Substitute.For<IDocumentRepository>();
+        var storage = Substitute.For<IDocumentStorageService>();
+        var doc = DocxWithBaseVersion(out var storagePath);
+        repo.GetByIdWithVersionsAsync(doc.Id, Arg.Any<CancellationToken>()).Returns(doc);
+        var original = new byte[] { 10, 20, 30 };
+        storage.DownloadAsync(storagePath, Arg.Any<CancellationToken>()).Returns(original);
+
+        var expected = new byte[] { 7, 7, 7 };
+        _converter.ConvertPreservingPackage(
+                Arg.Any<string>(), Arg.Any<Stream?>(), Arg.Any<DocumentMetadata?>(),
+                Arg.Any<HeaderFooterContent?>(), Arg.Any<HeaderFooterContent?>(),
+                Arg.Any<PageMargins?>(), Arg.Any<PageSize?>(), Arg.Any<IReadOnlyList<SectionHeaderFooter>?>())
+            .Returns(expected);
+
+        var handler = new SaveDocumentCommandHandler(_converter, repo, storage);
+
+        // Act
+        var result = await handler.Handle(CmdWithMaster(doc.Id), CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.DocxBytes.Should().Equal(expected);
+        await storage.Received(1).DownloadAsync(storagePath, Arg.Any<CancellationToken>());
+        _converter.DidNotReceive().Convert(
+            Arg.Any<string>(), Arg.Any<DocumentMetadata?>(), Arg.Any<HeaderFooterContent?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(), Arg.Any<PageSize?>(),
+            Arg.Any<IReadOnlyList<SectionHeaderFooter>?>());
+    }
+
+    [Test]
+    public async Task Handle_WithMasterId_ButNoBaseVersion_FallsBackToRegeneration()
+    {
+        var repo = Substitute.For<IDocumentRepository>();
+        var storage = Substitute.For<IDocumentStorageService>();
+        var doc = new Document(Guid.NewGuid(), "doc.docx", DocxMime, "User", metadata: null); // brak wersji
+        repo.GetByIdWithVersionsAsync(doc.Id, Arg.Any<CancellationToken>()).Returns(doc);
+        _converter.Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(), Arg.Any<HeaderFooterContent?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(), Arg.Any<PageSize?>(),
+            Arg.Any<IReadOnlyList<SectionHeaderFooter>?>()).Returns(new byte[] { 1 });
+
+        var handler = new SaveDocumentCommandHandler(_converter, repo, storage);
+
+        var result = await handler.Handle(CmdWithMaster(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _converter.Received(1).Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(),
+            Arg.Any<PageSize?>(), Arg.Any<IReadOnlyList<SectionHeaderFooter>?>());
+        await storage.DidNotReceive().DownloadAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Handle_WithMasterId_ButNonDocx_FallsBackToRegeneration()
+    {
+        var repo = Substitute.For<IDocumentRepository>();
+        var storage = Substitute.For<IDocumentStorageService>();
+        var doc = new Document(Guid.NewGuid(), "scan.pdf", "application/pdf", "User", metadata: null);
+        doc.AddVersion(Guid.NewGuid(), "documents/v1", 1, "User");
+        repo.GetByIdWithVersionsAsync(doc.Id, Arg.Any<CancellationToken>()).Returns(doc);
+        _converter.Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(), Arg.Any<HeaderFooterContent?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(), Arg.Any<PageSize?>(),
+            Arg.Any<IReadOnlyList<SectionHeaderFooter>?>()).Returns(new byte[] { 1 });
+
+        var handler = new SaveDocumentCommandHandler(_converter, repo, storage);
+
+        var result = await handler.Handle(CmdWithMaster(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _converter.Received(1).Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(),
+            Arg.Any<PageSize?>(), Arg.Any<IReadOnlyList<SectionHeaderFooter>?>());
+        await storage.DidNotReceive().DownloadAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Handle_PassThroughThrows_FallsBackToRegeneration_BestEffort()
+    {
+        // Uszkodzony/nieoczekiwany oryginał NIE może wywalić zapisu — best-effort fallback.
+        var repo = Substitute.For<IDocumentRepository>();
+        var storage = Substitute.For<IDocumentStorageService>();
+        var doc = DocxWithBaseVersion(out var storagePath);
+        repo.GetByIdWithVersionsAsync(doc.Id, Arg.Any<CancellationToken>()).Returns(doc);
+        storage.DownloadAsync(storagePath, Arg.Any<CancellationToken>())
+            .Returns<byte[]>(_ => throw new InvalidOperationException("GCS down"));
+        var expected = new byte[] { 9 };
+        _converter.Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(), Arg.Any<HeaderFooterContent?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(), Arg.Any<PageSize?>(),
+            Arg.Any<IReadOnlyList<SectionHeaderFooter>?>()).Returns(expected);
+
+        var handler = new SaveDocumentCommandHandler(_converter, repo, storage);
+
+        var result = await handler.Handle(CmdWithMaster(doc.Id), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value!.DocxBytes.Should().Equal(expected);
+    }
+
+    [Test]
+    public async Task Handle_MasterIdButNoStorageDeps_FallsBackToRegeneration()
+    {
+        // Handler skonstruowany bez repo/storage (np. ścieżka „nowy dokument") — MasterId ignorowane.
+        _converter.Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(), Arg.Any<HeaderFooterContent?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(), Arg.Any<PageSize?>(),
+            Arg.Any<IReadOnlyList<SectionHeaderFooter>?>()).Returns(new byte[] { 1 });
+
+        var result = await _handler.Handle(CmdWithMaster(Guid.NewGuid()), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _converter.Received(1).Convert(Arg.Any<string>(), Arg.Any<DocumentMetadata?>(),
+            Arg.Any<HeaderFooterContent?>(), Arg.Any<HeaderFooterContent?>(), Arg.Any<PageMargins?>(),
+            Arg.Any<PageSize?>(), Arg.Any<IReadOnlyList<SectionHeaderFooter>?>());
     }
 }

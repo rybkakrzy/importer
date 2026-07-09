@@ -11,6 +11,49 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-09 — Edytor: ENTER na dole strony przestaje ROZCIĄGAĆ kartkę i nie duplikuje treści — desync `[innerHTML]`↔contenteditable + strona o stałej wysokości (ADR-0032, +2 testy)
+
+### Changed
+- `wysiwyg-editor.ts`: po repaginacji `_repaginateNow` woła nowy `_syncPageEditorDom(newPageContents)` (w tym samym `setTimeout` co restore kursora) — WYMUSZA zgodność DOM edytorów stron z obliczonym rozkładem. Bez tego Angular pomijał nadpisanie `[innerHTML]` strony, której wartość SafeHtml się nie zmieniła (cache w `getPageContentSafe`), więc ŻYWE edycje użytkownika (dodane akapity) zostawały w DOM: strona rosła w pion, a nadmiar był DODATKOWO duplikowany na kolejne strony (i wchodził do zapisu przez `getContent`, który czyta DOM). Sync nadpisuje tylko rozjechane strony (guard `el.innerHTML !== desired`) i re-opakowuje obrazy.
+- `wysiwyg-editor.html` + `.scss`: `.page` ma teraz DEFINITYWNĄ `height` (było `min-height`) — dzięki temu flex ogranicza `.editor-content` (`overflow:hidden`), a nadmiar jest PRZYCINANY zamiast rozciągać kartkę. Strona nigdy nie przekracza formatu (jak MS Word); repaginacja przelewa nadmiar na kolejną stronę. `pageMinHeightPx` → `pageHeightPx`.
+
+### Verified
+- Realna przeglądarka (headless Chrome + CDP, auth off): PRZED — burst 45×ENTER rozciągał 1. stronę do 2300 px i tworzył 28 stron z fantomowymi pustymi akapitami (getContent duplikował treść); PO — 1. strona trzyma 1122 px (A4) przez cały burst, nadmiar spływa na kolejne strony, po ustabilizowaniu 3 strony A4, `getContent` = 34 unikalne akapity, ZERO duplikatów, ZERO utraty. Normalna pełna strona (50 akapitów) renderuje się bez przycięcia (`scrollHeight==clientHeight`).
+- `wysiwyg-editor.pagination-overflow.spec` **16/16** (+2 na `_syncPageEditorDom`), pełne specy `wysiwyg-editor` **89/89**, `ng build` (dev) 0 błędów (kontrola typów szablonu).
+
+### Notes
+- Zoom potwierdzony jako CZYSTO wizualny (`transform:scale` na `.editor-wrapper`, `transform-origin:top center`) — rozmiar strony (cm→px @96 DPI przez `CSS_PX_PER_CM`) i model są od zoomu niezależne, jak w Wordzie (pierwotne zgłoszenie „skalowanie względem zoomu" było OK; realny defekt to rozciąganie przy ENTER).
+- Skrajny przypadek: pojedynczy blok wyższy niż obszar treści strony jest teraz przycinany (wcześniej rozciągał kartkę) — akceptowalne (Word też nie zmieści bloku > strona); repaginacja i tak działa na całych blokach.
+
+## 2026-07-08 — Znaki z `w:sym` (strzałki/checkboxy z Symbol/Wingdings) widoczne w edytorze i w finalnym dokumencie (+6 testów)
+
+### Changed
+- **Reader (`DocxToHtmlConverter.ConvertRunChildToHtml`, gałąź `SymbolChar`)**: znaki wstawione przez „Wstaw → Symbol" (`w:sym w:font=... w:char=...`, np. strzałka z fontu Symbol, checkbox z Wingdings) były emitowane jako surowy punkt Private Use Area (`&#xF0E0;`), który BEZ zainstalowanego fontu symbolicznego renderuje się jako „tofu"/pusto, a po round-tripie wracał jako niewidoczny znak → „strzałki nie widać w edytorze i nie ma ich w finalnym dokumencie". Nowy `ConvertSymbolCharToHtml`: (1) **znane glify → prawdziwy Unicode** przez `MapSymbolCharToUnicode` (Symbol: ← ↑ → ↓ ↔ ⇐ ⇑ ⇒ ⇓ ⇔ ± ≤ ≥ ≠ ≈ × ÷ ∞ ° •; Wingdings: ☑ ☐ ✔ ■ •) — widoczne wszędzie i round-tripują jako zwykły tekst `w:t`; (2) **reszta → znak w ORYGINALNYM foncie glifowym** (`<span style="font-family:'Wingdings'">…</span>` z niskim bajtem, bo Word koduje symbol w PUA F000–F0FF = ten sam glif co 0xXX) — renderuje się tam, gdzie font jest (w Wordzie zawsze) i writer odtwarza `w:rFonts` z `font-family`, więc glif przeżywa zapis. Ignorowanie `sym.Font` było częścią buga (font symbolu bywa inny niż `w:rFonts` runa).
+- Zakres mapowania Unicode celowo wąski i pewny (strzałki + najczęstsze operatory/checkboxy); nieznane kody idą fallbackiem z fontem, żeby nie ryzykować błędnego odwzorowania.
+
+### Verified
+- Nowy `SymbolCharImportTests` **6/6** (Symbol → mapa Unicode dla PUA i raw byte, Wingdings checkbox → ☑, nieznany Wingdings → span z fontem zamiast niewidocznego PUA, round-trip strzałki jako tekst, round-trip nieznanego glifu z `w:rFonts=Wingdings`); Infrastructure **376/376**, golden bez zmian (ścieżka `SymbolChar` nietknięta przez istniejące snapshoty).
+
+### Notes
+- Zwykłe strzałki Unicode w treści (`w:t` z „→", np. z autokorekty „-->") działały już wcześniej (`EscapeHtml`=`WebUtility.HtmlEncode` zachowuje znaki ≥ U+0100 dosłownie; Latin-1 0xA0–0xFF kodowane jako `&#nnn;` i round-tripowane przez `HtmlDecode`) — bug dotyczył wyłącznie `w:sym`.
+- Nie odtwarzamy z powrotem elementu `w:sym` (mapowane glify wracają jako tekst, nieznane jako `w:t`+font) — wynik wizualnie identyczny w Wordzie, bez utraty danych. Pełny round-trip `w:sym`→`w:sym` = osobne zadanie, gdyby zależało na dokładnej tożsamości elementu.
+
+## 2026-07-08 — Zapis przez pass-through: definicje stylów tabel/motywu/numeracji przeżywają autosave (opcjonalny masterId w /save, +7 testów)
+
+### Changed
+- **Ścieżka zapisu `POST /document/save` używa `ConvertPreservingPackage`, gdy dostanie `masterId`** — domknięcie rekomendacji z ADR-0031 (i R-16/R-19). Dotąd zapis/autosave zawsze regenerował pakiet od zera (14 stylów, BEZ definicji stylów tabel — stąd `data-no-borders` od 2. otwarcia). Teraz gdy komenda niesie `masterId`, dokument jest DOCX i ma wersję bazową, handler wczytuje oryginalny pakiet z GCS i zachowuje `styles.xml`/`theme`/`fontTable`/`numbering` (38 stylów z definicją `Tabela-Siatka`). Weryfikacja harnessem na qutable: regeneracja = 14 stylów / brak definicji stylu tabeli; pass-through = 38 stylów / definicja obecna + theme + fontTable.
+- **Backend**: `SaveDocumentCommand`/`SaveDocumentRequest` (DTO API + TS) + `SaveDocumentCommand.MasterId` (opcjonalne, na końcu — wstecznie kompatybilne); `SaveDocumentCommandHandler` dostał opcjonalne `IDocumentRepository`/`IDocumentStorageService`/`ILogger` (nullable — czysta konwersja HTML→DOCX bez masterId, np. „nowy dokument"/testy, działa bez storage); `ConvertAsync` = pass-through gdy dane dostępne, best-effort fallback do `Convert` przy KAŻDYM błędzie (uszkodzony oryginał/GCS down nigdy nie wywala zapisu); `DocumentController.SaveDocument` przekazuje `request.MasterId`.
+- **GUI**: `buildSaveRequest()` dołącza `masterId: documentMasterId() ?? undefined` — wszystkie ścieżki przez `/document/save` (autosave, ręczny Zapisz, Pobierz, „Zakończ i wyślij") korzystają z pass-through dla istniejącego dokumentu; nowy dokument (brak masterId) → regeneracja jak dotąd. `SaveDocumentRequest` (TS) + `masterId?: string`.
+
+### Verified
+- `SaveDocumentCommandHandlerTests` +5 (pass-through gdy DOCX+wersja bazowa i BRAK wywołania `Convert`; fallback: brak wersji / nie-DOCX / wyjątek pass-through / brak wstrzykniętego storage) → 13/13; Application **311/311**, Api **130/130**, build solucji 0 błędów.
+- GUI: `document-editor.spec` +2 (masterId w request; null → undefined) → **371/372** (jedyny fail pre-existing `spec-layout-shell`); `ng build` OK.
+- Harness pass-through vs regeneracja na realnym qutable potwierdza zachowanie stylów/theme/fontTable.
+
+### Notes
+- Pass-through zachowuje definicje z ORYGINAŁU (v1). Body/sectPr/nagłówki/obrazy/numeracja list z edytora są nadal generowane (jak w Download) — to samo zachowanie co sprawdzona ścieżka „Pobierz". `numbering.xml` oryginału przenoszony (R-19 złagodzone dla tej ścieżki, ale listy z edytora nadal generują własną numerację).
+- Sign (`FinishAndSend`/podpis) nie był w zakresie — nadal regeneruje; do rozważenia analogiczny masterId, jeśli podpisywane dokumenty tracą style.
+
 ## 2026-07-08 — Domyślne odstępy/interlinia dokumentu i tabele przestają się psuć po zapisie (ADR-0031, +15 testów)
 
 ### Changed

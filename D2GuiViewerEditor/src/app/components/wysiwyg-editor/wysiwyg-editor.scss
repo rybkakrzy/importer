@@ -24,7 +24,11 @@
 
 .page {
   width: 794px; /* 21cm * 96 DPI / 2.54 = 793.7px */
-  min-height: 1122px; /* 29.7cm * 96 DPI / 2.54 */
+  /* DEFINITYWNA wysokość (nie min-height): dzięki temu flex ogranicza `.editor-content`,
+     a `overflow:hidden` na nim PRZYCINA nadmiar zamiast rozciągać kartkę w pion — strona
+     nigdy nie przekracza formatu (jak w MS Word), a repaginacja przelewa nadmiar na kolejną
+     stronę. Realna wartość nadawana inline z geometrii (`pageHeightPx`); ta jest fallbackiem. */
+  height: 1122px; /* 29.7cm * 96 DPI / 2.54 */
   background: white;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   position: relative;
@@ -36,7 +40,7 @@
 
 .page.landscape {
   width: 1122px;
-  min-height: 794px;
+  height: 794px;
 }
 
 /* Separator między stronami - styl Google Docs */

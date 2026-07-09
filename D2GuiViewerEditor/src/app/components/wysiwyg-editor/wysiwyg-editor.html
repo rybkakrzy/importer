@@ -7,7 +7,7 @@
         <div class="page"
              [class.landscape]="isLandscapePage($index)"
              [style.width.px]="pageWidthPx($index)"
-             [style.min-height.px]="pageMinHeightPx($index)"
+             [style.height.px]="pageHeightPx($index)"
              [attr.data-page-number]="$index + 1">
 
           <!-- Nagłówek strony: zaczyna się headerDistance od krawędzi (w:pgMar header),

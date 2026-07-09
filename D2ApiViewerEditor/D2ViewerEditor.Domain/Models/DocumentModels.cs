@@ -158,6 +158,9 @@ public class SaveDocumentRequest
     public PageMargins? Margins { get; set; }
     public PageSize? PageSize { get; set; }
     public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
+    /// <summary>Opcjonalne: gdy podane, zapis idzie przez pass-through oryginalnego pakietu
+    /// (zachowuje styles.xml/theme/fontTable/numbering). Brak → pełna regeneracja jak dotąd.</summary>
+    public Guid? MasterId { get; set; }
 }
 
 /// <summary>

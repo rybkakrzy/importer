@@ -3107,14 +3107,111 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             case SoftHyphen _:
                 return "&shy;";
             case SymbolChar sym:
-                if (sym.Char?.Value != null)
-                {
-                    try { return $"&#x{sym.Char.Value};"; } catch { return string.Empty; }
-                }
-                return string.Empty;
+                return ConvertSymbolCharToHtml(sym);
             default:
                 return string.Empty;
         }
+    }
+
+    /// <summary>
+    /// Fonty, których znaki są kodowane w układzie GLYFOWYM (a nie Unicode) — kod znaku to
+    /// pozycja w foncie, nie punkt kodowy. Dla nich zwykły znak z niskiego bajtu renderuje się
+    /// poprawnie tylko z tym konkretnym fontem (Word ma je zawsze), więc emitujemy go w spanie
+    /// z font-family (writer odtwarza <c>w:rFonts</c>, glif przeżywa round-trip).
+    /// </summary>
+    private static readonly HashSet<string> GlyphEncodedFonts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Wingdings", "Wingdings 2", "Wingdings 3", "Webdings", "Symbol"
+    };
+
+    /// <summary>
+    /// Konwertuje <c>w:sym</c> (znak z tablicy symboli, np. strzałka z fontu Symbol albo checkbox
+    /// z Wingdings) na widoczny HTML. Wcześniej reader emitował surowy punkt kodowy z Private Use
+    /// Area (<c>&amp;#xF0E0;</c>), który BEZ fontu symbolicznego renderuje się jako „tofu"/pusto,
+    /// a po round-tripie wracał jako niewidoczny znak — stąd „strzałki nie widać w edytorze i nie
+    /// ma jej w finalnym dokumencie". Teraz: (1) znane glify → prawdziwy Unicode (widoczny wszędzie),
+    /// (2) reszta → znak w oryginalnym foncie symbolicznym (renderuje się tam, gdzie font jest
+    /// zainstalowany — w Wordzie zawsze — i round-tripuje jako <c>w:rFonts</c> + tekst).
+    /// </summary>
+    private string ConvertSymbolCharToHtml(SymbolChar sym)
+    {
+        var hex = sym.Char?.Value;
+        if (string.IsNullOrEmpty(hex)) return string.Empty;
+
+        int codePoint;
+        try { codePoint = System.Convert.ToInt32(hex, 16); }
+        catch { return string.Empty; }
+
+        var font = sym.Font?.Value ?? string.Empty;
+
+        // Word często koduje symbol w Private Use Area (F000..F0FF) — to ten sam glif co 0xXX,
+        // tylko „przesunięty". Do mapowania i do renderu przez font glifowy liczy się młodszy bajt.
+        bool isPuaShifted = codePoint >= 0xF000 && codePoint <= 0xF0FF;
+        int low = isPuaShifted ? codePoint & 0xFF : codePoint;
+
+        // (1) Znany glif → prawdziwy Unicode: widoczny bez fontu symbolicznego i round-tripuje
+        // jako zwykły tekst (traci font symboliczny, ale wygląda identycznie — np. strzałka →).
+        var mapped = MapSymbolCharToUnicode(low, font);
+        if (mapped != null) return EscapeHtml(mapped);
+
+        // (2) Brak mapowania: zachowaj znak w ORYGINALNYM foncie glifowym.
+        string glyph;
+        try { glyph = char.ConvertFromUtf32(GlyphEncodedFonts.Contains(font) || isPuaShifted ? low : codePoint); }
+        catch { return string.Empty; }
+
+        if (!string.IsNullOrEmpty(font) && (GlyphEncodedFonts.Contains(font) || isPuaShifted))
+            return $"<span style=\"font-family:'{EscapeHtml(font)}'\">{EscapeHtml(glyph)}</span>";
+        return EscapeHtml(glyph);
+    }
+
+    /// <summary>
+    /// Mapuje kod znaku z fontu symbolicznego (Symbol/Wingdings) na odpowiadający punkt Unicode,
+    /// albo <c>null</c> gdy nie znamy pewnego odwzorowania (wtedy woła się fallback z fontem).
+    /// Zakres celowo wąski i pewny: strzałki + najczęstsze operatory (Symbol) oraz checkboxy/haczyki
+    /// (Wingdings). Reszta glifów wraca fallbackiem, żeby nie ryzykować błędnego mapowania.
+    /// </summary>
+    private static string? MapSymbolCharToUnicode(int low, string font)
+    {
+        if (font.Equals("Symbol", StringComparison.OrdinalIgnoreCase))
+        {
+            return low switch
+            {
+                0xAB => "↔", // ↔
+                0xAC => "←", // ←
+                0xAD => "↑", // ↑
+                0xAE => "→", // →
+                0xAF => "↓", // ↓
+                0xDA => "⇔", // ⇔
+                0xDB => "⇐", // ⇐
+                0xDC => "⇑", // ⇑
+                0xDD => "⇒", // ⇒
+                0xDE => "⇓", // ⇓
+                0xB1 => "±", // ±
+                0xA3 => "≤", // ≤
+                0xB3 => "≥", // ≥
+                0xB9 => "≠", // ≠
+                0xBB => "≈", // ≈
+                0xB4 => "×", // ×
+                0xB8 => "÷", // ÷
+                0xA5 => "∞", // ∞
+                0xB0 => "°", // °
+                0xB7 => "•", // •
+                _ => null
+            };
+        }
+        if (font.StartsWith("Wingdings", StringComparison.OrdinalIgnoreCase))
+        {
+            return low switch
+            {
+                0xFE => "☑", // ☑ zaznaczony checkbox
+                0xA8 => "☐", // ☐ pusty checkbox
+                0xFC => "✔", // ✔ haczyk
+                0xA7 => "■", // ■ wypełniony kwadrat
+                0x6C => "•", // • bullet
+                _ => null
+            };
+        }
+        return null;
     }
 
     /// <summary>

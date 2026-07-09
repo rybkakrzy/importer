@@ -260,4 +260,54 @@ describe('WysiwygEditorComponent — przepełnienie strony tworzy nową stronę 
       expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
     });
   });
+
+  /**
+   * Regresja (potwierdzona w realnej przeglądarce, headless CDP): „ENTER na dole strony
+   * rozciągał kartkę w nieskończoność i nie schodził na kolejną stronę, dopóki pisanie trwało".
+   *
+   * Root cause: Angular NIE nadpisuje `[innerHTML]`, gdy obliczona treść strony jest wartościowo
+   * taka sama jak ostatnio zbindowana (SafeHtml cache w `getPageContentSafe`). Strona, w którą
+   * użytkownik pisze, ma w DOM ŻYWE edycje (dodane akapity) nieznane sygnałowi — więc jej DOM
+   * rozjeżdża się z paginacją: rośnie w pion (przepełnienie nie schodzi), a nadmiar jest
+   * DODATKOWO duplikowany na dalsze strony (i wchodzi do zapisu przez getContent).
+   * Fix: `_syncPageEditorDom` po repaginacji wymusza zgodność DOM edytorów z rozkładem.
+   *
+   * Te testy pinują sam kontrakt synchronizacji (measurer/layout nie są potrzebne).
+   */
+  describe('_syncPageEditorDom — wymusza zgodność DOM edytora z paginacją (desync SafeHtml cache)', () => {
+    function editorsWith(...htmls: string[]): HTMLElement[] {
+      const refs = htmls.map(html => {
+        const el = document.createElement('div');
+        el.className = 'editor-content';
+        el.innerHTML = html;
+        document.body.appendChild(el);
+        bodyEditors.push(el);
+        return el;
+      });
+      (component as any).pageEditorRefs = { toArray: () => refs.map(nativeElement => ({ nativeElement })) };
+      return refs;
+    }
+
+    it('nadpisuje DOM strony rozjechanej z obliczoną treścią (żywe edycje użytkownika po ENTER)', () => {
+      // DOM strony 0 ma 3 „żywe" bloki (użytkownik dopisał enterami); paginacja wylicza,
+      // że tylko 1 blok mieści się na stronie 0, reszta na stronie 1.
+      const [p0, p1] = editorsWith('<p>1</p><p>2</p><p>3</p>', '<p></p>');
+
+      (component as any)._syncPageEditorDom(['<p>1</p>', '<p>2</p><p>3</p>']);
+
+      // Strona 0 zresetowana do 1 bloku (nie rośnie), nadmiar zszedł na stronę 1 (bez duplikacji).
+      expect(p0.innerHTML).toBe('<p>1</p>');
+      expect(p1.innerHTML).toBe('<p>2</p><p>3</p>');
+    });
+
+    it('nie rusza stron już zgodnych (bez zbędnego churnu / utraty kursora)', () => {
+      const [p0] = editorsWith('<p>ok</p>');
+      const nodeBefore = p0.querySelector('p');
+
+      (component as any)._syncPageEditorDom(['<p>ok</p>']);
+
+      // Ten sam węzeł — innerHTML nie zostało przepisane (zachowany kursor/selekcja).
+      expect(p0.querySelector('p')).toBe(nodeBefore);
+    });
+  });
 });

@@ -14,6 +14,26 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0032: Paginacja edytora wymusza DOM = obliczony rozkład (`_syncPageEditorDom`); strona ma stałą wysokość zamiast `min-height`
+
+- Date: 2026-07-09
+- Status: Accepted
+
+### Context
+Zgłoszenie: ENTER przekraczający dolną krawędź strony ROZCIĄGAŁ kartkę w nieskończoność zamiast przelać treść na kolejną stronę (efekt utrzymywał się „dopóki użytkownik nie przestał wciskać ENTER"). Wcześniejsze podejścia (2026-07-05 pomiar bloków w kontekście `.editor-content`, 2026-07-07 natychmiastowa repaginacja na rAF + `scrollIntoView`, `overflow:hidden` na `.editor-content`) NIE rozwiązały problemu, a testy jednostkowe (jsdom, stubowane wysokości) go nie wykrywały. Reprodukcja w realnej przeglądarce (headless Chrome + CDP) ujawniła DWIE przyczyny u źródła:
+1. **Desync `[innerHTML]`↔contenteditable.** `_repaginateNow` czyta bloki z DOM stron, redystrybuuje wg zmierzonej wysokości i woła `pageContents.set(...)`. Ale `getPageContentSafe` cache'uje `SafeHtml` per wartość HTML (celowo — bez tego każde CD rebindowałoby innerHTML i kasowało kursor), więc gdy obliczona treść strony jest wartościowo identyczna z ostatnio zbindowaną, Angular NIE nadpisuje jej DOM. Strona, w którą użytkownik pisze, ma w DOM ŻYWE dopisane akapity nieznane sygnałowi → nigdy nie jest resetowana do rozkładu paginacji: rośnie w pion, a jej nadmiar jest DODATKOWO powielany na kolejne strony. Ponieważ `getContent()` serializuje ŻYWY DOM, defekt trafiał też do ZAPISU (duplikacja/korupcja treści; empirycznie +8 fantomowych pustych akapitów na wywołanie repaginacji).
+2. **CSS.** `.page` używała `min-height` a `.editor-content` `flex:1`. Flex-kontener o wysokości `auto` rośnie do max-content swoich dzieci, więc reguła „`overflow` ≠ visible ⇒ automatyczne `min-height:0`" nie dawała przycięcia — kartka po prostu się rozciągała (45×ENTER → 1. strona 2300 px, licznik „Strona 2 z 28").
+
+### Decision
+1. **`_syncPageEditorDom(pageContents)`** wołane po `pageContents.set(...)` (w tym samym `setTimeout(…,0)` co `_restoreGlobalCaret`) wymusza `ref.nativeElement.innerHTML = pageContents[i]` dla stron, których DOM rozjechał się z obliczonym rozkładem (guard `el.innerHTML !== desired` — strony zgodne nietknięte, brak churnu/utraty kursora), i re-opakowuje obrazy (`wrapExistingImages`). To domyka pętlę: Angular tworzy właściwą LICZBĘ stron przez sygnał, a sync gwarantuje ich TREŚĆ.
+2. **`.page` ma definitywną `height`** (`pageHeightPx`, z geometrii sekcji cm→px) zamiast `min-height`. Flex ogranicza `.editor-content` do dostępnej wysokości, `overflow:hidden` przycina nadmiar, kartka nigdy nie przekracza formatu (jak MS Word). Nagłówek/stopka (pasma `min-height`) nadal mogą rosnąć i spychać body (flex-shrink) — zachowane.
+
+### Consequences
+Realna przeglądarka PO: 1. strona trzyma 1122 px (A4) przez cały burst 45×ENTER, nadmiar spływa na kolejne strony, po ustabilizowaniu 3 strony A4; `getContent` = 34 unikalne akapity, ZERO duplikatów/utraty; pełna strona 50 akapitów renderuje się bez przycięcia. Zoom pozostaje czysto wizualny (`transform:scale` na `.editor-wrapper`) — rozmiar strony i model niezależne od zoomu jak w Wordzie. Testy: `wysiwyg-editor.pagination-overflow.spec` 16/16 (+2 na `_syncPageEditorDom`), `wysiwyg-editor` 89/89, `ng build` 0 błędów. **Ograniczenie**: pojedynczy blok wyższy niż obszar treści strony jest teraz przycinany (wcześniej rozciągał kartkę) — akceptowalne (Word też nie zmieści bloku > strona); repaginacja operuje na całych blokach.
+
+### Alternatives considered
+(a) Bust cache SafeHtml (nowy obiekt per CD dla rozjechanej strony) — odrzucone: wraca pierwotny problem kasowania kursora/rebindowania (powód istnienia cache). (b) Aktualizacja sygnału `pageContents` na każdym `input` żeby DOM i sygnał się nie rozjeżdżały — odrzucone: ciężki churn + rebinding innerHTML przy pisaniu. (c) Pozostawienie `min-height` i poleganie wyłącznie na szybszej repaginacji — odrzucone: pod szybkim strumieniem ENTER (brak klatek) kartka nadal chwilowo rośnie; definitywna wysokość eliminuje rozciąganie NIEZALEŻNIE od tempa repaginacji. (d) Wirtualizowana/oddzielona warstwa layoutu od contenteditable (pełny rewrite paginacji) — poza zakresem; obecny fix jest mały i punktowy.
+
 ## ADR-0031: Domyślne wartości dokumentu (docDefaults) round-tripują przez kontener `.document-content`; spacing stylu tabeli zapiekany inline w komórkach
 
 - Date: 2026-07-08
@@ -33,7 +53,7 @@ Zapis z edytora (autosave / „Zakończ") idzie przez pełną regenerację pakie
 Round-trip qutable (12pt/278 + Tabela–Siatka + gridSpan/vAlign/jc/trHeight): eksport zachowuje rozmiar/interlinię/odstępy, komórki niosą `w:spacing after=0 line=240`, tblGrid `3020/3021/3021` bez dryfu, walidator OOXML (Office2013) 0 błędów (było 52). Edytor renderuje odstępy między akapitami i interlinię z dokumentu zamiast sztywnych 10px. Pozostałości: `data-no-borders` pojawia się od 2. otwarcia regenerowanego pakietu (brak definicji stylu tabeli — obramowania i tak zapieczone per komórka); definicje stylów tabel wracają w pełni tylko przez `ConvertPreservingPackage` (dziś Download) — docelowo Save powinien dostać pass-through (wymaga masterId w `POST /document/save`, zmiana kontraktu do ustalenia).
 
 ### Alternatives considered
-(a) Inline'owanie docDefaults spacing na KAŻDYM akapicie body — odrzucone: masywny churn HTML/goldenów i zamiana formatowania stylowego na bezpośrednie w całym dokumencie; kontener załatwia to samo bez churnu. (b) Emisja definicji stylu tabeli do regenerowanego styles.xml — odrzucone: rekonstrukcja stylu z resolved CSS jest stratna i dubluje pass-through; inline spacing komórek pokrywa jedyną realną stratę. (c) Przeniesienie Save na ConvertPreservingPackage — właściwe docelowo, ale to zmiana kontraktu API (masterId w request) — zostawione jako następny krok.
+(a) Inline'owanie docDefaults spacing na KAŻDYM akapicie body — odrzucone: masywny churn HTML/goldenów i zamiana formatowania stylowego na bezpośrednie w całym dokumencie; kontener załatwia to samo bez churnu. (b) Emisja definicji stylu tabeli do regenerowanego styles.xml — odrzucone: rekonstrukcja stylu z resolved CSS jest stratna i dubluje pass-through; inline spacing komórek pokrywa jedyną realną stratę. (c) Przeniesienie Save na ConvertPreservingPackage — właściwe docelowo, ale to zmiana kontraktu API (masterId w request) — zostawione jako następny krok. **ZREALIZOWANE 2026-07-08:** opcjonalny `masterId` w `POST /document/save` (wstecznie kompatybilne) → `SaveDocumentCommandHandler` robi pass-through gdy masterId + DOCX + wersja bazowa, best-effort fallback do regeneracji; harness potwierdza powrót definicji stylów tabel (14→38 stylów). To domyka główną stratę — inline spacing komórek zostaje jako zabezpieczenie dla ścieżki regeneracji (nowy dokument / Sign).
 
 ## ADR-0030: Model kotwicy elementów pływających = pozycja w DOM; pola tekstowe round-tripują jako wps:wsp
 

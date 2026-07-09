@@ -622,6 +622,22 @@ describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () 
 
     expect(req.pageSize).toBeUndefined();
   });
+
+  it('buildSaveRequest niesie masterId → backend zapisuje przez pass-through (style tabel przeżywają)', () => {
+    component.documentMasterId.set('m-42');
+
+    const req = (component as any).buildSaveRequest();
+
+    expect(req.masterId).toBe('m-42');
+  });
+
+  it('bez masterId (np. nowy dokument) request ma masterId undefined → regeneracja', () => {
+    component.documentMasterId.set(null);
+
+    const req = (component as any).buildSaveRequest();
+
+    expect(req.masterId).toBeUndefined();
+  });
 });
 
 /**

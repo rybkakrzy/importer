@@ -749,7 +749,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       footer: this.footerContent(),
       margins: this.pageSettings().margins,
       pageSize: this.documentPageSize(),
-      sectionHeadersFooters: this.sectionHeadersFooters() ?? undefined
+      sectionHeadersFooters: this.sectionHeadersFooters() ?? undefined,
+      // Pass-through: backend zachowa style tabel/motyw/numerację oryginału (definicje,
+      // nie tylko formatowanie bezpośrednie). Brak masterId (np. nowy dokument) → regeneracja.
+      masterId: this.documentMasterId() ?? undefined
     };
   }
 

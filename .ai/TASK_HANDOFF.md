@@ -2,7 +2,29 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-07-09)
+
+- **Edytor: ENTER na dole strony nie rozciąga już kartki i nie duplikuje treści (ADR-0032).**
+   - Dwie przyczyny (zdiagnozowane w REALNEJ przeglądarce przez headless Chrome + CDP — jsdom/stubowane testy tego nie łapały): (1) desync — Angular nie nadpisuje `[innerHTML]` strony o niezmienionej wartości SafeHtml (cache w `getPageContentSafe`), więc strona z żywymi edycjami użytkownika nie jest resetowana do rozkładu paginacji (rośnie w pion + duplikuje nadmiar na kolejne strony i do `getContent`/zapisu); (2) CSS — `.page{min-height}` + `.editor-content{flex:1}` pozwalały flex-kontenerowi rosnąć do max-content, więc `overflow:hidden` nie przycinał.
+   - Fix: `_syncPageEditorDom(newPageContents)` po repaginacji wymusza `innerHTML` edytorów = obliczony rozkład (tylko rozjechane strony, guard `!==`, re-wrap obrazów); `.page` ma definitywną `height` (`pageHeightPx`, było `pageMinHeightPx`/`min-height`).
+   - Zoom był OK od początku (czysto wizualny `transform:scale` na `.editor-wrapper`) — rozmiar strony/model niezależne od zoomu jak w Wordzie.
+   - Weryfikacja: CDP — 1122 px (A4) przez cały burst 45×ENTER, po ustabilizowaniu 3 strony A4, `getContent` 34 unikalne akapity bez duplikatów/utraty, pełna strona 50 akapitów bez przycięcia; `pagination-overflow.spec` 16/16 (+2), `wysiwyg-editor` 89/89, `ng build` 0 błędów.
+   - **Do rozważenia dalej:** repaginacja nadal opiera się na klonowaniu bloków + redystrybucji `innerHTML` (kruche przy jednoczesnym pisaniu i re-renderze) — docelowo warto oddzielić warstwę layoutu/paginacji od contenteditable; pojedynczy blok wyższy niż strona jest teraz przycinany (świadome ograniczenie).
+   - **Narzędzie (scratchpad, nietrwałe):** driver CDP `cdp-drive.mjs`/`probe*.mjs` odtwarza scenariusz ENTER na realnym layoucie (wzorzec ze skilla `verify`: auth off w `config.json`, `ng serve --port 4299`, headless Chrome `--remote-debugging-port`). Przydatny do regresji rozciągania/duplikacji, których jsdom nie wykryje.
+
 ## Ostatnia aktualizacja (2026-07-08)
+
+- **Znaki `w:sym` (Symbol/Wingdings) widoczne i round-tripujące.**
+   - Objaw: strzałki i inne znaki „Wstaw → Symbol" niewidoczne w edytorze i gubione przy zapisie. Root cause: reader (`DocxToHtmlConverter.ConvertRunChildToHtml`, gałąź `SymbolChar`) emitował surowy PUA `&#xF0E0;` (tofu bez fontu symbolicznego) i IGNOROWAŁ `sym.Font`.
+   - Fix: `ConvertSymbolCharToHtml` + `MapSymbolCharToUnicode` — znane glify (strzałki/operatory Symbol, checkboxy/haczyk Wingdings) → prawdziwy Unicode (tekst, widoczny wszędzie, round-trip jako `w:t`); nieznane → znak (niski bajt) w spanie z ORYGINALNYM fontem glifowym (`font-family`), który writer odtwarza jako `w:rFonts` → glif przeżywa zapis i jest poprawny w Wordzie. Zwykłe strzałki Unicode w `w:t` działały już wcześniej.
+   - Testy: `SymbolCharImportTests` 6/6, Infrastructure **376/376**, golden bez zmian.
+   - **Do rozważenia dalej:** rozszerzyć `MapSymbolCharToUnicode` o więcej pewnych glifów (np. Symbol → greka, dokładne strzałki Wingdings) i/lub pełny round-trip `w:sym`→`w:sym` (dziś mapowane wracają jako tekst, nieznane jako `w:t`+font — bez utraty danych, ale bez tożsamości elementu).
+
+- **Zapis przez pass-through (domknięcie ADR-0031).**
+   - `POST /document/save` używa `ConvertPreservingPackage`, gdy request niesie `masterId` (opcjonalne pole na `SaveDocumentCommand`/`SaveDocumentRequest` + TS). Handler ma teraz opcjonalne `IDocumentRepository`/`IDocumentStorageService`/`ILogger` (nullable): jest masterId + DOCX + wersja bazowa → wczytuje oryginał z GCS i zachowuje `styles.xml`/`theme`/`fontTable`/`numbering`; brak / błąd / uszkodzony oryginał → **best-effort fallback** do `Convert` (zapis nigdy się nie wywala).
+   - GUI: `buildSaveRequest()` dokłada `masterId: documentMasterId() ?? undefined` — autosave/Zapisz/Pobierz/Zakończ dla ISTNIEJĄCEGO dokumentu idą pass-through; nowy dokument (brak masterId) → regeneracja.
+   - Dowód: harness `passthrough` na qutable — regeneracja 14 stylów / brak definicji `Tabela-Siatka`; pass-through 38 stylów / definicja obecna + theme + fontTable. Testy: `SaveDocumentCommandHandlerTests` 13/13 (+5), Application 311/311, Api 130/130; GUI `document-editor.spec` +2 (371/372, fail = pre-existing layout-shell); build sln + `ng build` OK.
+   - **Do rozważenia dalej:** Sign/`FinishAndSend` nadal regeneruje pakiet (nie dostał masterId) — jeśli PODPISYWANE dokumenty tracą style tabel, dołożyć tam analogiczny pass-through (`SignDocumentCommand` ma dostęp do dokumentu). `numbering.xml` oryginału jest przenoszony, ale listy tworzone w edytorze nadal generują własną numerację (R-19 — pełne remapowanie numId poza zakresem).
 
 - **Domyślne odstępy/interlinia dokumentu + tabele nie psują się po zapisie (ADR-0031).**
    - Kontrakt: reader emituje na `.document-content` font + `data-default-before/after-tw`/`data-default-line`/`data-default-line-rule` + `line-height`; writer (`CaptureDocumentDefaults`) odtwarza z nich docDefaults/Normal regenerowanego pakietu; GUI (`_captureDocumentDefaults`/`_wrapWithDocumentContainer`) rozwija wrapper przy imporcie i owija treść z powrotem w `getContent()` — bez tego writer w produkcyjnym zapisie nie widzi domyślnych wartości dokumentu.
@@ -10,7 +32,7 @@
    - Tabele: `<col data-w-tw>` = dokładne twips tblGrid (writer preferuje nad px dla gridCol/tcW; suma spanowanych kolumn dla scaleń; % nietykane; `syncTableColgroup` usuwa atrybut przy zmianie szerokości); tabela z `data-tbl-style` bez CSS `border:` → writer NIE emituje tblBorders (val=none nadpisywało styl); `data-no-borders="1"` → jawne none jak dotąd.
    - Schemat OOXML: `NormalizeParagraphPropertiesOrder` (po `ApplyParagraphStyle`/`Extras` i po dołożeniu pStyle/tabs w `ConvertParagraphElement`), `NormalizeTableCellPropertiesOrder` (przed `cell.Append(cellProps)`), tcBorders top→left→bottom→right. Walidator (Office2013) na eksporcie qutable: 0 błędów.
    - Testy: `DocumentDefaultsAndTableSpacingFidelityTests` 11/11 (Infrastructure 370/370; goldeny simple/merged-cells-table zregenerowane — diff tylko `data-w-tw`); GUI +4 specy (369/370, fail = pre-existing layout-shell); `ng build` + build sln OK.
-   - **Do rozważenia dalej (najwyższa dźwignia):** przełączyć ścieżkę Save/autosave na `ConvertPreservingPackage` (dziś tylko DownloadEdited) — pełny powrót definicji stylów tabel/motywu; wymaga `masterId` w `POST /document/save` (zmiana kontraktu — uzgodnić). Mniejsze: `tcMar` dryf 108→105 tw (kosmetyka), wrapper `<span>` wokół `&nbsp;` pustych akapitów po 1. zapisie (idempotentne), definicja stylu tabeli w regenerowanym pakiecie (odrzucone w ADR-0031 jako stratne — patrz alternatywy).
+   - **ZROBIONE (patrz wpis pass-through wyżej):** Save/autosave przełączone na `ConvertPreservingPackage` przez opcjonalny `masterId` w `/save` — definicje stylów tabel/motywu wracają dla istniejących dokumentów. Pozostałe drobne: `tcMar` dryf 108→105 tw (kosmetyka), wrapper `<span>` wokół `&nbsp;` pustych akapitów po 1. zapisie (idempotentne) — oba nieszkodliwe i dotyczą już tylko ścieżki regeneracji (nowy dokument).
 
 ## Ostatnia aktualizacja (2026-07-07)
 

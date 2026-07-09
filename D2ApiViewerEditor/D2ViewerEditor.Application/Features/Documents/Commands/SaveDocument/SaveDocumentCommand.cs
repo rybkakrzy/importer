@@ -15,7 +15,11 @@ public record SaveDocumentCommand(
     HeaderFooterContent? Footer,
     PageMargins? Margins = null,
     PageSize? PageSize = null,
-    List<SectionHeaderFooter>? SectionHeadersFooters = null
+    List<SectionHeaderFooter>? SectionHeadersFooters = null,
+    // Gdy podane i dokument to DOCX z wersją bazową — konwersja idzie przez
+    // ConvertPreservingPackage (zachowuje styles.xml/theme/fontTable/numbering oryginału),
+    // więc definicje stylów tabel/motywu przeżywają zapis. Brak → pełna regeneracja (jak dotąd).
+    Guid? MasterId = null
 ) : IRequest<Result<SaveDocumentResult>>;
 
 public record SaveDocumentResult(byte[] DocxBytes, string FileName);

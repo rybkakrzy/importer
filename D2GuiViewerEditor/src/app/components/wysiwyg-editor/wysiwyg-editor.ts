@@ -177,7 +177,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   pageWidthPx(index: number): number {
     return this.geometryFor(index).widthCm * CSS_PX_PER_CM;
   }
-  pageMinHeightPx(index: number): number {
+  pageHeightPx(index: number): number {
     return this.geometryFor(index).heightCm * CSS_PX_PER_CM;
   }
   isLandscapePage(index: number): boolean {
@@ -3989,7 +3989,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         && current.every((v, i) => v === newPageContents[i]);
       if (!identical) {
         this.pageContents.set(newPageContents);
-        setTimeout(() => this._restoreGlobalCaret(caret), 0);
+        setTimeout(() => {
+          // KRYTYCZNE: Angular NIE nadpisuje `[innerHTML]`, gdy obliczona treść strony jest
+          // wartościowo taka sama jak ostatnio zbindowana (SafeHtml cache, patrz `_safeHtmlCache`).
+          // Ale strona, w którą użytkownik właśnie pisze, ma w DOM ŻYWE edycje (dodane akapity),
+          // których sygnał nie zna — więc jej DOM rozjeżdża się z paginacją: strona rośnie w pion
+          // (przepełnienie nie schodzi na kolejną), a nadmiar jest DODATKOWO duplikowany na dalsze
+          // strony (i trafia do zapisu przez getContent). Dlatego po repaginacji WYMUSZAMY zgodność
+          // DOM edytorów z obliczonym rozkładem, zanim przywrócimy kursor.
+          this._syncPageEditorDom(newPageContents);
+          this._restoreGlobalCaret(caret);
+        }, 0);
       }
       this.calculatePages();
       // Repaginacja przenosi bloki między stronami — znacznik kotwicy musi pojechać
@@ -4372,6 +4382,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       blockBase += blocks.length;
     }
     return null;
+  }
+
+  /**
+   * Wymusza zgodność DOM edytorów stron z obliczonym rozkładem paginacji. Angular pomija
+   * nadpisanie `[innerHTML]`, gdy wartość SafeHtml się nie zmieniła (cache) — więc strona,
+   * w którą użytkownik pisze (żywe edycje w DOM, nieznane sygnałowi), NIE jest resetowana do
+   * paginowanej treści: rośnie w pion i duplikuje nadmiar na dalsze strony. Nadpisujemy DOM
+   * tylko tych stron, które faktycznie się rozjechały (bez zbędnego churnu i utraty kursora na
+   * stronach już zgodnych), i re-opakowujemy obrazy w nadpisanej treści.
+   */
+  private _syncPageEditorDom(pageContents: string[]): void {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const n = Math.min(refs.length, pageContents.length);
+    for (let i = 0; i < n; i++) {
+      const el = refs[i].nativeElement;
+      const desired = pageContents[i];
+      if (el.innerHTML !== desired) {
+        el.innerHTML = desired;
+        this.wrapExistingImages(el);
+      }
+    }
   }
 
   /** Przywraca kursor wg kotwicy { blok, offset }. */

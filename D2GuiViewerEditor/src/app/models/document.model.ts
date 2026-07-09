@@ -166,6 +166,9 @@ export interface SaveDocumentRequest {
   margins?: PageMargins;
   pageSize?: PageSize;
   sectionHeadersFooters?: SectionHeaderFooter[];
+  /** Gdy podane, backend zapisuje przez pass-through oryginalnego pakietu (zachowuje
+   *  style tabel/motyw/numerację). Brak → pełna regeneracja pakietu. */
+  masterId?: string;
 }
 
 /** Szablon dokumentu */
