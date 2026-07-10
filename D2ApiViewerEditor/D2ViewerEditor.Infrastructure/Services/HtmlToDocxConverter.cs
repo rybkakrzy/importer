@@ -12,6 +12,8 @@ using Microsoft.Extensions.Options;
 using A = DocumentFormat.OpenXml.Drawing;
 using Wp = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
+using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
+using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -31,6 +33,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     // rozdzielone akapitem, ale należące do tej samej listy logicznej Worda, współdzielą jedną
     // NumberingInstance — Word kontynuuje wtedy numerację. Różne data-num-id → osobne instancje.
     private readonly Dictionary<string, int> _numIdByHtmlList = new();
+
+    // Przypisy dolne. Identyfikatory OOXML są przydzielane DETERMINISTYCZNIE po kolejności listy
+    // przekazanej do Convert (htmlId → 1..N); technicznym separatorom rezerwujemy -1 i 0, więc
+    // przypisy użytkownika nigdy z nimi nie kolidują. _referencedFootnoteHtmlIds notuje, które
+    // przypisy faktycznie mają odwołanie w treści (walidacja: brak osieroconych odwołań/treści).
+    private readonly Dictionary<string, long> _footnoteOoxmlIdByHtmlId = new();
+    private readonly HashSet<string> _referencedFootnoteHtmlIds = new();
 
     // Domyślne ustawienia dokumentu (firmowa czcionka itp.). Wstrzykiwane przez DI;
     // dla benchmarków / testów konstruktor bezparametrowy używa wartości domyślnych.
@@ -117,7 +126,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null, IReadOnlyList<DomainFootnote>? footnotes = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -132,6 +141,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _emittedSectionProps.Clear();
             _numIdByHtmlList.Clear();
             _pendingTextBoxDrawings.Clear();
+            _footnoteOoxmlIdByHtmlId.Clear();
+            _referencedFootnoteHtmlIds.Clear();
+            AssignFootnoteOoxmlIds(footnotes);
             _hasSectionMarkers = false;
             _headerBandCm = header?.Height;
             _footerBandCm = footer?.Height;
@@ -172,6 +184,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Własne nagłówki/stopki sekcji ≥ 1 (po AddPageSettings — body-level sectPr istnieje)
             AddSectionHeadersFooters(document, sectionHeadersFooters);
 
+            // Część przypisów (footnotes.xml + relacja + content type) — tylko gdy dokument ma przypisy.
+            AddFootnotes(footnotes);
+
             document.Save();
         }
 
@@ -181,9 +196,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     public byte[] ConvertPreservingPackage(string html, Stream? originalPackage,
         DocumentMetadata? metadata = null, HeaderFooterContent? header = null,
         HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null,
-        IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null)
+        IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null,
+        IReadOnlyList<DomainFootnote>? footnotes = null)
     {
-        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters);
+        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters, footnotes);
 
         if (originalPackage == null || !originalPackage.CanRead)
             return generated;
@@ -2147,16 +2163,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         var sides = new[] { ("border-top", typeof(TopBorder)), ("border-left", typeof(LeftBorder)),
                             ("border-bottom", typeof(BottomBorder)), ("border-right", typeof(RightBorder)) };
-        
+
         foreach (var (prefix, borderType) in sides)
         {
-            var match = Regex.Match(style, $@"{Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{{3,6}})");
-            if (match.Success)
+            if (TryParseBorderShorthand(style, prefix, out var size, out var bStyle, out var color))
             {
-                var size = CssPxToBorderEighthPoints(match.Groups[1].Value);
-                var bStyle = ParseBorderStyle(match.Groups[2].Value);
-                var color = NormalizeColor(match.Groups[3].Value);
-                
                 var border = (BorderType)Activator.CreateInstance(borderType)!;
                 border.Val = bStyle;
                 border.Size = size;
@@ -2173,27 +2184,88 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 hasBorders = true;
             }
         }
-        
-        // Parsuj border shorthand
+
+        // Parsuj border shorthand (border: 0.7px solid #000 / rgb(...))
+        if (!hasBorders && TryParseBorderShorthand(style, "border", out var aSize, out var aStyle, out var aColor))
+        {
+            borders.Append(new TopBorder { Val = aStyle, Size = aSize, Color = aColor });
+            borders.Append(new LeftBorder { Val = aStyle, Size = aSize, Color = aColor });
+            borders.Append(new BottomBorder { Val = aStyle, Size = aSize, Color = aColor });
+            borders.Append(new RightBorder { Val = aStyle, Size = aSize, Color = aColor });
+            hasBorders = true;
+        }
+
+        // Forma rozbita na osobne właściwości: `border-width` + `border-style` + `border-color`.
+        // Tak przeglądarka SERIALIZUJE jednolite obramowanie komórki przy zapisie edytora
+        // (getContent/outerHTML zwija cztery identyczne border-top/left/bottom/right do tej trójki),
+        // a kolor normalizuje do rgb(). Bez tej gałęzi writer nie rozpoznawał obramowania po
+        // pierwszym zapisie → komórki traciły linie, a tabela „rozpadała się" wizualnie.
         if (!hasBorders)
         {
-            var borderAll = Regex.Match(style, @"(?<![a-z-])border:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
-            if (borderAll.Success)
+            var uniformStyle = GetCssDeclarationValue(style, "border-style");
+            if (uniformStyle != null)
             {
-                var size = CssPxToBorderEighthPoints(borderAll.Groups[1].Value);
-                var bStyle = ParseBorderStyle(borderAll.Groups[2].Value);
-                var color = NormalizeColor(borderAll.Groups[3].Value);
-                
-                borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new LeftBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new RightBorder { Val = bStyle, Size = size, Color = color });
-                hasBorders = true;
+                var bStyle = ParseBorderStyle(uniformStyle);
+                if (bStyle != BorderValues.None)
+                {
+                    var widthDecl = GetCssDeclarationValue(style, "border-width");
+                    var widthMatch = widthDecl != null ? Regex.Match(widthDecl, @"([\d.]+)px") : Match.Empty;
+                    var size = widthMatch.Success ? CssPxToBorderEighthPoints(widthMatch.Groups[1].Value) : 6u;
+                    var color = NormalizeCssColorToken(GetCssDeclarationValue(style, "border-color")) ?? "auto";
+
+                    borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
+                    borders.Append(new LeftBorder { Val = bStyle, Size = size, Color = color });
+                    borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
+                    borders.Append(new RightBorder { Val = bStyle, Size = size, Color = color });
+                    hasBorders = true;
+                }
             }
         }
-        
+
         if (hasBorders)
             cellProps.Append(borders);
+    }
+
+    /// <summary>
+    /// Parsuje deklarację obramowania w formie skróconej „width style color" (np.
+    /// <c>border-top: 0.7px solid #000</c> lub <c>border: 1px solid rgb(0,0,0)</c>). Akceptuje kolor
+    /// hex ORAZ rgb()/rgba() — przeglądarka po edycji często normalizuje kolor do rgb, a poprzednia
+    /// wersja rozpoznawała tylko hex, przez co obramowania ginęły przy zapisie.
+    /// </summary>
+    private bool TryParseBorderShorthand(string style, string prefix, out uint size, out BorderValues bStyle, out string color)
+    {
+        size = 0; bStyle = BorderValues.Single; color = "auto";
+        var match = Regex.Match(style,
+            $@"(?<![a-z-]){Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+(#?[0-9a-fA-F]{{3,6}}|rgba?\([^)]*\))");
+        if (!match.Success)
+            return false;
+        size = CssPxToBorderEighthPoints(match.Groups[1].Value);
+        bStyle = ParseBorderStyle(match.Groups[2].Value);
+        color = NormalizeCssColorToken(match.Groups[3].Value) ?? "auto";
+        return true;
+    }
+
+    /// <summary>Wartość pojedynczej deklaracji CSS (np. „border-color") lub null, gdy jej brak.</summary>
+    private static string? GetCssDeclarationValue(string style, string property)
+    {
+        var match = Regex.Match(style, $@"(?<![a-z-]){Regex.Escape(property)}\s*:\s*([^;]+)");
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    /// <summary>Normalizuje token koloru CSS (hex #rgb/#rrggbb, rgb(), rgba()) do 6-znakowego hex; null gdy nie kolor.</summary>
+    private string? NormalizeCssColorToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        token = token.Trim();
+        if (token.StartsWith("#"))
+        {
+            var hex = token.TrimStart('#');
+            return Regex.IsMatch(hex, "^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$") ? NormalizeColor(hex) : null;
+        }
+        var rgb = Regex.Match(token, @"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)");
+        if (rgb.Success)
+            return $"{int.Parse(rgb.Groups[1].Value):X2}{int.Parse(rgb.Groups[2].Value):X2}{int.Parse(rgb.Groups[3].Value):X2}";
+        return null;
     }
 
     /// <summary>
@@ -3030,6 +3102,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     break;
                 }
 
+                // Odwołanie do przypisu dolnego: <sup class="footnote-ref" data-footnote-id="fn-N">.
+                // Emituje w:footnoteReference z identyfikatorem OOXML przypisanym w AssignFootnoteOoxmlIds.
+                // Odwołanie do nieistniejącego przypisu jest POMIJANE (brak osieroconego w:footnoteReference).
+                if (node.Name.Equals("sup", StringComparison.OrdinalIgnoreCase) && node.HasClass("footnote-ref"))
+                {
+                    var run = CreateFootnoteReferenceRun(node, inheritedProps);
+                    if (run != null) runs.Add(run);
+                    break;
+                }
+
                 // Segment pozycyjny tab-stopu (reader: nagłówek/stopka z w:tabs) — segment
                 // zaczyna się od tabulatora; pozycję odtwarza pPr/w:tabs z data-tab-stops.
                 if (node.HasClass("docx-tab-seg"))
@@ -3123,6 +3205,138 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         return runs;
+    }
+
+    // Zarezerwowane identyfikatory OOXML dla technicznych elementów części przypisów.
+    // Przypisy użytkownika zaczynają się od 1, więc nigdy z nimi nie kolidują.
+    private const long FootnoteSeparatorId = -1;
+    private const long FootnoteContinuationSeparatorId = 0;
+
+    /// <summary>
+    /// Deterministycznie przydziela identyfikatory OOXML przypisom po kolejności listy modelu
+    /// (htmlId → 1..N). Odwołania w treści odwzorowują się przez ten słownik; sama treść jest
+    /// jednym źródłem prawdy (numer widoczny nie jest tożsamością).
+    /// </summary>
+    private void AssignFootnoteOoxmlIds(IReadOnlyList<DomainFootnote>? footnotes)
+    {
+        if (footnotes == null) return;
+        long next = 1;
+        foreach (var footnote in footnotes)
+        {
+            if (string.IsNullOrEmpty(footnote.Id) || _footnoteOoxmlIdByHtmlId.ContainsKey(footnote.Id))
+                continue;
+            _footnoteOoxmlIdByHtmlId[footnote.Id] = next++;
+        }
+    }
+
+    /// <summary>
+    /// Buduje run z <c>w:footnoteReference</c> dla odwołania <c>&lt;sup class="footnote-ref"&gt;</c>.
+    /// Zwraca null, gdy odwołanie wskazuje przypis spoza listy (nie emitujemy osieroconego odwołania).
+    /// </summary>
+    private Run? CreateFootnoteReferenceRun(HtmlNode node, RunProperties? inheritedProps)
+    {
+        var htmlId = node.GetAttributeValue("data-footnote-id", "");
+        if (string.IsNullOrEmpty(htmlId) || !_footnoteOoxmlIdByHtmlId.TryGetValue(htmlId, out var ooxmlId))
+            return null;
+
+        _referencedFootnoteHtmlIds.Add(htmlId);
+
+        var props = (inheritedProps?.CloneNode(true) as RunProperties) ?? new RunProperties();
+        if (!props.Elements<VerticalTextAlignment>().Any())
+            props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript });
+
+        var run = new Run();
+        run.Append(props);
+        run.Append(new FootnoteReference { Id = ooxmlId });
+        return run;
+    }
+
+    /// <summary>
+    /// Tworzy część <c>word/footnotes.xml</c> (relacja + content type przez <see cref="MainDocumentPart.AddNewPart"/>)
+    /// z wymaganymi separatorami technicznymi i treścią przypisów użytkownika. Nic nie tworzy dla
+    /// dokumentów bez przypisów (brak nadmiarowej części). Zapisujemy wyłącznie przypisy z listy
+    /// modelu — reader zwraca je w kolejności odwołań, więc każdy ma odpowiadające odwołanie.
+    /// </summary>
+    private void AddFootnotes(IReadOnlyList<DomainFootnote>? footnotes)
+    {
+        if (_mainPart == null || footnotes == null || footnotes.Count == 0)
+            return;
+        if (_footnoteOoxmlIdByHtmlId.Count == 0)
+            return;
+
+        var footnotesPart = _mainPart.FootnotesPart ?? _mainPart.AddNewPart<FootnotesPart>();
+        var root = new Footnotes();
+        root.Append(CreateSeparatorFootnote(FootnoteSeparatorId, FootnoteEndnoteValues.Separator));
+        root.Append(CreateSeparatorFootnote(FootnoteContinuationSeparatorId, FootnoteEndnoteValues.ContinuationSeparator));
+
+        foreach (var footnote in footnotes)
+        {
+            if (!_footnoteOoxmlIdByHtmlId.TryGetValue(footnote.Id, out var ooxmlId))
+                continue;
+            root.Append(BuildFootnoteElement(footnote, ooxmlId, footnotesPart));
+        }
+
+        footnotesPart.Footnotes = root;
+        footnotesPart.Footnotes.Save();
+    }
+
+    /// <summary>
+    /// Odtwarza treść przypisu z HTML przez istniejące konwertery treści (akapity/runy/listy/linki),
+    /// aby nie duplikować logiki mapowania. Pierwszy akapit dostaje run ze znacznikiem auto-numeru
+    /// (<c>w:footnoteRef</c>). Relacje obrazów są zakresowane do części przypisów.
+    /// </summary>
+    private WpFootnote BuildFootnoteElement(DomainFootnote model, long ooxmlId, FootnotesPart footnotesPart)
+    {
+        var footnote = new WpFootnote { Id = ooxmlId };
+
+        var tempBody = new Body();
+        var htmlDoc = new HtmlDocument();
+        htmlDoc.LoadHtml(model.Html ?? string.Empty);
+
+        var prevContainer = _currentImageContainer;
+        _currentImageContainer = footnotesPart;
+        try
+        {
+            ConvertHtmlToBody(htmlDoc.DocumentNode, tempBody);
+        }
+        finally
+        {
+            _currentImageContainer = prevContainer;
+        }
+
+        var blocks = tempBody.ChildElements
+            .Where(e => e is Paragraph || e is Table)
+            .Select(e => e.CloneNode(true))
+            .ToList();
+
+        if (blocks.Count == 0)
+            blocks.Add(new Paragraph());
+
+        // Znacznik auto-numeru na początku pierwszego akapitu (po pPr, jeśli istnieje).
+        if (blocks[0] is Paragraph firstParagraph)
+        {
+            var markRun = new Run(new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }),
+                                  new FootnoteReferenceMark());
+            var pPr = firstParagraph.GetFirstChild<ParagraphProperties>();
+            if (pPr != null)
+                firstParagraph.InsertAfter(markRun, pPr);
+            else
+                firstParagraph.InsertAt(markRun, 0);
+        }
+
+        foreach (var block in blocks)
+            footnote.Append(block);
+
+        return footnote;
+    }
+
+    /// <summary>Techniczny przypis-separator (w:separator / w:continuationSeparator) z zarezerwowanym id.</summary>
+    private static WpFootnote CreateSeparatorFootnote(long id, FootnoteEndnoteValues type)
+    {
+        OpenXmlElement mark = type == FootnoteEndnoteValues.Separator
+            ? new SeparatorMark()
+            : new ContinuationSeparatorMark();
+        return new WpFootnote(new Paragraph(new Run(mark))) { Id = id, Type = type };
     }
 
     /// <summary>

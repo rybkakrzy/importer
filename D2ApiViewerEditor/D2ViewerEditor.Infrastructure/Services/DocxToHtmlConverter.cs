@@ -11,6 +11,8 @@ using D2ViewerEditor.Infrastructure.DocxModel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
+using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -177,6 +179,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _pageWidthTwips = _pageHeightTwips = null;
         _marginLeftTwips = _marginTopTwips = _marginRightTwips = _marginBottomTwips = 0;
         _pendingTextBoxes.Clear();
+        _footnoteDisplayNumbers.Clear();
+        _footnoteRefOrder.Clear();
 
         using var document = WordprocessingDocument.Open(docxStream, false);
 
@@ -202,6 +206,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             PageSize = ExtractPageSize(document),
             SectionHeadersFooters = ExtractSectionHeadersFooters(document)
         };
+
+        // Przypisy MUSZĄ być czytane po ConvertBodyToHtml (Html) — kolejność pierwszych odwołań
+        // (numeracja prezentacyjna) jest ustalana podczas renderowania treści.
+        content.Footnotes = ExtractFootnotes(document);
+
+        // Ochrona przed edycją (settings.xml) — front otwiera taki dokument tylko do odczytu.
+        content.IsReadOnlyProtected = document.MainDocumentPart != null
+            && HasEnforcedEditProtection(document.MainDocumentPart);
 
         return content;
     }
@@ -799,6 +811,37 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var setting = mainPart.DocumentSettingsPart?.Settings?.GetFirstChild<EvenAndOddHeaders>();
         return setting != null && (setting.Val == null || setting.Val.Value);
+    }
+
+    /// <summary>
+    /// Ochrona przed edycją zadeklarowana w settings.xml (Word: „Ogranicz edycję" /
+    /// „Zawsze otwieraj tylko do odczytu"):
+    /// - w:documentProtection z w:enforcement=1 i w:edit ≠ "none" — Word blokuje wtedy
+    ///   edycję („Możesz tylko wyświetlić ten dokument"); tryby częściowe (comments,
+    ///   trackedChanges, forms) też liczymy jako ochronę, bo edytor nie umie ich egzekwować,
+    /// - w:writeProtection — zalecenie tylko-do-odczytu (w:recommended) lub hasło zapisu
+    ///   (legacy w:hash lub nowszy w:hashValue); hasła nie weryfikujemy, więc dokument
+    ///   traktujemy jak chroniony.
+    /// </summary>
+    private static bool HasEnforcedEditProtection(MainDocumentPart mainPart)
+    {
+        var settings = mainPart.DocumentSettingsPart?.Settings;
+        if (settings == null) return false;
+
+        var protection = settings.GetFirstChild<DocumentProtection>();
+        if (protection != null
+            && protection.Enforcement?.Value == true
+            && protection.Edit != null
+            && protection.Edit.Value != DocumentProtectionValues.None)
+        {
+            return true;
+        }
+
+        var writeProtection = settings.GetFirstChild<WriteProtection>();
+        return writeProtection != null
+            && (writeProtection.Recommended?.Value == true
+                || !string.IsNullOrEmpty(writeProtection.Hash?.Value)
+                || !string.IsNullOrEmpty(writeProtection.HashValue?.Value));
     }
 
     private string ConvertHeaderPartToHtml(HeaderPart part, WordprocessingDocument document)
@@ -3091,7 +3134,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         switch (child)
         {
             case Text text:
-                return EscapeHtml(text.Text);
+                return EscapeHtml(MapSymbolicTextRun(text));
             case Break br:
                 return br.Type?.Value == BreakValues.Page ? "<div class=\"page-break\"></div>" : "<br/>";
             case TabChar _:
@@ -3102,20 +3145,187 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 return ConvertPictureToHtml(picture, document, sourcePart);
             case AlternateContent alternate:
                 return ConvertAlternateContentToHtml(alternate, document, sourcePart);
+            case FootnoteReference footnoteRef:
+                return RenderFootnoteReference(footnoteRef);
+            case FootnoteReferenceMark _:
+                // Znacznik auto-numeru w TREŚCI przypisu — numer renderujemy jako tekst przy
+                // odwołaniu, więc sam znacznik nie emituje nic (bez pustego widma w treści).
+                return string.Empty;
             case NoBreakHyphen _:
                 return "&#8209;";
             case SoftHyphen _:
                 return "&shy;";
             case SymbolChar sym:
-                if (sym.Char?.Value != null)
-                {
-                    try { return $"&#x{sym.Char.Value};"; } catch { return string.Empty; }
-                }
-                return string.Empty;
+                return ConvertSymbolCharToHtml(sym);
             default:
                 return string.Empty;
         }
     }
+
+    /// <summary>
+    /// Znak wstawiony jako symbol (<c>w:sym</c>, np. strzałka z Wingdings/Symbol). Word renderuje
+    /// go glifem fontu symbolicznego spod kodu w Private Use Area (U+F000..U+F0FF) — goła encja
+    /// PUA w HTML (dotychczasowe zachowanie) dawała w przeglądarce tofu/kwadrat, bo znak nie ma
+    /// publicznej semantyki, a font symboliczny nie był nawet wskazany. Mapujemy na odpowiednik
+    /// Unicode (renderuje się wszędzie, round-tripuje jako zwykły tekst); kod bez mapowania
+    /// emitujemy jako encję w spanie z font-family fontu symbolicznego (fonty Wingdings/Symbol/
+    /// Webdings są na Windows — lepsze przybliżenie niż tofu, a writer odtwarza rFonts z CSS).
+    /// </summary>
+    private string ConvertSymbolCharToHtml(SymbolChar sym)
+    {
+        var hex = sym.Char?.Value;
+        if (string.IsNullOrEmpty(hex) ||
+            !int.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var codePoint))
+        {
+            return string.Empty;
+        }
+
+        var font = sym.Font?.Value;
+        if (TryMapSymbolicChar(codePoint, font, out var mapped))
+            return EscapeHtml(mapped);
+
+        var style = string.IsNullOrEmpty(font)
+            ? string.Empty
+            : $" style=\"font-family:'{EscapeHtml(font)}';\"";
+        return $"<span{style}>&#x{codePoint:X};</span>";
+    }
+
+    /// <summary>
+    /// Word zapisuje znaki fontów symbolicznych także w ZWYKŁYM <c>w:t</c> — jako kod PUA
+    /// (U+F0xx) albo znak bajtowy (autokorekta „--&gt;" wstawia <c>è</c> w foncie Wingdings).
+    /// Bez mapowania edytor pokazywał kwadrat (PUA) lub literalną literę zamiast symbolu.
+    /// Mapujemy znaki, dla których znamy odpowiednik Unicode; resztę zostawiamy nietkniętą
+    /// (run niesie font-family fontu symbolicznego w CSS — renderuje się tam, gdzie font jest).
+    /// </summary>
+    private string MapSymbolicTextRun(Text text)
+    {
+        var value = text.Text ?? string.Empty;
+        if (value.Length == 0) return value;
+
+        var hasPua = false;
+        foreach (var c in value)
+        {
+            if (c >= '\uF000' && c <= '\uF0FF') { hasPua = true; break; }
+        }
+
+        var runFonts = (text.Parent as Run)?.RunProperties?.RunFonts;
+        if (!hasPua && runFonts == null) return value;
+
+        var font = GetFontName(runFonts);
+        var symbolicFont = NormalizeSymbolFontName(font) != null;
+        if (!hasPua && !symbolicFont) return value;
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            var isPua = c >= '\uF000' && c <= '\uF0FF';
+            if ((isPua || symbolicFont) && TryMapSymbolicChar(c, font, out var mapped))
+                sb.Append(mapped);
+            else
+                sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Rozpoznaje WYŁĄCZNIE klasyczne fonty symboliczne (glify pod kodami bajtowymi/PUA).
+    /// Celowo dokładne dopasowanie nazwy, nie Contains — „Segoe UI Symbol" to normalny font
+    /// Unicode i jego znaków NIE wolno przemapowywać po młodszym bajcie.
+    /// </summary>
+    private static string? NormalizeSymbolFontName(string? font)
+    {
+        var f = font?.Trim().ToLowerInvariant();
+        return f is "symbol" or "wingdings" or "wingdings 2" or "wingdings 3" or "webdings"
+            ? f
+            : null;
+    }
+
+    /// <summary>
+    /// Mapuje kod znaku z fontu symbolicznego (po zdjęciu przesunięcia PUA U+F000..U+F0FF)
+    /// na odpowiednik Unicode. Dla fontu niesymbolicznego kod poza PUA emitowany wprost
+    /// (<c>w:sym</c> bywa używany ze zwykłym fontem i normalnym code-pointem).
+    /// </summary>
+    private static bool TryMapSymbolicChar(int codePoint, string? font, out string mapped)
+    {
+        mapped = string.Empty;
+        var canonical = NormalizeSymbolFontName(font);
+        var isPua = codePoint is >= 0xF000 and <= 0xF0FF;
+        var lookup = isPua ? codePoint & 0xFF : codePoint;
+
+        if (canonical == null)
+        {
+            // PUA bez fontu symbolicznego nie ma publicznego znaczenia — nie zgadujemy.
+            if (isPua) return false;
+            try { mapped = char.ConvertFromUtf32(codePoint); return true; }
+            catch { return false; }
+        }
+
+        var table = canonical switch
+        {
+            "symbol" => SymbolFontMap,
+            "wingdings" => WingdingsFontMap,
+            _ => null,
+        };
+        if (table != null && table.TryGetValue(lookup, out var s))
+        {
+            mapped = s;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Font „Symbol" (kodowanie Adobe) → Unicode: greka, operatory matematyczne, strzałki.</summary>
+    private static readonly Dictionary<int, string> SymbolFontMap = new()
+    {
+        [0x22] = "∀", [0x24] = "∃", [0x27] = "∍", [0x40] = "≅",
+        [0x41] = "Α", [0x42] = "Β", [0x43] = "Χ", [0x44] = "Δ",
+        [0x45] = "Ε", [0x46] = "Φ", [0x47] = "Γ", [0x48] = "Η",
+        [0x49] = "Ι", [0x4A] = "ϑ", [0x4B] = "Κ", [0x4C] = "Λ",
+        [0x4D] = "Μ", [0x4E] = "Ν", [0x4F] = "Ο", [0x50] = "Π",
+        [0x51] = "Θ", [0x52] = "Ρ", [0x53] = "Σ", [0x54] = "Τ",
+        [0x55] = "Υ", [0x56] = "ς", [0x57] = "Ω", [0x58] = "Ξ",
+        [0x59] = "Ψ", [0x5A] = "Ζ", [0x5E] = "⊥",
+        [0x61] = "α", [0x62] = "β", [0x63] = "χ", [0x64] = "δ",
+        [0x65] = "ε", [0x66] = "φ", [0x67] = "γ", [0x68] = "η",
+        [0x69] = "ι", [0x6A] = "ϕ", [0x6B] = "κ", [0x6C] = "λ",
+        [0x6D] = "μ", [0x6E] = "ν", [0x6F] = "ο", [0x70] = "π",
+        [0x71] = "θ", [0x72] = "ρ", [0x73] = "σ", [0x74] = "τ",
+        [0x75] = "υ", [0x76] = "ϖ", [0x77] = "ω", [0x78] = "ξ",
+        [0x79] = "ψ", [0x7A] = "ζ",
+        [0xA2] = "′", [0xA3] = "≤", [0xA4] = "⁄", [0xA5] = "∞",
+        [0xA6] = "ƒ", [0xA7] = "♣", [0xA8] = "♦", [0xA9] = "♥",
+        [0xAA] = "♠", [0xAB] = "↔", [0xAC] = "←", [0xAD] = "↑",
+        [0xAE] = "→", [0xAF] = "↓",
+        [0xB0] = "°", [0xB1] = "±", [0xB2] = "″", [0xB3] = "≥",
+        [0xB4] = "×", [0xB5] = "∝", [0xB6] = "∂", [0xB7] = "•",
+        [0xB8] = "÷", [0xB9] = "≠", [0xBA] = "≡", [0xBB] = "≈",
+        [0xBC] = "…",
+        [0xC0] = "ℵ", [0xC1] = "ℑ", [0xC2] = "ℜ", [0xC3] = "℘",
+        [0xC4] = "⊗", [0xC5] = "⊕", [0xC6] = "∅", [0xC7] = "∩",
+        [0xC8] = "∪", [0xC9] = "⊃", [0xCA] = "⊇", [0xCB] = "⊄",
+        [0xCC] = "⊂", [0xCD] = "⊆", [0xCE] = "∈", [0xCF] = "∉",
+        [0xD0] = "∠", [0xD1] = "∇", [0xD5] = "∏", [0xD6] = "√",
+        [0xD7] = "⋅", [0xD8] = "¬", [0xD9] = "∧", [0xDA] = "∨",
+        [0xDB] = "⇔", [0xDC] = "⇐", [0xDD] = "⇑", [0xDE] = "⇒",
+        [0xDF] = "⇓", [0xE5] = "∑", [0xF2] = "∫",
+    };
+
+    /// <summary>
+    /// Font „Wingdings" → Unicode (podzbiór o pewnym mapowaniu: strzałki, checkboxy, kształty).
+    /// Kody spoza tabeli lecą fallbackiem span+font-family (bez zgadywania złego glifu).
+    /// </summary>
+    private static readonly Dictionary<int, string> WingdingsFontMap = new()
+    {
+        [0x4A] = "☺", [0x4C] = "☹",                                       // ☺ ☹
+        [0x6C] = "●", [0x6E] = "■", [0x6F] = "□", [0x75] = "◆", // ● ■ □ ◆
+        [0xA7] = "■", [0xA8] = "☐",                                       // ■ ☐ (spójne z MapBulletChar)
+        [0xD8] = "❖",                                                          // ❖
+        [0xE8] = "➔",                                                          // ➔ (autokorekta „-->")
+        [0xEF] = "⇦", [0xF0] = "⇨", [0xF1] = "⇧", [0xF2] = "⇩", // ⇦ ⇨ ⇧ ⇩
+        [0xF3] = "⬄", [0xF4] = "⇳",                                       // ⬄ ⇳
+        [0xFB] = "✗", [0xFC] = "✔", [0xFD] = "☒", [0xFE] = "☑", // ✗ ✔ ☒ ☑
+    };
 
     /// <summary>
     /// Word owija nowsze rysunki (obrazy zakotwiczone z efektami, grupy, kanwy, kształty) w
@@ -3277,6 +3487,115 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>Pola tekstowe oczekujące na emisję przed akapitem-kotwicą (patrz <see cref="HoistTextBox"/>).</summary>
     private readonly List<string> _pendingTextBoxes = new();
 
+    // Przypisy dolne. Numer widoczny jest przydzielany przy PIERWSZYM odwołaniu w kolejności
+    // dokumentu (tożsamość OOXML → numer prezentacyjny); kolejne odwołania do tego samego
+    // przypisu współdzielą numer. _footnoteRefOrder trzyma kolejność pierwszych odwołań, po
+    // której ExtractFootnotes buduje listę modelu (jedno źródło prawdy dla treści).
+    private readonly Dictionary<long, int> _footnoteDisplayNumbers = new();
+    private readonly List<long> _footnoteRefOrder = new();
+
+    /// <summary>Stabilny wewnętrzny identyfikator przypisu z numeru OOXML (nie mylić z numerem widocznym).</summary>
+    private static string FootnoteHtmlId(long ooxmlId) => $"fn-{ooxmlId}";
+
+    /// <summary>
+    /// Renderuje odwołanie do przypisu jako semantyczny <c>&lt;sup&gt;</c> z numerem widocznym
+    /// (kolejność pierwszych odwołań) i stabilnym <c>data-footnote-id</c>. Wiele odwołań do tego
+    /// samego przypisu współdzieli numer i identyfikator.
+    /// </summary>
+    private string RenderFootnoteReference(FootnoteReference footnoteRef)
+    {
+        if (footnoteRef.Id?.Value is not long ooxmlId)
+            return string.Empty;
+
+        if (!_footnoteDisplayNumbers.TryGetValue(ooxmlId, out var number))
+        {
+            number = _footnoteRefOrder.Count + 1;
+            _footnoteDisplayNumbers[ooxmlId] = number;
+            _footnoteRefOrder.Add(ooxmlId);
+        }
+
+        var htmlId = FootnoteHtmlId(ooxmlId);
+        return $"<sup class=\"footnote-ref\" data-footnote-id=\"{htmlId}\" " +
+               $"aria-label=\"Przypis {number}\">{number}</sup>";
+    }
+
+    /// <summary>
+    /// Buduje listę przypisów w kolejności pierwszych odwołań w treści. Pomija techniczne
+    /// separatory (separator / continuationSeparator), a treść konwertuje istniejącym
+    /// konwerterem akapitów/tabel. Zwraca null, gdy dokument nie ma żadnych odwołań (brak
+    /// nadmiarowego footnotes.xml na późniejszym eksporcie).
+    /// </summary>
+    private List<DomainFootnote>? ExtractFootnotes(WordprocessingDocument document)
+    {
+        if (_footnoteRefOrder.Count == 0)
+            return null;
+
+        var footnotesPart = document.MainDocumentPart?.FootnotesPart;
+        var contentById = new Dictionary<long, string>();
+        if (footnotesPart?.Footnotes != null)
+        {
+            foreach (var footnote in footnotesPart.Footnotes.Elements<WpFootnote>())
+            {
+                var type = footnote.Type?.Value;
+                if (type == FootnoteEndnoteValues.Separator ||
+                    type == FootnoteEndnoteValues.ContinuationSeparator ||
+                    type == FootnoteEndnoteValues.ContinuationNotice)
+                    continue;
+
+                if (footnote.Id?.Value is not long id)
+                    continue;
+
+                try
+                {
+                    contentById[id] = ConvertFootnoteContent(footnote, document, footnotesPart);
+                }
+                catch (Exception ex)
+                {
+                    // Jeden wadliwy przypis nie może przerwać importu całego dokumentu.
+                    _log.LogWarning(ex, "Nie udało się skonwertować treści przypisu o id {FootnoteId}.", id);
+                    contentById[id] = string.Empty;
+                }
+            }
+        }
+
+        var result = new List<DomainFootnote>(_footnoteRefOrder.Count);
+        foreach (var ooxmlId in _footnoteRefOrder)
+        {
+            if (!contentById.TryGetValue(ooxmlId, out var html))
+            {
+                // Odwołanie wskazuje przypis bez treści (brak lub błędne powiązanie OOXML) —
+                // zachowujemy odwołanie z pustą treścią zamiast osieroconego <sup> i logujemy.
+                _log.LogWarning("Odwołanie do przypisu {FootnoteId} nie ma treści w footnotes.xml.", ooxmlId);
+                html = string.Empty;
+            }
+            result.Add(new DomainFootnote { Id = FootnoteHtmlId(ooxmlId), Html = html });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Konwertuje blokową treść przypisu (akapity/tabele) do HTML przez istniejące konwertery.
+    /// Znacznik auto-numeru (w:footnoteRef) jest pomijany w <see cref="ConvertRunChildToHtml"/>.
+    /// </summary>
+    private string ConvertFootnoteContent(WpFootnote footnote, WordprocessingDocument document, OpenXmlPart sourcePart)
+    {
+        var html = new StringBuilder();
+        foreach (var block in footnote.Elements())
+        {
+            switch (block)
+            {
+                case Paragraph paragraph:
+                    html.Append(ConvertParagraphToHtml(paragraph, document, sourcePart));
+                    break;
+                case Table table:
+                    html.Append(ConvertTableToHtml(table, document, sourcePart));
+                    break;
+            }
+        }
+        return html.ToString();
+    }
+
     /// <summary>
     /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu jako przybliżenie HTML:
     /// preset line/straightConnector → pozioma linia (grubość/kolor z <c>a:ln</c>); prostokąt/
@@ -3359,19 +3678,73 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Kolor wypełnienia kształtu z jego <c>spPr/a:solidFill</c> (nie z obrysu ani ukrytej linii).
-    /// Obsługuje jawny <c>a:srgbClr</c>. Wypełnienie motywowe (<c>a:schemeClr</c>) bez mapowania —
-    /// kształt i tak pozostaje widoczny (fallback czarny w SVG / brak tła w bloku).
+    /// Kolor wypełnienia kształtu (bez „#") z jego <c>spPr/a:solidFill</c> — jawny <c>a:srgbClr</c>
+    /// lub <c>a:schemeClr</c> (kolor motywu) — a gdy brak, z referencji stylu <c>wps:style/a:fillRef</c>.
+    /// Nie bierze koloru z obrysu ani ukrytej linii. Null gdy nierozwiązywalne (fill przez SVG:
+    /// <c>currentColor</c>, w bloku: brak tła) — kształt i tak pozostaje widoczny.
     /// </summary>
     private string? GetShapeFillHex(Drawing drawing, DocumentFormat.OpenXml.Drawing.CustomGeometry? custom)
     {
         var geom = (OpenXmlElement?)custom
             ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>().FirstOrDefault();
         var spPr = geom?.Parent; // wps:spPr / pic:spPr — element właściwości kształtu
-        var fill = spPr?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>().FirstOrDefault()
-                   ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
-                       .FirstOrDefault(f => f.Parent is not DocumentFormat.OpenXml.Drawing.Outline);
-        return HexColorOrNull(fill?.RgbColorModelHex?.Val?.Value);
+
+        // 1) Jawne wypełnienie kształtu: spPr/a:solidFill (a:srgbClr LUB a:schemeClr = kolor motywu).
+        // Bez obsługi schemeClr brandowe logo z fillem motywowym dawało null → czarny blob.
+        var solid = spPr?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>().FirstOrDefault()
+                    ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
+                        .FirstOrDefault(f => f.Parent is not DocumentFormat.OpenXml.Drawing.Outline);
+        var hex = SolidFillHex(solid);
+        if (hex != null) return hex;
+
+        // 2) Wypełnienie przez referencję stylu: wps:style/a:fillRef → a:schemeClr/a:srgbClr.
+        // Typowe dla kształtów-logo, które nie mają jawnego solidFill w spPr.
+        var fillRef = spPr?.Parent?.Descendants<DocumentFormat.OpenXml.Drawing.FillReference>().FirstOrDefault();
+        return FillReferenceHex(fillRef);
+    }
+
+    /// <summary>Hex (bez „#") z a:solidFill: jawny a:srgbClr, inaczej a:schemeClr rozwiązany z theme1.xml.</summary>
+    private string? SolidFillHex(DocumentFormat.OpenXml.Drawing.SolidFill? fill)
+        => fill == null ? null
+            : HexColorOrNull(fill.RgbColorModelHex?.Val?.Value)
+              ?? ResolveDrawingSchemeColor(fill.SchemeColor?.Val?.Value);
+
+    /// <summary>Hex (bez „#") z a:fillRef (referencja wypełnienia w stylu kształtu).</summary>
+    private string? FillReferenceHex(DocumentFormat.OpenXml.Drawing.FillReference? fillRef)
+        => fillRef == null ? null
+            : HexColorOrNull(fillRef.RgbColorModelHex?.Val?.Value)
+              ?? ResolveDrawingSchemeColor(fillRef.SchemeColor?.Val?.Value);
+
+    /// <summary>
+    /// Rozwiązuje DrawingML-owy <c>a:schemeClr</c> (dk1/lt1/dk2/lt2/tx1/bg1/tx2/bg2/accent1..6/
+    /// hlink/folHlink) na hex (bez „#") ze schematu kolorów motywu (theme1.xml). Domyślne mapowanie
+    /// clrMap (tx1→dk1, bg1→lt1, …); <c>phClr</c> i braki → null (kształt zostaje widoczny w fallbacku).
+    /// </summary>
+    private string? ResolveDrawingSchemeColor(DocumentFormat.OpenXml.Drawing.SchemeColorValues? scheme)
+    {
+        if (scheme == null || _themePart?.Theme?.ThemeElements?.ColorScheme == null) return null;
+        var cs = _themePart.Theme.ThemeElements.ColorScheme;
+        var s = scheme.Value;
+
+        DocumentFormat.OpenXml.Drawing.Color2Type? c2 = null;
+        if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Dark1 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Text1) c2 = cs.Dark1Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Light1 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Background1) c2 = cs.Light1Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Dark2 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Text2) c2 = cs.Dark2Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Light2 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Background2) c2 = cs.Light2Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent1) c2 = cs.Accent1Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent2) c2 = cs.Accent2Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent3) c2 = cs.Accent3Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent4) c2 = cs.Accent4Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent5) c2 = cs.Accent5Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent6) c2 = cs.Accent6Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Hyperlink) c2 = cs.Hyperlink;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.FollowedHyperlink) c2 = cs.FollowedHyperlinkColor;
+        if (c2 == null) return null;
+
+        var srgb = c2.GetFirstChild<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>();
+        if (srgb?.Val?.Value != null) return HexColorOrNull(srgb.Val.Value);
+        var sys = c2.GetFirstChild<DocumentFormat.OpenXml.Drawing.SystemColor>();
+        return HexColorOrNull(sys?.LastColor?.Value);
     }
 
     /// <summary>
@@ -3443,7 +3816,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         if (d.Length == 0 || spaceW <= 0 || spaceH <= 0) return string.Empty;
 
-        var fill = fillHex != null ? $"#{fillHex}" : "#000000";
+        // Brak rozwiązanego wypełnienia: NIE malujemy solidnego czarnego bloba (najgorszy wynik dla
+        // logo/wordmark). currentColor dziedziczy kolor tekstu otoczenia (w stopkach zwykle brand/tekst).
+        var fill = fillHex != null ? $"#{fillHex}" : "currentColor";
         var stroke = strokeHex != null
             ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
             : string.Empty;

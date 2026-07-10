@@ -15,7 +15,8 @@ public record SaveDocumentCommand(
     HeaderFooterContent? Footer,
     PageMargins? Margins = null,
     PageSize? PageSize = null,
-    List<SectionHeaderFooter>? SectionHeadersFooters = null
+    List<SectionHeaderFooter>? SectionHeadersFooters = null,
+    List<Footnote>? Footnotes = null
 ) : IRequest<Result<SaveDocumentResult>>;
 
 public record SaveDocumentResult(byte[] DocxBytes, string FileName);

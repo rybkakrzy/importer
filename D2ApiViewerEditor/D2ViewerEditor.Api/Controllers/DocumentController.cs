@@ -71,7 +71,8 @@ public class DocumentController : BaseApiController
             request.Footer,
             request.Margins,
             request.PageSize,
-            request.SectionHeadersFooters
+            request.SectionHeadersFooters,
+            request.Footnotes
         );
 
         var result = await Mediator.Send(command);

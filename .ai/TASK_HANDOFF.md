@@ -2,7 +2,81 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
-## Ostatnia aktualizacja (2026-07-08)
+## Ostatnia aktualizacja (2026-07-11)
+
+- **Fix: przyciski wyrównania/list nie pokazywały stanu aktywnego (toolbar, mini-toolbar, menu).**
+   - Root cause: `TextFormatting` nie niósł wyrównania ani stanu list (tylko B/I/U/S/sub/sup
+     z queryCommandState), a przyciski wyrównania w `editor-toolbar.html` i mini-toolbarze nie miały
+     ŻADNEGO bindingu `[class.active]` — toolbar nie miał czego podświetlić.
+   - Fix: model +`alignment`/`bulletList`/`numberedList`; `updateFormattingState` liczy wyrównanie
+     z computed `text-align` bloku pod karetką (`start`→left jak w Wordzie), listy z przodka `li`;
+     `isAlignActive()`/`alignmentActive()` (dokładnie jeden aktywny, domyślnie left); bindingi
+     w toolbarze głównym, mini-toolbarze oraz klasa `*-checked` w menu „Formatuj→Wyrównanie"
+     i kontekstowym podmenu wyrównania (nowe style w document-editor.scss).
+   - Testy: nowy `formatting-state.spec` 7/7; pełne GUI 396/396; `ng build` OK.
+
+- **Fix (UAT): komórki tabeli zaczynały się od twardej spacji (&nbsp;) — tekst przesunięty vs Word.**
+   - Root cause: placeholder pustej komórki `td.innerHTML='&nbsp;'` (insertTable + operacje
+     wiersz/kolumna/split/merge) zostawał przed wpisanym tekstem i szedł jako U+00A0 do DOCX.
+   - Fix (tylko front): placeholder komórek → `<br>` (eksport: goły `<br>` w td → pusty akapit);
+     nowy `onEditorBeforeInput` (beforeinput na stronach + nagłówku/stopce) zaznacza samotny
+     placeholder U+00A0 w bloku tuż przed wstawieniem tekstu → pisanie go zastępuje (pokrywa też
+     import DOCX `<td><p>&nbsp;</p></td>` i stare zapisane dokumenty).
+   - Separatory `<p>&nbsp;</p>` po tabeli celowo bez zmian (`<p><br></p>` = w:br → dodatkowa linia).
+   - Testy: nowy `wysiwyg-editor.table-cell-placeholder.spec.ts` 3/3; pełne GUI 389/389.
+   - **Uwaga:** dokumenty zapisane PRZED poprawką mają U+00A0 zapieczone w DOCX — beforeinput czyści
+     je dopiero przy pisaniu w danym bloku; ewentualne czyszczenie hurtowe (import/save) do decyzji.
+
+- **Fix: dokument Word „tylko do odczytu" był edytowalny w DOC2 Editor (ADR-0034).**
+   - Root cause: konwerter nie czytał ochrony z settings.xml; GUI decydowało o trybie wyłącznie
+     z obecności `versionId` w URL.
+   - Reader: `HasEnforcedEditProtection` w `DocxToHtmlConverter` (wymuszone `w:documentProtection`
+     edit≠none — także tryby częściowe; `w:writeProtection` recommended/hash/hashValue) → nowe pole
+     `DocumentContent.IsReadOnlyProtected` (Domain + interfejs TS).
+   - GUI `document-editor`: sygnał `documentEditProtected` (ustawiany w `_applyLoadedContent`,
+     samoresetujący), `editingDisabled` rozszerzone o ten stan, badge + toast, guard `saveDocument()`
+     `readOnly()`→`editingDisabled()`, guard w ticku auto-save, switch Autozapisu ukryty.
+     Przy okazji: `d2-wysiwyg-editor [readOnly]` podpięty pod `editingDisabled()` (wcześniej surowe
+     `readOnly()` — treść była edytowalna w trybie `lockedByOther`).
+   - Testy: `DocumentProtectionImportTests` 8/8; GUI +3 (document-editor.spec), pełna suita 386/386
+     (naprawiony też pre-existing fail `layout-shell.spec` — stub ResourceAccessService/MsalService).
+   - **Do rozważenia dalej:** egzekwowanie ochrony w `SaveDocumentCommandHandler` (risk R-29 —
+     dziś tylko GUI); ewentualny round-trip `w:documentProtection` na eksporcie; dialog hasła
+     writeProtection (dziś zawsze read-only).
+
+- **Fix: znaki specjalne (strzałka → z fontu symbolicznego) renderowane jako kwadrat zamiast glifu.**
+   - Root cause w readerze: `w:sym` emitowany jako goła encja PUA (U+F0xx) bez mapowania i bez
+     font-family → tofu w przeglądarce; symbole w zwykłym `w:t` (PUA lub znak bajtowy w foncie
+     Wingdings — autokorekta „-->" wstawia `è`) przechodziły literalnie.
+   - Fix: `ConvertSymbolCharToHtml`/`MapSymbolicTextRun`/`TryMapSymbolicChar` + tabele
+     `SymbolFontMap`/`WingdingsFontMap` → odpowiednik Unicode (round-trip jako zwykły tekst);
+     kod spoza tabel → encja w spanie z font-family fontu symbolicznego. `NormalizeSymbolFontName`
+     dopasowuje nazwy DOKŁADNIE („Segoe UI Symbol" ≠ font symboliczny). PUA bez fontu nietykane.
+   - Testy: `SymbolCharFidelityTests` 10/10; Infrastructure 412/412; build sln 0 błędów.
+   - **Uwaga:** jeżeli konkretny dokument zgłoszenia nadal pokaże kwadrat — pozyskać DOCX
+     i sprawdzić realny `w:font`/kod (tabele łatwo rozszerzyć); fallback span+font zadziała
+     na Windows nawet bez mapowania.
+
+- **Fix: kursor skakał na początek dokumentu podczas pisania; znaki lądowały w złym miejscu.**
+   - Root cause: `_repaginateNow` porównywał nowy rozkład stron z sygnałem `pageContents`, który jest
+     celowo przestarzały między repaginacjami (`onPageInput` go nie aktualizuje) → przy pisaniu check
+     zawsze false → co ~600 ms (max-wait debounce'a) rebind `[innerHTML]` WSZYSTKICH stron → utrata
+     selekcji (karetka na początek contenteditable) do czasu odroczonego restore (`setTimeout(0)`);
+     znaki wpisane w tym oknie lądowały na początku dokumentu lub ginęły ze starym DOM.
+   - Fix: porównanie z ŻYWYM DOM (serializacja per strona tym samym mechanizmem co `newPageContents`;
+     bez fallbacku `<p></p>` — pusta strona musi wymusić rebind) + wymagana zgodność liczby stron
+     z sygnałem (steruje `@for`). Zwykłe pisanie w środku strony = zero rebindów. Gdy rebind konieczny
+     (przelanie treści), restore karetki przez `afterNextRender` (injector w polu) zamiast `setTimeout(0)`.
+   - Testy: `pagination-overflow.spec` +4 (18/18); pełne GUI 382/383 (fail = pre-existing layout-shell).
+
+## Ostatnia aktualizacja (2026-07-10)
+
+- **Kompletna obsługa przypisów dolnych DOCX (ADR-0032).**
+   - Kontrakt: `Footnote { Id, Html }`; `DocumentContent.Footnotes` / `SaveDocumentRequest.Footnotes` (backend+TS). Odwołania w treści = `<sup class="footnote-ref" data-footnote-id="fn-N" aria-label="Przypis N">N</sup>`; treść przypisów żyje wyłącznie w liście `Footnotes` (jedno źródło prawdy). Tożsamość `fn-<ooxmlId>` stabilna; numer widoczny = kolejność pierwszych odwołań (reader przy emisji `<sup>`, GUI `syncFootnotesWithBody`); `w:id` OOXML przydzielany dopiero na eksporcie (1..N; separatory techniczne -1/0). ID NIE round-tripują 1:1 — deterministyczne przemapowanie.
+   - Reader `ExtractFootnotes` (po `ConvertBodyToHtml`, bo numeracja ustala się przy renderze) czyta `FootnotesPart`, pomija separator/continuationSeparator/continuationNotice, treść przez `ConvertParagraphToHtml`/`ConvertTableToHtml`; `FootnoteReferenceMark` w treści pomijany. Writer `AddFootnotes` (`AddNewPart<FootnotesPart>` → relacja+content type auto) + `ConvertHtmlToBody` na treść (relacje obrazów zakresowane do części przypisów). Alias `DomainFootnote`/`WpFootnote` w obu konwerterach (kolizja `Footnote` OOXML vs domena).
+   - GUI: panel `.footnotes-panel` POZA contenteditable (nie serializuje się w `getContent`); odwołania w body renderują się same z HTML; edycja treści commitowana na `blur`; `syncFootnotesWithBody` renumeruje odwołania w DOM i przycina osierocone treści (wpięte w `_schedulePersist`). `addFootnoteAtCursor`/`removeFootnote` publiczne.
+   - Testy: backend `FootnoteFidelityTests` 18/18 (fixture `FootnoteTestDocuments` na czystym OpenXML SDK, walidacja OOXML), GUI `wysiwyg-editor.footnotes.spec` 7/7 + `document-editor.footnotes.spec` 2/2. Solucja 0 fail; GUI 378/379 (pre-existing `spec-layout-shell`).
+   - **Do rozważenia dalej:** obsługa przypisów w ścieżce `Sign` (dziś nie przenosi); przypisanie treści przypisu do konkretnej strony (dziś panel dla całego dokumentu); przypisy końcowe (endnotes) analogicznym mechanizmem; round-trip `w:footnotePr` (format numeracji/restart) — dziś nieodwzorowany.
 
 - **Domyślne odstępy/interlinia dokumentu + tabele nie psują się po zapisie (ADR-0031).**
    - Kontrakt: reader emituje na `.document-content` font + `data-default-before/after-tw`/`data-default-line`/`data-default-line-rule` + `line-height`; writer (`CaptureDocumentDefaults`) odtwarza z nich docDefaults/Normal regenerowanego pakietu; GUI (`_captureDocumentDefaults`/`_wrapWithDocumentContainer`) rozwija wrapper przy imporcie i owija treść z powrotem w `getContent()` — bez tego writer w produkcyjnym zapisie nie widzi domyślnych wartości dokumentu.
@@ -34,18 +108,18 @@
    - Testy: nowy `DocxAnchorPositionFidelityTests` 8/8; zaktualizowane `Doc2ImportFidelityTests.AnchoredTextBox…` i `ImageFloatingRoundTripTests`; Infrastructure 339/339, build solucji 0 błędów.
    - **Do rozważenia dalej:** dokładniejszy Y (pomiar realnego pasma nagłówka zamiast założenia „≈ górny margines"), `wp:align` pionowy center/bottom, rozróżnienie inside/outside dla stron parzystych, `wrapSquare`/`wrapTight` (opływanie tekstem) zamiast obecnego front/behind.
 
-- **SVG „puste białe logo" w nagłówku (Doc2/ING) — sanitizer naprawiony u źródła.**
+- **SVG „puste białe logo" w nagłówku (Doc2/Qutalo) — sanitizer naprawiony u źródła.**
    - `GraphicConversionService.SanitizeSvg`: (1) wewnętrzny `<use href="#id">` ZOSTAJE (wcześniej wycinany bezwarunkowo — logo z `<defs>`+`<use>` = pusty biały obraz o poprawnych wymiarach), zewnętrzny/data:/bez href usuwany (`HasInternalFragmentHref`); (2) UTF-8 BOM trimowany przed parsowaniem (wcześniej cały SVG odrzucany); (3) `SafeParse`: `DtdProcessing.Prohibit`→`Ignore` (DOCTYPE Illustratora przechodzi; XXE nadal null — encje niezdefiniowane rzucają).
    - Testy: `GraphicConversionSecurityTests` +4 i zaktualizowany `SanitizeSvg_KeepsSafeDataHrefAndFragment` (poprzednio pilnował usuwania use), `Doc2ImportFidelityTests` +2 E2E (defs/use w data-URI, BOM). SVG-testy 25/25; Infrastructure 325/328 w czystym worktree (3 faile = WIP hMerge/tab-in-cell z sesji tabelowej, niezwiązane).
    - **Triage gdy logo nadal puste po wdrożeniu:** logi backendu „SVG part pominięty…" / „Media part bez rastra web…"; w DOM edytora `data-legacy-graphic="blank"` na `<img>` ⇒ metafile EMF+ (poza etapem 1 ADR-0027 — patrz kandydaci etapu 2: parsowanie EMF+ z GDICOMMENT). Najlepiej pozyskać źródłowy DOCX i przepuścić przez `tools/docx-diagnostics/inspect-docx`.
    - Ograniczenie bez zmian: writer dropuje SVG na eksporcie HTML→DOCX (utrata na 1. autosave; roadmapa `asvg:svgBlip`/rasteryzacja SVG→PNG).
 
-- **Tabele Doc2/ING — druga runda (screenshot edytor vs Word):**
+- **Tabele Doc2/Qutalo — druga runda (screenshot edytor vs Word):**
    - `w:hMerge` (legacy scalanie poziome) obsłużony w readerze: `BuildRowRenderPlan` + `GetHMerge` w `DocxToHtmlConverter` (restart pochłania continue jako colspan; continue pomijane jak kontynuacje vMerge; pominięty val = continue; sierota renderowana normalnie). Fix „deficytu kolumn" z 2026-07-06 zostaje — dotyczył KRÓTKICH wierszy, ten dokument używał hMerge.
    - Taby POZYCYJNE wyłączone wewnątrz komórek tabel (`usePositionedTabs && !paragraph.Ancestors<TableCell>().Any()`) — absolutne segmenty wyjeżdżały poza wąską komórkę (nałożone nagłówki) i wyłączały text-align komórki. W komórce: inline spacer/flex jak dawniej; `data-tab-stops` dalej round-tripuje.
    - Testy: `Doc2ImportFidelityTests` 24/24 (+4). Infrastructure 321/322.
    - **Wyjaśnione:** fail `SanitizeSvg_KeepsSafeDataHrefAndFragment` pochodził z RÓWNOLEGŁEJ sesji SVG w tym samym drzewie (produkcja już zachowywała `<use>`, test chwilowo stary) — domknięte wpisem „SVG puste białe logo" wyżej, test zaktualizowany, komplet zielony.
-   - Jeśli tabela ING nadal odbiega: kandydaci = warunkowe formatowanie TEKSTU ze stylu tabeli (jc/bold nagłówka ze stylu — znane ograniczenie ADR-0026) oraz reguła „tab skacze do NASTĘPNEGO stopu za bieżącą pozycją x" (k-ty tab → k-ty stop).
+   - Jeśli tabela Qutalo nadal odbiega: kandydaci = warunkowe formatowanie TEKSTU ze stylu tabeli (jc/bold nagłówka ze stylu — znane ograniczenie ADR-0026) oraz reguła „tab skacze do NASTĘPNEGO stopu za bieżącą pozycją x" (k-ty tab → k-ty stop).
 
 - **Własny tłumacz wektorowy EMF/WMF → SVG, etap 1 (ADR-0027).**
    - Nowy `MetafileVectorTranslator` (Infrastructure, internal, pure-managed — zero zależności) tłumaczy podzbiór rekordów GDI na SVG; wpięty jako strategia `vector-translate` w `GraphicConversionService.ConvertMetafile` po `dib-rasterize`, przed blankiem. SVG tylko podgląd — eksport zawsze niesie oryginalny metafile (data-original-src / pass-through), `LoadImageFromPart` nie podmienia bajtów na SVG.

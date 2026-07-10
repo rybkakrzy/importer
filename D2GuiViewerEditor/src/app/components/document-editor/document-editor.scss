@@ -191,6 +191,19 @@
   color: #666;
 }
 
+/* Zaznaczona opcja wyboru w menu (np. aktualne wyrównanie) — jak „ptaszek" w Wordzie. */
+.dropdown-item-checked {
+  background: #d0e8ff;
+  color: #0066cc;
+  font-weight: 600;
+
+  svg { color: #0066cc; }
+
+  &:hover:not(:disabled) {
+    background: #bcdcfa;
+  }
+}
+
 .dropdown-item-spacer {
   display: inline-block;
   width: 18px;
@@ -2374,6 +2387,19 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   letter-spacing: 0.04em;
   user-select: none;
   pointer-events: none;
+}
+
+/* Zaznaczona opcja wyboru w menu kontekstowym (np. aktualne wyrównanie). */
+.context-menu-item-checked {
+  background: #d0e8ff;
+  color: #0066cc;
+  font-weight: 600;
+
+  svg { color: #0066cc; }
+
+  &:hover {
+    background: #bcdcfa;
+  }
 }
 
 .context-menu-item-danger {

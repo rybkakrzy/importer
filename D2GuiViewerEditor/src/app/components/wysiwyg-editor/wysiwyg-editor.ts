@@ -13,7 +13,9 @@ import {
   ViewChildren,
   QueryList,
   ViewEncapsulation,
-  input
+  input,
+  Injector,
+  afterNextRender
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -27,7 +29,8 @@ import {
   PageMargins,
   PageSize,
   HeaderFooterContent,
-  SectionHeaderFooter
+  SectionHeaderFooter,
+  Footnote
 } from '../../models/document.model';
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
 import { syncTableColgroup } from '../../core/utils/table-grid.util';
@@ -366,6 +369,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   activePageIndex = signal<number>(0);
 
   private _sanitizer = inject(DomSanitizer);
+  private _injector = inject(Injector);
   /** Cache trusted-HTML per strona — KLUCZOWE dla wydajności i contenteditable.
    *  Bez tego każde change detection tworzy nowy obiekt SafeHtml, Angular widzi
    *  „zmianę" i rebinduje innerHTML co kasuje kursor + uniemożliwia pisanie. */
@@ -409,6 +413,171 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private invalidateHeaderFooterCache(): void {
     this._safeHeaderCache.clear();
     this._safeFooterCache.clear();
+  }
+
+  // ── Przypisy dolne ────────────────────────────────────────────────────────
+  // Treść przypisów (jedno źródło prawdy) trzymana w sygnale, renderowana w panelu
+  // POZA contenteditable body. Odwołania (<sup class="footnote-ref">) żyją w treści
+  // strony; numer widoczny wynika z kolejności pierwszych odwołań i jest przeliczany
+  // po każdej operacji edycyjnej (add/remove/reorder).
+
+  private readonly _footnotes = signal<Footnote[]>([]);
+  readonly footnoteList = computed(() => this._footnotes());
+
+  @Input() set footnotes(value: Footnote[] | undefined) {
+    // Kopia obronna — nie mutujemy tablicy wejściowej rodzica.
+    this._footnotes.set(value ? value.map(f => ({ ...f })) : []);
+  }
+
+  @Output() footnotesChange = new EventEmitter<Footnote[]>();
+
+  /** Cache SafeHtml treści przypisu (klucz = id + treść) — bez tego rebinding kasuje kursor. */
+  private _footnoteHtmlCache = new Map<string, SafeHtml>();
+
+  footnoteSafeHtml(fn: Footnote): SafeHtml {
+    const key = `${fn.id} ${fn.html}`;
+    let safe = this._footnoteHtmlCache.get(key);
+    if (!safe) {
+      safe = this._sanitizer.bypassSecurityTrustHtml(fn.html || '<p></p>');
+      this._footnoteHtmlCache.set(key, safe);
+    }
+    return safe;
+  }
+
+  /** Zwraca aktualny model przypisów (dla zapisu / testów). */
+  getFootnotes(): Footnote[] {
+    return this._footnotes().map(f => ({ ...f }));
+  }
+
+  /** Commit treści przypisu po edycji w panelu (blur) → aktualizacja modelu + emisja. */
+  commitFootnoteContent(id: string, event: Event): void {
+    if (this.readOnly) return;
+    const el = event.target as HTMLElement | null;
+    if (!el) return;
+    const html = el.innerHTML;
+    const current = this._footnotes();
+    const idx = current.findIndex(f => f.id === id);
+    if (idx < 0 || current[idx].html === html) return;
+
+    const updated = current.map(f => (f.id === id ? { ...f, html } : f));
+    this._footnotes.set(updated);
+    this.footnotesChange.emit(this.getFootnotes());
+  }
+
+  /** Wszystkie odwołania w treści stron, w kolejności dokumentu (DOM). */
+  private _footnoteReferenceElements(): HTMLElement[] {
+    const refs: HTMLElement[] = [];
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      page.nativeElement
+        .querySelectorAll<HTMLElement>('sup.footnote-ref[data-footnote-id]')
+        .forEach(el => refs.push(el));
+    }
+    return refs;
+  }
+
+  /**
+   * Uzgadnia model przypisów z odwołaniami w treści: numeruje odwołania wg kolejności
+   * pierwszego wystąpienia, porządkuje listę treści tak samo, usuwa treści bez odwołania
+   * (brak osieroconych) i emituje zmianę. Woływane po każdej operacji edycyjnej.
+   */
+  syncFootnotesWithBody(): void {
+    const refEls = this._footnoteReferenceElements();
+
+    // Kolejność pierwszych wystąpień + mapa id → numer (współdzielony przez powtórzone odwołania).
+    const order: string[] = [];
+    const numberById = new Map<string, number>();
+    for (const el of refEls) {
+      const id = el.getAttribute('data-footnote-id') ?? '';
+      if (!id) continue;
+      if (!numberById.has(id)) {
+        numberById.set(id, order.length + 1);
+        order.push(id);
+      }
+    }
+
+    // Odśwież numer + etykietę na KAŻDYM odwołaniu (także powtórzonych).
+    for (const el of refEls) {
+      const id = el.getAttribute('data-footnote-id') ?? '';
+      const number = numberById.get(id);
+      if (!number) continue;
+      if (el.textContent !== String(number)) el.textContent = String(number);
+      el.setAttribute('aria-label', `Przypis ${number}`);
+    }
+
+    // Uporządkuj listę treści wg kolejności odwołań; treści bez odwołania są usuwane.
+    const byId = new Map(this._footnotes().map(f => [f.id, f]));
+    const reordered: Footnote[] = order.map(id => byId.get(id) ?? { id, html: '<p></p>' });
+
+    if (this._footnotesChanged(reordered)) {
+      this._footnotes.set(reordered);
+      this.footnotesChange.emit(this.getFootnotes());
+    }
+  }
+
+  private _footnotesChanged(next: Footnote[]): boolean {
+    const cur = this._footnotes();
+    if (cur.length !== next.length) return true;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i].id !== next[i].id || cur[i].html !== next[i].html) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Wstawia nowy przypis w bieżącej pozycji kursora: odwołanie <sup> w treści + pusty
+   * wpis treści w modelu, po czym przelicza numerację. Zwraca id nowego przypisu.
+   */
+  addFootnoteAtCursor(): string | null {
+    if (this.readOnly) return null;
+    const editor = this.getActiveEditor();
+    if (!editor) return null;
+
+    const id = `fn-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const sup = document.createElement('sup');
+    sup.className = 'footnote-ref';
+    sup.setAttribute('data-footnote-id', id);
+    sup.setAttribute('aria-label', 'Przypis');
+    sup.textContent = '?';
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(sup);
+      range.setStartAfter(sup);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } else {
+      editor.appendChild(sup);
+    }
+
+    // Dodaj wpis treści; kolejność/numer ustali syncFootnotesWithBody wg pozycji w DOM.
+    this._footnotes.set([...this._footnotes(), { id, html: '<p></p>' }]);
+    this.syncFootnotesWithBody();
+    this.contentChange.emit(this.getContent());
+    return id;
+  }
+
+  /**
+   * Usuwa przypis: kasuje WSZYSTKIE jego odwołania z treści oraz wpis treści, po czym
+   * przelicza numerację. Bez osieroconych odwołań ani nieużywanych przypisów.
+   */
+  removeFootnote(id: string): void {
+    if (this.readOnly) return;
+
+    let removedFromDom = false;
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      page.nativeElement
+        .querySelectorAll<HTMLElement>(`sup.footnote-ref[data-footnote-id="${id}"]`)
+        .forEach(el => { el.remove(); removedFromDom = true; });
+    }
+
+    // Nie usuwamy z modelu ręcznie — syncFootnotesWithBody przytnie treść bez odwołania,
+    // przenumeruje pozostałe i wyemituje footnotesChange. Przypis bez odwołania w DOM też
+    // zostanie przycięty (brak nieużywanych przypisów).
+    this.syncFootnotesWithBody();
+    if (removedFromDom) this.contentChange.emit(this.getContent());
   }
 
   // Paginator: debounce + safety flag
@@ -3155,7 +3324,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       for (let j = 0; j < cols; j++) {
         const td = document.createElement('td');
         td.style.cssText = `border:1px solid #ccc;padding:8px;min-width:30px;width:${colWidth}%;`;
-        td.innerHTML = '&nbsp;';
+        // <br> a nie &nbsp; — twarda spacja zostawała przed wpisanym tekstem i szła do DOCX
+        td.innerHTML = '<br>';
         tr.appendChild(td);
       }
       table.appendChild(tr);
@@ -3372,21 +3542,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aktualizuje stan formatowania
    */
   private updateFormattingState(): void {
-    const formatting: TextFormatting = {
-      bold: document.queryCommandState('bold'),
-      italic: document.queryCommandState('italic'),
-      underline: document.queryCommandState('underline'),
-      strikethrough: document.queryCommandState('strikeThrough'),
-      subscript: document.queryCommandState('subscript'),
-      superscript: document.queryCommandState('superscript')
-    };
-
     // Pobierz rzeczywisty rozmiar i czcionkę z computed styles
     const selection = window.getSelection();
     let fontSize = 11;
     let fontFamily = 'Calibri';
     let textColor = '#000000';
     let currentBlockFormat = 'p';
+    // Wyrównanie/listy liczone z DOM (nie queryCommandState) — komendy justify* zapisują
+    // inline text-align na bloku, a import DOCX niesie je i inline, i przez style;
+    // computed style pokrywa oba źródła. Domyślne 'start' = lewa (jak w Wordzie).
+    let alignment: 'left' | 'center' | 'right' | 'justify' = 'left';
+    let bulletList = false;
+    let numberedList = false;
 
     if (selection && selection.rangeCount > 0) {
       // Wyznacz „element pod karetką" tak, żeby na granicach spanów
@@ -3434,9 +3601,31 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         }
         if (blockElement) {
           currentBlockFormat = blockElement.tagName.toLowerCase();
+          const ta = window.getComputedStyle(blockElement).textAlign;
+          alignment = ta === 'center' ? 'center'
+            : (ta === 'right' || ta === 'end') ? 'right'
+            : ta === 'justify' ? 'justify'
+            : 'left';
         }
+
+        const li = element.closest('li');
+        const listTag = li?.parentElement?.tagName;
+        bulletList = listTag === 'UL';
+        numberedList = listTag === 'OL';
       }
     }
+
+    const formatting: TextFormatting = {
+      bold: document.queryCommandState('bold'),
+      italic: document.queryCommandState('italic'),
+      underline: document.queryCommandState('underline'),
+      strikethrough: document.queryCommandState('strikeThrough'),
+      subscript: document.queryCommandState('subscript'),
+      superscript: document.queryCommandState('superscript'),
+      alignment,
+      bulletList,
+      numberedList
+    };
 
     // Detect a selection that spans more than one font family so the toolbar can
     // show a mixed (blank) state instead of an arbitrary single font (item 6).
@@ -3587,11 +3776,39 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.updateFormattingState();
   }
 
+  /** Placeholder &nbsp; pustych bloków (komórki tabel, akapity z importu DOCX) musi
+   *  zniknąć w chwili rozpoczęcia pisania — inaczej tekst zaczyna się od twardej
+   *  spacji, której nie ma w Wordzie. Zamiast usuwać węzeł (kursor straciłby kotwicę),
+   *  zaznaczamy nbsp, więc domyślne wstawienie tekstu go zastępuje. */
+  onEditorBeforeInput(event: InputEvent): void {
+    if (event.inputType !== 'insertText' && event.inputType !== 'insertFromPaste') return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+    const anchor = sel.anchorNode;
+    if (!anchor) return;
+    const el = anchor.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor.parentElement;
+    const block = el?.closest('p, h1, h2, h3, h4, h5, h6, li, td, th');
+    if (!block || block.textContent !== '\u00A0') return;
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let nbspNode: Text | null = null;
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if ((n as Text).data.includes('\u00A0')) { nbspNode = n as Text; break; }
+    }
+    if (!nbspNode) return;
+    const range = document.createRange();
+    range.selectNodeContents(nbspNode);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
   /** Debounce ciężkich operacji (undo snapshot + emit contentChange) — 500 ms. */
   private _schedulePersist(): void {
     if (this._persistTimer) clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
+      // Renumeruj przypisy i przytnij osierocone treści PRZED serializacją — edycja treści
+      // (usunięcie/przeniesienie odwołania) musi uaktualnić numerację i model przypisów.
+      this.syncFootnotesWithBody();
       const html = this.getContent();
       this._isInternalUpdate = true;
       this._content.set(html);
@@ -3841,11 +4058,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const caret = this._saveGlobalCaret(refs);
 
       const allBlocks: HTMLElement[] = [];
+      // Serializacja ŻYWEGO DOM per strona (tym samym mechanizmem co newPageContents niżej)
+      // — potrzebna do decyzji, czy rebind [innerHTML] jest w ogóle konieczny. Celowo BEZ
+      // fallbacku '<p></p>': pusta strona w DOM musi różnić się od syntetycznego akapitu,
+      // żeby rebind przywrócił edytowalny <p>.
+      const livePageContents: string[] = [];
+      const liveTmp = document.createElement('div');
       for (const ref of refs) {
         const kids = this._flattenTopBlocks(ref.nativeElement);
+        liveTmp.innerHTML = '';
         kids.forEach(child => {
-          allBlocks.push(child.cloneNode(true) as HTMLElement);
+          const clone = child.cloneNode(true) as HTMLElement;
+          allBlocks.push(clone);
+          liveTmp.appendChild(clone);
         });
+        livePageContents.push(liveTmp.innerHTML);
       }
       if (allBlocks.length === 0) {
         allBlocks.push(document.createElement('p'));
@@ -3984,12 +4211,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
       this.pageGeometries.set(pageGeos);
       this.pageSectionIndexes.set(pageSections);
-      const current = this.pageContents();
-      const identical = current.length === newPageContents.length
-        && current.every((v, i) => v === newPageContents[i]);
-      if (!identical) {
+      // Rebind [innerHTML] tylko gdy rozkład bloków na strony REALNIE się zmienił — porównanie
+      // z ŻYWYM DOM, nie z sygnałem pageContents. Sygnał jest celowo przestarzały między
+      // repaginacjami (onPageInput go nie aktualizuje), więc przy pisaniu różnił się ZAWSZE
+      // i każda repaginacja (max-wait 600 ms) wymieniała DOM stron: selekcja ginęła, kursor
+      // na ułamek sekundy spadał na początek dokumentu, a znaki wpisane przed odtworzeniem
+      // karetki lądowały w złym miejscu / ginęły. Zgodność liczby stron z sygnałem jest
+      // wymagana, bo to sygnał steruje @for stron (żywy DOM opisuje tylko wyrenderowane).
+      const domAlreadyCorrect = newPageContents.length === this.pageContents().length
+        && newPageContents.length === livePageContents.length
+        && newPageContents.every((v, i) => v === livePageContents[i]);
+      if (!domAlreadyCorrect) {
         this.pageContents.set(newPageContents);
-        setTimeout(() => this._restoreGlobalCaret(caret), 0);
+        // Odtworzenie karetki zaraz PO renderze (nie setTimeout 0) — zwęża okno, w którym
+        // klawisz mógł trafić w zresetowaną selekcję po podmianie innerHTML.
+        afterNextRender(() => this._restoreGlobalCaret(caret), { injector: this._injector });
       }
       this.calculatePages();
       // Repaginacja przenosi bloki między stronami — znacznik kotwicy musi pojechać

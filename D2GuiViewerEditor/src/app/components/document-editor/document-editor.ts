@@ -36,7 +36,8 @@ import {
   HeaderFooterContent,
   SectionHeaderFooter,
   DigitalSignatureInfo,
-  SignDocumentRequest
+  SignDocumentRequest,
+  Footnote
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
 import { FontProviderService } from '../../services/font-provider.service';
@@ -125,10 +126,19 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   lockedByOther = signal<boolean>(false);
 
   /**
-   * Edycja zablokowana: tryb tylko-do-odczytu LUB dokument zajęty przez kogoś innego.
+   * Dokument źródłowy jest chroniony przed edycją (Word: „Ogranicz edycję" / hasło zapisu;
+   * settings.xml: wymuszone w:documentProtection lub w:writeProtection). Ustawiane z flagi
+   * `isReadOnlyProtected` konwersji przy KAŻDYM załadowaniu treści — resetuje się samo
+   * przy otwarciu kolejnego, niechronionego dokumentu.
+   */
+  documentEditProtected = signal<boolean>(false);
+
+  /**
+   * Edycja zablokowana: tryb tylko-do-odczytu, dokument zajęty przez kogoś innego
+   * LUB dokument chroniony przed edycją w pliku źródłowym.
    * Steruje ukrywaniem edycyjnych funkcji w toolbarze i menu.
    */
-  editingDisabled = computed(() => this.readOnly() || this.lockedByOther());
+  editingDisabled = computed(() => this.readOnly() || this.lockedByOther() || this.documentEditProtected());
 
   // Auto-save (nadpisuje wersję edytowalną w miejscu)
   autoSaveEnabled = signal<boolean>(environment.autoSave?.enabled ?? true);
@@ -563,6 +573,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   documentPageSize = signal<PageSize | undefined>(undefined);
   /** Własne nagłówki/stopki sekcji ≥ 1 z importu (dokumenty wielosekcyjne, ADR-0023). */
   sectionHeadersFooters = signal<SectionHeaderFooter[] | null>(null);
+  /** Przypisy dolne z importu (jedno źródło prawdy treści; round-trip przez zapis). */
+  footnotes = signal<Footnote[] | null>(null);
   marginPresets = MARGIN_PRESETS;
 
   // Dialog nagłówka i stopki
@@ -715,6 +727,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.autoSaveSub = timer(intervalMs, intervalMs).subscribe(() => {
       if (!this.autoSaveEnabled()) return;
       if (this.isAutoSaving) return;
+      if (this.editingDisabled()) return;
       if (!this.documentVersionId() || !this.documentMasterId()) return;
       if (!this.editorState()?.isModified) return;
       this.performAutoSave();
@@ -749,7 +762,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       footer: this.footerContent(),
       margins: this.pageSettings().margins,
       pageSize: this.documentPageSize(),
-      sectionHeadersFooters: this.sectionHeadersFooters() ?? undefined
+      sectionHeadersFooters: this.sectionHeadersFooters() ?? undefined,
+      footnotes: this.footnotes() ?? undefined
     };
   }
 
@@ -1039,6 +1053,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   /** Ustawia treść/metadane/nagłówki/stopki/marginesy/podpisy z DocumentContent w edytorze. */
   private _applyLoadedContent(content: DocumentContent, fileName: string): void {
+    // Ochrona przed edycją z pliku źródłowego (Word „Ogranicz edycję" / hasło zapisu) —
+    // blokuje edycję niezależnie od trybu (versionId) i informuje użytkownika.
+    const editProtected = content.isReadOnlyProtected === true;
+    this.documentEditProtected.set(editProtected);
+    if (editProtected) {
+      this.showError('Dokument jest chroniony przed edycją w pliku źródłowym — otwarto w trybie tylko do odczytu.');
+    }
     this.documentContent.set(content.html);
     this.documentMetadata.set(content.metadata);
     this.documentStyles.set(content.styles || []);
@@ -1063,6 +1084,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
     // Własne nagłówki/stopki sekcji ≥ 1 (dokumenty wielosekcyjne) — round-trip przez zapis.
     this.sectionHeadersFooters.set(content.sectionHeadersFooters ?? null);
+    // Przypisy dolne — treść przekazywana do edytora i z powrotem w zapisie (jedno źródło prawdy).
+    this.footnotes.set(content.footnotes ?? null);
     if (this.editor) {
       this.editor.setContent(content.html);
     }
@@ -1124,9 +1147,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Nadpisuje wersję edytowalną (v2) w miejscu gdy jest versionId; w przeciwnym razie tworzy nową wersję.
    */
   saveDocument(): void {
-    if (this.readOnly()) {
-      // Tryb podglądu (Krok 2) — wersja bazowa jest nietykalna. Zapis przez API zablokowany.
-      this.showError('Tryb podglądu — dokument jest tylko do odczytu. Użyj „Pobierz dokument", aby zapisać kopię lokalnie.');
+    if (this.editingDisabled()) {
+      // Tryb podglądu (Krok 2), dokument zajęty albo chroniony przed edycją — zapis przez API zablokowany.
+      this.showError(this.documentEditProtected()
+        ? 'Dokument jest chroniony przed edycją — zapis jest zablokowany.'
+        : 'Tryb podglądu — dokument jest tylko do odczytu. Użyj „Pobierz dokument", aby zapisać kopię lokalnie.');
       this.showMenu.set(false);
       return;
     }
@@ -3001,6 +3026,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Stan przycisków wyrównania (mini-toolbar / menu kontekstowe) — jak w Wordzie
+   * dokładnie jeden aktywny; brak jawnego text-align = „do lewej".
+   */
+  alignmentActive(align: 'left' | 'center' | 'right' | 'justify'): boolean {
+    return (this.editorState()?.currentFormatting?.alignment ?? 'left') === align;
+  }
+
   miniToolbarCommand(command: string): void {
     this.editor?.executeCommand(command as any);
     // Nie zamykaj — użytkownik może kliknąć kolejny przycisk
@@ -3933,7 +3966,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const newRow = table.insertRow(pos.rowIndex);
     for (let i = 0; i < colCount; i++) {
       const td = newRow.insertCell();
-      td.innerHTML = '&nbsp;';
+      td.innerHTML = '<br>';
       td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
     }
     this.notifyEditorChange();
@@ -3951,7 +3984,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const newRow = table.insertRow(insertAt < table.rows.length ? insertAt : -1);
     for (let i = 0; i < colCount; i++) {
       const td = newRow.insertCell();
-      td.innerHTML = '&nbsp;';
+      td.innerHTML = '<br>';
       td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
     }
     this.notifyEditorChange();
@@ -3966,7 +3999,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     if (!pos) return;
     Array.from(table.rows).forEach(row => {
       const td = row.insertCell(Math.min(pos.colIndex, row.cells.length));
-      td.innerHTML = '&nbsp;';
+      td.innerHTML = '<br>';
       td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
     });
     syncTableColgroup(table);
@@ -3983,7 +4016,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const insertAt = pos.colIndex + 1;
     Array.from(table.rows).forEach(row => {
       const td = row.insertCell(Math.min(insertAt, row.cells.length));
-      td.innerHTML = '&nbsp;';
+      td.innerHTML = '<br>';
       td.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
     });
     syncTableColgroup(table);
@@ -4154,7 +4187,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const rowSpan = maxRow - minRow + 1;
     firstCell.colSpan = colSpan;
     firstCell.rowSpan = rowSpan;
-    firstCell.innerHTML = mergedContent || '&nbsp;';
+    firstCell.innerHTML = mergedContent || '<br>';
 
     // Usuń nadmiarowe komórki
     const table = this.activeTable();
@@ -4191,11 +4224,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       Array.from(table.rows).forEach((row, ri) => {
         if (ri === pos.rowIndex) {
           const newTd = row.insertCell(pos.colIndex + 1);
-          newTd.innerHTML = '&nbsp;';
+          newTd.innerHTML = '<br>';
           newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
         } else {
           const newTd = row.insertCell(Math.min(pos.colIndex + 1, row.cells.length));
-          newTd.innerHTML = '&nbsp;';
+          newTd.innerHTML = '<br>';
           newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
         }
       });
@@ -4209,7 +4242,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       const row = cell.parentElement as HTMLTableRowElement;
       for (let c = 1; c < cs; c++) {
         const newTd = row.insertCell(Array.from(row.cells).indexOf(cell) + 1);
-        newTd.innerHTML = '&nbsp;';
+        newTd.innerHTML = '<br>';
         newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
       }
       // Dodaj brakujące komórki w kolejnych wierszach
@@ -4219,7 +4252,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         for (let c = 0; c < cs; c++) {
           const insertIdx = Math.min(pos.colIndex, targetRow.cells.length);
           const newTd = targetRow.insertCell(insertIdx);
-          newTd.innerHTML = '&nbsp;';
+          newTd.innerHTML = '<br>';
           newTd.style.cssText = 'border:1px solid #ccc;padding:8px;min-width:30px;';
         }
       }

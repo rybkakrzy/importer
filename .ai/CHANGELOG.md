@@ -11,6 +11,205 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-11 — Fix: przyciski wyrównania/list nie pokazują stanu aktywnego (toolbar główny, mini-toolbar, menu)
+
+### Changed
+- `TextFormatting` (+`alignment?`/`bulletList?`/`numberedList?`): stan formatowania akapitu wreszcie
+  jest częścią kontraktu `EditorState` — wcześniej model niósł tylko bold/italic/underline/strike/sub/sup,
+  więc toolbar fizycznie nie miał czego podświetlić.
+- `wysiwyg-editor.updateFormattingState`: wyrównanie liczone z computed `text-align` bloku pod karetką
+  (pokrywa inline z `execCommand justify*` ORAZ wartości z importu DOCX; `start`/brak → `left` jak
+  w Wordzie), listy z przodka `li` (UL→bullet, OL→numbered). Odpala się na selectionchange — stan
+  jedzie za karetką bez dodatkowych zdarzeń.
+- `editor-toolbar`: `isAlignActive()` (dokładnie jeden aktywny, domyślnie left) + `[class.active]`
+  na 4 przyciskach wyrównania i 2 list; `isActive()` utwardzone (`=== true`, bo model ma teraz
+  pole nie-boolean).
+- `document-editor`: `alignmentActive()`; mini-toolbar `[class.mt-btn-active]` na wyrównaniu
+  i listach; menu „Formatuj→Wyrównanie" i kontekstowe podmenu wyrównania dostają klasę
+  `dropdown-item-checked`/`context-menu-item-checked` (nowe style — paleta jak `.toolbar-btn.active`).
+
+### Verified
+- Nowy `wysiwyg-editor.formatting-state.spec.ts` 7/7 (left domyślne, center/right/justify, ul/ol,
+  brak listy, toolbar: jeden aktywny + null-state). Pełne GUI **396/396** (0 fail), `ng build` OK.
+
+### Notes
+- Word-parity: „do lewej" aktywne także bez jawnego text-align (default akapitu).
+
+## 2026-07-11 — Fix (UAT): twarda spacja na początku każdej komórki tabeli
+
+### Changed
+- `wysiwyg-editor.insertTable` + operacje tabelowe w `document-editor` (wstaw wiersz/kolumnę,
+  podziel/scal komórki): placeholder pustej komórki zmieniony z `&nbsp;` na `<br>` —
+  `&nbsp;` zostawał przed wpisanym tekstem (przesunięcie względem MS Word) i trafiał jako
+  U+00A0 do zapisanego DOCX. Goły `<br>` w `td` eksportuje się do pustego akapitu
+  (`HtmlToDocxConverter.ConvertHtmlNode` case "br" → `new Paragraph()`).
+- Nowy handler `onEditorBeforeInput` (bindowany na `beforeinput` stron + nagłówka/stopki):
+  gdy blok (p/h1-6/li/td/th) zawiera wyłącznie U+00A0, zaznacza placeholder tuż przed
+  wstawieniem tekstu, więc pisanie go zastępuje. Obejmuje komórki/akapity z importu DOCX
+  (`<td><p>&nbsp;</p></td>`) i dokumenty zapisane przed poprawką.
+- Separatory-akapity po tabeli zostają z `&nbsp;` celowo — `<p><br></p>` eksportowałby się
+  do akapitu z `w:br` (dodatkowa linia w Wordzie); czyszczenie przy pisaniu robi beforeinput.
+
+### Verified
+- Nowy spec `wysiwyg-editor.table-cell-placeholder.spec.ts` (3 testy: placeholder `<br>`,
+  zaznaczenie nbsp przez beforeinput, brak ingerencji przy prawdziwej treści).
+- Pełny frontend: 389/389 testów, 42 pliki (`npx ng test --watch=false`).
+
+### Notes
+- W `wysiwyg-editor.ts` jest literalny bajt NUL w kluczu cache przypisów
+  (`${fn.id}\0${fn.html}`) — przez to ripgrep traktuje plik jako binarny; grep po tym
+  pliku robić przez Select-String.
+
+## 2026-07-11 — Fix: dokument Word „tylko do odczytu" był edytowalny w DOC2 Editor
+
+### Changed
+- `DocxToHtmlConverter`: nowa detekcja `HasEnforcedEditProtection` (settings.xml) — wymuszone
+  `w:documentProtection` (enforcement=1, edit≠none; tryby częściowe comments/forms/trackedChanges
+  też liczone jako ochrona) oraz `w:writeProtection` (w:recommended lub hasło zapisu w:hash/
+  w:hashValue). Wynik w nowym polu `DocumentContent.IsReadOnlyProtected` (Domain + model TS).
+- GUI `document-editor`: nowy sygnał `documentEditProtected` ustawiany w `_applyLoadedContent`
+  z flagi konwersji (samoresetujący przy kolejnym dokumencie); `editingDisabled` rozszerzone
+  o ten stan; badge „Tylko do odczytu — dokument chroniony przed edycją"; toast informacyjny
+  przy otwarciu; guard `saveDocument()` zmieniony z `readOnly()` na `editingDisabled()`;
+  dodatkowy guard w ticku auto-save; przełącznik Autozapisu ukrywany dla chronionych dokumentów.
+- GUI: `d2-wysiwyg-editor [readOnly]` podpięty pod `editingDisabled()` zamiast surowego
+  `readOnly()` — domyka to też lukę `lockedByOther` (treść była edytowalna mimo ukrytego toolbara).
+- `layout-shell.spec.ts`: dodane stuby `ResourceAccessService`/`MsalService` (pre-existing fail
+  NG0201 po tym, jak Dashboard zaczął wstrzykiwać gating zasobów — niezwiązany z tą zmianą).
+
+### Verified
+- Nowe `DocumentProtectionImportTests` 8/8 (enforced readOnly/comments, brak enforcement,
+  edit=none, writeProtection recommended/hash, puste settings, brak części settings).
+- Front: 3 nowe testy w `document-editor.spec.ts` (blokada edycji + toast, blokada zapisu,
+  reset flagi na kolejnym dokumencie). Cała suita **386/386**, backend Infrastructure zielony.
+
+### Notes
+- Egzekwowanie WYŁĄCZNIE po stronie GUI — patrz RISKS: endpoint zapisu nadal przyjmie PUT,
+  jeśli klient zignoruje flagę. Haseł ochrony nie weryfikujemy (dokument z hasłem zapisu
+  jest zawsze tylko-do-odczytu w edytorze).
+
+## 2026-07-11 — Fix: znaki specjalne z fontów symbolicznych (strzałka →) renderowane jako kwadrat/tofu
+
+### Changed
+- `DocxToHtmlConverter`: `w:sym` przestaje być emitowany jako goła encja PUA (`&#xF0E0;` bez fontu =
+  tofu w przeglądarce). Nowy `ConvertSymbolCharToHtml` + `TryMapSymbolicChar` + tabele
+  `SymbolFontMap` (greka, operatory, strzałki — kodowanie Adobe) i `WingdingsFontMap` (strzałki,
+  checkboxy, kształty): kod (po zdjęciu przesunięcia PUA U+F000..U+F0FF) mapowany na odpowiednik
+  Unicode — renderuje się wszędzie i round-tripuje jako zwykły tekst. Kod spoza tabel → encja
+  w spanie z `font-family` fontu symbolicznego (fonty są na Windows; writer odtwarza rFonts z CSS).
+  `w:sym` ze zwykłym fontem i normalnym code-pointem → znak wprost.
+- `MapSymbolicTextRun`: te same mapowania dla ZWYKŁEGO `w:t` — Word zapisuje symbole także jako
+  znaki PUA / znaki bajtowe w runie z fontem symbolicznym (autokorekta „-->" = literalne `è`
+  w foncie Wingdings). PUA bez fontu symbolicznego nietykane (nie zgadujemy glifu).
+  `NormalizeSymbolFontName` dopasowuje nazwę DOKŁADNIE (symbol/wingdings/wingdings 2/3/webdings) —
+  „Segoe UI Symbol" to normalny font Unicode i NIE podlega mapowaniu po młodszym bajcie.
+
+### Verified
+- Nowe `SymbolCharFidelityTests` 10/10 (w:sym Symbol/Wingdings/PUA i bez przesunięcia, zwykły font,
+  fallback span+font dla nieznanego kodu, w:t z PUA i znakiem bajtowym, ochrona Segoe UI Symbol,
+  czysty Unicode bez zmian). Infrastructure **412/412**, build solucji 0 błędów, goldeny nietknięte.
+
+### Notes
+- `MapBulletChar` (punktatory list) celowo NIE ruszany — ma własną semantykę fallbacku (•).
+- Eksport: zmapowany znak wraca jako zwykły tekst w `w:t` (Word renderuje poprawnie); fallback
+  span+PUA wraca jako run z rFonts fontu symbolicznego.
+
+## 2026-07-11 — Fix: kursor skacze na początek dokumentu podczas pisania (rebind stron przy każdej repaginacji)
+
+### Changed
+- `wysiwyg-editor.ts` `_repaginateNow`: decyzja o rebindzie `[innerHTML]` stron porównuje nowy rozkład
+  bloków z **żywym DOM** (serializacja per strona tym samym mechanizmem co `newPageContents`), a nie
+  z sygnałem `pageContents` — sygnał jest celowo przestarzały między repaginacjami (`onPageInput` go
+  nie aktualizuje), więc stary check `identical` był przy pisaniu zawsze false i KAŻDA repaginacja
+  (max-wait 600 ms) wymieniała DOM wszystkich stron: selekcja ginęła, kursor na ułamek sekundy spadał
+  na początek contenteditable, a znaki wpisane w oknie rebind→restore lądowały w złym miejscu lub
+  ginęły ze starym DOM. Dodatkowy warunek: liczba stron zgodna z sygnałem (sygnał steruje `@for`).
+  Pominięcie `set()` jest bezpieczne — `getContent()` czyta żywy DOM.
+- Restore karetki po realnym rebindzie: `afterNextRender(..., { injector })` zamiast `setTimeout(0)`
+  — odtworzenie selekcji zaraz po renderze zwęża okno, w którym klawisz trafia w zresetowaną karetkę
+  (przypadek prawdziwego przelania treści na inną stronę).
+
+### Verified
+- `wysiwyg-editor.pagination-overflow.spec.ts` +4 (18/18): pisanie bez przelania = zero rebindów,
+  przelanie nadal rebinduje, opróżniona strona odzyskuje syntetyczny `<p></p>`, rozjazd liczby stron
+  sygnał↔DOM wymusza rebind (scalanie w górę). Pełna suita GUI 382/383 (fail = pre-existing layout-shell).
+
+### Notes
+- Sygnał `pageContents` pozostaje przestarzały do czasu realnej zmiany rozkladu — to istniejący kontrakt
+  (DOM jest źródłem prawdy; serializacja w `getContent`). Skip nie dotyka `pageGeometries`/`pageSectionIndexes`.
+
+## 2026-07-11 — Fix: custom-geometry logo (custGeom) renderowane jako czarny blob zamiast grafiki
+
+### Changed
+- `DocxToHtmlConverter.GetShapeFillHex`: rozwiązuje fill kształtu z `a:solidFill` (`a:srgbClr` **lub**
+  `a:schemeClr`) oraz z referencji stylu `wps:style/a:fillRef`. Nowy `ResolveDrawingSchemeColor` mapuje
+  DrawingML `a:schemeClr` (dk1/lt1/dk2/lt2/tx1/bg1/tx2/bg2/accent1..6/hlink/folHlink) na hex z theme1.xml.
+- `BuildCustomGeometrySvg`: fallback nierozwiązywalnego wypełnienia z `#000000` → `currentColor`
+  (dziedziczy kolor tekstu otoczenia) — koniec „czarnego knefla" zasłaniającego logo. Patrz ADR-0033.
+
+### Verified
+- `Doc2ImportFidelityTests`: 30/30 (3 nowe: schemeClr→motyw, fillRef→motyw, brak fill→brak `#000000`).
+
+### Notes
+- Tylko podgląd (reader); writer nie odtwarza tych kształtów do DOCX. Dokument źródłowy (Qutalo
+  „Pamiętniczek_V3") niedostępny — diagnoza z wyrenderowanego HTML; naprawa pokrywa wszystkie
+  prawdopodobne źródła fill niezależnie od wariantu.
+
+## 2026-07-11 — Fix: obraz w pozycjonowanym segmencie tab-stopu renderuje się jako pionowy pasek
+
+### Changed
+- `wysiwyg-editor.scss`: nowa reguła `.docx-tab-seg .editor-image-wrapper, .docx-tab-seg img { max-width: none !important }`.
+  `.docx-tab-seg` jest `position:absolute` (szerokość shrink-to-fit); inline `max-width:100%` na `<img>`
+  (importer) i na wrapperze (`wrapExistingImages`) tworzy cykl rozmiaru — wkład obrazka do intrinsic width
+  kontenera liczy się jako 0, kontener zapada się i obraz (np. logo w nagłówku wyrównane tabem do prawej)
+  renderował się jako pasek ~0px szerokości × inline-height. `!important` konieczny, bo max-width:100% jest inline.
+  Bezpieczne: obrazy z importera zawsze niosą jawne `width`/`height` w px.
+
+### Verified
+- `npx sass` kompiluje plik bez błędów; zmiana czysto CSS, brak wpływu na round-trip (writer czyta width/height/EMU, nie max-width).
+
+### Notes
+- `data-width-emu=575945` (≈1.52 cm ≈ 60px) to rozmiar zadeklarowany w DOCX (wp:extent), nie intrinsic PNG (165×165) — to poprawne.
+
+## 2026-07-10 — Fix: tabela traci obramowania po zapisie (writer nie parsował rozbitych border-* / rgb)
+
+### Changed
+- `HtmlToDocxConverter.ApplyCellBorders`: rozpoznaje teraz obramowanie komórki zapisane jako OSOBNE
+  właściwości `border-width` + `border-style` + `border-color` (tak przeglądarka serializuje jednolite
+  obramowanie `<td>` przy getContent/outerHTML) oraz kolory `rgb()`/`rgba()` (przeglądarka normalizuje
+  hex→rgb przy edycji). Wcześniej parser akceptował tylko formę skróconą `border-top: .. #hex`, więc po
+  PIERWSZYM zapisie w edytorze `w:tcBorders` w ogóle nie powstawało → komórki traciły wszystkie linie i
+  tabela „rozpadała się" wizualnie (wszystkie krawędzie `none`, tabela znaczona `data-no-borders`).
+- Nowe helpery: `TryParseBorderShorthand` (per-strona/`border:`, hex+rgb), `GetCssDeclarationValue`,
+  `NormalizeCssColorToken` (#rgb/#rrggbb/rgb()/rgba() → 6-hex). `border-style:none` w formie rozbitej nie
+  emituje obramowań (styl tabeli decyduje). Ścieżka table-level i `data-no-borders` NIE zmieniane.
+
+### Verified
+- Harness round-trip (HTML→DOCX→HTML) tabeli „kredyty" ze zrzutu: przed = 14 komórek `border-*:none`;
+  po = 14 komórek `border-top:0.7px solid #000000` (linie zachowane). Wariant per-side hex bez regresji.
+- `TableStyleFidelityTests` 29/29 (+3), pełne `Infrastructure.UnitTests` 391/391, 0 fail.
+
+### Notes
+- `data-no-borders="1"` na TABELI to osobna, wcześniejsza kosmetyka (ADR-0031, tblStyle bez definicji w
+  regenerowanym pakiecie) — nieszkodliwa dla gridlines, bo komórki niosą własne linie. Poza zakresem fixa.
+
+## 2026-07-10 — Kompletna obsługa przypisów dolnych DOCX (ADR-0032, +27 testów)
+
+### Changed
+- **Model domenowy**: nowy `Footnote { Id, Html }` (`DocumentModels.cs` + `document.model.ts`); `DocumentContent.Footnotes` i `SaveDocumentRequest.Footnotes` (backend+TS). `Id` = STABILNA tożsamość (`fn-<ooxmlId>`), niezależna od numeru widocznego; numer liczony z kolejności pierwszych odwołań; numeryczny `w:id` OOXML przydzielany deterministycznie dopiero na eksporcie. Treść przypisu = jedno źródło prawdy (odwołania niosą tylko `data-footnote-id`).
+- **Reader (`DocxToHtmlConverter`)**: `w:footnoteReference` w treści → `<sup class="footnote-ref" data-footnote-id aria-label>N</sup>` (numer wg pierwszego wystąpienia, wspólny dla powtórzonych odwołań); `FootnoteReferenceMark` pomijany; `ExtractFootnotes` czyta `FootnotesPart`, POMIJA separator/continuationSeparator/continuationNotice, konwertuje treść istniejącymi konwerterami akapitu/tabeli (formatowanie/wieloakapitowość/Unicode), buduje `Footnotes` w kolejności odwołań; jeden wadliwy przypis nie przerywa importu (try/catch + `ILogger`); odwołanie bez treści = zachowane z pustą treścią + diagnostyka. Brak odwołań → `Footnotes = null`.
+- **Writer (`HtmlToDocxConverter`)**: `AssignFootnoteOoxmlIds` (htmlId→1..N); `CreateFootnoteReferenceRun` (`<sup>`→`w:footnoteReference`; odwołanie do nieistniejącego przypisu POMIJANE); `AddFootnotes` tworzy `word/footnotes.xml` (relacja+content type przez `AddNewPart<FootnotesPart>`) z separatorami technicznymi (id=-1/0) i treścią przypisów (pierwszy akapit dostaje `w:footnoteRef`; treść przez `ConvertHtmlToBody`, relacje obrazów zakresowane do części przypisów). Brak przypisów → brak części. `Convert`/`ConvertPreservingPackage` + `IHtmlToDocxConverter` dostały opcjonalny param `footnotes`.
+- **API**: `footnotes` przewleczone przez `SaveDocumentCommand`/handler (`/api/document/save`) i `DownloadEditedDocumentCommand`/handler (`/user-download`) + oba kontrolery.
+- **GUI (`wysiwyg-editor`)**: input `footnotes` + output `footnotesChange`; panel treści POZA contenteditable (`.footnotes-panel`, numer wg kolejności, edytowalny, przycisk usuń, aria-label); odwołania w treści strony jako `<sup class="footnote-ref">` (SCSS superscript). Metody `commitFootnoteContent`/`addFootnoteAtCursor`/`removeFootnote`/`syncFootnotesWithBody` (renumeracja wg DOM + przycięcie osieroconych, wpięte w debounce persist). `document-editor`: sygnał `footnotes` z importu → `[footnotes]`/`(footnotesChange)` + `buildSaveRequest`.
+
+### Verified
+- Backend `FootnoteFidelityTests` **18/18** (import, eksport z inspekcją ZIP/XML, walidacja OOXML Office2013 = 0 błędów, round-trip semantyczny, add/edit/delete/reorder+renumeracja, regresja bez przypisów), fixture `FootnoteTestDocuments` na czystym OpenXML SDK (niezależny od eksportera). Solucja: Domain 79 / Application 306 / Api 130 / Api.Integration 9 / Infrastructure **388** — 0 fail.
+- GUI `wysiwyg-editor.footnotes.spec` **7/7** + `document-editor.footnotes.spec` **2/2**; pełne GUI **378/379** (jedyny fail = pre-existing `spec-layout-shell`). `ng build` + `dotnet build` OK.
+
+### Notes
+- Repo bez infrastruktury E2E (tylko Vitest) — headless pełen przepływ pokryty przez TestBed (render+edycja+serializacja) + backend round-trip/OOXML zamiast Playwright (nieproporcjonalne). ADR-0032.
+- ID OOXML nie są zachowywane 1:1 — writer przemapowuje deterministycznie (1..N), reader odtwarza `fn-<ooxmlId>`; semantyka (liczba/treść/kolejność/powiązania) zachowana.
+
 ## 2026-07-08 — Domyślne odstępy/interlinia dokumentu i tabele przestają się psuć po zapisie (ADR-0031, +15 testów)
 
 ### Changed
@@ -31,7 +230,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ## 2026-07-07 — Kotwiczenie jak w Wordzie: pola tekstowe przeżywają zapis (wps:wsp), jawny model kotwicy w HTML, znacznik kotwicy w edytorze, obramowanie edycyjne textboxa (+36 testów)
 
 ### Changed
-- **Writer (`HtmlToDocxConverter`) — NAJWIĘKSZA utrata danych domknięta**: `div.docx-textbox` wpadał w generyczną gałąź `div` i był spłaszczany do zwykłych akapitów — przy PIERWSZYM autosave ginęła ramka, pozycja, rozmiar i kotwica pola tekstowego (adres ING w stopce itd.). Nowe: `BuildTextBoxDrawing` odtwarza `wps:wsp` + `w:txbxContent` (format DrawingML, Word 2010+; treść przez istniejące ConvertParagraph/Heading/Table/List), pływające → `wp:anchor` w konwencji edytora (X=posOffset od lewej krawędzi strony/`page`, Y=od górnego marginesu/`margin` — te same osie co obrazy, ADR-0029), inline → `wp:inline`; `data-border-*` → `a:ln`. Model kotwicy: **textbox kotwiczy do NASTĘPNEGO akapitu** — `BufferTextBoxDrawing`/`AttachPendingTextBoxes` przypina run z drawingiem do najbliższego następnego akapitu (`ConvertParagraphElement`/`ConvertHeadingElement`), awaryjny flush na końcu body/header/footer; bufor izolowany dla zagnieżdżonych pól; obsłużony też textbox inline w `<li>`/akapicie (`AppendInlineContent`).
+- **Writer (`HtmlToDocxConverter`) — NAJWIĘKSZA utrata danych domknięta**: `div.docx-textbox` wpadał w generyczną gałąź `div` i był spłaszczany do zwykłych akapitów — przy PIERWSZYM autosave ginęła ramka, pozycja, rozmiar i kotwica pola tekstowego (adres Qutalo w stopce itd.). Nowe: `BuildTextBoxDrawing` odtwarza `wps:wsp` + `w:txbxContent` (format DrawingML, Word 2010+; treść przez istniejące ConvertParagraph/Heading/Table/List), pływające → `wp:anchor` w konwencji edytora (X=posOffset od lewej krawędzi strony/`page`, Y=od górnego marginesu/`margin` — te same osie co obrazy, ADR-0029), inline → `wp:inline`; `data-border-*` → `a:ln`. Model kotwicy: **textbox kotwiczy do NASTĘPNEGO akapitu** — `BufferTextBoxDrawing`/`AttachPendingTextBoxes` przypina run z drawingiem do najbliższego następnego akapitu (`ConvertParagraphElement`/`ConvertHeadingElement`), awaryjny flush na końcu body/header/footer; bufor izolowany dla zagnieżdżonych pól; obsłużony też textbox inline w `<li>`/akapicie (`AppendInlineContent`).
 - **Reader (`DocxToHtmlConverter`)**: (1) `RenderTextBoxContent` emituje jawne metadane kotwicy `data-pos-mode/x-emu/y-emu/width-emu/height-emu` (kontrakt wspólny z obrazami); (2) **hoisting**: div pola tekstowego jest emitowany bezpośrednio PRZED akapitem-kotwicą (`HoistTextBox` + wstrzyknięcie w `ConvertParagraphToHtml`), bo blokowy `div` w `<p>` jest re-parentowany przez parser przeglądarki — wypadał z akapitu i ROZCINAŁ go przy pierwszym renderze (wyjątek: `<li>` — div w li jest legalny, zostaje w środku); `ConvertAlternateContentToHtml` traktuje zbuforowany textbox jako skonsumowaną gałąź (bez dublowania Choice/Fallback); (3) koniec zapiekania obramowania EDYCYJNEGO `border:1px solid #ccc` w treść — realne obramowanie DOKUMENTOWE kształtu (`a:ln` z solidFill, poza txbxContent) idzie jako inline `border:` + `data-border-*`; (4) `data-wrap` (square/tight/through/topAndBottom) na obrazach i textboxach — writer odtwarza `wrapSquare`/`wrapTopBottom` (tight/through ≈ square, brak wrapPolygon w HTML) zamiast degradować wszystko do `WrapNone` (Word przestawał opływać obiekt po 1. autosave).
 - **GUI (`wysiwyg-editor` + nowy `core/utils/floating-anchor.util.ts`)**: (1) **znacznik kotwicy jak w Wordzie** — zaznaczenie elementu PŁYWAJĄCEGO (obraz front/behind, textbox) pokazuje ikonę kotwicy (SVG Material „anchor") przy akapicie-kotwicy; overlay w `.page` POZA contenteditable (nie serializuje się), `pointer-events:none` + `role=img`/`aria-label` (nie kradnie kliknięć/fokusu), pozycja w px układu strony → zoom (transform) i scroll przesuwają go razem z treścią bez przeliczeń; repozycjonowanie koalescowane rAF po `onContentChange`/repaginacji (element usunięty → znacznik znika); kotwica akapitu: obraz = blokowy przodek, textbox = następny brat-akapit (czyste funkcje `findAnchorParagraph`/`computeAnchorBadgePosition`); (2) **interakcje textboxa** — klik zaznacza (`tb-selected`), drag pływającego pola TYLKO z pasa 8px krawędzi (wnętrze zostaje dla edycji tekstu, kursor `move` przez klasę `tb-edge` z mousemove), delty dzielone przez skalę zoomu, drag-end zapisuje `left/top` + `data-x/y-emu` (kotwica pozostaje przy tym samym akapicie — tylko offsety, bez skoków); (3) **fix zoomu w drag pływających OBRAZÓW** — delty `clientX/Y` dzielone przez `_pageVisualScale` (wcześniej obraz uciekał kursorowi przy zoomie ≠ 100%); (4) serializacja usuwa klasy stanu (`tb-selected/tb-dragging/tb-edge`) i defensywnie `.anchor-badge`; sprzątanie rAF/badge w `ngOnDestroy`.
 - **SCSS**: obramowanie EDYCYJNE textboxa = `outline` (zero wpływu na box-model) widoczne przy hover/`:focus-within` (dashed) i zaznaczeniu/drag (solid) — stan nieaktywny bez ramki; realne obramowanie dokumentowe (inline `border` z readera) nieruszane; style `.anchor-badge`.
@@ -76,7 +275,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ## 2026-07-07 — Wektorowe EMF (logo w stopce) przestały wychodzić jako niewidoczny blank — mapowanie window/viewport w tłumaczu metafile (+1 test)
 
 ### Changed
-- `MetafileVectorTranslator` (strategia `vector-translate` w `GraphicConversionService`): tłumacz EMF ignorował mapowanie **page→device** (`SETWINDOWEXTEX/ORGEX`, `SETVIEWPORTEXTEX/ORGEX` były na liście „silent"), a `viewBox` SVG brał z `rclBounds` nagłówka (jednostki URZĄDZENIA). Współrzędne rysowania są LOGICZNE, więc dla metafile z niejednostkowym mapowaniem window/viewport (typowe logo Office, np. stopka wyciągu ING = 2× klasyczny EMF ze ścieżek `BEGINPATH`/`POLYBEZIERTO16`/`LINETO`/`FILLPATH`) ścieżki lądowały **poza viewBox** → SVG poprawny, ale wizualnie pusty → logo widoczne w Wordzie, niewidoczne w edytorze.
+- `MetafileVectorTranslator` (strategia `vector-translate` w `GraphicConversionService`): tłumacz EMF ignorował mapowanie **page→device** (`SETWINDOWEXTEX/ORGEX`, `SETVIEWPORTEXTEX/ORGEX` były na liście „silent"), a `viewBox` SVG brał z `rclBounds` nagłówka (jednostki URZĄDZENIA). Współrzędne rysowania są LOGICZNE, więc dla metafile z niejednostkowym mapowaniem window/viewport (typowe logo Office, np. stopka wyciągu Qutalo = 2× klasyczny EMF ze ścieżek `BEGINPATH`/`POLYBEZIERTO16`/`LINETO`/`FILLPATH`) ścieżki lądowały **poza viewBox** → SVG poprawny, ale wizualnie pusty → logo widoczne w Wordzie, niewidoczne w edytorze.
 - Fix: `GdiState.Apply` po world-transformie stosuje teraz mapowanie window→viewport (`(p−winOrg)·(vpExt/winExt)+vpOrg`), aktywne tylko gdy metafile faktycznie zdefiniował OBA zakresy (inaczej tożsamość — zero zmian dla metafile bez tych rekordów). Dodane obsłużone rekordy EMR 9/10/11/12. Safety-net w `BuildSvg`: jeśli mimo mapowania treść nie przecina `rclBounds` (np. nieobsłużony tryb metryczny), `viewBox` bierze bounding box realnie narysowanej treści — grafika nie wyjdzie pusta.
 
 ### Verified
@@ -91,13 +290,13 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ## 2026-07-07 — Kształty DrawingML z własną/preset geometrią (a:custGeom, ellipse, roundRect) renderowane w edytorze — grafika z oryginału przestała znikać (+1 test)
 
 ### Changed
-- Reader (`DocxToHtmlConverter.RenderVectorShapeAsHtml`): kształt `wps:wsp` bez obrazu i bez pola tekstowego z **`a:custGeom`** (dowolna ścieżka wektorowa — np. wordmark „ING", ikona ostrzeżenia „!") był dotąd dropowany w całości (metoda zwracała `""`), więc grafika z dokumentu oryginalnego **nie rysowała się w edytorze**. Teraz ścieżka jest tłumaczona na inline `<svg><path>` (`BuildCustomGeometrySvg`: komendy moveTo/lnTo/cubicBezTo/quadBezTo/close, współrzędne literalne w przestrzeni `a:path w/h`, `viewBox`+`preserveAspectRatio=none` = dokładne dopasowanie do `wp:extent`).
+- Reader (`DocxToHtmlConverter.RenderVectorShapeAsHtml`): kształt `wps:wsp` bez obrazu i bez pola tekstowego z **`a:custGeom`** (dowolna ścieżka wektorowa — np. wordmark „Qutalo", ikona ostrzeżenia „!") był dotąd dropowany w całości (metoda zwracała `""`), więc grafika z dokumentu oryginalnego **nie rysowała się w edytorze**. Teraz ścieżka jest tłumaczona na inline `<svg><path>` (`BuildCustomGeometrySvg`: komendy moveTo/lnTo/cubicBezTo/quadBezTo/close, współrzędne literalne w przestrzeni `a:path w/h`, `viewBox`+`preserveAspectRatio=none` = dokładne dopasowanie do `wp:extent`).
 - Rozszerzono blok preset-geometrii o **elipsę** (`border-radius:50%`) i **zaokrąglony prostokąt** (`border-radius:12%`) obok istniejącego prostokąta/linii.
 - Kolor wypełnienia brany precyzyjnie z properties kształtu (`spPr/a:solidFill`) przez nowy `GetShapeFillHex` — nie z pierwszego `a:solidFill` w poddrzewie (mógł należeć do obrysu `a:ln` lub ukrytej linii w `extLst`). Obrys emitowany tylko gdy `a:ln` ma realne wypełnienie (`noFill` → brak ramki, jak w Wordzie).
 
 ### Verified
 - Nowy `Doc2ImportFidelityTests.CustomGeometryShape_WithoutImage_RendersAsInlineSvgPath`; pełne `Infrastructure.UnitTests` **340/340**.
-- Harness na realnym szablonie ING (`szablon 1`): wordmark „ING" (`custGeom` navy `000066`) renderuje się jako `<svg>` (wcześniej: 0 kształtów w body); podgląd potwierdzony wizualnie (headless Chrome). Round-trip HTML→DOCX (`HtmlToDocxConverter.Convert`) nie rzuca na inline `<svg>`.
+- Harness na realnym szablonie Qutalo (`szablon 1`): wordmark „Qutalo" (`custGeom` navy `000066`) renderuje się jako `<svg>` (wcześniej: 0 kształtów w body); podgląd potwierdzony wizualnie (headless Chrome). Round-trip HTML→DOCX (`HtmlToDocxConverter.Convert`) nie rzuca na inline `<svg>`.
 
 ### Notes
 - PODGLĄD-only: writer (jak przy istniejących liniach/prostokątach) NIE odtwarza tych kształtów z powrotem do DOCX — na 1. autosave kształt znika z v2 (oryginał v1 nietykalny; do rozważenia round-trip przez `data-original-*`). Wypełnienie motywowe (`a:schemeClr`) bez mapowania → fallback czarny (kształt nadal widoczny). Wypełnienie regułą nonzero (zgodnie ze spec DrawingML) — litery z zamkniętymi „oczkami" mogłyby wymagać evenodd.
@@ -118,7 +317,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## 2026-07-07 — „Inne na pierwszej stronie" (titlePg): stopka/nagłówek pierwszej strony nie wyciekają na kolejne strony (+2 testy)
 ### Changed
-- `DocxToHtmlConverter.ExtractHeader`/`ExtractFooter`: fallback `mainPart.HeaderParts/FooterParts.FirstOrDefault()` używany TYLKO gdy sekcja nie deklaruje ŻADNEJ referencji nagłówka/stopki. Gdy sekcja ma `titlePg` + referencję `first` (i BRAK referencji `default`), domyślny nagłówek/stopka jest CELOWO pusty (Word nic nie pokazuje na zwykłych stronach) — wcześniej fallback wciągał część pierwszej strony jako domyślną i renderował ją na WSZYSTKICH stronach (np. adres ING w stopce widoczny na str. 2, choć w Wordzie tylko na str. 1).
+- `DocxToHtmlConverter.ExtractHeader`/`ExtractFooter`: fallback `mainPart.HeaderParts/FooterParts.FirstOrDefault()` używany TYLKO gdy sekcja nie deklaruje ŻADNEJ referencji nagłówka/stopki. Gdy sekcja ma `titlePg` + referencję `first` (i BRAK referencji `default`), domyślny nagłówek/stopka jest CELOWO pusty (Word nic nie pokazuje na zwykłych stronach) — wcześniej fallback wciągał część pierwszej strony jako domyślną i renderował ją na WSZYSTKICH stronach (np. adres Qutalo w stopce widoczny na str. 2, choć w Wordzie tylko na str. 1).
 - Metoda zwraca teraz `HeaderFooterContent` także gdy domyślny wariant jest pusty, ale istnieje `FirstPageHtml`/`EvenHtml` (`Html = string.Empty`, `DifferentFirstPage = true`); `null` tylko gdy nie ma ani domyślnego, ani first/even.
 - Nowe pomocnicze `SectionDeclaresAnyHeaderReference`/`SectionDeclaresAnyFooterReference`.
 - Front bez zmian — `wysiwyg-editor` już rozwiązuje `differentFirstPage` (str. 0 = `firstPageHtml`, reszta = `html`).
@@ -130,7 +329,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 
 ## 2026-07-07 — SVG „puste białe logo": sanitizer wycinał wewnętrzne `<use>` + odrzucał BOM/DOCTYPE (+6 testów)
 ### Changed
-- **`GraphicConversionService.SanitizeSvg`** — trzy przyczyny, dla których legalne logo SVG (przypadek: nagłówek Doc2/ING) traciło treść lub cały plik:
+- **`GraphicConversionService.SanitizeSvg`** — trzy przyczyny, dla których legalne logo SVG (przypadek: nagłówek Doc2/Qutalo) traciło treść lub cały plik:
   1. `<use>` był na liście `killTags` i wycinany BEZWARUNKOWO — logo zbudowane z `<defs>`+`<use href="#id">` (typowy eksport korporacyjny) renderowało się jako pusty biały obraz o poprawnych wymiarach (defs są niewidoczne). Teraz `<use>` z wewnętrznym odnośnikiem `#id` (href/xlink:href) ZOSTAJE (wskazuje już-sanityzowaną treść tego samego dokumentu); `<use>` z zewnętrznym URL/data:/bez href — usuwany w całości (`HasInternalFragmentHref`).
   2. Bajty z prefiksem **UTF-8 BOM** (częste w plikach z Windows) — U+FEFF na początku stringa wywala parser XML → poprawny SVG odrzucany → obraz znikał; `TrimStart('﻿','​',…)` przed parsowaniem.
   3. **DOCTYPE** (standard w SVG z eksportu Illustratora) — `DtdProcessing.Prohibit` rzucał na sam DOCTYPE → odrzucenie; zmiana na `DtdProcessing.Ignore` w `SafeParse`: DTD pomijany bez przetwarzania, XXE/billion-laughs nadal niemożliwe (encje pozostają niezdefiniowane → parser rzuca → null, potwierdzone testem).
@@ -150,7 +349,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 - Formant inline w akapicie stopki (`SdtRun`) już działał — obsługuje go `ConvertParagraphToHtml`. Luką był wyłącznie poziom bloku w nagłówku/stopce.
 - To render treści; interaktywność formantu (klikalny checkbox/dropdown) nadal osobne zadanie frontu. QR-kod w nagłówku = osobny wątek importu obrazów.
 
-## 2026-07-07 — Tabele (Doc2/ING follow-up): legacy w:hMerge + taby w komórkach bez pozycjonowania absolutnego (+4 testy)
+## 2026-07-07 — Tabele (Doc2/Qutalo follow-up): legacy w:hMerge + taby w komórkach bez pozycjonowania absolutnego (+4 testy)
 ### Changed
 - **Reader (`DocxToHtmlConverter`) — legacy scalanie poziome `w:hMerge`** — dotąd obsługiwany był wyłącznie `w:gridSpan`; komórki scalone mechanizmem legacy (`hMerge` restart + continue) renderowały się jako OSOBNE `<td>` (treść ściśnięta w pierwszej wąskiej kolumnie, reszta puste widma — wiersz „Umowa wieloproduktowa…"). Nowy `BuildRowRenderPlan`: restart pochłania `gridSpan` kolejnych continue jako `colspan`, continue nie emitują `<td>` (analogicznie do kontynuacji vMerge); pominięty `w:val` = continue (ECMA-376); continue-sierota bez restartu renderuje się normalnie (bez utraty treści). Round-trip: writer i tak emituje `gridSpan` z colspan — reprezentacja równoważna dla Worda.
 - **Reader — taby w komórkach tabel bez segmentów absolutnych** — rozszerzenie renderingu pozycyjnego tabów na body (2026-07-06) objęło też akapity WEWNĄTRZ komórek: segment `position:absolute;left:{stop}px` jest kotwiczony do akapitu, a pozycje stopów opisują geometrię strony → w wąskiej komórce segment wyjeżdżał poza komórkę i malował się po sąsiedniej kolumnie (nałożone nagłówki „Waluta"/„Termin spłaty kredytu"), a `text-align` komórki przestawał działać (rozjechane wyśrodkowanie nagłówków i wartości). `usePositionedTabs` wyklucza teraz akapity z przodkiem `TableCell` — w komórce tab renderuje się inline/flex jak przed regresją; `data-tab-stops` nadal niesie stopy (eksport bez zmian).
@@ -195,7 +394,7 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 - Wartość pola to nadal placeholder-liczba „1" w cache — realny numer wylicza Word/edytor przy renderze/przeliczeniu (brak twardej paginacji w modelu = ograniczenie stałe).
 
-## 2026-07-06 — Wierność importu Word („Doc2"/ING): tab-stopy body, scalone wiersze nieregularne, v-align, SVG (+16 testów)
+## 2026-07-06 — Wierność importu Word („Doc2"/Qutalo): tab-stopy body, scalone wiersze nieregularne, v-align, SVG (+16 testów)
 ### Changed
 - `Infrastructure/Services/DocxToHtmlConverter.cs`:
   - Tab-stopy body renderowane POZYCYJNIE (`usePositionedTabs` już nie wymaga `HeaderPart`/`FooterPart`) — lewy/prawy/wiele stopów na realnych pozycjach `w:tabs` zamiast flexa 50/100%; flex tylko jako fallback bez rozwiązywalnych pozycji.
@@ -967,7 +1166,7 @@ Pełna referencja: `.ai/EDITOR_KEYBOARD.md`.
 ### Verified / tests
 - Nowy `pages/layout-shell.spec.ts` (2): dashboard i pdf-maintenance — wstrzyknięty scoped CSS wrappera **nie zawiera `100vh`** i ma `min-height:100%` (kontrakt layoutu; jsdom nie robi layoutu, więc asercja na faktycznie zregresowanym CSS, nie na pikselach). GUI **185** (było 183, +2). Edytor nietknięty (te same testy zielone).
 ### Scenariusze manualne
-- Dashboard z bannerem DEV: „Witaj w Qutas" wyśrodkowane, stopka `© 2026 ING` widoczna, brak scrolla/skoku. Bez bannera (PROD): identyczny układ. Edytor (screen A): toolbar/panele/stopka bez zmian. Środowiska Local/DEV/TST/PRE: różny kolor bannera, **ta sama wysokość** layoutu. Małe rozdzielczości: gdy treść > obszar, host scrolluje (nic nie ucięte).
+- Dashboard z bannerem DEV: „Witaj w Qutas" wyśrodkowane, stopka `© 2026 Qutalo` widoczna, brak scrolla/skoku. Bez bannera (PROD): identyczny układ. Edytor (screen A): toolbar/panele/stopka bez zmian. Środowiska Local/DEV/TST/PRE: różny kolor bannera, **ta sama wysokość** layoutu. Małe rozdzielczości: gdy treść > obszar, host scrolluje (nic nie ucięte).
 ### Ograniczenia
 - `min-height:100%` wymaga definite-height hosta — zapewnia go shell (`flex:1 1 0` w `d2-root height:100vh`); ten sam mechanizm, na którym opiera się edytor.
 
@@ -1189,7 +1388,7 @@ Reader emitował break-only akapit (`<w:p><w:r><w:br type=page/></w:r></w:p>`) j
 ### Verified
 - Backend build OK; `dotnet test` filtr Header/Footer + SectionReference: **10/10 pass** (5 nowych w `DocxToHtmlConverterSectionReferenceTests`, 5 istniejących).
 - Frontend `tsc --noEmit` OK.
-- Diagnoza na realnym `stupki.docx`: 3 nagłówki (even/default/first) + 3 stopki, brak `titlePg`/`evenAndOddHeaders`; default=header2 (logo + „ING Bank … Obciągalski"), default footer=footer2 (8pt, #808080). Stary kod mógł renderować pusty even part.
+- Diagnoza na realnym `stupki.docx`: 3 nagłówki (even/default/first) + 3 stopki, brak `titlePg`/`evenAndOddHeaders`; default=header2 (logo + „Qutalo Qutalo … Obciągalski"), default footer=footer2 (8pt, #808080). Stary kod mógł renderować pusty even part.
 ### Notes
 - R-10 częściowo zamknięte (default + first-page). Pozostaje: even/odd (brak pól w modelu backendu) i wiele sekcji.
 - `stupki.docx` NIE dodano jako fixture (treść wulgarna) — testy używają syntetycznego DOCX o tej samej strukturze.
