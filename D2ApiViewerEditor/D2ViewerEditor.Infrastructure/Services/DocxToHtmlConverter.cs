@@ -3281,7 +3281,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu jako przybliżenie HTML:
     /// preset line/straightConnector → pozioma linia (grubość/kolor z <c>a:ln</c>); prostokąt/
     /// elipsa/zaokrąglony prostokąt z <c>a:solidFill</c> → kolorowy blok (z border-radius);
-    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „ING", ikona „!") → inline
+    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „Qutasator", ikona „!") → inline
     /// <c>&lt;svg&gt;&lt;path&gt;</c> z wypełnieniem kształtu. Kotwica → pozycja absolutna (jak
     /// w Wordzie). Zwraca pusty string dla nieobsługiwanej geometrii (drop bez zmian).
     /// PODGLĄD-only: writer nie odtwarza tych kształtów do DOCX (tak samo jak istniejące

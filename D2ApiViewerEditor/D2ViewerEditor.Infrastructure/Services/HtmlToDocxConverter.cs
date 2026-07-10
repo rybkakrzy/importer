@@ -561,7 +561,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 case "header":
                 case "footer":
                 {
-                    // Pole tekstowe (np. adres w stopce ING) — do bufora, przypinane do
+                    // Pole tekstowe (np. adres w stopce Qutasator) — do bufora, przypinane do
                     // następnego akapitu; pozostałe kontenery — zejdź w dzieci.
                     if (IsTextBoxNode(child))
                     {

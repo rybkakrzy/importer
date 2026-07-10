@@ -633,7 +633,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
     // Imię ustalamy tak samo jak na Dashboardzie: `name` ma format „Nazwisko, X. (Imię)" —
     // najpierw bierzemy tekst z nawiasów; gdy go brak, claim `given_name`; w ostateczności fallback
-    // z pełnej nazwy (ING `given_name` bywa samym inicjałem, dlatego nawias ma priorytet).
+    // z pełnej nazwy (Qutasator `given_name` bywa samym inicjałem, dlatego nawias ma priorytet).
     const parenthesized = fullName.match(/\(([^)]+)\)/)?.[1]?.trim();
     const givenName = (account?.idTokenClaims as Record<string, unknown> | undefined)?.['given_name'];
     const first = parenthesized
