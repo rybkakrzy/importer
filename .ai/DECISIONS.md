@@ -14,6 +14,87 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0036: Kompletna obsługa list DOCX — wariant A: semantyka specyfikacji na istniejącym transporcie `data-*` (bez kanonicznego modelu w kontraktach API)
+- Date: 2026-07-12
+- Status: Accepted
+
+### Context
+Przyjęta specyfikacja „kompletnej obsługi list" wymaga m.in. rozdziału definicja/instancja/
+przypisanie (abstractNum/num/numPr), eksportu restartów przez `w:lvlOverride/w:startOverride`,
+punktatorów graficznych (`w:numPicBullet`), silnika liczenia etykiet wspólnego dla podglądu
+i eksportu oraz kanonicznego modelu JSON niezależnego od HTML. Tymczasem CAŁA aplikacja
+(przypisy ADR-0032, sekcje ADR-0023, kotwice ADR-0030, docDefaults ADR-0031) używa HTML
+z kontraktem `data-*` jako transportu Domain↔GUI; pełny model kanoniczny w kontraktach API
+= przebudowa `DocumentContent`/`SaveDocumentRequest` i modelu stanu edytora (zakazany „broad
+refactor"). Writer dodatkowo NIE emitował w ogóle `startOverride`/`lvlOverride` ani
+`numPicBullet` — restart numeracji i punktator graficzny ginęły przy pierwszym autosave.
+
+### Decision
+1. **Wariant A**: semantyka specyfikacji realizowana na obecnym transporcie — kontrakt `data-*`
+   na kontenerach `ol/ul` jest formalną serializacją modelu list (definicja poziomu + tożsamość
+   instancji + przypisanie), bez zmian kontraktów API. Wariant B (kanoniczny model JSON
+   w odpowiedzi importu / żądaniu zapisu) odrzucony na teraz — do rewizji, gdyby powstał
+   frontowy silnik etykiet wymagający pełnych definicji poza DOM.
+2. Kontrakt `data-*` list rozszerzony o: `data-start-override` (w:startOverride instancji,
+   emitowany ODDZIELNIE od `data-start` = w:start definicji), `data-suffix` (w:suff ≠ tab),
+   `data-is-legal` (w:isLgl), `data-lvl-restart` (surowa wartość w:lvlRestart, jednobazowa),
+   `data-pic-bullet` (poziom z w:lvlPicBulletId), `data-ind-left/hanging/first-line-tw`
+   (wcięcia definicji poziomu w twips).
+3. Writer: `w:abstractNum` współdzielony po `data-abstract-num-id` (`_abstractIdByHtmlAbstract`),
+   instancja per `data-num-id` jak dotąd; restart = `w:lvlOverride/w:startOverride` na instancji
+   (FR-EXPORT-004), NIE kopia definicji z przepisanym w:start. Wcięcia poziomu z `data-ind-*-tw`
+   zamiast hardkodowanej drabinki 720×(lvl+1).
+4. Punktator graficzny (FR-EXPORT-006): marker `<span class="list-marker"><img data:URI/></span>`
+   → `TryCreatePictureBullet` tworzy ImagePart na CZĘŚCI NUMERACJI + `w:numPicBullet`
+   (wariant VML `w:pict/v:shape/v:imagedata` — ten sam, który zapisuje Word) + `w:lvlPicBulletId`;
+   deduplikacja po data URI; obraz NIE jest już bake'owany jako inline run (dublował się);
+   nieosadzalny src/SVG → dotychczasowy fallback (numFmt=none + obraz inline w treści).
+5. Kolejność dzieci `w:lvl` naprawiona do sekwencji CT_Lvl (start, numFmt, lvlRestart, isLgl,
+   suff, lvlText, lvlPicBulletId, lvlJc, pPr, rPr) — wcześniej rPr szedł przed lvlJc (poza
+   schematem). `w:numPicBullet` przed `w:abstractNum` przed `w:num`.
+6. Stan konwertera resetowany per `Convert` (`_numberingId`, `_numberingPart`, mapy list) —
+   deterministyczny wynik dla tego samego wejścia (FR-EXPORT-002) i brak przecieku części
+   między konwersjami.
+7. Pełne nadpisanie wyglądu poziomu na instancji (`w:lvlOverride` z własnym `w:lvl`, nie tylko
+   startOverride) round-tripuje przez `data-lvl-override="1"`: reader znaczy poziomy, których
+   efektywna definicja pochodzi z lvlOverride instancji; writer buduje dla nich `w:lvl`
+   WEWNĄTRZ `w:lvlOverride` i NIE wkłada ich definicji do współdzielonego abstraktu
+   (dwie instancje wspólnego abstraktu mogą wyglądać różnie — bez tego zlewały się w jeden wygląd).
+8. Fragment listy zaczynający się na głębszym poziomie (top-level `ol` z `data-ilvl=N`, np.
+   kontynuacja poziomu 1 po zwykłym akapicie) eksportuje się z właściwym `w:ilvl` —
+   `ResolveListLevel` honoruje `data-ilvl` w `ConvertListElement` i wszystkich skanach poziomów
+   (wcześniej spłaszczany do ilvl=0: złe wcięcie i format poziomu 0).
+9. Współdzielony abstrakt jest UZUPEŁNIANY (`UpgradeSharedAbstractLevels`): fragment tworzący
+   abstrakt definiuje tylko poziomy, których używa (reszta = drabinka domyślna); późniejszy
+   fragment współdzielący abstrakt dosyła definicje brakujących poziomów. Poziomy już zbudowane
+   z jawnych data-* nie są podmieniane (pierwsza definicja wygrywa). Bezpieczne, bo fragment
+   tworzący nie miał elementów na upgradowanym poziomie.
+
+### Consequences
+- „Rozpocznij od nowa" z Worda przeżywa zapis (wspólny abstrakt + nowa instancja z override);
+  restart nie zmienia numeracji wcześniejszych elementów po round-tripie.
+- Punktatory graficzne przechodzą pełny cykl import→zapis→import bez degradacji do kropki.
+- Niestandardowe wcięcia list, suffix, isLgl i lvlRestart nie giną przy pierwszym autosave.
+- Eksport listy waliduje się czysto (`OpenXmlValidator` Office2013 = 0 błędów — test).
+- Kontynuacja na głębszym poziomie, mieszanie wyglądów instancji wspólnego abstraktu
+  i doposażanie poziomów abstraktu przez późniejsze fragmenty — pokryte testami round-trip.
+- Silnik etykiet w GUI ZROBIONY (runda 3): `core/utils/list-label.util.ts` (TS, lustrzany do
+  liczników readera) + `data-list-label` renderowane przez CSS `::before` poza edytowalnym
+  tekstem; atrybuty prezentacyjne zdejmowane przy serializacji. Kontynuacja fragmentów
+  przelicza się także po edycji (statyczny `<ol start>` tego nie umiał).
+- NADAL poza zakresem (kolejne etapy planu): komendy edytora (Tab/Shift+Tab, kontynuuj/
+  restart/ustaw wartość; nowe listy z edytora bez data-* = drabinka domyślna), wcięcia
+  znacznika z `data-ind-*-tw` w podglądzie, styl znacznika (rPr poziomu) w kontrakcie,
+  pełny łańcuch `basedOn`/`styleLink` w resolverze, `lvlRestart=N` w licznikach READERA
+  (silnik TS już honoruje), diagnostyka kodów LIST_*.
+
+### Alternatives considered
+Wariant B (pełny kanoniczny model JSON w kontraktach API, ListDefinitionDto/ListInstanceDto) —
+zgodny w 100% ze specyfikacją, odrzucony na tym etapie: zmiana kontraktów API i modelu stanu
+edytora, wielotygodniowy refactor sprzeczny z zasadą małych zmian; wariant A pokrywa ~90%
+wymagań bez ruszania architektury. Emisja `w:numPicBullet` w wariancie DrawingML — odrzucona:
+Word sam zapisuje wariant VML, walidator i starsze wersje Worda przyjmują go bez zastrzeżeń.
+
 ## ADR-0035: Placeholder pustych bloków edytora — `<br>` w komórkach tabel, `&nbsp;` tylko w akapitach, czyszczenie na beforeinput
 - Date: 2026-07-11
 - Status: Accepted

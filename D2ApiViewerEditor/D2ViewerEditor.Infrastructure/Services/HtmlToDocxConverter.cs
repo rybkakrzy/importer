@@ -10,6 +10,7 @@ using HtmlAgilityPack;
 using OoxmlPageSize = DocumentFormat.OpenXml.Wordprocessing.PageSize;
 using Microsoft.Extensions.Options;
 using A = DocumentFormat.OpenXml.Drawing;
+using V = DocumentFormat.OpenXml.Vml;
 using Wp = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
 using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
@@ -33,6 +34,23 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     // rozdzielone akapitem, ale należące do tej samej listy logicznej Worda, współdzielą jedną
     // NumberingInstance — Word kontynuuje wtedy numerację. Różne data-num-id → osobne instancje.
     private readonly Dictionary<string, int> _numIdByHtmlList = new();
+    // HTML data-abstract-num-id (tożsamość DEFINICJI z readera) → abstractNumId w generowanym
+    // pakiecie. Listy współdzielące abstrakt w oryginale (np. „Rozpocznij od nowa" = nowy w:num
+    // ze startOverride na TEN SAM abstrakt) współdzielą go też po zapisie — bez tego restart
+    // degradował się do niezależnej listy z przepisanym w:start.
+    private readonly Dictionary<string, int> _abstractIdByHtmlAbstract = new();
+    // Poziomy z WYEKSPORTOWANYM punktatorem graficznym (w:lvlPicBulletId) per abstrakt/numId —
+    // dla nich marker <span class="list-marker"><img/></span> NIE jest bake'owany w treść runu.
+    private readonly Dictionary<int, HashSet<int>> _picBulletLevelsByAbstract = new();
+    private readonly Dictionary<int, HashSet<int>> _picBulletLevelsByNum = new();
+    // Poziomy abstraktu zbudowane z jawnych data-* (nie z drabinki domyślnej) — późniejszy
+    // fragment współdzielący abstrakt może dosłać definicje brakujących poziomów
+    // (UpgradeSharedAbstractLevels), ale nigdy nie podmienia już zdefiniowanych.
+    private readonly Dictionary<int, HashSet<int>> _specLevelsByAbstract = new();
+    // Deduplikacja obrazów punktatorów: data URI → numPicBulletId (jeden w:numPicBullet
+    // dla wielu poziomów/list używających tego samego obrazu).
+    private readonly Dictionary<string, int> _picBulletIdByDataUri = new();
+    private int _picBulletId = 1;
 
     // Przypisy dolne. Identyfikatory OOXML są przydzielane DETERMINISTYCZNIE po kolejności listy
     // przekazanej do Convert (htmlId → 1..N); technicznym separatorom rezerwujemy -1 i 0, więc
@@ -140,6 +158,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _firstSectionProps = null;
             _emittedSectionProps.Clear();
             _numIdByHtmlList.Clear();
+            _abstractIdByHtmlAbstract.Clear();
+            _picBulletLevelsByAbstract.Clear();
+            _picBulletLevelsByNum.Clear();
+            _specLevelsByAbstract.Clear();
+            _picBulletIdByDataUri.Clear();
+            _picBulletId = 1;
+            _numberingId = 1;
+            _numberingPart = null; // część należy do POPRZEDNIEGO pakietu — EnsureNumberingPart utworzy nową
             _pendingTextBoxDrawings.Clear();
             _footnoteOoxmlIdByHtmlId.Clear();
             _referencedFootnoteHtmlIds.Clear();
@@ -1197,7 +1223,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private List<OpenXmlElement> ConvertListElement(HtmlNode node, bool ordered, int level = 0, int? parentNumId = null)
     {
         var elements = new List<OpenXmlElement>();
-        
+
+        // Fragment listy może zaczynać się na głębszym poziomie (data-ilvl z readera, np.
+        // kontynuacja poziomu 1 po zwykłym akapicie) — bez tego eksport spłaszczał go do
+        // ilvl=0: złe wcięcie i format poziomu 0 zamiast właściwego.
+        level = ResolveListLevel(node, level);
+
         int numId;
         if (parentNumId.HasValue)
         {
@@ -1224,19 +1255,73 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
                 // Wykryj poziomy z punktatorem obrazkowym (DocxToHtmlConverter wstawia
                 // <span class="list-marker"><img .../></span> jako wizualny marker).
-                // Dla takich poziomów wyłączymy automatyczny punktator Worda, żeby nie
-                // dublować markera (kropka + grafika).
-                var pictureBulletLevels = new HashSet<int>();
+                // Osadzalny obraz (data URI) → prawdziwy w:numPicBullet + w:lvlPicBulletId;
+                // nieosadzalny → jak dotąd: numFmt=none i obraz inline w treści.
+                var pictureBulletLevels = new Dictionary<int, string?>();
                 ScanPictureBulletLevels(node, level, pictureBulletLevels);
 
                 // Definicje poziomów round-tripowane z readera (data-num-fmt / data-lvl-text /
-                // data-start / data-bullet-font) — zachowują oryginalny format numeracji
-                // (np. upperRoman, "%1)", start=5) zamiast hardkodowanej drabinki.
+                // data-start / data-bullet-font / data-suffix / data-is-legal / data-lvl-restart /
+                // data-ind-*-tw) — zachowują oryginalny format numeracji zamiast hardkodowanej drabinki.
                 var levelSpecs = new Dictionary<int, HtmlListLevelSpec>();
                 ScanListLevelSpecs(node, level, levelSpecs);
 
-                var abstractNumId = CreateAbstractNumbering(levelFormats, pictureBulletLevels, levelSpecs);
-                numId = CreateNumberingInstance(abstractNumId);
+                // Poziomy z data-lvl-override = pełne w:lvlOverride/w:lvl NA INSTANCJI —
+                // ich definicje nie trafiają do abstraktu (inne instancje tego samego
+                // abstraktu wyglądają inaczej).
+                var overrideSpecs = levelSpecs
+                    .Where(kv => kv.Value.IsLvlOverride)
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+                var abstractSpecs = levelSpecs
+                    .Where(kv => !kv.Value.IsLvlOverride)
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+                var abstractPicLevels = pictureBulletLevels
+                    .Where(kv => !overrideSpecs.ContainsKey(kv.Key))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+                // Definicja (w:abstractNum) współdzielona między listami o tym samym
+                // data-abstract-num-id; instancja (w:num) per data-num-id. „Rozpocznij od nowa"
+                // = nowa instancja ze startOverride na wspólny abstrakt (FR-EXPORT-004),
+                // a nie kopia definicji z przepisanym w:start.
+                var htmlAbstractId = node.GetAttributeValue("data-abstract-num-id", "");
+                int abstractNumId;
+                if (htmlAbstractId.Length > 0 && _abstractIdByHtmlAbstract.TryGetValue(htmlAbstractId, out var existingAbstract))
+                {
+                    abstractNumId = existingAbstract;
+                    // Ten fragment może używać poziomów, których fragment tworzący abstrakt
+                    // nie widział (miały drabinkę domyślną) — dosyłamy ich definicje.
+                    UpgradeSharedAbstractLevels(abstractNumId, levelFormats, abstractPicLevels, abstractSpecs);
+                }
+                else
+                {
+                    abstractNumId = CreateAbstractNumbering(levelFormats, abstractPicLevels, abstractSpecs);
+                    if (htmlAbstractId.Length > 0)
+                        _abstractIdByHtmlAbstract[htmlAbstractId] = abstractNumId;
+                }
+
+                var startOverrides = levelSpecs
+                    .Where(kv => kv.Value.StartOverride > 0)
+                    .ToDictionary(kv => kv.Key, kv => kv.Value.StartOverride);
+
+                // Pełne nadpisania poziomów budowane tym samym mechanizmem co poziomy abstraktu.
+                var instancePicLevels = new HashSet<int>();
+                var fullLevelOverrides = new Dictionary<int, Level>();
+                foreach (var (lvl, overrideSpec) in overrideSpecs)
+                {
+                    string? overridePicUri = null;
+                    var hasOverridePic = pictureBulletLevels.TryGetValue(lvl, out overridePicUri);
+                    fullLevelOverrides[lvl] = BuildAbstractLevel(
+                        lvl, ResolveLevelOrdered(levelFormats, lvl),
+                        hasOverridePic, overridePicUri, overrideSpec, instancePicLevels);
+                }
+
+                numId = CreateNumberingInstance(abstractNumId, startOverrides, fullLevelOverrides);
+
+                var numPicLevels = new HashSet<int>(instancePicLevels);
+                if (_picBulletLevelsByAbstract.TryGetValue(abstractNumId, out var picLevels))
+                    numPicLevels.UnionWith(picLevels);
+                if (numPicLevels.Count > 0)
+                    _picBulletLevelsByNum[numId] = numPicLevels;
                 if (htmlListId.Length > 0)
                     _numIdByHtmlList[htmlListId] = numId;
             }
@@ -1286,15 +1371,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 // <span class="list-marker"> jest artefaktem prezentacyjnym dodanym przez
                 // DocxToHtmlConverter, żeby przeglądarka pokazała niestandardowy punktator
                 // (obrazek lub znak Wingdings/Symbol). Przy eksporcie:
-                //   - jeżeli zawiera <img> (picture bullet) — zachowaj sam obrazek jako
-                //     wiodący inline run; poziom ma format=None, więc Word nie doda
-                //     dodatkowej kropki.
+                //   - obrazek, którego poziom dostał PRAWDZIWY w:numPicBullet — pomijamy
+                //     (Word narysuje go sam z definicji numeracji; inline run by go zdublował),
+                //   - obrazek nieosadzalny (poziom z numFmt=none) — zachowaj jako wiodący
+                //     inline run, żeby grafika nie zginęła,
                 //   - tekstowy marker (np. ✓, ✗) pomijamy — Word wstawi własny automatyczny
                 //     punktator z definicji numeracji.
                 if (liChildName == "span" && IsListMarkerSpan(liChild))
                 {
                     var img = liChild.SelectSingleNode(".//img");
-                    if (img != null)
+                    var levelHasPicBullet = _picBulletLevelsByNum.TryGetValue(numId, out var picBulletLevels)
+                        && picBulletLevels.Contains(level);
+                    if (img != null && !levelHasPicBullet)
                     {
                         foreach (var run in CreateRunsFromNode(img, liBaseProps))
                             para.Append(run);
@@ -1320,6 +1408,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 foreach (var nestedList in nestedLists)
                 {
                     var isOrdered = nestedList.Name.ToLower() == "ol";
+                    // ResolveListLevel wewnątrz honoruje data-ilvl zagnieżdżonego kontenera
+                    // (skoki poziomów, np. 0 → 2, są legalne w WordprocessingML).
                     elements.AddRange(ConvertListElement(nestedList, isOrdered, level + 1, numId));
                 }
             }
@@ -1331,11 +1421,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Definicja poziomu listy odczytana z data-* kontenera (round-trip z DocxToHtmlConverter).
     /// </summary>
-    private readonly record struct HtmlListLevelSpec(string? Fmt, string? LvlText, int Start, string? BulletFont);
+    private readonly record struct HtmlListLevelSpec(
+        string? Fmt, string? LvlText, int Start, string? BulletFont,
+        int StartOverride, string? Suffix, bool IsLegal, int LvlRestart,
+        string? IndLeftTw, string? IndHangingTw, string? IndFirstLineTw,
+        bool IsLvlOverride);
 
     /// <summary>
-    /// Zbiera definicje poziomów z atrybutów data-num-fmt / data-lvl-text / data-start /
-    /// data-bullet-font na kontenerach ul/ol (każdy zagnieżdżony kontener opisuje swój poziom).
+    /// Zbiera definicje poziomów z atrybutów data-* na kontenerach ul/ol (każdy zagnieżdżony
+    /// kontener opisuje swój poziom): data-num-fmt / data-lvl-text / data-start / data-bullet-font
+    /// / data-start-override / data-suffix / data-is-legal / data-lvl-restart / data-ind-*-tw.
     /// Pierwsze napotkane wystąpienie poziomu wygrywa.
     /// </summary>
     private static void ScanListLevelSpecs(HtmlNode node, int level, Dictionary<int, HtmlListLevelSpec> specs)
@@ -1346,14 +1441,34 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var lvlText = node.GetAttributeValue("data-lvl-text", "");
             var startRaw = node.GetAttributeValue("data-start", "");
             var bulletFont = node.GetAttributeValue("data-bullet-font", "");
-            if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0)
+            var startOverrideRaw = node.GetAttributeValue("data-start-override", "");
+            var suffix = node.GetAttributeValue("data-suffix", "");
+            var isLegal = node.GetAttributeValue("data-is-legal", "") == "1";
+            var lvlRestartRaw = node.GetAttributeValue("data-lvl-restart", "");
+            var indLeft = node.GetAttributeValue("data-ind-left-tw", "");
+            var indHanging = node.GetAttributeValue("data-ind-hanging-tw", "");
+            var indFirstLine = node.GetAttributeValue("data-ind-first-line-tw", "");
+            var isLvlOverride = node.GetAttributeValue("data-lvl-override", "") == "1";
+            if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0
+                || startOverrideRaw.Length > 0 || suffix.Length > 0 || isLegal
+                || lvlRestartRaw.Length > 0 || indLeft.Length > 0)
             {
                 _ = int.TryParse(startRaw, out var start);
+                var startOverride = int.TryParse(startOverrideRaw, out var so) && so > 0 ? so : -1;
+                var lvlRestart = int.TryParse(lvlRestartRaw, out var lr) && lr >= 0 ? lr : -1;
                 specs[level] = new HtmlListLevelSpec(
                     fmt.Length > 0 ? fmt : null,
                     lvlText.Length > 0 ? HtmlEntity.DeEntitize(lvlText) : null,
                     start > 0 ? start : 1,
-                    bulletFont.Length > 0 ? HtmlEntity.DeEntitize(bulletFont) : null);
+                    bulletFont.Length > 0 ? HtmlEntity.DeEntitize(bulletFont) : null,
+                    startOverride,
+                    suffix is "space" or "nothing" ? suffix : null,
+                    isLegal,
+                    lvlRestart,
+                    indLeft.Length > 0 ? indLeft : null,
+                    indHanging.Length > 0 ? indHanging : null,
+                    indFirstLine.Length > 0 ? indFirstLine : null,
+                    isLvlOverride);
             }
         }
 
@@ -1363,8 +1478,21 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var nested = child.SelectNodes("./ul|./ol");
             if (nested == null) continue;
             foreach (var nestedList in nested)
-                ScanListLevelSpecs(nestedList, level + 1, specs);
+                ScanListLevelSpecs(nestedList, ResolveListLevel(nestedList, level + 1), specs);
         }
+    }
+
+    /// <summary>
+    /// Efektywny poziom listy dla kontenera ul/ol: data-ilvl z readera (fragment listy może
+    /// zaczynać się na GŁĘBSZYM poziomie, np. kontynuacja ilvl=1 po zwykłym akapicie),
+    /// z fallbackiem do poziomu wynikającego z zagnieżdżenia HTML.
+    /// </summary>
+    private static int ResolveListLevel(HtmlNode node, int fallback)
+    {
+        var raw = node.GetAttributeValue("data-ilvl", "");
+        if (int.TryParse(raw, out var ilvl) && ilvl is >= 0 and <= 8)
+            return ilvl;
+        return Math.Clamp(fallback, 0, 8);
     }
 
     /// <summary>Mapuje token data-num-fmt (nazwy w:numFmt) na NumberFormatValues.</summary>
@@ -1380,7 +1508,19 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             case "upperRoman": fmt = NumberFormatValues.UpperRoman; return true;
             case "bullet": fmt = NumberFormatValues.Bullet; return true;
             case "none": fmt = NumberFormatValues.None; return true;
-            default: fmt = NumberFormatValues.Decimal; return false;
+            default:
+                // Token spoza mapy pochodzi z data-num-fmt readera (surowa wartość w:numFmt
+                // z importowanego dokumentu: ordinal/cardinalText/ordinalText/chicago/
+                // formaty językowe…) — odtwórz 1:1 zamiast degradować do decimal
+                // (pkt 22.10 specyfikacji list). Guard na kształt tokenu odsiewa śmieci
+                // z ręcznie edytowanego HTML.
+                if (Regex.IsMatch(token, "^[a-zA-Z][a-zA-Z0-9]*$"))
+                {
+                    fmt = new NumberFormatValues(token);
+                    return true;
+                }
+                fmt = NumberFormatValues.Decimal;
+                return false;
         }
     }
 
@@ -1400,7 +1540,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             foreach (var nestedList in nested)
             {
                 var isOrdered = nestedList.Name.ToLower() == "ol";
-                ScanListLevels(nestedList, isOrdered, level + 1, levelFormats);
+                ScanListLevels(nestedList, isOrdered, ResolveListLevel(nestedList, level + 1), levelFormats);
             }
         }
     }
@@ -1408,9 +1548,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Wykrywa poziomy listy, które używają punktatora obrazkowego — czyli mają
     /// <c>&lt;span class="list-marker"&gt;&lt;img/&gt;&lt;/span&gt;</c> wewnątrz &lt;li&gt;.
-    /// Dla takich poziomów wyłączymy automatyczny punktator Worda.
+    /// Wartość = data URI obrazu (eksport jako w:numPicBullet) albo null, gdy źródło nie jest
+    /// osadzalne — wtedy fallback: obraz zostaje inline w treści, poziom bez markera Worda.
     /// </summary>
-    private static void ScanPictureBulletLevels(HtmlNode node, int level, HashSet<int> pictureBulletLevels)
+    private static void ScanPictureBulletLevels(HtmlNode node, int level, Dictionary<int, string?> pictureBulletLevels)
     {
         foreach (var child in node.ChildNodes)
         {
@@ -1421,9 +1562,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 if (liChild.Name.ToLower() != "span") continue;
                 if (!IsListMarkerSpan(liChild)) continue;
-                if (liChild.SelectSingleNode(".//img") != null)
+                var img = liChild.SelectSingleNode(".//img");
+                if (img != null)
                 {
-                    pictureBulletLevels.Add(level);
+                    if (!pictureBulletLevels.ContainsKey(level))
+                    {
+                        var src = img.GetAttributeValue("src", "");
+                        pictureBulletLevels[level] = src.StartsWith("data:") ? src : null;
+                    }
                     break;
                 }
             }
@@ -1431,7 +1577,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var nested = child.SelectNodes("./ul|./ol");
             if (nested == null) continue;
             foreach (var nestedList in nested)
-                ScanPictureBulletLevels(nestedList, level + 1, pictureBulletLevels);
+                ScanPictureBulletLevels(nestedList, ResolveListLevel(nestedList, level + 1), pictureBulletLevels);
         }
     }
 
@@ -1467,7 +1613,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// </summary>
     private int CreateAbstractNumbering(
         Dictionary<int, bool> levelFormats,
-        HashSet<int>? pictureBulletLevels = null,
+        Dictionary<int, string?>? pictureBulletLevels = null,
         Dictionary<int, HtmlListLevelSpec>? levelSpecs = null)
     {
         var abstractNumId = _numberingId++;
@@ -1479,23 +1625,72 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         abstractNum.Append(new Nsid { Val = nsidValue });
         abstractNum.Append(new MultiLevelType { Val = MultiLevelValues.HybridMultilevel });
 
+        var exportedPicBulletLevels = new HashSet<int>();
+        var specLevels = new HashSet<int>();
+
         // Zdefiniuj 9 poziomów — każdy poziom ma format zgodny ze strukturą HTML
         for (int lvl = 0; lvl < 9; lvl++)
         {
-            // Określ format dla danego poziomu (domyślnie jak poziom najwyższy)
-            var isOrdered = levelFormats.TryGetValue(lvl, out var fmt)
-                ? fmt
-                : (levelFormats.TryGetValue(0, out var defaultFmt) && defaultFmt);
-
+            var isOrdered = ResolveLevelOrdered(levelFormats, lvl);
             HtmlListLevelSpec? spec = levelSpecs != null && levelSpecs.TryGetValue(lvl, out var s) ? s : null;
+            string? picBulletUri = null;
+            var hasPicBulletMarker = pictureBulletLevels != null
+                && pictureBulletLevels.TryGetValue(lvl, out picBulletUri);
 
+            // Poziomy zbudowane z jawnych data-* notujemy — późniejszy fragment współdzielący
+            // abstrakt może dosłać definicje poziomów, których ten fragment nie używał
+            // (UpgradeSharedAbstractLevels podmienia wtedy poziomy z drabinki domyślnej).
+            if (spec != null || hasPicBulletMarker) specLevels.Add(lvl);
+
+            abstractNum.Append(BuildAbstractLevel(
+                lvl, isOrdered, hasPicBulletMarker, picBulletUri, spec, exportedPicBulletLevels));
+        }
+
+        _specLevelsByAbstract[abstractNumId] = specLevels;
+        if (exportedPicBulletLevels.Count > 0)
+            _picBulletLevelsByAbstract[abstractNumId] = exportedPicBulletLevels;
+
+        // Wstaw na początku (przed instancjami)
+        var firstInstance = _numberingPart!.Numbering.Elements<NumberingInstance>().FirstOrDefault();
+        if (firstInstance != null)
+            _numberingPart.Numbering.InsertBefore(abstractNum, firstInstance);
+        else
+            _numberingPart.Numbering.Append(abstractNum);
+
+        _numberingPart.Numbering.Save();
+        return abstractNumId;
+    }
+
+    /// <summary>Format poziomu (ordered/unordered) — domyślnie jak poziom najwyższy.</summary>
+    private static bool ResolveLevelOrdered(Dictionary<int, bool> levelFormats, int lvl) =>
+        levelFormats.TryGetValue(lvl, out var fmt)
+            ? fmt
+            : (levelFormats.TryGetValue(0, out var defaultFmt) && defaultFmt);
+
+    /// <summary>
+    /// Buduje definicję pojedynczego poziomu (w:lvl) w kolejności sekwencji CT_Lvl — używane
+    /// zarówno dla poziomów abstraktu, jak i pełnych nadpisań w:lvlOverride/w:lvl na instancji.
+    /// </summary>
+    private Level BuildAbstractLevel(int lvl, bool isOrdered, bool hasPicBulletMarker,
+        string? picBulletUri, HtmlListLevelSpec? spec, HashSet<int> exportedPicBulletLevels)
+    {
             var levelDef = new Level { LevelIndex = lvl };
             levelDef.Append(new StartNumberingValue { Val = spec?.Start ?? 1 });
 
-            // Poziom z punktatorem obrazkowym — wyłącz automatyczny marker Worda,
-            // grafika została wstawiona jako wiodący inline run w paragrafie.
-            if (pictureBulletLevels != null && pictureBulletLevels.Contains(lvl))
+            if (hasPicBulletMarker && picBulletUri != null
+                && TryCreatePictureBullet(picBulletUri, out var numPicBulletId))
             {
+                // Prawdziwy punktator graficzny (FR-EXPORT-006): znak z lvlText jest w Wordzie
+                // zastępowany obrazem wskazanym przez w:lvlPicBulletId.
+                levelDef.Append(new NumberingFormat { Val = NumberFormatValues.Bullet });
+                levelDef.Append(new LevelText { Val = "" });
+                levelDef.Append(new LevelPictureBulletId { Val = numPicBulletId });
+                exportedPicBulletLevels.Add(lvl);
+            }
+            else if (hasPicBulletMarker)
+            {
+                // Obraz nieosadzalny (src nie jest data URI / SVG) — grafika zostaje inline
+                // w treści runu, automatyczny marker Worda wyłączony.
                 levelDef.Append(new NumberingFormat { Val = NumberFormatValues.None });
                 levelDef.Append(new LevelText { Val = string.Empty });
             }
@@ -1571,40 +1766,216 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 }
             }
             
+            // Kolejność schematu CT_Lvl (sequence!): start, numFmt, lvlRestart, isLgl, suff,
+            // lvlText, lvlPicBulletId, lvlJc, pPr, rPr. Gałęzie wyżej dołożyły start/numFmt/
+            // lvlText(/lvlPicBulletId) — nowe elementy wstawiamy tuż PO numFmt.
+            if (spec is { } specProps && levelDef.GetFirstChild<NumberingFormat>() is { } numFmtAnchor)
+            {
+                OpenXmlElement anchor = numFmtAnchor;
+                if (specProps.LvlRestart >= 0)
+                {
+                    // Surowa wartość w:lvlRestart (jednobazowa; 0 = poziom nigdy nie restartuje).
+                    var lvlRestartEl = new LevelRestart { Val = specProps.LvlRestart };
+                    levelDef.InsertAfter(lvlRestartEl, anchor);
+                    anchor = lvlRestartEl;
+                }
+                if (specProps.IsLegal)
+                {
+                    // w:isLgl — etykieta „legal": wszystkie poziomy formatowane jako decimal.
+                    var isLglEl = new IsLegalNumberingStyle();
+                    levelDef.InsertAfter(isLglEl, anchor);
+                    anchor = isLglEl;
+                }
+                if (specProps.Suffix is { } suffixToken)
+                {
+                    // w:suff — separator znacznik→tekst; tab jest domyślny, emitujemy odstępstwa.
+                    levelDef.InsertAfter(new LevelSuffix
+                    {
+                        Val = suffixToken == "space" ? LevelSuffixValues.Space : LevelSuffixValues.Nothing
+                    }, anchor);
+                }
+            }
+
+            // w:rPr musi być OSTATNIM dzieckiem w:lvl — gałęzie dokładają go po lvlText,
+            // więc przenosimy go za lvlJc/pPr (wcześniej lądował przed nimi, poza schematem).
+            var markerRunProps = levelDef.GetFirstChild<NumberingSymbolRunProperties>();
+            markerRunProps?.Remove();
+
             levelDef.Append(new LevelJustification { Val = LevelJustificationValues.Left });
-            
-            var indent = 720 * (lvl + 1);
-            levelDef.Append(new PreviousParagraphProperties(
-                new Indentation { Left = indent.ToString(), Hanging = "360" }
-            ));
-            
-            abstractNum.Append(levelDef);
-        }
-        
-        // Wstaw na początku (przed instancjami)
-        var firstInstance = _numberingPart!.Numbering.Elements<NumberingInstance>().FirstOrDefault();
-        if (firstInstance != null)
-            _numberingPart.Numbering.InsertBefore(abstractNum, firstInstance);
-        else
-            _numberingPart.Numbering.Append(abstractNum);
-        
-        _numberingPart.Numbering.Save();
-        return abstractNumId;
+
+            // Wcięcia: dokładne twips z definicji poziomu oryginału (data-ind-*-tw); bez nich
+            // dotychczasowa drabinka 720×(lvl+1) z wcięciem wiszącym 360.
+            var indentation = new Indentation();
+            if (spec is { IndLeftTw: not null } or { IndHangingTw: not null } or { IndFirstLineTw: not null })
+            {
+                if (spec.Value.IndLeftTw != null) indentation.Left = spec.Value.IndLeftTw;
+                if (spec.Value.IndHangingTw != null) indentation.Hanging = spec.Value.IndHangingTw;
+                if (spec.Value.IndFirstLineTw != null) indentation.FirstLine = spec.Value.IndFirstLineTw;
+            }
+            else
+            {
+                indentation.Left = (720 * (lvl + 1)).ToString();
+                indentation.Hanging = "360";
+            }
+            levelDef.Append(new PreviousParagraphProperties(indentation));
+
+            if (markerRunProps != null)
+                levelDef.Append(markerRunProps);
+
+            return levelDef;
     }
 
     /// <summary>
-    /// Tworzy instancję numeracji
+    /// Dosyła do WSPÓŁDZIELONEGO abstraktu definicje poziomów, których fragment tworzący
+    /// abstrakt nie używał (dostały drabinkę domyślną). Poziomy zbudowane wcześniej z jawnych
+    /// data-* nie są podmieniane (pierwsza definicja wygrywa — spójnie z resztą kontraktu).
+    /// Bezpieczne: fragment tworzący abstrakt nie miał elementów na upgradowanym poziomie
+    /// (inaczej niosłyby data-*), więc wygląd żadnego wcześniejszego akapitu się nie zmienia.
     /// </summary>
-    private int CreateNumberingInstance(int abstractNumId)
+    private void UpgradeSharedAbstractLevels(
+        int abstractNumId,
+        Dictionary<int, bool> levelFormats,
+        Dictionary<int, string?> pictureBulletLevels,
+        Dictionary<int, HtmlListLevelSpec> levelSpecs)
+    {
+        var abstractNum = _numberingPart?.Numbering.Elements<AbstractNum>()
+            .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
+        if (abstractNum == null) return;
+
+        if (!_specLevelsByAbstract.TryGetValue(abstractNumId, out var specLevels))
+            _specLevelsByAbstract[abstractNumId] = specLevels = new HashSet<int>();
+        var exportedPic = _picBulletLevelsByAbstract.TryGetValue(abstractNumId, out var pic)
+            ? pic
+            : new HashSet<int>();
+
+        var changed = false;
+        foreach (var lvl in levelSpecs.Keys.Union(pictureBulletLevels.Keys).OrderBy(l => l))
+        {
+            if (lvl is < 0 or > 8 || specLevels.Contains(lvl)) continue;
+
+            HtmlListLevelSpec? spec = levelSpecs.TryGetValue(lvl, out var s) ? s : null;
+            string? picBulletUri = null;
+            var hasPicBulletMarker = pictureBulletLevels.TryGetValue(lvl, out picBulletUri);
+            var isOrdered = ResolveLevelOrdered(levelFormats, lvl);
+
+            var newLevel = BuildAbstractLevel(
+                lvl, isOrdered, hasPicBulletMarker, picBulletUri, spec, exportedPic);
+            var oldLevel = abstractNum.Elements<Level>()
+                .FirstOrDefault(l => l.LevelIndex?.Value == lvl);
+            if (oldLevel != null)
+                abstractNum.ReplaceChild(newLevel, oldLevel);
+            else
+                abstractNum.Append(newLevel);
+
+            specLevels.Add(lvl);
+            changed = true;
+        }
+
+        if (exportedPic.Count > 0)
+            _picBulletLevelsByAbstract[abstractNumId] = exportedPic;
+        if (changed)
+            _numberingPart!.Numbering.Save();
+    }
+
+    /// <summary>
+    /// Tworzy (lub reużywa — deduplikacja po data URI) w:numPicBullet w części numeracji:
+    /// ImagePart + relacja + VML v:shape/v:imagedata (wariant, który zapisuje sam Word).
+    /// Zwraca false dla nieparsowalnego data URI lub SVG (imagedata na SVG psuje pakiet) —
+    /// wtedy caller zostawia obraz inline w treści (kontrolowana degradacja, zero utraty).
+    /// </summary>
+    private bool TryCreatePictureBullet(string dataUri, out int numPicBulletId)
+    {
+        if (_picBulletIdByDataUri.TryGetValue(dataUri, out numPicBulletId))
+            return true;
+
+        numPicBulletId = -1;
+        var m = Regex.Match(dataUri, @"data:([^;]+);base64,(.+)");
+        if (!m.Success) return false;
+        var contentType = m.Groups[1].Value;
+        if (contentType == "image/svg+xml") return false;
+        if (!Regex.IsMatch(contentType, @"^image/[\w.+-]+$")) return false;
+
+        byte[] bytes;
+        try { bytes = System.Convert.FromBase64String(m.Groups[2].Value); }
+        catch { return false; }
+
+        PartTypeInfo? knownType = contentType switch
+        {
+            "image/png" => ImagePartType.Png,
+            "image/jpeg" or "image/jpg" => ImagePartType.Jpeg,
+            "image/gif" => ImagePartType.Gif,
+            "image/bmp" => ImagePartType.Bmp,
+            "image/tiff" or "image/tif" => ImagePartType.Tiff,
+            _ => (PartTypeInfo?)null
+        };
+
+        EnsureNumberingPart();
+        var imagePart = knownType is { } t
+            ? _numberingPart!.AddImagePart(t)
+            : _numberingPart!.AddImagePart(contentType);
+        using (var stream = new MemoryStream(bytes))
+        {
+            imagePart.FeedData(stream);
+        }
+        var relId = _numberingPart!.GetIdOfPart(imagePart);
+
+        numPicBulletId = _picBulletId++;
+        var numPicBullet = new NumberingPictureBullet(
+            new PictureBulletBase(
+                new V.Shape(new V.ImageData { RelationshipId = relId })
+                {
+                    Id = $"picBullet{numPicBulletId}",
+                    Style = "width:12pt;height:12pt"
+                }))
+        { NumberingPictureBulletId = numPicBulletId };
+
+        // Kolejność schematu w:numbering: numPicBullet* → abstractNum* → num*.
+        var firstAbstract = _numberingPart.Numbering.Elements<AbstractNum>().FirstOrDefault();
+        var firstNum = _numberingPart.Numbering.Elements<NumberingInstance>().FirstOrDefault();
+        if (firstAbstract != null)
+            _numberingPart.Numbering.InsertBefore(numPicBullet, firstAbstract);
+        else if (firstNum != null)
+            _numberingPart.Numbering.InsertBefore(numPicBullet, firstNum);
+        else
+            _numberingPart.Numbering.Append(numPicBullet);
+        _numberingPart.Numbering.Save();
+
+        _picBulletIdByDataUri[dataUri] = numPicBulletId;
+        return true;
+    }
+
+    /// <summary>
+    /// Tworzy instancję numeracji. „Rozpocznij od nowa"/„Ustaw wartość" = w:lvlOverride
+    /// z w:startOverride na instancji (FR-EXPORT-004) — restart bez kopiowania definicji.
+    /// Pełne nadpisanie wyglądu poziomu (data-lvl-override) = w:lvlOverride z własnym w:lvl.
+    /// </summary>
+    private int CreateNumberingInstance(
+        int abstractNumId,
+        Dictionary<int, int>? startOverrides = null,
+        Dictionary<int, Level>? fullLevelOverrides = null)
     {
         var numId = _numberingId++;
-        
+
         var numInstance = new NumberingInstance { NumberID = numId };
         numInstance.Append(new AbstractNumId { Val = abstractNumId });
-        
+
+        var overrideLevels = (startOverrides?.Keys ?? Enumerable.Empty<int>())
+            .Union(fullLevelOverrides?.Keys ?? Enumerable.Empty<int>())
+            .OrderBy(l => l);
+        foreach (var lvl in overrideLevels)
+        {
+            // Sekwencja CT_NumLvl: w:startOverride, potem w:lvl.
+            var levelOverride = new LevelOverride { LevelIndex = lvl };
+            if (startOverrides != null && startOverrides.TryGetValue(lvl, out var startValue))
+                levelOverride.Append(new StartOverrideNumberingValue { Val = startValue });
+            if (fullLevelOverrides != null && fullLevelOverrides.TryGetValue(lvl, out var fullLevel))
+                levelOverride.Append(fullLevel);
+            numInstance.Append(levelOverride);
+        }
+
         _numberingPart!.Numbering.Append(numInstance);
         _numberingPart.Numbering.Save();
-        
+
         return numId;
     }
 
@@ -1620,10 +1991,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Wcześniej wymuszaliśmy solid-black jako default, co powodowało fałszywe czarne linie
         // w tabelach, które w oryginalnym DOCX miały `w:tblBorders` z val=nil/none lub w ogóle bez
         // definicji (bordery per-komórka są w pełni opisane przez ApplyCellBorders).
+        // Kolejność dzieci wg sekwencji CT_TblBorders: top, left, bottom, right, insideH,
+        // insideV (bottom przed left = błąd walidacji — jak tcBorders w ADR-0031).
         var defaultBorders = new TableBorders(
             new TopBorder { Val = BorderValues.None, Size = 0 },
-            new BottomBorder { Val = BorderValues.None, Size = 0 },
             new LeftBorder { Val = BorderValues.None, Size = 0 },
+            new BottomBorder { Val = BorderValues.None, Size = 0 },
             new RightBorder { Val = BorderValues.None, Size = 0 },
             new InsideHorizontalBorder { Val = BorderValues.None, Size = 0 },
             new InsideVerticalBorder { Val = BorderValues.None, Size = 0 }
@@ -1710,8 +2083,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
             defaultBorders = new TableBorders(
                 new TopBorder { Val = bStyle, Size = bSize, Color = bColor },
-                new BottomBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new LeftBorder { Val = bStyle, Size = bSize, Color = bColor },
+                new BottomBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new RightBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new InsideHorizontalBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new InsideVerticalBorder { Val = bStyle, Size = bSize, Color = bColor }

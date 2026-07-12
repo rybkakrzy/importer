@@ -325,6 +325,35 @@ img[data-legacy-graphic='blank'] {
   margin: 2px 0;
 }
 
+/* Etykiety list DOCX liczone silnikiem (data-list-label z list-label.util) — natywne
+   markery przeglądarki nie umieją szablonów wielopoziomowych ("2.4.1."), sufiksów
+   lvlText ("1)"), numeracji legal ani kontynuacji fragmentów po edycji. Pseudo-element
+   jest POZA edytowalnym tekstem: nie łapie się w zaznaczenie, nie kopiuje i nie
+   serializuje; atrybut zdejmowany przy zapisie. Pozycjonowanie right:100% = prawa
+   krawędź etykiety przy lewej krawędzi tekstu (wiersze zawijane zaczynają się na
+   pozycji tekstu, jak w Wordzie). */
+.editor-content li[data-list-label] {
+  list-style: none;
+  position: relative;
+}
+
+.editor-content li[data-list-label]::before {
+  content: attr(data-list-label);
+  position: absolute;
+  right: 100%;
+  top: 0;
+  padding-right: 0.4em;
+  white-space: nowrap;
+}
+
+.editor-content li[data-list-label][data-list-suffix='nothing']::before {
+  padding-right: 0;
+}
+
+.editor-content li[data-list-label][data-list-suffix='space']::before {
+  padding-right: 0.25em;
+}
+
 .editor-content a {
   color: #0066cc;
   text-decoration: underline;

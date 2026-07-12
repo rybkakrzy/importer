@@ -11,6 +11,84 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-12 — Listy DOCX etap 1 wariantu A (ADR-0036): eksport restartów, punktatorów graficznych i rzadkich właściwości poziomu
+
+### Changed
+- `DocxToHtmlConverter`: kontrakt `data-*` list rozszerzony o `data-start-override` (w:startOverride
+  instancji — emitowany ODDZIELNIE od `data-start`, które teraz niesie zawsze w:start DEFINICJI),
+  `data-suffix` (w:suff space/nothing), `data-is-legal` (w:isLgl), `data-lvl-restart` (surowa
+  jednobazowa wartość w:lvlRestart), `data-pic-bullet` (poziom z lvlPicBulletId),
+  `data-ind-left/hanging/first-line-tw` (wcięcia definicji poziomu w twips).
+- `HtmlToDocxConverter`: w:abstractNum współdzielony po `data-abstract-num-id`; restart =
+  `w:lvlOverride/w:startOverride` na nowej instancji (wcześniej writer w ogóle ich nie emitował —
+  „Rozpocznij od nowa" ginęło przy pierwszym autosave); `TryCreatePictureBullet` odtwarza
+  `w:numPicBullet` (ImagePart na części numeracji + VML v:shape/v:imagedata + w:lvlPicBulletId,
+  deduplikacja po data URI) zamiast bake'ować obraz w treść runu; suffix/isLgl/lvlRestart/wcięcia
+  z data-*; kolejność dzieci w:lvl zgodna z sekwencją CT_Lvl (rPr na końcu — było przed lvlJc);
+  stan numeracji (`_numberingId`, `_numberingPart`, mapy) resetowany per Convert.
+
+- Runda 2 (weryfikacja kontynuacji/wcięć/rodzaju numeracji): `ResolveListLevel` — writer honoruje
+  `data-ilvl` (fragment kontynuacji na głębszym poziomie nie jest spłaszczany do ilvl=0);
+  pełne `w:lvlOverride/w:lvl` na instancji przez `data-lvl-override` (reader znaczy poziomy
+  z definicją z lvlOverride instancji — wygląd per instancja nie zlewa się we wspólnym
+  abstrakcie); `UpgradeSharedAbstractLevels` (późniejszy fragment dosyła definicje poziomów,
+  których fragment tworzący abstrakt nie używał). Wydzielone `BuildAbstractLevel`.
+
+- GUI (prezentacja): nowy `core/utils/list-label.util.ts` — silnik etykiet TS lustrzany do
+  liczników readera (szablony %N z formatem poziomu odwołania, isLegal, suffix, lvlRestart=0/N,
+  startOverride, kontynuacja fragmentów przez strony); `wysiwyg-editor.refreshListLabels()`
+  (hooki: content-input/setContent/persist/undo/redo/pageEditorRefs.changes) nadaje
+  `data-list-label` na li, render CSS `li[data-list-label]::before` (etykieta poza edytowalnym
+  tekstem, nie kopiuje się); `stripListLabelAttributes` w serializacji — zapis bez atrybutów
+  prezentacyjnych.
+
+### Verified
+- `ListNumberingFidelityTests` 21/21 (+9: start-override osobno od start, lvlOverride na wspólnym
+  abstrakcie, pełny round-trip restartu, suffix/isLgl/lvlRestart/wcięcia, punktator graficzny
+  z bajtami 1:1 i bez inline Drawing, walidator OOXML Office2013 = 0 błędów, fragment ilvl=1,
+  upgrade poziomów wspólnego abstraktu, pełny lvlOverride zostaje na instancji).
+- Infrastructure.UnitTests 421/421 (0 fail, goldeny bez zmian), build solucji 0 błędów.
+- GUI: `list-label.util.spec` 12 + `wysiwyg-editor.list-labels.spec` 5, pełne Vitest 415/415,
+  `ng build` OK; wizualna weryfikacja headless Chrome+CDP (skill verify) na żywym edytorze:
+  1. / 2. / 2.a) / 2.b) / 3. (kontynuacja po akapicie) / 1. (startOverride), zapis czysty.
+- Runda 4 (katalog wymagań użytkownika): fix readera — WIELOZNAKOWY lvlText punktatora
+  ("TODO:", "Pkt", "§ 1", "o czym mowa") renderuje się w całości (wcześniej tylko pierwszy
+  znak przez MapBulletChar; skróty disc/circle/square ograniczone do jednoznakowego lvlText).
+  Testy: `MultilevelSchemes_FormatsAndTemplates_SurviveRoundTrip` (1.1.1. / 1.1.1) / A.1.a. /
+  I.A.1. / § 1.1.1), `UnicodeBulletCatalog_LvlTextSurvivesRoundTrip` (~70 znaków: kropki/koła,
+  kwadraty, trójkąty/strzałki, myślniki, gwiazdki, romby, znaczniki wyboru),
+  `TextMarkerBullets_RenderFullTextAndRoundTrip`; TS: schematy + numeratory z literałami
+  ((%1) / [%1] / Krok %1 / Pkt %1). Infrastructure 424/424, GUI Vitest 417/417.
+- Runda 5 (ENTER w listach + eksport po edycjach — weryfikacja EMPIRYCZNA na żywym edytorze,
+  headless Chrome + realne zdarzenia klawiszy): (a) Enter na końcu/w środku li → nowy element
+  tej samej listy, etykiety (w tym DALSZE fragmenty) przeliczają się po debounce; (b) 2×Enter
+  (wyjście z listy) → Chrome dzieli <ol> KOPIUJĄC kontrakt data-* na drugi fragment, akapit
+  ląduje jako <div>; (c) nowy test `Writer_EditorHtmlAfterEnterAndListExit_KeepsOneLogicalList`
+  na DOSŁOWNYM HTML przechwyconym z edytora: fragmenty scalone do JEDNEJ instancji, div →
+  zwykły akapit, kolejność treści, walidator 0 błędów, reimport z kontynuacją start=3/4;
+  (d) fix: `ensureBulletMarkers` (list-label.util, wołane w refreshListLabels) — li utworzony
+  Enterem w liście z marker spanem (własny symbol/„TODO:"/obraz) nie dziedziczył znacznika;
+  uzupełniany klonem z rodzeństwa (add-only, bez ryzyka dla kotwicy kursora); potwierdzone
+  na żywo (TODO:/✔ — dokładnie 1 marker per li, zapis bez atrybutów prezentacyjnych).
+  Infrastructure 425/425, GUI Vitest 419/419.
+- Runda 6 (naprawy z audytu, R-30 częściowo): (1) **Listy w komórkach tabel przestały ginąć** —
+  `AppendTableCellHtml` grupuje akapity listowe przez `ConvertConsecutiveListItems` (jak body/
+  SdtBlock); li w komórce dostaje też inline spacing docDefaults/stylu tabeli (ADR-0031) przez
+  `_tableParagraphDefaultCss` + `DeduplicateCss`. Kontynuacja numeracji działa przez granicę
+  komórek (wspólny numId). (2) **Nieznane w:numFmt nie degradują się do decimal** (pkt 22.10):
+  `NumFmtToken` niesie surowy token (`Val.InnerText`) — ordinal/cardinalText/ordinalText/
+  chicago/językowe; `TryMapNumFmt` odtwarza token 1:1 (`new NumberFormatValues(token)`,
+  guard regex na kształt). (3) Przy okazji pre-existing bug writera: kolejność dzieci
+  `w:tblBorders` była top→bottom→left→right — schemat CT_TblBorders wymaga top→left→bottom→
+  right (błąd walidacji OOXML przy KAŻDEJ tabeli bez data-tbl-style; wykryty, bo nowy test
+  jako pierwszy walidował eksport tabeli). Testy: `ListsInTableCells_GroupIntoOlAndSurviveRoundTrip`,
+  `UnknownNumFmt_RoundTripsRawToken…`; Infrastructure 427/427, build sln 0 błędów.
+
+### Notes
+- Decyzja architektoniczna (wariant A vs B) i pełna lista konsekwencji: ADR-0036.
+- GUI i kontrakty API nietknięte; następne etapy w TASK_HANDOFF (silnik etykiet, komendy edytora,
+  lvlRestart=N w licznikach, łańcuch basedOn/styleLink, diagnostyka LIST_*).
+
 ## 2026-07-11 — Fix: przyciski wyrównania/list nie pokazują stanu aktywnego (toolbar główny, mini-toolbar, menu)
 
 ### Changed

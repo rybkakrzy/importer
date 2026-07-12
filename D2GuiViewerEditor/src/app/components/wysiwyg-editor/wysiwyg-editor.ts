@@ -33,6 +33,11 @@ import {
   Footnote
 } from '../../models/document.model';
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
+import {
+  applyListLabels,
+  ensureBulletMarkers,
+  stripListLabelAttributes,
+} from '../../core/utils/list-label.util';
 import { syncTableColgroup } from '../../core/utils/table-grid.util';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 import {
@@ -127,6 +132,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.pageGeometries.set(this._deriveGeometriesForPages(pages));
       // Po Angular re-render zaktualizuj aktywny edytor i zrepaginuj
       this._schedulePaginate('content-input');
+      // Etykiety list DOCX liczy silnik (nie przeglądarka) — po renderze stron.
+      setTimeout(() => this.refreshListLabels(), 0);
     }
   }
   
@@ -690,6 +697,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       syncActiveEditor();
       // Po repaginacji ponownie podpinamy listenery do nowych edytorów
       this.setupEventListeners();
+      // Nowe/usunięte strony mogą przecinać listy — przelicz etykiety w kolejności dokumentu.
+      this.refreshListLabels();
     });
 
     this.initializeEditor();
@@ -3492,8 +3501,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._content.set(previous);
       this.contentChange.emit(previous);
       this._schedulePaginate('undo');
-      
+
       this.updateState();
+      // Snapshot undo jest bez atrybutów etykiet (strip przy serializacji) — przelicz po renderze.
+      setTimeout(() => this.refreshListLabels(), 0);
     }
   }
 
@@ -3510,8 +3521,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._content.set(next);
       this.contentChange.emit(next);
       this._schedulePaginate('redo');
-      
+
       this.updateState();
+      setTimeout(() => this.refreshListLabels(), 0);
     }
   }
 
@@ -3801,6 +3813,24 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     sel.addRange(range);
   }
 
+  /**
+   * Przelicza etykiety list DOCX silnikiem z `list-label.util` na wszystkich stronach
+   * W KOLEJNOŚCI DOKUMENTU (kontynuacja działa przez granice stron i fragmentów listy).
+   * Render robi CSS ::before z data-list-label — poza edytowalnym tekstem; serializacja
+   * zapisu zdejmuje atrybuty (stripListLabelAttributes w _serializeSingleEditor).
+   */
+  refreshListLabels(): void {
+    const roots = (this.pageEditorRefs?.toArray() ?? []).map(r => r.nativeElement);
+    if (roots.length === 0 && this.editorContent?.nativeElement) {
+      roots.push(this.editorContent.nativeElement);
+    }
+    if (roots.length === 0) return;
+    applyListLabels(roots);
+    // li utworzony Enterem nie dziedziczy marker spana (własny symbol / "TODO:" / obraz
+    // punktatora) — uzupełnij klonem z rodzeństwa, żeby nowy element miał znacznik.
+    ensureBulletMarkers(roots);
+  }
+
   /** Debounce ciężkich operacji (undo snapshot + emit contentChange) — 500 ms. */
   private _schedulePersist(): void {
     if (this._persistTimer) clearTimeout(this._persistTimer);
@@ -3809,6 +3839,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Renumeruj przypisy i przytnij osierocone treści PRZED serializacją — edycja treści
       // (usunięcie/przeniesienie odwołania) musi uaktualnić numerację i model przypisów.
       this.syncFootnotesWithBody();
+      // Przelicz etykiety list (dodanie/usunięcie li zmienia numery dalszych elementów,
+      // także w innych fragmentach tej samej listy — natywny <ol start> tego nie umie).
+      this.refreshListLabels();
       const html = this.getContent();
       this._isInternalUpdate = true;
       this._content.set(html);
@@ -4716,6 +4749,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // trafił (np. przez wklejenie) — usuń przy serializacji.
     clone.querySelectorAll('.anchor-badge').forEach(b => b.remove());
 
+    // Etykiety list (data-list-label/-suffix) są czysto prezentacyjne — liczy je silnik
+    // przy każdym renderze; w zapisie byłyby szumem i groziłyby dryfem po edycjach.
+    stripListLabelAttributes(clone);
+
     clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;
       wrapper.classList.remove('selected');
@@ -4754,9 +4791,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // avoids doubling them.
     this._content.set(pages.join(''));
     this._isDirty = false;
-    // Po Angular re-render: opakuj obrazki, zapisz snapshot, repaginuj
+    // Po Angular re-render: opakuj obrazki, przelicz etykiety list, zapisz snapshot, repaginuj
     setTimeout(() => {
       this.wrapExistingImages();
+      this.refreshListLabels();
       const merged = this.getContent();
       this.lastSavedContent = merged;
       this.undoStack = [merged];

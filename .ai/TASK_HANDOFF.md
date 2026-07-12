@@ -2,6 +2,101 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-07-12)
+
+- **Listy DOCX — etap 1 wariantu A (ADR-0036): restart, punktatory graficzne, rzadkie właściwości poziomu.**
+   - Decyzja użytkownika: **wariant A** — semantyka specyfikacji „kompletnej obsługi list" na
+     istniejącym transporcie `data-*` (kontrakt na kontenerach ul/ol = serializacja modelu list),
+     BEZ kanonicznego modelu JSON w kontraktach API. Szczegóły i odrzucony wariant B: ADR-0036.
+   - Reader (`DocxToHtmlConverter`): `ListLevelInfo` rozszerzone; **zmiana semantyki `Start`** —
+     teraz ZAWSZE w:start definicji; startOverride instancji jedzie osobno w `data-start-override`.
+     Nowe atrybuty: `data-suffix` (space/nothing), `data-is-legal`, `data-lvl-restart` (surowa
+     wartość jednobazowa), `data-pic-bullet`, `data-ind-left/hanging/first-line-tw`.
+   - Writer (`HtmlToDocxConverter`): abstrakt współdzielony po `data-abstract-num-id`
+     (`_abstractIdByHtmlAbstract`); `CreateNumberingInstance(abstractId, startOverrides)` emituje
+     `w:lvlOverride/w:startOverride`; `TryCreatePictureBullet` (ImagePart na części numeracji +
+     `w:numPicBullet` VML + `w:lvlPicBulletId`, dedup po data URI; SVG/nie-data-URI → stary
+     fallback numFmt=none z obrazem inline); wcięcia poziomu z `data-ind-*-tw` zamiast drabinki
+     720×(lvl+1); kolejność dzieci `w:lvl` = sekwencja CT_Lvl (rPr przenoszony na koniec);
+     `_numberingId`/`_numberingPart`/mapy resetowane per Convert (determinizm + brak przecieku
+     części przy reużytej instancji konwertera).
+   - Testy: `ListNumberingFidelityTests` 18/18 (+6, w tym walidator OOXML Office2013 = 0 błędów
+     dla list z data-* i bez); Infrastructure 418/418; build sln 0 błędów.
+   - **Następne etapy planu (kolejność wg dźwigni):** (a) `lvlRestart=N` w licznikach readera
+     (dziś honorowane tylko 0) + pełny łańcuch `basedOn`/`styleLink` w rozwiązywaniu numeracji
+     ze stylów; (b) silnik etykiet (szablony `%1.%2.%3`, suffix, isLegal) jako czysty komponent
+     + port TS ze wspólnymi fixture'ami JSON; (c) warstwa znacznika w GUI + komendy edytora
+     (Tab/Shift+Tab, kontynuuj/restart/ustaw wartość — nowe listy z edytora wciąż dostają
+     drabinkę domyślną bez data-*); (d) kody diagnostyczne LIST_* + RoundTripComparator.
+   - **Uwaga na pułapkę:** `data-start` w starych zapisanych dokumentach niósł wartość
+     efektywną (z override) — writer odtworzy ją jako w:start abstraktu; wizualnie identycznie,
+     semantycznie akceptowalne (dokument sprzed poprawki nie miał override'u w HTML).
+   - **Runda 2 (weryfikacja kontynuacji/wcięć/rodzaju numeracji) — domknięte:**
+     (a) `ResolveListLevel` — writer honoruje `data-ilvl` (fragment kontynuacji na głębszym
+     poziomie nie jest już spłaszczany do ilvl=0; dotyczy też skanów specyfikacji poziomów);
+     (b) pełne `w:lvlOverride/w:lvl` na instancji przez `data-lvl-override` (wygląd nadpisany
+     per instancja NIE jest zapiekany we wspólnym abstrakcie ani nie zlewa się z pierwszym
+     wygranym — `FindLevelDefinition` zwraca źródło definicji);
+     (c) `UpgradeSharedAbstractLevels` — późniejszy fragment współdzielący abstrakt dosyła
+     definicje poziomów, których fragment tworzący nie używał (miały drabinkę domyślną).
+     Wydzielone `BuildAbstractLevel`/`ResolveLevelOrdered`. Testy: 21/21, Infrastructure 421/421.
+   - **Świadome ograniczenie sharingu:** definicje poziomów NIE-override'owych łączą się po
+     `data-abstract-num-id` zasadą „pierwsza definicja wygrywa" — poziom już zbudowany z data-*
+     nie jest podmieniany przez późniejszy fragment (identyczna zasada jak słownik specs).
+   - **Runda 3 — prezentacja w edytorze Angular:**
+     - `core/utils/list-label.util.ts` — czysty silnik etykiet TS (lustrzany do liczników
+       readera; scenariusze spec-ów odpowiadają backendowym `ListNumberingFidelityTests`).
+       Formaty (litery jak Word: 27=aa), szablony %N z formatem poziomu ODWOŁANIA, isLegal,
+       suffix, lvlRestart=0/N, startOverride raz per numId, licznik per abstrakt.
+     - `wysiwyg-editor.refreshListLabels()` + hooki (content-input, setContent, persist,
+       undo/redo, pageEditorRefs.changes); etykieta w `data-list-label` na li, render CSS
+       `::before` (right:100%, poza edytowalnym tekstem); `stripListLabelAttributes`
+       w `_serializeSingleEditor` — zapis czysty.
+     - Weryfikacja: Vitest 415/415, `ng build` OK, wizualnie headless Chrome+CDP
+       (skill verify): 1./2./2.a)/2.b)/3.(kontynuacja)/1.(restart) na żywym edytorze.
+     - **Następne w prezentacji:** wcięcia znacznika z `data-ind-*-tw` (dziś padding
+       kontenera z readera), styl znacznika (rPr poziomu: bold/kolor/rozmiar — brak w
+       kontrakcie data-*), komendy list (Tab/Shift+Tab poziomy, kontynuuj/restart/ustaw
+       wartość, generowanie data-* dla nowych list z edytora).
+   - **Runda 5 — ENTER i eksport po edycjach (zweryfikowane empirycznie headless Chrome
+     z realnymi zdarzeniami klawiszy, nie tylko jsdom):**
+     - Enter w li → nowy element tej samej listy; etykiety (też dalszych fragmentów)
+       przeliczane w debounce persist. Wyjście z listy (2×Enter) → Chrome KOPIUJE data-*
+       na rozdzielony fragment i wstawia `<div>` — eksport scala fragmenty do jednej
+       instancji, a div konwertuje na akapit (test `Writer_EditorHtmlAfterEnterAndListExit…`
+       na dosłownym HTML przechwyconym z edytora + walidator + reimport start=3/4).
+     - `ensureBulletMarkers` (list-label.util): li utworzony Enterem w liście z marker
+       spanem dostaje znacznik klonem z rodzeństwa; ADD-ONLY (usuwanie węzłów przy kursorze
+       = ryzyko utraty kotwicy); eksport i tak pomija marker spany.
+     - Driver CDP wielokrotnego użytku: scratchpad `verify/cdp-enter.mjs`, `cdp-bullets.mjs`
+       (wg .claude/skills/verify) — wzorzec do kolejnych empirycznych testów edytora.
+   - **AUDYT luk listowych (2026-07-12; 1–2 NAPRAWIONE w rundzie 6, reszta otwarta):**
+     1. ~~Listy w komórkach tabel giną~~ **NAPRAWIONE**: `AppendTableCellHtml` grupuje akapity
+        listowe (`ConvertConsecutiveListItems`), li w komórce niesie inline spacing ADR-0031;
+        kontynuacja przez granicę komórek; test `ListsInTableCells_GroupIntoOlAndSurviveRoundTrip`.
+        PRZY OKAZJI naprawiony pre-existing writer bug: kolejność dzieci `w:tblBorders`
+        (top→left→bottom→right wg CT_TblBorders; było top→bottom→left→right = błąd walidacji
+        każdej tabeli bez data-tbl-style).
+     2. ~~Nieznane `w:numFmt` → decimal~~ **NAPRAWIONE**: surowy token przez `Val.InnerText`
+        w data-num-fmt, writer odtwarza `new NumberFormatValues(token)` z guardem;
+        test `UnknownNumFmt_RoundTripsRawToken…` (ordinal/cardinalText/ordinalText/chicago).
+        Podgląd przybliża takie formaty jako decimal (silnik TS) — plik jest wierny.
+     3. Styl znacznika `w:rPr` poziomu (bold/kolor/rozmiar numeru) i `w:lvlJc` — brak
+        w kontrakcie data-*; writer emituje zawsze lvlJc=left, rPr tylko font bulleta.
+     4. Paste z MS Word: `handlePaste`+`sanitizeHtml` (regexy) wkleja `MsoListParagraph`/
+        `mso-list` jako akapity z LITERALNYM numerem (spec 22.1/9.7 — brak konwersji na kontrakt).
+     5. Paste między dokumentami: brak remapu kolidujących `data-num-id`/`data-abstract-num-id`
+        (spec 9.7) — obce listy mogą się scalić z lokalnymi przy zapisie.
+     6. Długa lista vs paginacja: `<ol>` jest blokiem ATOMOWYM (`_flattenTopBlocks`); tabele
+        mają split+merge (`_mergeSplitTables`), listy nie → lista > 1 strony rozjeżdża layout.
+     7. `refreshListLabels` obejmuje tylko strony body (nagłówek/stopka/panel przypisów bez
+        etykiet silnika); listy w treści PRZYPISÓW pewnie też bez grupowania (per-akapit).
+     8. `ResolveStyleNumbering`: numPr z numId=0 w łańcuchu basedOn nie przerywa dziedziczenia
+        (semantyka „numeracja wyłączona" — FR-IMPORT-002); akapit z samym ilvl bez numId
+        bierze poziom stylu zamiast własnego.
+     9. Skasowanie ostatniego marker spana w liście = brak wzorca dla `ensureBulletMarkers`
+        do końca sesji (wraca po ponownym otwarciu).
+
 ## Ostatnia aktualizacja (2026-07-11)
 
 - **Fix: przyciski wyrównania/list nie pokazywały stanu aktywnego (toolbar, mini-toolbar, menu).**

@@ -1,8 +1,8 @@
-{
+﻿{
   "auth": {
     "enabled": true,
-    "clientId": "fac950da-4c4e-48b3-acd9-afc7fb49c756",
-    "authority": "https://login.microsoftonline.com/587b6ea1-3db9-4fe1-a9d7-85d4c64ce5cc/v2.0",
+    "clientId": "fac950da-4c4esdasdd",
+    "authority": "https://login.microsoftonline.com/asdasdsd/v2.0",
     "redirectUri": "http://localhost:4200/",
     "apiScopes": ["User.Read"]
   }

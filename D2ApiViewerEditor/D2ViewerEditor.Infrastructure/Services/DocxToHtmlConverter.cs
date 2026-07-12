@@ -1262,6 +1262,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             identityAttrs.Append($" data-lvl-text=\"{System.Net.WebUtility.HtmlEncode(firstInfo.LvlText)}\"");
         if (!string.IsNullOrEmpty(firstInfo.BulletFont))
             identityAttrs.Append($" data-bullet-font=\"{System.Net.WebUtility.HtmlEncode(firstInfo.BulletFont)}\"");
+        // Rozszerzony kontrakt round-trip (ADR — listy, wariant A): restart instancji, separator
+        // znacznika, numeracja legal, reguła restartu poziomu, punktator graficzny i wcięcia
+        // definicji poziomu. Bez tych atrybutów writer tracił je przy pierwszym zapisie.
+        if (firstInfo.StartOverride > 0)
+            identityAttrs.Append($" data-start-override=\"{firstInfo.StartOverride}\"");
+        if (firstInfo.SuffixToken != null)
+            identityAttrs.Append($" data-suffix=\"{firstInfo.SuffixToken}\"");
+        if (firstInfo.IsLegal)
+            identityAttrs.Append(" data-is-legal=\"1\"");
+        if (firstInfo.LvlRestart >= 0)
+            identityAttrs.Append($" data-lvl-restart=\"{firstInfo.LvlRestart}\"");
+        if (firstInfo.PicBulletId >= 0)
+            identityAttrs.Append(" data-pic-bullet=\"1\"");
+        if (firstInfo.IndLeftTw != null)
+            identityAttrs.Append($" data-ind-left-tw=\"{firstInfo.IndLeftTw}\"");
+        if (firstInfo.IndHangingTw != null)
+            identityAttrs.Append($" data-ind-hanging-tw=\"{firstInfo.IndHangingTw}\"");
+        if (firstInfo.IndFirstLineTw != null)
+            identityAttrs.Append($" data-ind-first-line-tw=\"{firstInfo.IndFirstLineTw}\"");
+        if (firstInfo.FromInstanceOverride)
+            identityAttrs.Append(" data-lvl-override=\"1\"");
 
         html.Append($"<{listType}{startAttr}{identityAttrs} style=\"{listStyleCss}\">");
 
@@ -1306,7 +1327,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 {
                     cssStyle = styleCss + cssStyle;
                 }
-                cssStyle = StripIndentationCss(cssStyle);
+                // Akapit listy w KOMÓRCE tabeli niesie rozwiązany spacing docDefaults/stylu
+                // tabeli inline (ADR-0031, jak w ConvertParagraphToHtml) — bez tego wiersze
+                // z listami puchną w Wordzie po pierwszym zapisie.
+                if (!string.IsNullOrEmpty(_tableParagraphDefaultCss) && p.Ancestors<TableCell>().Any())
+                {
+                    cssStyle = _tableParagraphDefaultCss + cssStyle;
+                }
+                cssStyle = DeduplicateCss(StripIndentationCss(cssStyle));
                 
                 html.Append($"<li style=\"{cssStyle}\">");
                 
@@ -2626,21 +2654,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     /// <summary>
     /// Definicja poziomu dla (numId, level): w:lvlOverride/w:lvl z instancji ma pierwszeństwo,
-    /// potem w:lvl z abstraktu (po rozwiązaniu numStyleLink). Zwraca też startOverride (−1 = brak).
+    /// potem w:lvl z abstraktu (po rozwiązaniu numStyleLink). Zwraca też startOverride (−1 = brak)
+    /// oraz flagę, czy definicja pochodzi z PEŁNEGO nadpisania poziomu na instancji.
     /// </summary>
-    private (Level? levelDef, int startOverride) FindLevelDefinition(int numId, int level)
+    private (Level? levelDef, int startOverride, bool fromInstanceOverride) FindLevelDefinition(int numId, int level)
     {
-        if (_numberingPart?.Numbering == null) return (null, -1);
+        if (_numberingPart?.Numbering == null) return (null, -1, false);
 
         var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
             .FirstOrDefault(n => n.NumberID?.Value == numId);
-        if (numInstance == null) return (null, -1);
+        if (numInstance == null) return (null, -1, false);
 
         var levelOverrideElem = numInstance.Elements<LevelOverride>()
             .FirstOrDefault(lo => lo.LevelIndex?.Value == level);
         int startOverride = levelOverrideElem?.StartOverrideNumberingValue?.Val?.Value ?? -1;
 
         Level? levelDef = levelOverrideElem?.GetFirstChild<Level>();
+        // Pełny w:lvlOverride/w:lvl = INSTANCJA nadpisuje cały wygląd poziomu (nie tylko start).
+        // Flaga jedzie do data-lvl-override, żeby writer nie zapiekł tego wyglądu we wspólnym
+        // abstrakcie (inne instancje tego samego abstraktu wyglądają inaczej).
+        var fromInstanceOverride = levelDef != null;
         if (levelDef == null)
         {
             var absId = ResolveAbstractNumId(numId);
@@ -2649,13 +2682,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             levelDef = abstractNum?.Elements<Level>()
                 .FirstOrDefault(l => l.LevelIndex?.Value == level);
         }
-        return (levelDef, startOverride);
+        return (levelDef, startOverride, fromInstanceOverride);
     }
 
     /// <summary>Wartość początkowa poziomu: startOverride instancji, inaczej w:start, inaczej 1.</summary>
     private int GetLevelStart(int numId, int level)
     {
-        var (levelDef, startOverride) = FindLevelDefinition(numId, level);
+        var (levelDef, startOverride, _) = FindLevelDefinition(numId, level);
         if (startOverride > 0) return startOverride;
         return levelDef?.StartNumberingValue?.Val?.Value ?? 1;
     }
@@ -2716,7 +2749,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         for (int deeper = level + 1; deeper <= 8; deeper++)
         {
             if (!_listCounters.ContainsKey((key, deeper))) continue;
-            var (deeperDef, _) = FindLevelDefinition(numId, deeper);
+            var (deeperDef, _, _) = FindLevelDefinition(numId, deeper);
             var lvlRestart = deeperDef?.LevelRestart?.Val?.Value;
             if (lvlRestart == 0) continue; // nigdy nie restartuj
             _listCounters.Remove((key, deeper));
@@ -2736,7 +2769,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (fmt == NumberFormatValues.UpperRoman) return "upperRoman";
         if (fmt == NumberFormatValues.Bullet) return "bullet";
         if (fmt == NumberFormatValues.None) return "none";
-        return "decimal";
+        // Format spoza mapy (ordinal/cardinalText/ordinalText/chicago/formaty językowe…):
+        // nieś SUROWY token w:numFmt — degradacja do decimal przy zapisie jest wprost
+        // zakazana (pkt 22.10 specyfikacji list). Podgląd może przybliżać, plik nie.
+        var raw = levelDef?.NumberingFormat?.Val?.InnerText;
+        return string.IsNullOrEmpty(raw) ? "decimal" : raw;
     }
 
     /// <summary>
@@ -2750,16 +2787,38 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public string? BulletChar { get; init; }
         public string? BulletFont { get; init; }
         public string? BulletImageDataUri { get; init; }
+        /// <summary>w:start z DEFINICJI poziomu (bez startOverride — ten jedzie osobno).</summary>
         public int Start { get; init; }
         /// <summary>Token w:numFmt do round-tripu (data-num-fmt).</summary>
         public string FmtToken { get; init; }
         /// <summary>Surowy w:lvlText (np. "%1)" albo znak punktatora) do round-tripu.</summary>
         public string? LvlText { get; init; }
+        /// <summary>w:lvlOverride/w:startOverride INSTANCJI (−1 = brak) — semantyka „Rozpocznij od nowa".</summary>
+        public int StartOverride { get; init; }
+        /// <summary>w:suff, tylko wartości niedomyślne: "space"/"nothing" (tab = domyślne, null).</summary>
+        public string? SuffixToken { get; init; }
+        /// <summary>w:isLgl — numeracja „legal" (wszystkie poziomy w etykiecie jako decimal).</summary>
+        public bool IsLegal { get; init; }
+        /// <summary>Surowa wartość w:lvlRestart (indeks JEDNOBAZOWY; 0 = nigdy; −1 = brak elementu).</summary>
+        public int LvlRestart { get; init; }
+        /// <summary>w:lvlPicBulletId (−1 = brak) — poziom używa punktatora graficznego.</summary>
+        public int PicBulletId { get; init; }
+        /// <summary>Wcięcia z w:lvl/w:pPr/w:ind (twips, surowe stringi; null = atrybut nieobecny).</summary>
+        public string? IndLeftTw { get; init; }
+        public string? IndHangingTw { get; init; }
+        public string? IndFirstLineTw { get; init; }
+        /// <summary>Definicja pochodzi z PEŁNEGO w:lvlOverride/w:lvl instancji — wygląd tej
+        /// instancji różni się od abstraktu; writer musi to odwzorować na instancji.</summary>
+        public bool FromInstanceOverride { get; init; }
     }
 
     private ListLevelInfo GetListLevelInfo(NumberingProperties? numPr, int levelOverride = -1)
     {
-        var fallback = new ListLevelInfo { Tag = "ul", ListStyleType = "disc", Start = 1, FmtToken = "bullet" };
+        var fallback = new ListLevelInfo
+        {
+            Tag = "ul", ListStyleType = "disc", Start = 1, FmtToken = "bullet",
+            StartOverride = -1, LvlRestart = -1, PicBulletId = -1
+        };
         if (numPr == null || _numberingPart?.Numbering == null) return fallback;
 
         var numId = numPr.NumberingId?.Val?.Value;
@@ -2767,7 +2826,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var level = levelOverride >= 0 ? levelOverride : (numPr.NumberingLevelReference?.Val?.Value ?? 0);
 
         // Wspólny resolver: lvlOverride/w:lvl instancji → w:lvl abstraktu (z numStyleLink).
-        var (levelDef, startOverride) = FindLevelDefinition(numId.Value, level);
+        var (levelDef, startOverride, fromInstanceOverride) = FindLevelDefinition(numId.Value, level);
         if (levelDef == null) return fallback;
 
         var numFmt = levelDef.NumberingFormat?.Val?.Value;
@@ -2779,9 +2838,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                          ?? bulletFontRun?.HighAnsi?.Value
                          ?? bulletFontRun?.ComplexScript?.Value
                          ?? bulletFontRun?.EastAsia?.Value;
-        var start = startOverride > 0
-            ? startOverride
-            : (levelDef.StartNumberingValue?.Val?.Value ?? 1);
+        // w:start definicji i w:startOverride instancji round-tripują OSOBNO — writer odtwarza
+        // start w abstrakcie, a override jako w:lvlOverride na instancji (FR-EXPORT-004).
+        var start = levelDef.StartNumberingValue?.Val?.Value ?? 1;
+
+        // w:suff — separator znacznik→tekst; emitujemy tylko wartości niedomyślne.
+        string? suffixToken = null;
+        var suffix = levelDef.LevelSuffix?.Val;
+        if (suffix != null && suffix == LevelSuffixValues.Space) suffixToken = "space";
+        else if (suffix != null && suffix == LevelSuffixValues.Nothing) suffixToken = "nothing";
+
+        // w:isLgl — obecność elementu bez w:val oznacza true.
+        var isLgl = levelDef.IsLegalNumberingStyle;
+        var isLegal = isLgl != null && (isLgl.Val == null || isLgl.Val.Value);
+
+        // w:lvlRestart — surowa wartość OOXML (jednobazowa; 0 = poziom nigdy nie restartuje).
+        var lvlRestart = levelDef.LevelRestart?.Val?.Value ?? -1;
+
+        // Wcięcia poziomu (w:lvl/w:pPr/w:ind) — bez nich writer regenerował drabinkę 720×(lvl+1),
+        // niszcząc niestandardowe wcięcia list przy pierwszym zapisie.
+        var lvlInd = levelDef.PreviousParagraphProperties?.GetFirstChild<Indentation>();
 
         // Picture bullet (w:lvlPicBulletId) — Word pozwala wstawić obrazek jako punktator.
         // Jeśli istnieje, użyjemy obrazka zamiast znaku.
@@ -2823,6 +2899,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 ? (codePoint & 0xFF)
                 : codePoint;
 
+            // Jednoznakowy lvlText = klasyczny punktator; dłuższy = MARKER TEKSTOWY
+            // ("TODO:", "Pkt", "§ ") — pokazujemy CAŁY tekst, a skróty do natywnych
+            // disc/circle/square stosujemy tylko dla pojedynczego znaku (tekst zaczynający
+            // się od "o" nie może zmienić się w kółko).
+            int firstCodePointLength = !string.IsNullOrEmpty(levelText)
+                && char.IsHighSurrogate(levelText[0]) && levelText.Length > 1 ? 2 : 1;
+            bool isSingleCodePoint = levelText.Length == firstCodePointLength;
+
             if (bulletImageDataUri != null)
             {
                 // Picture bullet ma pierwszeństwo — wyłącz natywny punktator HTML.
@@ -2834,6 +2918,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 // znak źródłowy (np. Wingdings 0x6C) w przeglądarce bez Wingdings dałby tofu.
                 listStyle = "none";
                 bulletChar = MapBulletChar(lookup, bulletFont);
+            }
+            else if (!isSingleCodePoint && codePoint != 0)
+            {
+                // Wieloznakowy punktator tekstowy — literalnie, bez mapowania per znak;
+                // do DOCX wraca nietknięty przez data-lvl-text.
+                listStyle = "none";
+                bulletChar = levelText;
             }
             else
             {
@@ -2873,7 +2964,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             BulletImageDataUri = bulletImageDataUri,
             Start = start,
             FmtToken = NumFmtToken(levelDef),
-            LvlText = string.IsNullOrEmpty(levelText) ? null : levelText
+            LvlText = string.IsNullOrEmpty(levelText) ? null : levelText,
+            StartOverride = startOverride > 0 ? startOverride : -1,
+            SuffixToken = suffixToken,
+            IsLegal = isLegal,
+            LvlRestart = lvlRestart,
+            PicBulletId = picBulletId ?? -1,
+            IndLeftTw = lvlInd?.Left?.Value,
+            IndHangingTw = lvlInd?.Hanging?.Value,
+            IndFirstLineTw = lvlInd?.FirstLine?.Value,
+            FromInstanceOverride = fromInstanceOverride
         };
     }
 
@@ -5535,8 +5635,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
 
         // Iteruj wszystkie dzieci komórki, by obsłużyć też SdtBlock i Table osadzone bezpośrednio.
-        foreach (var inner in cell.Elements())
+        // Akapity LISTOWE grupujemy w ol/ul jak w body — bez tego lista w komórce renderowała
+        // się jako gołe akapity (bez numeru) i TRACIŁA numerację przy pierwszym zapisie (R-30).
+        var innerElements = cell.Elements().Cast<OpenXmlElement>().ToList();
+        var innerIndex = 0;
+        while (innerIndex < innerElements.Count)
         {
+            var inner = innerElements[innerIndex];
+            if (inner is Paragraph listPara && IsListParagraph(listPara))
+            {
+                html.Append(ConvertConsecutiveListItems(innerElements, ref innerIndex, document));
+                continue; // indeks przesunięty wewnątrz
+            }
+
             switch (inner)
             {
                 case Paragraph para:
@@ -5549,6 +5660,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     html.Append(ConvertSdtBlockToHtml(sdt, document));
                     break;
             }
+            innerIndex++;
         }
 
         html.Append("</td>");
