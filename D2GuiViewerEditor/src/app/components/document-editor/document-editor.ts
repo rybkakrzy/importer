@@ -279,6 +279,24 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.fontProvider.normalize(this.editorState()?.currentStyle?.fontFamily),
   );
 
+  /**
+   * Options for the mini-toolbar font `<select>`. A native `<select>` cannot
+   * display a value that has no matching `<option>`, so it silently falls back
+   * to the first option (Calibri) whenever the selection uses a font outside the
+   * shared list — e.g. a corporate/document font like "ING Me". The main toolbar
+   * avoids this by using an `<input list=…>`; here we keep the `<select>` but make
+   * the current font always selectable, so the control reflects the real
+   * selection instead of misreporting Calibri.
+   */
+  readonly miniToolbarFontOptions = computed<readonly string[]>(() => {
+    const current = this.miniToolbarFontFamily();
+    const fonts = this.commonFonts();
+    if (current && !fonts.some((f) => f.toLowerCase() === current.toLowerCase())) {
+      return [current, ...fonts];
+    }
+    return fonts;
+  });
+
   // Menu Narzędzia
   showToolsMenu = signal(false);
 
@@ -2289,24 +2307,28 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Wklej
    */
   paste(): void {
-    navigator.clipboard.readText().then(text => {
-      this.editor?.insertText(text);
-    }).catch(() => {
-      document.execCommand('paste');
-    });
+    // Capture the target selection synchronously, before the async clipboard read
+    // and the menu teardown move it (see pasteWithoutFormatting for the details).
+    const target = this.editor?.captureSelectionBookmark() ?? null;
     this.closeAllMenus();
+    navigator.clipboard.readText()
+      .then(text => this.editor?.pastePlainTextAt(target, text))
+      .catch(() => { document.execCommand('paste'); });
   }
 
   /**
    * Wklej bez formatowania
    */
   pasteWithoutFormatting(): void {
+    // Snapshot the target selection synchronously — BEFORE closing the menu and the
+    // async clipboard read. Otherwise the paste lands at whatever selection is live
+    // after the await (historically the source range), which also made the text keep
+    // the source formatting. readText() yields text/plain only, so formatting is
+    // dropped by construction. On denied clipboard we fail quietly (Ctrl+Shift+V works).
+    const target = this.editor?.captureSelectionBookmark() ?? null;
     this.closeAllMenus();
-    // readText() yields text/plain only — formatting is dropped by construction. insertText
-    // restores the editor selection (lost on the menu click) before inserting. If clipboard
-    // permission is denied, fail quietly — the Ctrl+Shift+V shortcut remains available.
     navigator.clipboard.readText()
-      .then(text => this.editor?.insertText(text))
+      .then(text => this.editor?.pastePlainTextAt(target, text))
       .catch(() => { /* brak dostępu do schowka */ });
   }
 
@@ -3083,7 +3105,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   miniToolbarPaste(): void {
-    navigator.clipboard.readText().then(text => this.editor?.insertText(text)).catch(() => document.execCommand('paste'));
+    const target = this.editor?.captureSelectionBookmark() ?? null;
+    navigator.clipboard.readText()
+      .then(text => this.editor?.pastePlainTextAt(target, text))
+      .catch(() => document.execCommand('paste'));
   }
 
   miniToolbarIncreaseIndent(): void {

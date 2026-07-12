@@ -14,6 +14,59 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0037: Semantyka wariantów nagłówka/stopki (titlePg / evenAndOddHeaders) — flagi per pasmo, null = dziedzicz, "" = jawnie puste, wariant per pierwsza strona sekcji
+- Date: 2026-07-13
+- Status: Accepted
+
+### Context
+Zgłoszenie: DOC2 Viewer ignorował „Inną pierwszą stronę" — str. 1 renderowała nagłówek default,
+a zapis gubił `w:titlePg`. Trzy współdziałające przyczyny: (1) GUI trzymało JEDNĄ flagę
+`differentFirstPage` wspólną dla nagłówka i stopki, nadpisywaną przez setter wykonany później
+(kontrakt `HeaderFooterContent` raportuje flagę per pasmo — nagłówek może mieć wariant first,
+stopka nie); (2) reader traktował pusty/brakujący part first przy aktywnym titlePg jako „brak
+wariantu" → default wyciekał na stronę 1, choć Word pokazuje puste pasmo; (3) writer pisał
+warianty first/even TYLKO wewnątrz gałęzi niepustego default i tylko przy niepustym first —
+dokument first-only (Qutalo/ING) tracił nagłówek przy pierwszym zapisie, a `EnsureTitlePage`
+appendował `w:titlePg` przed późniejszym dopisaniem pgSz/pgMar (błąd sekwencji CT_SectPr
+w każdym eksporcie z titlePg). Dodatkowo wybór wariantu first opierał się na `pageIndex === 0`
+(pierwsza strona CAŁEGO dokumentu), a wpisy sekcyjne ignorowały własne warianty first/even.
+
+### Decision
+1. **Flagi per pasmo w GUI** (`_headerDifferentFirstPage`/`_footerDifferentFirstPage` + odd/even);
+   publiczne `differentFirstPage()` = OR obu (checkbox), toggle/dialog ustawiają OBA pasma
+   (w DOCX titlePg jest właściwością sekcji wspólną dla nagłówka i stopki).
+2. **Kontrakt wartości wariantów** w `HeaderFooterContent`: `null` = wariant niezdefiniowany
+   (sekcja dziedziczy go z wcześniejszej sekcji / bazy — odpowiednik „Połącz z poprzednim");
+   `""` = wariant zdefiniowany i celowo pusty (puste pasmo, NIE fallback do default).
+   Baza (sekcja 0) przy titlePg zawsze niesie `FirstPageHtml != null` (brak poprzednika →
+   puste pasmo); wpisy sekcyjne ≥ 1 mogą nieść null (dziedziczenie rozwiązuje GUI).
+3. **Jeden resolver wariantu** w edytorze (`_resolveHfVariant`) używany przez rendering,
+   ładowanie edycji i routing zapisu (rule 10): first na pierwszej stronie KAŻDEJ sekcji
+   (z `pageSectionIndexes`), potem even (strony parzyste globalnie), potem default;
+   właściciel treści = najbliższy wpis definiujący wariant, inaczej sygnały bazowe.
+4. **Writer**: default/first/even emitowane niezależnie; `w:titlePg` zawsze przy
+   `DifferentFirstPage` (pusty first = part z pustym akapitem — CT_HdrFtr wymaga bloku);
+   pgSz/pgMar wstawiane PRZED titlePg (`AppendBeforeTitlePage`), titlePg przed
+   textDirection/bidi/rtlGutter/docGrid (`EnsureTitlePage` pozycjonuje wg CT_SectPr).
+
+### Consequences
+- Strona 1 (i pierwsza strona każdej sekcji) respektuje titlePg także dla pustych pasm;
+  zapis→otwarcie nie gubi `w:titlePg`/referencji first; eksport z titlePg przechodzi
+  walidator OOXML (wcześniej błąd sekwencji).
+- Świadome przybliżenia: titlePg sekcji BEZ własnych referencji (brak wpisu w modelu)
+  przybliżany flagą najbliższego wcześniejszego wpisu (titlePg w OOXML nie jest dziedziczone,
+  ale Word kopiuje je przy tworzeniu sekcji — rozjazd tylko gdy użytkownik ręcznie wyłączył
+  titlePg w sekcji dziedziczącej wszystkie party); parzystość even/odd liczona globalnie
+  po indeksie strony (bez `w:pgNumType/@start` i restartów numeracji).
+- Dokumenty z `w:evenAndOddHeaders` bez referencji even pokazują PUSTE strony parzyste
+  (jak Word) — wcześniej pokazywały default (niezgodnie z Wordem).
+
+### Alternatives considered
+- Wspólna flaga + „OR" setterów (nie da się wyłączyć titlePg per pasmo, dalej gubi stan).
+- Pełne per-sekcyjne `TitlePg` w modelu `DocumentContent` (osobna lista właściwości sekcji)
+  — odrzucone jako zmiana kontraktu API nieproporcjonalna do zysku; do rewizji przy
+  ewentualnym renderingu `pgNumType`.
+
 ## ADR-0036: Kompletna obsługa list DOCX — wariant A: semantyka specyfikacji na istniejącym transporcie `data-*` (bez kanonicznego modelu w kontraktach API)
 - Date: 2026-07-12
 - Status: Accepted

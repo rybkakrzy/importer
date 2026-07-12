@@ -298,46 +298,55 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
-    /// Writes the document's headers and footers. The default variant is always emitted;
-    /// first-page (DifferentFirstPage + FirstPageHtml) and even (DifferentOddEven + EvenHtml)
-    /// variants are emitted as additional parts with type=First/Even references, and the
-    /// section/settings opt-ins (titlePg, evenAndOddHeaders) are written so Word/round-trip
-    /// import picks them up.
+    /// Writes the document's headers and footers. Each variant (default / first / even) is
+    /// emitted independently as its own part with a type=Default/First/Even reference, and
+    /// the section/settings opt-ins (titlePg, evenAndOddHeaders) are written so Word and a
+    /// round-trip import pick them up — including titlePg with a blank first-page band.
     /// </summary>
     private void AddHeaderAndFooter(WordprocessingDocument document, HeaderFooterContent? header, HeaderFooterContent? footer)
     {
         if (_mainPart == null) return;
 
-        if (header != null && !string.IsNullOrWhiteSpace(header.Html))
+        if (header != null)
         {
-            WriteHeaderPart(header.Html, HeaderFooterValues.Default);
+            // Variants are written independently of the default part: a titlePg document
+            // may legitimately have a first-page header and NO default one (blank ordinary
+            // pages) — skipping variants when Html is empty destroyed them on first save.
+            if (!string.IsNullOrWhiteSpace(header.Html))
+                WriteHeaderPart(header.Html, HeaderFooterValues.Default);
 
-            if (header.DifferentFirstPage && !string.IsNullOrWhiteSpace(header.FirstPageHtml))
+            if (header.DifferentFirstPage)
             {
-                WriteHeaderPart(header.FirstPageHtml!, HeaderFooterValues.First);
+                // titlePg must survive even when the first-page band is blank; dropping it
+                // would leak the default header onto page 1 after reopening in Word.
+                // Null FirstPageHtml = no explicit part (Word inherits/blank), empty = blank part.
+                if (header.FirstPageHtml != null)
+                    WriteHeaderPart(header.FirstPageHtml, HeaderFooterValues.First);
                 EnsureTitlePage();
             }
 
-            if (header.DifferentOddEven && !string.IsNullOrWhiteSpace(header.EvenHtml))
+            if (header.DifferentOddEven && header.EvenHtml != null)
             {
-                WriteHeaderPart(header.EvenHtml!, HeaderFooterValues.Even);
+                WriteHeaderPart(header.EvenHtml, HeaderFooterValues.Even);
                 EnsureEvenAndOddHeaders(document);
             }
         }
 
-        if (footer != null && !string.IsNullOrWhiteSpace(footer.Html))
+        if (footer != null)
         {
-            WriteFooterPart(footer.Html, HeaderFooterValues.Default);
+            if (!string.IsNullOrWhiteSpace(footer.Html))
+                WriteFooterPart(footer.Html, HeaderFooterValues.Default);
 
-            if (footer.DifferentFirstPage && !string.IsNullOrWhiteSpace(footer.FirstPageHtml))
+            if (footer.DifferentFirstPage)
             {
-                WriteFooterPart(footer.FirstPageHtml!, HeaderFooterValues.First);
+                if (footer.FirstPageHtml != null)
+                    WriteFooterPart(footer.FirstPageHtml, HeaderFooterValues.First);
                 EnsureTitlePage();
             }
 
-            if (footer.DifferentOddEven && !string.IsNullOrWhiteSpace(footer.EvenHtml))
+            if (footer.DifferentOddEven && footer.EvenHtml != null)
             {
-                WriteFooterPart(footer.EvenHtml!, HeaderFooterValues.Even);
+                WriteFooterPart(footer.EvenHtml, HeaderFooterValues.Even);
                 EnsureEvenAndOddHeaders(document);
             }
         }
@@ -371,6 +380,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _inHeaderFooter = prevInHF;
             _currentSectionStyleId = prevSection;
         }
+
+        // CT_HdrFtr requires at least one block-level element — a blank band (titlePg with
+        // an intentionally empty first page) is expressed as a single empty paragraph.
+        if (!headerElement.HasChildren)
+            headerElement.Append(new Paragraph());
 
         headerPart.Header = headerElement;
         headerPart.Header.Save();
@@ -406,6 +420,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _currentSectionStyleId = prevSection;
         }
 
+        // See WriteHeaderPart: CT_HdrFtr requires at least one block-level element.
+        if (!footerElement.HasChildren)
+            footerElement.Append(new Paragraph());
+
         footerPart.Footer = footerElement;
         footerPart.Footer.Save();
 
@@ -416,10 +434,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var sectionProps = targetSection ?? GetReferenceSectionProps();
         if (sectionProps == null) return;
-        if (!sectionProps.Elements<TitlePage>().Any())
-        {
-            sectionProps.Append(new TitlePage());
-        }
+        if (sectionProps.Elements<TitlePage>().Any()) return;
+
+        // CT_SectPr sequence: titlePg precedes textDirection/bidi/rtlGutter/docGrid/
+        // printerSettings — a plain Append lands after docGrid on preserved packages.
+        var tail = sectionProps.ChildElements.FirstOrDefault(c =>
+            c is TextDirection or BiDi or GutterOnRight or DocGrid or PrinterSettingsReference);
+        var titlePg = new TitlePage();
+        if (tail != null) sectionProps.InsertBefore(titlePg, tail);
+        else sectionProps.Append(titlePg);
     }
 
     private static void EnsureEvenAndOddHeaders(WordprocessingDocument document)
@@ -710,32 +733,39 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 target = bodySectPr; // ostatnia sekcja
             if (target == null) continue; // markery usunięte z treści → sekcja nie istnieje
 
-            if (entry.Header is { } h && !string.IsNullOrWhiteSpace(h.Html))
+            // See AddHeaderAndFooter: variants are independent of the default part (empty
+            // Html = the section inherits the default in Word), and titlePg survives even
+            // with no explicit first part (null FirstPageHtml = inherit from previous section).
+            if (entry.Header is { } h)
             {
-                WriteHeaderPart(h.Html, HeaderFooterValues.Default, target);
-                if (h.DifferentFirstPage && !string.IsNullOrWhiteSpace(h.FirstPageHtml))
+                if (!string.IsNullOrWhiteSpace(h.Html))
+                    WriteHeaderPart(h.Html, HeaderFooterValues.Default, target);
+                if (h.DifferentFirstPage)
                 {
-                    WriteHeaderPart(h.FirstPageHtml!, HeaderFooterValues.First, target);
+                    if (h.FirstPageHtml != null)
+                        WriteHeaderPart(h.FirstPageHtml, HeaderFooterValues.First, target);
                     EnsureTitlePage(target);
                 }
-                if (h.DifferentOddEven && !string.IsNullOrWhiteSpace(h.EvenHtml))
+                if (h.DifferentOddEven && h.EvenHtml != null)
                 {
-                    WriteHeaderPart(h.EvenHtml!, HeaderFooterValues.Even, target);
+                    WriteHeaderPart(h.EvenHtml, HeaderFooterValues.Even, target);
                     EnsureEvenAndOddHeaders(document);
                 }
             }
 
-            if (entry.Footer is { } f && !string.IsNullOrWhiteSpace(f.Html))
+            if (entry.Footer is { } f)
             {
-                WriteFooterPart(f.Html, HeaderFooterValues.Default, target);
-                if (f.DifferentFirstPage && !string.IsNullOrWhiteSpace(f.FirstPageHtml))
+                if (!string.IsNullOrWhiteSpace(f.Html))
+                    WriteFooterPart(f.Html, HeaderFooterValues.Default, target);
+                if (f.DifferentFirstPage)
                 {
-                    WriteFooterPart(f.FirstPageHtml!, HeaderFooterValues.First, target);
+                    if (f.FirstPageHtml != null)
+                        WriteFooterPart(f.FirstPageHtml, HeaderFooterValues.First, target);
                     EnsureTitlePage(target);
                 }
-                if (f.DifferentOddEven && !string.IsNullOrWhiteSpace(f.EvenHtml))
+                if (f.DifferentOddEven && f.EvenHtml != null)
                 {
-                    WriteFooterPart(f.EvenHtml!, HeaderFooterValues.Even, target);
+                    WriteFooterPart(f.EvenHtml, HeaderFooterValues.Even, target);
                     EnsureEvenAndOddHeaders(document);
                 }
             }
@@ -4319,7 +4349,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Round-trip the authored page size/orientation; fall back to A4 portrait when unknown.
         if (!sectionProps.Elements<OoxmlPageSize>().Any())
         {
-            sectionProps.Append(BuildPageSize(geometry.PageSize));
+            AppendBeforeTitlePage(sectionProps, BuildPageSize(geometry.PageSize));
         }
 
         int defaultMarginTwips = OoxmlUnits.TwipsPerInch;
@@ -4344,7 +4374,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         if (!sectionProps.Elements<PageMargin>().Any())
         {
-            sectionProps.Append(new PageMargin
+            AppendBeforeTitlePage(sectionProps, new PageMargin
             {
                 Top    = topTwips,
                 Right  = (uint)rightTwips,
@@ -4354,6 +4384,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 Footer = footerDistance
             });
         }
+    }
+
+    /// <summary>
+    /// pgSz/pgMar must precede titlePg in CT_SectPr, but AddHeaderAndFooter (which sets
+    /// titlePg) runs before AddPageSettings — a plain Append would put them after it.
+    /// </summary>
+    private static void AppendBeforeTitlePage(SectionProperties sectionProps, OpenXmlElement element)
+    {
+        var titlePg = sectionProps.GetFirstChild<TitlePage>();
+        if (titlePg != null) sectionProps.InsertBefore(element, titlePg);
+        else sectionProps.Append(element);
     }
 
     private static OoxmlPageSize BuildPageSize(Domain.Models.PageSize? pageSize)

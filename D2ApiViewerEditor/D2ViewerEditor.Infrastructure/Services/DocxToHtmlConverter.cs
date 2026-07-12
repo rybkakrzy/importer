@@ -511,42 +511,36 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = headerPart?.Header != null ? ConvertHeaderPartToHtml(headerPart, document) : null;
         if (string.IsNullOrWhiteSpace(html)) html = null;
 
-        // First-page header is honoured only when the section opts in via titlePg.
+        // First-page header is honoured only when the section opts in via titlePg. Once
+        // opted in, page 1 NEVER falls back to the default header: a missing or empty
+        // first part means Word renders a BLANK first-page band, so empty string is a
+        // meaningful value here (leaking the default onto page 1 was the original bug).
         string? firstPageHtml = null;
         var differentFirstPage = false;
         if (HasTitlePage(sectionProps))
         {
+            differentFirstPage = true;
             var firstPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First);
-            if (firstPart?.Header != null)
-            {
-                var fph = ConvertHeaderPartToHtml(firstPart, document);
-                if (!string.IsNullOrWhiteSpace(fph))
-                {
-                    firstPageHtml = fph;
-                    differentFirstPage = true;
-                }
-            }
+            var fph = firstPart?.Header != null ? ConvertHeaderPartToHtml(firstPart, document) : null;
+            firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
         }
 
         // Even-page header is honoured only when the document opts in via evenAndOddHeaders.
+        // Same opt-in rule as titlePg: even pages never fall back to the default header —
+        // a missing/empty even part renders blank in Word.
         string? evenHtml = null;
         var differentOddEven = false;
         if (HasEvenAndOddHeaders(mainPart))
         {
+            differentOddEven = true;
             var evenPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even);
-            if (evenPart?.Header != null)
-            {
-                var eh = ConvertHeaderPartToHtml(evenPart, document);
-                if (!string.IsNullOrWhiteSpace(eh))
-                {
-                    evenHtml = eh;
-                    differentOddEven = true;
-                }
-            }
+            var eh = evenPart?.Header != null ? ConvertHeaderPartToHtml(evenPart, document) : null;
+            evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
         }
 
-        // Nothing to report: no default header AND no first/even variant.
-        if (html == null && firstPageHtml == null && evenHtml == null) return null;
+        // Nothing to report: no default header AND no first/even content (blank-only
+        // variants of a document without any header are not worth an object).
+        if (html == null && string.IsNullOrEmpty(firstPageHtml) && string.IsNullOrEmpty(evenHtml)) return null;
 
         // Band geometry follows the FIRST section's page margins — the same section whose
         // margins/page size the rest of DocumentContent reports.
@@ -593,40 +587,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = footerPart?.Footer != null ? ConvertFooterPartToHtml(footerPart, document) : null;
         if (string.IsNullOrWhiteSpace(html)) html = null;
 
+        // See ExtractHeader: with titlePg on, the first page never falls back to the
+        // default footer — a missing/empty first part is an intentionally BLANK band.
         string? firstPageHtml = null;
         var differentFirstPage = false;
         if (HasTitlePage(sectionProps))
         {
+            differentFirstPage = true;
             var firstPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First);
-            if (firstPart?.Footer != null)
-            {
-                var fph = ConvertFooterPartToHtml(firstPart, document);
-                if (!string.IsNullOrWhiteSpace(fph))
-                {
-                    firstPageHtml = fph;
-                    differentFirstPage = true;
-                }
-            }
+            var fph = firstPart?.Footer != null ? ConvertFooterPartToHtml(firstPart, document) : null;
+            firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
         }
 
         string? evenHtml = null;
         var differentOddEven = false;
         if (HasEvenAndOddHeaders(mainPart))
         {
+            differentOddEven = true;
             var evenPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even);
-            if (evenPart?.Footer != null)
-            {
-                var eh = ConvertFooterPartToHtml(evenPart, document);
-                if (!string.IsNullOrWhiteSpace(eh))
-                {
-                    evenHtml = eh;
-                    differentOddEven = true;
-                }
-            }
+            var eh = evenPart?.Footer != null ? ConvertFooterPartToHtml(evenPart, document) : null;
+            evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
         }
 
-        // Nothing to report: no default footer AND no first/even variant.
-        if (html == null && firstPageHtml == null && evenHtml == null) return null;
+        // Nothing to report: no default footer AND no first/even content.
+        if (html == null && string.IsNullOrEmpty(firstPageHtml) && string.IsNullOrEmpty(evenHtml)) return null;
 
         var page = SectionPropertiesReader.ReadPageSettings(sections.FirstOrDefault());
         double footerHeight = page.HasPageMargin
@@ -676,37 +660,47 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private HeaderFooterContent? ExtractHeaderOwnedBySection(MainDocumentPart mainPart, WordprocessingDocument document, SectionProperties sectionProps)
     {
         var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default);
-        if (headerPart?.Header == null) return null;
+        var html = headerPart?.Header != null ? ConvertHeaderPartToHtml(headerPart, document) : null;
+        if (string.IsNullOrWhiteSpace(html)) html = null;
 
-        var html = ConvertHeaderPartToHtml(headerPart, document);
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
+        // Section-owned entries distinguish "inherit from the previous section" (no
+        // reference → null, the frontend walks back like Word) from "explicitly blank"
+        // (a referenced but empty part → empty string).
         string? firstPageHtml = null;
         var differentFirstPage = false;
-        if (HasTitlePage(sectionProps)
-            && ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First) is { Header: not null } firstPart
-            && ConvertHeaderPartToHtml(firstPart, document) is { Length: > 0 } fph && !string.IsNullOrWhiteSpace(fph))
+        if (HasTitlePage(sectionProps))
         {
-            firstPageHtml = fph;
             differentFirstPage = true;
+            if (ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First) is { Header: not null } firstPart)
+            {
+                var fph = ConvertHeaderPartToHtml(firstPart, document);
+                firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
+            }
         }
 
         string? evenHtml = null;
         var differentOddEven = false;
-        if (HasEvenAndOddHeaders(mainPart)
-            && ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Header: not null } evenPart
-            && ConvertHeaderPartToHtml(evenPart, document) is { Length: > 0 } eh && !string.IsNullOrWhiteSpace(eh))
+        if (HasEvenAndOddHeaders(mainPart))
         {
-            evenHtml = eh;
             differentOddEven = true;
+            if (ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Header: not null } evenPart)
+            {
+                var eh = ConvertHeaderPartToHtml(evenPart, document);
+                evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
+            }
         }
+
+        // No own parts and no titlePg opt-in → the section fully inherits, no entry.
+        if (html == null && firstPageHtml == null && evenHtml == null && !differentFirstPage) return null;
 
         var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
         var height = page.HasPageMargin ? ComputeBandHeightCm(page.TopMarginTwips, page.HeaderDistanceTwips) : 1.5;
 
         return new HeaderFooterContent
         {
-            Html = html,
+            // Empty string = no own default part, the frontend inherits it (entries are
+            // only created when the section owns SOMETHING or opts into titlePg).
+            Html = html ?? string.Empty,
             Height = Math.Max(0.8, Math.Min(8, height)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,
@@ -718,37 +712,43 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private HeaderFooterContent? ExtractFooterOwnedBySection(MainDocumentPart mainPart, WordprocessingDocument document, SectionProperties sectionProps)
     {
         var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default);
-        if (footerPart?.Footer == null) return null;
+        var html = footerPart?.Footer != null ? ConvertFooterPartToHtml(footerPart, document) : null;
+        if (string.IsNullOrWhiteSpace(html)) html = null;
 
-        var html = ConvertFooterPartToHtml(footerPart, document);
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
+        // See ExtractHeaderOwnedBySection: null = inherit from previous section,
+        // empty string = explicitly blank part.
         string? firstPageHtml = null;
         var differentFirstPage = false;
-        if (HasTitlePage(sectionProps)
-            && ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First) is { Footer: not null } firstPart
-            && ConvertFooterPartToHtml(firstPart, document) is { Length: > 0 } fph && !string.IsNullOrWhiteSpace(fph))
+        if (HasTitlePage(sectionProps))
         {
-            firstPageHtml = fph;
             differentFirstPage = true;
+            if (ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First) is { Footer: not null } firstPart)
+            {
+                var fph = ConvertFooterPartToHtml(firstPart, document);
+                firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
+            }
         }
 
         string? evenHtml = null;
         var differentOddEven = false;
-        if (HasEvenAndOddHeaders(mainPart)
-            && ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Footer: not null } evenPart
-            && ConvertFooterPartToHtml(evenPart, document) is { Length: > 0 } eh && !string.IsNullOrWhiteSpace(eh))
+        if (HasEvenAndOddHeaders(mainPart))
         {
-            evenHtml = eh;
             differentOddEven = true;
+            if (ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Footer: not null } evenPart)
+            {
+                var eh = ConvertFooterPartToHtml(evenPart, document);
+                evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
+            }
         }
+
+        if (html == null && firstPageHtml == null && evenHtml == null && !differentFirstPage) return null;
 
         var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
         var height = page.HasPageMargin ? ComputeBandHeightCm(page.BottomMarginTwips, page.FooterDistanceTwips) : 1.5;
 
         return new HeaderFooterContent
         {
-            Html = html,
+            Html = html ?? string.Empty,
             Height = Math.Max(0.8, Math.Min(8, height)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,

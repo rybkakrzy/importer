@@ -11,6 +11,213 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-13 — „Inna pierwsza strona" (w:titlePg): nagłówek/stopka first ignorowane w podglądzie i gubione przy zapisie (ADR-0037)
+
+### Changed
+- **GUI `wysiwyg-editor.ts` (root cause zgłoszenia):** flagi `differentFirstPage`/`differentOddEven`
+  rozdzielone PER PASMO (`_headerDifferentFirstPage`/`_footerDifferentFirstPage` + odpowiedniki
+  odd/even) — settery `[headerContent]`/`[footerContent]` współdzieliły JEDEN sygnał, więc binding
+  stopki aplikowany po nagłówku ZEROWAŁ flagę nagłówka (dokument z nagłówkiem `first` bez stopki
+  `first` renderował na str. 1 wariant default i tracił titlePg przy 1. zapisie).
+- **GUI:** nowy wspólny resolver `_resolveHfVariant(pageIndex, kind)` (render + edycja + routing
+  zapisu — zero duplikacji nagłówek/stopka): wariant `first` na PIERWSZEJ stronie KAŻDEJ sekcji
+  (`_isSectionFirstPage` po `pageSectionIndexes`, nie `pageIndex===0`), `even` na stronach parzystych,
+  wpisy sekcyjne niosą własne warianty first/even; brakujący wariant (null) dziedziczy z wcześniejszych
+  sekcji/bazy jak Word; jawnie pusty (`''`) = puste pasmo, NIE fallback do default.
+  `_updateSectionEntry` przyjmuje wariant; `toggleDifferentFirstPage`/dialog ustawiają OBA pasma.
+- **Reader `DocxToHtmlConverter`:** przy `titlePg` (ST_OnOff: brak val/true/1/on = włączone)
+  `DifferentFirstPage=true` ZAWSZE, a `FirstPageHtml` = treść albo `""` (pusty/brakujący part first
+  = puste pasmo — default NIE wycieka na stronę 1); analogicznie `evenAndOddHeaders` → `EvenHtml=""`.
+  `Extract*OwnedBySection`: wpis powstaje też dla sekcji first-only/titlePg-only; null = dziedzicz,
+  `""` = jawnie puste (kontrakt ADR-0037).
+- **Writer `HtmlToDocxConverter`:** warianty first/even pisane NIEZALEŻNIE od default (nagłówek
+  first-only bez default przeżywa zapis — wcześniej całość znikała przy 1. autosave); `titlePg`
+  emitowany zawsze gdy `DifferentFirstPage` (pusty first = pusty part z 1 akapitem — CT_HdrFtr);
+  `EnsureTitlePage` wstawia `w:titlePg` w pozycji sekwencji CT_SectPr (przed textDirection/docGrid),
+  a `AppendSectionGeometry` wstawia pgSz/pgMar PRZED titlePg (`AppendBeforeTitlePage`) — pre-existing
+  błąd walidacji schematu każdego eksportu z titlePg (AddHeaderAndFooter biegnie przed AddPageSettings).
+
+### Verified
+- Nowe `TitlePageHeaderFidelityTests` **22/22** (ST_OnOff wszystkie warianty, pusty/brakujący first,
+  first-only bez default, titlePg per sekcja ≥ 1 z dziedziczeniem, walidator OOXML Office2013 = 0 błędów,
+  round-tripy zapis→otwarcie); Infrastructure **449/449**; Application 306/306; build sln 0 błędów.
+- Nowy `wysiwyg-editor.first-page-header.spec.ts` **9/9** (kolejność bindingów obu pasm, pusty first,
+  pierwsza strona sekcji ≥ 1, dziedziczenie first, routing edycji do wariantu wpisu sekcyjnego,
+  per-band emisja, toggle); pełne GUI **464/464**; `ng build` OK.
+
+### Notes
+- Dokument zgłoszenia (ING, DEV) niedostępny lokalnie — diagnoza potwierdzona na syntetycznych
+  DOCX odtwarzających strukturę (titlePg + first + default). Ograniczenia: titlePg sekcji BEZ
+  własnych referencji przybliżane flagą najbliższego wcześniejszego wpisu; parzystość stron globalna
+  (bez `pgNumType`); szczegóły ADR-0037.
+
+## 2026-07-13 — „Wklej bez formatowania" (menu) wstawiał w pozycji źródłowej i zachowywał formatowanie źródła
+
+### Changed
+- `wysiwyg-editor.ts` — nowe `captureSelectionBookmark()` (synchroniczny snapshot zakresu
+  docelowego) i `pastePlainTextAt(bookmark, text)` (wstawia goły `TextNode` przez Range w
+  bookmark docelowy; `\n`→`<br>`, styl dziedziczony z celu, bez marków źródła, jeden
+  `onContentChange` = jeden undo, karetka za tekstem, guard abort gdy bookmark poza edytorem).
+  `insertText` (ścieżka natywnego `paste`/Ctrl+Shift+V) BEZ zmian.
+- `document-editor.ts` — `pasteWithoutFormatting()`, `paste()`, `miniToolbarPaste()` łapią
+  bookmark **synchronicznie przed** `closeAllMenus()`/`readText()`, potem `pastePlainTextAt`.
+
+### Verified
+- `npx ng test --watch=false` → 464/464 (nowy `wysiwyg-editor.paste-plain.spec.ts`, 10 przypadków:
+  pozycja docelowa vs źródłowa, brak marków źródła, replace selekcji, karetka, multiline `<br>`,
+  `<img>` dosłowny, jeden undo, abort, no-op, klon bookmarku).
+
+### Notes
+- **Root cause (wspólny dla obu objawów):** ścieżka menu wstawiała w żywą/nieaktualną selekcję po
+  `await readText()` (zwykle zakres źródłowy) — wstawienie w run źródłowy dawało zarówno złą
+  pozycję, jak i „zachowane" formatowanie (dziedziczenie stylu źródła). Nie `execCommand`, nie
+  `innerHTML` — Range + `TextNode` (bezpieczne dla `<`/`>`/`&`).
+- Plik `wysiwyg-editor.ts` był równolegle edytowany przez inną sesję (refactor `_differentOddEven`
+  → header/footer); edycje w rozłącznych regionach, sesja zbudowała się na zielono.
+
+## 2026-07-13 — Toolbar pokazuje domyślne 11pt po otwarciu dokumentu 9pt (do 1. kliknięcia) — początkowa synchronizacja formatowania (Wariant B)
+
+### Changed
+- `wysiwyg-editor.ts` `updateFormattingState()` — gdy NIE ma selekcji w edytorze (tuż po
+  załadowaniu / przełączeniu dokumentu), rozwiązuje kontekst formatowania z PIERWSZEGO
+  edytowalnego runu przez nowy `_firstEditableContextElement()` zamiast pomijać odczyt.
+  Rozmiar/krój/kolor/wyrównanie/blok/listy liczone z computed style tego elementu (kaskada
+  = bezpośrednie + odziedziczone); bold/italic/… z computed style (`_readInlineFormattingFromElement`)
+  bo `queryCommandState` nie ma wtedy selekcji. Ścieżka z żywą selekcją bez zmian
+  (`fromSelection` = selekcja w edytorze LUB brak zamontowanych stron — zachowuje testy).
+- Nowy `_syncInitialFormatting()` wołany z post-render `setTimeout(0)` w setterze `content`
+  i w `setContent()` (te same, które już czytają wyrenderowany DOM). Bez fokusa, selekcji,
+  dirty, undo i scrolla; no-op gdy user już kliknął (fallback aktywny tylko bez selekcji);
+  guard `_isDestroyed`. **Świadomie BEZ `afterNextRender`** — wersja z afterNextRender
+  wewnątrz setTimeout przeciekała między testami (Angular error 205 po zniszczeniu komponentu,
+  wywracała `font-family.spec`); bezpośrednie wywołanie w istniejącym setTimeout to naprawia.
+
+### Verified
+- Nowy `wysiwyg-editor.initial-formatting.spec.ts` 12/12 (9pt→9 bez kliknięcia, 11pt→11,
+  bezpośrednie>styl, pusty akapit, start tabelą, start obrazem, pusty dokument, przełączenie
+  9↔12, klik nie regresuje, bold bez selekcji, brak dirty, integracja z EditorToolbar→9).
+- Pełna suita GUI zielona na moim baseline (445/445 wraz z nowym specem); `ng build` OK.
+
+### Notes
+- Wariant B (synchronizacja bez widocznego kursora) — zgodny z MS Word (pokazuje 9 od razu),
+  nie kradnie fokusu (prompt tego zabrania), jedno źródło prawdy = ten sam resolver co po kliknięciu.
+- **Kolizja współbieżna:** w trakcie prac inny agent równolegle przepisywał `wysiwyg-editor.ts`
+  (refaktor header/footer `differentFirstPage` + nowy `pastePlainTextAt`/`paste-plain.spec`).
+  Jego niedokończony stan pośredni psuł build (dangling `_differentFirstPage()`), a nowy
+  `paste-plain.spec` ma 1 failujący test — OBA niezwiązane z tą zmianą (moje ścieżki nie
+  dotykają paste ani flag header/footer). Po ustabilizowaniu pliku build i moje testy zielone.
+
+## 2026-07-13 — Binarny `.doc`: odzyskiwanie formatowania znaków (bold/italic/underline/strike/kolor)
+
+### Changed
+- `LegacyDocBinaryConverter` — nowa warstwa CHPX. Wcześniej konwerter binarnego `.doc`→`.docx`
+  odzyskiwał WYŁĄCZNIE tekst i podział akapitów (świadome ograniczenie), więc pogrubienie,
+  kursywa, podkreślenie, przekreślenie i kolor tekstu ginęły — dokument w DOC2 wyglądał jak
+  zwykły tekst mimo formatowania widocznego w MS Word. Root cause: parser czytał tylko FIB +
+  piece table (PlcPcd), a NIGDY warstwy formatowania znaków.
+- Dodane parsowanie: `PlcfBteChpx` (FIB @0x00FA/0x00FE, w strumieniu tablicy) → `PnFkpChpx`
+  (numery stron FKP w strumieniu WordDocument) → CHPX FKP (512 B: rgfc + rgb + dane CHPX,
+  crun @511) → grpprl SPRM-ów. Wspierane character-SPRM-y: `sprmCFBold` 0x0835, `sprmCFItalic`
+  0x0836, `sprmCFStrike` 0x0837, `sprmCKul` 0x2A3E (podkreślenie), `sprmCIco` 0x2A42 (paleta
+  16 kolorów), `sprmCCv` 0x6870 (COLORREF 24-bit). Generyczny dekoder rozmiaru operandu z `spra`.
+- Każdy znak dostaje offset bajtowy (FC) liczony z piece (compressed ⇒ fc/2 + k; unicode ⇒ fc + 2k),
+  po czym indeks CHPX zwraca jego format; sąsiednie znaki o identycznym formacie łączą się w run.
+  Writer buduje `w:rPr` w kolejności schematu CT_RPr (b, i, strike, color, u). Dalej płynie przez
+  dojrzały `DocxToHtmlConverter` (renderuje `<strong>/<em>/<u>/<s>` + `w:color`) do podglądu.
+- Odporność: niespójna warstwa CHPX (zły PlcfBteChpx/FKP/grpprl) → degradacja do samego tekstu
+  (format domyślny), nigdy wyjątek; niespójny FIB/CLX nadal → `null` (kontrolowane odrzucenie).
+  ToggleOperand: 0x80 (dziedzicz ze stylu) → brak stylu w płaskim DOCX → wył.
+
+### Verified
+- Nowe `LegacyDocBinaryConverterTests` (+2): pełne pokrycie bold/italic/underline/strike/ico-red/
+  cv-blue/kombinacja-4-właściwości/plain (bez rPr) na syntetycznym `.doc` z realną warstwą
+  CHPX (FKP + PlcfBteChpx budowane w teście, ta sama ścieżka co produkcja) oraz test degradacji
+  (uszkodzony PnFkpChpx → tekst przeżywa bez formatowania). `LegacyDocBinaryConverterTests` 7/7.
+- Infrastructure **448/449** — jedyny fail `TitlePageHeaderFidelityTests.Write_TitlePgWithBlankFirstPage…`
+  jest PRE-EXISTING (failuje też na czystym `git stash`, pochodzi z równoległego WIP writera
+  nagłówków, niezwiązany z tą zmianą). Ścieżka DOCX nietknięta (normalizer pass-through dla ZIP).
+
+### Notes
+- Zakres świadomie ograniczony do bezpośredniego formatowania znaków (bez stylów akapitowych/
+  znakowych, tabel, obrazów, nagłówków). Rozmiar/font znaku (`sprmCHps`/`sprmCRgFtc*`) pominięte —
+  łatwe do dołożenia analogicznie, gdyby zgłoszenie tego wymagało.
+- Plik testowy z taska (załącznik) nie był dostępny w repo — regresję pokrywają syntetyczne `.doc`
+  budowane 1:1 wg [MS-DOC], co jest zgodne z konwencją istniejących testów tego konwertera.
+
+## 2026-07-12 — Zmiana czcionki dla nowo wpisywanego tekstu — weryfikacja zgłoszenia + parytet `setFontFamily`↔`setFontSize`
+
+### Changed
+- `wysiwyg-editor.ts` `setFontFamily` — gałąź świeżego ZWS-spana przy zwiniętej karetce
+  ustawia teraz `this.savedSelection = newRange.cloneRange()` i woła `updateFormattingState()`
+  (jak bliźniacze `setFontSize`). Dzięki temu kolejny wybór z comboboxa (który po utracie fokusu
+  odtwarza `savedSelection`) trafia DO wnętrza spana, a selektor pokazuje wybrany krój jeszcze
+  przed wpisaniem znaku. Zmiana defensywna (5 linii) — nie zmienia zachowania w potwierdzonych
+  scenariuszach, usuwa niespójność między dwiema siostrzanymi metodami.
+
+### Verified
+- **Zgłoszony bug NIE reprodukuje się na `feature/over_o1`** — został już naprawiony wcześniejszym
+  refactorem selektora na `<input list>`+`<datalist>`, odtwarzaniem selekcji PRZED `focus()` oraz
+  kotwicą ZWS-spana. Empiryczne dowody (headless Chrome + CDP, realne klawisze) w scratchpadzie:
+  pusty akapit, karetka po tekście, pełny przepływ przez realny combobox, dwukrotna zmiana kroju
+  bez wpisywania, sekwencja pick→utrata-fokusu→pick→wpisz — we WSZYSTKICH „to jest" ląduje w
+  `<span style="font-family:…">`, `caretFont`/`stateFont` = wybrany krój. Firmowy `--corporate-font-family`
+  aplikowany BEZ `!important` (`wysiwyg-editor.scss`) → inline span wygrywa specyficznością.
+- Nowy `wysiwyg-editor.font-family.spec.ts` **5/5**; komponenty **281/281** (26 plików); `ng build` OK.
+
+### Notes
+- Screenshot w zgłoszeniu pokazuje STARY natywny `<select>` (sprzed refactoru), stąd rozbieżność.
+- Znane ograniczenie (współdzielone z `setFontSize`): pole `pendingFontFamily`/`pendingFontSize`
+  jest ustawiane, ale nigdzie NIE konsumowane — ścieżka „brak selekcji i brak `savedSelection`"
+  (użytkownik wybiera krój, nie postawiwszy nigdy karetki) po cichu gubi wybór. Poza zgłoszonym
+  scenariuszem (karetka postawiona); nie ruszane, by nie rozszerzać zakresu.
+
+## 2026-07-12 — Paginacja: korekcyjna repaginacja po załadowaniu czcionek/obrazów (rozjazd liczby stron vs MS Word)
+
+### Changed
+- `wysiwyg-editor.ts`: nowe `_repaginateAfterResources()` + `_pendingImagesSettled()` — po
+  `document.fonts.ready` oraz doładowaniu obrazów wykonują JEDEN korekcyjny przebieg
+  `_flushPaginateNow()`. Token generacji (`_resourceRepaginateGen`) unieważnia oczekiwanie, gdy
+  wjedzie nowy dokument; flaga `_isDestroyed` (ustawiana w `ngOnDestroy`) blokuje repaginację po
+  zniszczeniu. Wpięte w `ngAfterViewInit` (po `init`) i `setContent` (po imporcie).
+- Powód: pierwsza paginacja liczona jest synchronicznie na metrykach dostępnych „teraz" (często
+  fallbackowa czcionka, obrazy bez wymiarów) i NIGDY nie była korygowana po doładowaniu zasobów —
+  liczba stron mogła odbiegać od finalnego układu (trop z UAT: DOC2 3 strony vs Word 8).
+
+### Verified
+- Nowy `wysiwyg-editor.resource-repaginate.spec.ts` 5/5; pełna suita wysiwyg 131/131 (jedyny błąd
+  205 w `perf.spec` pochodzi z pre-existing `_scheduleInitialFormattingSync`/`afterNextRender`,
+  niezwiązany); `ng build` OK.
+
+### Notes
+- To domyka wektor „paginacja przed załadowaniem fontów/obrazów". DRUGI, konfiguracyjny wektor
+  rozjazdu metryk pozostaje: firmowa czcionka (np. „ING Me") NIE jest zbundlowana jako web-font
+  (`assets/fonts/` ma tylko README+scss, `$corporate-font-family=''` → fallback Calibri/Segoe UI).
+  Dopóki krój dokumentu nie jest dostępny w przeglądarce, pomiar używa metryk zastępczych ≠ Word.
+  Pełne potwierdzenie różnicy 3↔8 wymaga oryginalnego 8-stronicowego DOCX ze zgłoszenia (brak w repo).
+
+## 2026-07-12 — Fix GUI: mini-toolbar pokazywał „Calibri" zamiast rzeczywistego fontu dokumentu („ING Me")
+
+### Changed
+- `document-editor.ts`: nowy computed `miniToolbarFontOptions` — lista opcji fontu mini-toolbara
+  zawsze zawiera BIEŻĄCY font selekcji (dodany na początek, gdy spoza listy systemowej).
+- `document-editor.html`: mini-toolbar `<select>` iteruje po `miniToolbarFontOptions()` zamiast po
+  `commonFonts()`; rozmiar czcionki binduje `editorState()?.currentStyle?.fontSize` zamiast nigdy
+  nieustawianego `editorState()?.fontSize` (wcześniej zawsze pokazywał fallback 11).
+
+### Verified
+- Nowy `document-editor.mini-toolbar-font.spec.ts` 4/4; document-editor/editor-toolbar/font-provider
+  łącznie **100/100**; `ng build` OK (tylko pre-existing budget warnings).
+
+### Notes
+- Root cause: natywny `<select>` nie potrafi pokazać wartości bez pasującej `<option>` — dla fontu
+  firmowego/dokumentu spoza listy (np. „ING Me", firmowy font nie zarejestrowany w
+  `FontProviderService`) przeglądarka pokazywała PIERWSZĄ opcję (Calibri). Główny toolbar używa
+  `<input list=datalist>` i pokazywał prawdę („ING Me"). Rozjazd toolbarów = ten UI bug; reader
+  rozwiązuje font dokumentu poprawnie (kontener `.document-content` → dziedziczenie runów).
+- Świadomie NIE zmieniamy głównego toolbara ani readera — dokument NAPRAWDĘ niesie „ING Me"; to
+  mini-toolbar kłamał. Font firmowy nie jest w repo (brak @font-face) → wizualnie ING Me spada do
+  generic sans (wygląda jak Calibri), ale `font-family` w źródle to nadal „ING Me".
+
 ## 2026-07-12 — Listy DOCX etap 1 wariantu A (ADR-0036): eksport restartów, punktatorów graficznych i rzadkich właściwości poziomu
 
 ### Changed

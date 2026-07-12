@@ -1326,14 +1326,14 @@
         <!-- Font family -->
         <select class="mt-font-family" [value]="miniToolbarFontFamily()"
                 (change)="miniToolbarSetFontFamily($any($event.target).value)" title="Czcionka">
-          @for (f of commonFonts(); track f) {
+          @for (f of miniToolbarFontOptions(); track f) {
             <option [value]="f" [selected]="miniToolbarFontFamily() === f">{{ f }}</option>
           }
         </select>
 
         <!-- Font size -->
         <input type="number" class="mt-font-size"
-               [value]="editorState()?.fontSize || 11"
+               [value]="editorState()?.currentStyle?.fontSize || 11"
                min="1" max="400" step="1"
                (change)="miniToolbarSetFontSize($event)"
                title="Rozmiar czcionki">

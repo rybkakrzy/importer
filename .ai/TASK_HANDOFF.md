@@ -2,7 +2,68 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-07-13)
+
+- **Fix: „Inna pierwsza strona" (w:titlePg) ignorowana w podglądzie i gubiona przy zapisie (ADR-0037).**
+   - Root cause GŁÓWNY (GUI `wysiwyg-editor.ts`): settery `[headerContent]` i `[footerContent]`
+     współdzieliły jeden sygnał `_differentFirstPage`/`_differentOddEven` — binding stopki
+     (w szablonie PO nagłówku) zerował flagę nagłówka, gdy stopka nie miała wariantu first
+     → str. 1 renderowała default, a po edycji skorumpowana flaga szła do zapisu (utrata titlePg).
+   - Fix GUI: flagi PER PASMO + wspólny `_resolveHfVariant(pageIndex, kind)` (render, `_editable*`,
+     `_applyEditedHfHtml` — rule 10): first na pierwszej stronie KAŻDEJ sekcji
+     (`_isSectionFirstPage` z `pageSectionIndexes`), even na parzystych, warianty first/even
+     wpisów sekcyjnych honorowane, null = dziedziczenie (jak „Połącz z poprzednim"), '' = celowo
+     puste pasmo (NIE default). `_updateSectionEntry(sectionIndex, kind, variant, html)`.
+     `toggleDifferentFirstPage`/`applyHeaderFooterSettings` ustawiają oba pasma.
+   - Reader: przy titlePg `DifferentFirstPage=true` zawsze; `FirstPageHtml` = treść albo `""`
+     (pusty/brakujący part first = puste pasmo); analogicznie evenAndOddHeaders → `EvenHtml=""`;
+     `Extract*OwnedBySection` emituje wpis też dla first-only/titlePg-only (null=dziedzicz).
+   - Writer: warianty niezależne od default (first-only bez default przeżywa zapis); `titlePg`
+     zawsze przy fladze (pusty first = part z pustym akapitem); **pre-existing bug schematu
+     naprawiony**: pgSz/pgMar wstawiane przed titlePg (`AppendBeforeTitlePage`), titlePg przed
+     textDirection/docGrid — wcześniej KAŻDY eksport z titlePg łamał sekwencję CT_SectPr.
+   - Testy: `TitlePageHeaderFidelityTests` 22/22 (ST_OnOff, pusty/brakujący first, first-only,
+     titlePg sekcji ≥ 1, walidator OOXML, round-tripy), Infrastructure **449/449** — w tym
+     test oznaczony w poprzednim wpisie jako „pre-existing fail z równoległego WIP" (to był
+     WIP TEJ sesji, teraz zielony); GUI `wysiwyg-editor.first-page-header.spec.ts` 9/9,
+     pełne **464/464**, `ng build` + build sln OK.
+   - **Ograniczenia/do rozważenia dalej:** titlePg sekcji dziedziczącej wszystkie referencje
+     przybliżany flagą najbliższego wcześniejszego wpisu (pełna wierność wymaga per-sekcyjnych
+     właściwości w modelu); parzystość even/odd globalna (bez `w:pgNumType/@start`);
+     `ConvertPreservingPackage` nadal regeneruje referencje nagłówków tą samą ścieżką (spójne);
+     dokument zgłoszenia (ING/DEV) niedostępny lokalnie — warto potwierdzić na nim po deployu.
+
+- **Binarny `.doc`: odzyskiwanie formatowania znaków (warstwa CHPX).**
+   - Root cause: `LegacyDocBinaryConverter` odzyskiwał tylko tekst + akapity (FIB + PlcPcd),
+     nigdy warstwy CHPX → bold/italic/underline/strike/kolor ginęły przy imporcie `.doc`.
+   - Fix: parser `PlcfBteChpx` (FIB @0x00FA/@0x00FE, w tablicy) → `PnFkpChpx` (strony FKP
+     w WordDocument) → CHPX FKP (rgfc/rgb/dane, crun@511) → grpprl SPRM-ów. SPRM-y:
+     `sprmCFBold` 0x0835, `sprmCFItalic` 0x0836, `sprmCFStrike` 0x0837, `sprmCKul` 0x2A3E,
+     `sprmCIco` 0x2A42 (paleta 16), `sprmCCv` 0x6870 (COLORREF). Char→FC z piece, grupowanie
+     run-ów po formacie, `w:rPr` w kolejności CT_RPr → dojrzały `DocxToHtmlConverter` renderuje.
+   - Odporność: uszkodzony CHPX → sam tekst (bez wyjątku); uszkodzony FIB/CLX → `null`.
+   - Testy: `LegacyDocBinaryConverterTests` 7/7 (+2: pełne formatowanie + degradacja); syntetyczny
+     `.doc` z realną warstwą CHPX budowany w teście 1:1 wg MS-DOC. Infrastructure 448/449
+     (jedyny fail `TitlePageHeaderFidelityTests…BlankFirstPage` PRE-EXISTING, z równoległego WIP).
+   - **Następne (opcjonalne, gdy zgłoszenia wymuszą):** rozmiar/font znaku (`sprmCHps`
+     0x4A43, `sprmCRgFtc0` 0x4A4F — analogiczne dołożenie w `ParseChpxGrpprl` + `w:sz`/`w:rFonts`);
+     sub/superscript (`sprmCIss` 0x2A48), highlight (`sprmCHighlight` 0x2A0C); formatowanie
+     akapitowe (PAPX FKP @fcPlcfBtePapx 0x0102 — wyrównanie/wcięcia/interlinia). Plik testowy
+     z taska (załącznik) nie był w repo — jeśli konkretny `.doc` nadal odbiega, pozyskać go
+     i przepuścić przez konwerter (tabele SPRM łatwo rozszerzyć).
+
 ## Ostatnia aktualizacja (2026-07-12)
+
+- **Zmiana czcionki dla nowo wpisywanego tekstu — zgłoszenie zweryfikowane jako już naprawione.**
+   - Bug „nowy tekst dostaje domyślny krój zamiast wybranego" NIE reprodukuje się na `feature/over_o1`.
+     Naprawiony wcześniej: selektor `<input list>`+`<datalist>`, odtwarzanie selekcji PRZED `focus()`,
+     kotwica ZWS-spana. Empiryczne dowody: headless Chrome + CDP, realne klawisze (skill `verify`),
+     drivery w scratchpadzie `app-drive/repro*.mjs` — wszystkie scenariusze OK.
+   - Jedyna zmiana kodu: `setFontFamily` gałąź świeżego ZWS-spana ustawia `savedSelection` +
+     woła `updateFormattingState()` (parytet z `setFontSize`). Test: `wysiwyg-editor.font-family.spec.ts`.
+   - Otwarte (świadomie poza zakresem): `pendingFontFamily`/`pendingFontSize` są ustawiane, ale
+     nigdy niekonsumowane → ścieżka „brak karetki i brak savedSelection" gubi wybór (wspólne dla
+     rozmiaru i kroju). Do rozważenia: konsumpcja pending w `beforeinput` albo wymuszenie karetki.
 
 - **Listy DOCX — etap 1 wariantu A (ADR-0036): restart, punktatory graficzne, rzadkie właściwości poziomu.**
    - Decyzja użytkownika: **wariant A** — semantyka specyfikacji „kompletnej obsługi list" na
