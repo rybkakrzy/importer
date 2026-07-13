@@ -72,6 +72,7 @@ public class DocumentController : BaseApiController
             request.Margins,
             request.PageSize,
             request.SectionHeadersFooters,
+            request.Footnotes,
             request.MasterId
         );
 

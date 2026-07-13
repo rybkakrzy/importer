@@ -11,6 +11,8 @@ using D2ViewerEditor.Infrastructure.DocxModel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
+using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -177,6 +179,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _pageWidthTwips = _pageHeightTwips = null;
         _marginLeftTwips = _marginTopTwips = _marginRightTwips = _marginBottomTwips = 0;
         _pendingTextBoxes.Clear();
+        _footnoteDisplayNumbers.Clear();
+        _footnoteRefOrder.Clear();
 
         using var document = WordprocessingDocument.Open(docxStream, false);
 
@@ -202,6 +206,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             PageSize = ExtractPageSize(document),
             SectionHeadersFooters = ExtractSectionHeadersFooters(document)
         };
+
+        // Przypisy MUSZĄ być czytane po ConvertBodyToHtml (Html) — kolejność pierwszych odwołań
+        // (numeracja prezentacyjna) jest ustalana podczas renderowania treści.
+        content.Footnotes = ExtractFootnotes(document);
+
+        // Ochrona przed edycją (settings.xml) — front otwiera taki dokument tylko do odczytu.
+        content.IsReadOnlyProtected = document.MainDocumentPart != null
+            && HasEnforcedEditProtection(document.MainDocumentPart);
 
         return content;
     }
@@ -499,42 +511,36 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = headerPart?.Header != null ? ConvertHeaderPartToHtml(headerPart, document) : null;
         if (string.IsNullOrWhiteSpace(html)) html = null;
 
-        // First-page header is honoured only when the section opts in via titlePg.
+        // First-page header is honoured only when the section opts in via titlePg. Once
+        // opted in, page 1 NEVER falls back to the default header: a missing or empty
+        // first part means Word renders a BLANK first-page band, so empty string is a
+        // meaningful value here (leaking the default onto page 1 was the original bug).
         string? firstPageHtml = null;
         var differentFirstPage = false;
         if (HasTitlePage(sectionProps))
         {
+            differentFirstPage = true;
             var firstPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First);
-            if (firstPart?.Header != null)
-            {
-                var fph = ConvertHeaderPartToHtml(firstPart, document);
-                if (!string.IsNullOrWhiteSpace(fph))
-                {
-                    firstPageHtml = fph;
-                    differentFirstPage = true;
-                }
-            }
+            var fph = firstPart?.Header != null ? ConvertHeaderPartToHtml(firstPart, document) : null;
+            firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
         }
 
         // Even-page header is honoured only when the document opts in via evenAndOddHeaders.
+        // Same opt-in rule as titlePg: even pages never fall back to the default header —
+        // a missing/empty even part renders blank in Word.
         string? evenHtml = null;
         var differentOddEven = false;
         if (HasEvenAndOddHeaders(mainPart))
         {
+            differentOddEven = true;
             var evenPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even);
-            if (evenPart?.Header != null)
-            {
-                var eh = ConvertHeaderPartToHtml(evenPart, document);
-                if (!string.IsNullOrWhiteSpace(eh))
-                {
-                    evenHtml = eh;
-                    differentOddEven = true;
-                }
-            }
+            var eh = evenPart?.Header != null ? ConvertHeaderPartToHtml(evenPart, document) : null;
+            evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
         }
 
-        // Nothing to report: no default header AND no first/even variant.
-        if (html == null && firstPageHtml == null && evenHtml == null) return null;
+        // Nothing to report: no default header AND no first/even content (blank-only
+        // variants of a document without any header are not worth an object).
+        if (html == null && string.IsNullOrEmpty(firstPageHtml) && string.IsNullOrEmpty(evenHtml)) return null;
 
         // Band geometry follows the FIRST section's page margins — the same section whose
         // margins/page size the rest of DocumentContent reports.
@@ -581,40 +587,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var html = footerPart?.Footer != null ? ConvertFooterPartToHtml(footerPart, document) : null;
         if (string.IsNullOrWhiteSpace(html)) html = null;
 
+        // See ExtractHeader: with titlePg on, the first page never falls back to the
+        // default footer — a missing/empty first part is an intentionally BLANK band.
         string? firstPageHtml = null;
         var differentFirstPage = false;
         if (HasTitlePage(sectionProps))
         {
+            differentFirstPage = true;
             var firstPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First);
-            if (firstPart?.Footer != null)
-            {
-                var fph = ConvertFooterPartToHtml(firstPart, document);
-                if (!string.IsNullOrWhiteSpace(fph))
-                {
-                    firstPageHtml = fph;
-                    differentFirstPage = true;
-                }
-            }
+            var fph = firstPart?.Footer != null ? ConvertFooterPartToHtml(firstPart, document) : null;
+            firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
         }
 
         string? evenHtml = null;
         var differentOddEven = false;
         if (HasEvenAndOddHeaders(mainPart))
         {
+            differentOddEven = true;
             var evenPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even);
-            if (evenPart?.Footer != null)
-            {
-                var eh = ConvertFooterPartToHtml(evenPart, document);
-                if (!string.IsNullOrWhiteSpace(eh))
-                {
-                    evenHtml = eh;
-                    differentOddEven = true;
-                }
-            }
+            var eh = evenPart?.Footer != null ? ConvertFooterPartToHtml(evenPart, document) : null;
+            evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
         }
 
-        // Nothing to report: no default footer AND no first/even variant.
-        if (html == null && firstPageHtml == null && evenHtml == null) return null;
+        // Nothing to report: no default footer AND no first/even content.
+        if (html == null && string.IsNullOrEmpty(firstPageHtml) && string.IsNullOrEmpty(evenHtml)) return null;
 
         var page = SectionPropertiesReader.ReadPageSettings(sections.FirstOrDefault());
         double footerHeight = page.HasPageMargin
@@ -664,37 +660,47 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private HeaderFooterContent? ExtractHeaderOwnedBySection(MainDocumentPart mainPart, WordprocessingDocument document, SectionProperties sectionProps)
     {
         var headerPart = ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Default);
-        if (headerPart?.Header == null) return null;
+        var html = headerPart?.Header != null ? ConvertHeaderPartToHtml(headerPart, document) : null;
+        if (string.IsNullOrWhiteSpace(html)) html = null;
 
-        var html = ConvertHeaderPartToHtml(headerPart, document);
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
+        // Section-owned entries distinguish "inherit from the previous section" (no
+        // reference → null, the frontend walks back like Word) from "explicitly blank"
+        // (a referenced but empty part → empty string).
         string? firstPageHtml = null;
         var differentFirstPage = false;
-        if (HasTitlePage(sectionProps)
-            && ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First) is { Header: not null } firstPart
-            && ConvertHeaderPartToHtml(firstPart, document) is { Length: > 0 } fph && !string.IsNullOrWhiteSpace(fph))
+        if (HasTitlePage(sectionProps))
         {
-            firstPageHtml = fph;
             differentFirstPage = true;
+            if (ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.First) is { Header: not null } firstPart)
+            {
+                var fph = ConvertHeaderPartToHtml(firstPart, document);
+                firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
+            }
         }
 
         string? evenHtml = null;
         var differentOddEven = false;
-        if (HasEvenAndOddHeaders(mainPart)
-            && ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Header: not null } evenPart
-            && ConvertHeaderPartToHtml(evenPart, document) is { Length: > 0 } eh && !string.IsNullOrWhiteSpace(eh))
+        if (HasEvenAndOddHeaders(mainPart))
         {
-            evenHtml = eh;
             differentOddEven = true;
+            if (ResolveHeaderPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Header: not null } evenPart)
+            {
+                var eh = ConvertHeaderPartToHtml(evenPart, document);
+                evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
+            }
         }
+
+        // No own parts and no titlePg opt-in → the section fully inherits, no entry.
+        if (html == null && firstPageHtml == null && evenHtml == null && !differentFirstPage) return null;
 
         var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
         var height = page.HasPageMargin ? ComputeBandHeightCm(page.TopMarginTwips, page.HeaderDistanceTwips) : 1.5;
 
         return new HeaderFooterContent
         {
-            Html = html,
+            // Empty string = no own default part, the frontend inherits it (entries are
+            // only created when the section owns SOMETHING or opts into titlePg).
+            Html = html ?? string.Empty,
             Height = Math.Max(0.8, Math.Min(8, height)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,
@@ -706,37 +712,43 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private HeaderFooterContent? ExtractFooterOwnedBySection(MainDocumentPart mainPart, WordprocessingDocument document, SectionProperties sectionProps)
     {
         var footerPart = ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Default);
-        if (footerPart?.Footer == null) return null;
+        var html = footerPart?.Footer != null ? ConvertFooterPartToHtml(footerPart, document) : null;
+        if (string.IsNullOrWhiteSpace(html)) html = null;
 
-        var html = ConvertFooterPartToHtml(footerPart, document);
-        if (string.IsNullOrWhiteSpace(html)) return null;
-
+        // See ExtractHeaderOwnedBySection: null = inherit from previous section,
+        // empty string = explicitly blank part.
         string? firstPageHtml = null;
         var differentFirstPage = false;
-        if (HasTitlePage(sectionProps)
-            && ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First) is { Footer: not null } firstPart
-            && ConvertFooterPartToHtml(firstPart, document) is { Length: > 0 } fph && !string.IsNullOrWhiteSpace(fph))
+        if (HasTitlePage(sectionProps))
         {
-            firstPageHtml = fph;
             differentFirstPage = true;
+            if (ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.First) is { Footer: not null } firstPart)
+            {
+                var fph = ConvertFooterPartToHtml(firstPart, document);
+                firstPageHtml = string.IsNullOrWhiteSpace(fph) ? string.Empty : fph;
+            }
         }
 
         string? evenHtml = null;
         var differentOddEven = false;
-        if (HasEvenAndOddHeaders(mainPart)
-            && ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Footer: not null } evenPart
-            && ConvertFooterPartToHtml(evenPart, document) is { Length: > 0 } eh && !string.IsNullOrWhiteSpace(eh))
+        if (HasEvenAndOddHeaders(mainPart))
         {
-            evenHtml = eh;
             differentOddEven = true;
+            if (ResolveFooterPart(mainPart, sectionProps, HeaderFooterValues.Even) is { Footer: not null } evenPart)
+            {
+                var eh = ConvertFooterPartToHtml(evenPart, document);
+                evenHtml = string.IsNullOrWhiteSpace(eh) ? string.Empty : eh;
+            }
         }
+
+        if (html == null && firstPageHtml == null && evenHtml == null && !differentFirstPage) return null;
 
         var page = SectionPropertiesReader.ReadPageSettings(sectionProps);
         var height = page.HasPageMargin ? ComputeBandHeightCm(page.BottomMarginTwips, page.FooterDistanceTwips) : 1.5;
 
         return new HeaderFooterContent
         {
-            Html = html,
+            Html = html ?? string.Empty,
             Height = Math.Max(0.8, Math.Min(8, height)),
             DifferentFirstPage = differentFirstPage,
             FirstPageHtml = firstPageHtml,
@@ -799,6 +811,37 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var setting = mainPart.DocumentSettingsPart?.Settings?.GetFirstChild<EvenAndOddHeaders>();
         return setting != null && (setting.Val == null || setting.Val.Value);
+    }
+
+    /// <summary>
+    /// Ochrona przed edycją zadeklarowana w settings.xml (Word: „Ogranicz edycję" /
+    /// „Zawsze otwieraj tylko do odczytu"):
+    /// - w:documentProtection z w:enforcement=1 i w:edit ≠ "none" — Word blokuje wtedy
+    ///   edycję („Możesz tylko wyświetlić ten dokument"); tryby częściowe (comments,
+    ///   trackedChanges, forms) też liczymy jako ochronę, bo edytor nie umie ich egzekwować,
+    /// - w:writeProtection — zalecenie tylko-do-odczytu (w:recommended) lub hasło zapisu
+    ///   (legacy w:hash lub nowszy w:hashValue); hasła nie weryfikujemy, więc dokument
+    ///   traktujemy jak chroniony.
+    /// </summary>
+    private static bool HasEnforcedEditProtection(MainDocumentPart mainPart)
+    {
+        var settings = mainPart.DocumentSettingsPart?.Settings;
+        if (settings == null) return false;
+
+        var protection = settings.GetFirstChild<DocumentProtection>();
+        if (protection != null
+            && protection.Enforcement?.Value == true
+            && protection.Edit != null
+            && protection.Edit.Value != DocumentProtectionValues.None)
+        {
+            return true;
+        }
+
+        var writeProtection = settings.GetFirstChild<WriteProtection>();
+        return writeProtection != null
+            && (writeProtection.Recommended?.Value == true
+                || !string.IsNullOrEmpty(writeProtection.Hash?.Value)
+                || !string.IsNullOrEmpty(writeProtection.HashValue?.Value));
     }
 
     private string ConvertHeaderPartToHtml(HeaderPart part, WordprocessingDocument document)
@@ -1219,6 +1262,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             identityAttrs.Append($" data-lvl-text=\"{System.Net.WebUtility.HtmlEncode(firstInfo.LvlText)}\"");
         if (!string.IsNullOrEmpty(firstInfo.BulletFont))
             identityAttrs.Append($" data-bullet-font=\"{System.Net.WebUtility.HtmlEncode(firstInfo.BulletFont)}\"");
+        // Rozszerzony kontrakt round-trip (ADR — listy, wariant A): restart instancji, separator
+        // znacznika, numeracja legal, reguła restartu poziomu, punktator graficzny i wcięcia
+        // definicji poziomu. Bez tych atrybutów writer tracił je przy pierwszym zapisie.
+        if (firstInfo.StartOverride > 0)
+            identityAttrs.Append($" data-start-override=\"{firstInfo.StartOverride}\"");
+        if (firstInfo.SuffixToken != null)
+            identityAttrs.Append($" data-suffix=\"{firstInfo.SuffixToken}\"");
+        if (firstInfo.IsLegal)
+            identityAttrs.Append(" data-is-legal=\"1\"");
+        if (firstInfo.LvlRestart >= 0)
+            identityAttrs.Append($" data-lvl-restart=\"{firstInfo.LvlRestart}\"");
+        if (firstInfo.PicBulletId >= 0)
+            identityAttrs.Append(" data-pic-bullet=\"1\"");
+        if (firstInfo.IndLeftTw != null)
+            identityAttrs.Append($" data-ind-left-tw=\"{firstInfo.IndLeftTw}\"");
+        if (firstInfo.IndHangingTw != null)
+            identityAttrs.Append($" data-ind-hanging-tw=\"{firstInfo.IndHangingTw}\"");
+        if (firstInfo.IndFirstLineTw != null)
+            identityAttrs.Append($" data-ind-first-line-tw=\"{firstInfo.IndFirstLineTw}\"");
+        if (firstInfo.FromInstanceOverride)
+            identityAttrs.Append(" data-lvl-override=\"1\"");
 
         html.Append($"<{listType}{startAttr}{identityAttrs} style=\"{listStyleCss}\">");
 
@@ -1263,7 +1327,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 {
                     cssStyle = styleCss + cssStyle;
                 }
-                cssStyle = StripIndentationCss(cssStyle);
+                // Akapit listy w KOMÓRCE tabeli niesie rozwiązany spacing docDefaults/stylu
+                // tabeli inline (ADR-0031, jak w ConvertParagraphToHtml) — bez tego wiersze
+                // z listami puchną w Wordzie po pierwszym zapisie.
+                if (!string.IsNullOrEmpty(_tableParagraphDefaultCss) && p.Ancestors<TableCell>().Any())
+                {
+                    cssStyle = _tableParagraphDefaultCss + cssStyle;
+                }
+                cssStyle = DeduplicateCss(StripIndentationCss(cssStyle));
                 
                 html.Append($"<li style=\"{cssStyle}\">");
                 
@@ -2583,21 +2654,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     /// <summary>
     /// Definicja poziomu dla (numId, level): w:lvlOverride/w:lvl z instancji ma pierwszeństwo,
-    /// potem w:lvl z abstraktu (po rozwiązaniu numStyleLink). Zwraca też startOverride (−1 = brak).
+    /// potem w:lvl z abstraktu (po rozwiązaniu numStyleLink). Zwraca też startOverride (−1 = brak)
+    /// oraz flagę, czy definicja pochodzi z PEŁNEGO nadpisania poziomu na instancji.
     /// </summary>
-    private (Level? levelDef, int startOverride) FindLevelDefinition(int numId, int level)
+    private (Level? levelDef, int startOverride, bool fromInstanceOverride) FindLevelDefinition(int numId, int level)
     {
-        if (_numberingPart?.Numbering == null) return (null, -1);
+        if (_numberingPart?.Numbering == null) return (null, -1, false);
 
         var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
             .FirstOrDefault(n => n.NumberID?.Value == numId);
-        if (numInstance == null) return (null, -1);
+        if (numInstance == null) return (null, -1, false);
 
         var levelOverrideElem = numInstance.Elements<LevelOverride>()
             .FirstOrDefault(lo => lo.LevelIndex?.Value == level);
         int startOverride = levelOverrideElem?.StartOverrideNumberingValue?.Val?.Value ?? -1;
 
         Level? levelDef = levelOverrideElem?.GetFirstChild<Level>();
+        // Pełny w:lvlOverride/w:lvl = INSTANCJA nadpisuje cały wygląd poziomu (nie tylko start).
+        // Flaga jedzie do data-lvl-override, żeby writer nie zapiekł tego wyglądu we wspólnym
+        // abstrakcie (inne instancje tego samego abstraktu wyglądają inaczej).
+        var fromInstanceOverride = levelDef != null;
         if (levelDef == null)
         {
             var absId = ResolveAbstractNumId(numId);
@@ -2606,13 +2682,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             levelDef = abstractNum?.Elements<Level>()
                 .FirstOrDefault(l => l.LevelIndex?.Value == level);
         }
-        return (levelDef, startOverride);
+        return (levelDef, startOverride, fromInstanceOverride);
     }
 
     /// <summary>Wartość początkowa poziomu: startOverride instancji, inaczej w:start, inaczej 1.</summary>
     private int GetLevelStart(int numId, int level)
     {
-        var (levelDef, startOverride) = FindLevelDefinition(numId, level);
+        var (levelDef, startOverride, _) = FindLevelDefinition(numId, level);
         if (startOverride > 0) return startOverride;
         return levelDef?.StartNumberingValue?.Val?.Value ?? 1;
     }
@@ -2673,7 +2749,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         for (int deeper = level + 1; deeper <= 8; deeper++)
         {
             if (!_listCounters.ContainsKey((key, deeper))) continue;
-            var (deeperDef, _) = FindLevelDefinition(numId, deeper);
+            var (deeperDef, _, _) = FindLevelDefinition(numId, deeper);
             var lvlRestart = deeperDef?.LevelRestart?.Val?.Value;
             if (lvlRestart == 0) continue; // nigdy nie restartuj
             _listCounters.Remove((key, deeper));
@@ -2693,7 +2769,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (fmt == NumberFormatValues.UpperRoman) return "upperRoman";
         if (fmt == NumberFormatValues.Bullet) return "bullet";
         if (fmt == NumberFormatValues.None) return "none";
-        return "decimal";
+        // Format spoza mapy (ordinal/cardinalText/ordinalText/chicago/formaty językowe…):
+        // nieś SUROWY token w:numFmt — degradacja do decimal przy zapisie jest wprost
+        // zakazana (pkt 22.10 specyfikacji list). Podgląd może przybliżać, plik nie.
+        var raw = levelDef?.NumberingFormat?.Val?.InnerText;
+        return string.IsNullOrEmpty(raw) ? "decimal" : raw;
     }
 
     /// <summary>
@@ -2707,16 +2787,38 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public string? BulletChar { get; init; }
         public string? BulletFont { get; init; }
         public string? BulletImageDataUri { get; init; }
+        /// <summary>w:start z DEFINICJI poziomu (bez startOverride — ten jedzie osobno).</summary>
         public int Start { get; init; }
         /// <summary>Token w:numFmt do round-tripu (data-num-fmt).</summary>
         public string FmtToken { get; init; }
         /// <summary>Surowy w:lvlText (np. "%1)" albo znak punktatora) do round-tripu.</summary>
         public string? LvlText { get; init; }
+        /// <summary>w:lvlOverride/w:startOverride INSTANCJI (−1 = brak) — semantyka „Rozpocznij od nowa".</summary>
+        public int StartOverride { get; init; }
+        /// <summary>w:suff, tylko wartości niedomyślne: "space"/"nothing" (tab = domyślne, null).</summary>
+        public string? SuffixToken { get; init; }
+        /// <summary>w:isLgl — numeracja „legal" (wszystkie poziomy w etykiecie jako decimal).</summary>
+        public bool IsLegal { get; init; }
+        /// <summary>Surowa wartość w:lvlRestart (indeks JEDNOBAZOWY; 0 = nigdy; −1 = brak elementu).</summary>
+        public int LvlRestart { get; init; }
+        /// <summary>w:lvlPicBulletId (−1 = brak) — poziom używa punktatora graficznego.</summary>
+        public int PicBulletId { get; init; }
+        /// <summary>Wcięcia z w:lvl/w:pPr/w:ind (twips, surowe stringi; null = atrybut nieobecny).</summary>
+        public string? IndLeftTw { get; init; }
+        public string? IndHangingTw { get; init; }
+        public string? IndFirstLineTw { get; init; }
+        /// <summary>Definicja pochodzi z PEŁNEGO w:lvlOverride/w:lvl instancji — wygląd tej
+        /// instancji różni się od abstraktu; writer musi to odwzorować na instancji.</summary>
+        public bool FromInstanceOverride { get; init; }
     }
 
     private ListLevelInfo GetListLevelInfo(NumberingProperties? numPr, int levelOverride = -1)
     {
-        var fallback = new ListLevelInfo { Tag = "ul", ListStyleType = "disc", Start = 1, FmtToken = "bullet" };
+        var fallback = new ListLevelInfo
+        {
+            Tag = "ul", ListStyleType = "disc", Start = 1, FmtToken = "bullet",
+            StartOverride = -1, LvlRestart = -1, PicBulletId = -1
+        };
         if (numPr == null || _numberingPart?.Numbering == null) return fallback;
 
         var numId = numPr.NumberingId?.Val?.Value;
@@ -2724,7 +2826,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var level = levelOverride >= 0 ? levelOverride : (numPr.NumberingLevelReference?.Val?.Value ?? 0);
 
         // Wspólny resolver: lvlOverride/w:lvl instancji → w:lvl abstraktu (z numStyleLink).
-        var (levelDef, startOverride) = FindLevelDefinition(numId.Value, level);
+        var (levelDef, startOverride, fromInstanceOverride) = FindLevelDefinition(numId.Value, level);
         if (levelDef == null) return fallback;
 
         var numFmt = levelDef.NumberingFormat?.Val?.Value;
@@ -2736,9 +2838,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                          ?? bulletFontRun?.HighAnsi?.Value
                          ?? bulletFontRun?.ComplexScript?.Value
                          ?? bulletFontRun?.EastAsia?.Value;
-        var start = startOverride > 0
-            ? startOverride
-            : (levelDef.StartNumberingValue?.Val?.Value ?? 1);
+        // w:start definicji i w:startOverride instancji round-tripują OSOBNO — writer odtwarza
+        // start w abstrakcie, a override jako w:lvlOverride na instancji (FR-EXPORT-004).
+        var start = levelDef.StartNumberingValue?.Val?.Value ?? 1;
+
+        // w:suff — separator znacznik→tekst; emitujemy tylko wartości niedomyślne.
+        string? suffixToken = null;
+        var suffix = levelDef.LevelSuffix?.Val;
+        if (suffix != null && suffix == LevelSuffixValues.Space) suffixToken = "space";
+        else if (suffix != null && suffix == LevelSuffixValues.Nothing) suffixToken = "nothing";
+
+        // w:isLgl — obecność elementu bez w:val oznacza true.
+        var isLgl = levelDef.IsLegalNumberingStyle;
+        var isLegal = isLgl != null && (isLgl.Val == null || isLgl.Val.Value);
+
+        // w:lvlRestart — surowa wartość OOXML (jednobazowa; 0 = poziom nigdy nie restartuje).
+        var lvlRestart = levelDef.LevelRestart?.Val?.Value ?? -1;
+
+        // Wcięcia poziomu (w:lvl/w:pPr/w:ind) — bez nich writer regenerował drabinkę 720×(lvl+1),
+        // niszcząc niestandardowe wcięcia list przy pierwszym zapisie.
+        var lvlInd = levelDef.PreviousParagraphProperties?.GetFirstChild<Indentation>();
 
         // Picture bullet (w:lvlPicBulletId) — Word pozwala wstawić obrazek jako punktator.
         // Jeśli istnieje, użyjemy obrazka zamiast znaku.
@@ -2780,6 +2899,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 ? (codePoint & 0xFF)
                 : codePoint;
 
+            // Jednoznakowy lvlText = klasyczny punktator; dłuższy = MARKER TEKSTOWY
+            // ("TODO:", "Pkt", "§ ") — pokazujemy CAŁY tekst, a skróty do natywnych
+            // disc/circle/square stosujemy tylko dla pojedynczego znaku (tekst zaczynający
+            // się od "o" nie może zmienić się w kółko).
+            int firstCodePointLength = !string.IsNullOrEmpty(levelText)
+                && char.IsHighSurrogate(levelText[0]) && levelText.Length > 1 ? 2 : 1;
+            bool isSingleCodePoint = levelText.Length == firstCodePointLength;
+
             if (bulletImageDataUri != null)
             {
                 // Picture bullet ma pierwszeństwo — wyłącz natywny punktator HTML.
@@ -2791,6 +2918,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 // znak źródłowy (np. Wingdings 0x6C) w przeglądarce bez Wingdings dałby tofu.
                 listStyle = "none";
                 bulletChar = MapBulletChar(lookup, bulletFont);
+            }
+            else if (!isSingleCodePoint && codePoint != 0)
+            {
+                // Wieloznakowy punktator tekstowy — literalnie, bez mapowania per znak;
+                // do DOCX wraca nietknięty przez data-lvl-text.
+                listStyle = "none";
+                bulletChar = levelText;
             }
             else
             {
@@ -2830,7 +2964,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             BulletImageDataUri = bulletImageDataUri,
             Start = start,
             FmtToken = NumFmtToken(levelDef),
-            LvlText = string.IsNullOrEmpty(levelText) ? null : levelText
+            LvlText = string.IsNullOrEmpty(levelText) ? null : levelText,
+            StartOverride = startOverride > 0 ? startOverride : -1,
+            SuffixToken = suffixToken,
+            IsLegal = isLegal,
+            LvlRestart = lvlRestart,
+            PicBulletId = picBulletId ?? -1,
+            IndLeftTw = lvlInd?.Left?.Value,
+            IndHangingTw = lvlInd?.Hanging?.Value,
+            IndFirstLineTw = lvlInd?.FirstLine?.Value,
+            FromInstanceOverride = fromInstanceOverride
         };
     }
 
@@ -3091,7 +3234,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         switch (child)
         {
             case Text text:
-                return EscapeHtml(text.Text);
+                return EscapeHtml(MapSymbolicTextRun(text));
             case Break br:
                 return br.Type?.Value == BreakValues.Page ? "<div class=\"page-break\"></div>" : "<br/>";
             case TabChar _:
@@ -3102,6 +3245,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 return ConvertPictureToHtml(picture, document, sourcePart);
             case AlternateContent alternate:
                 return ConvertAlternateContentToHtml(alternate, document, sourcePart);
+            case FootnoteReference footnoteRef:
+                return RenderFootnoteReference(footnoteRef);
+            case FootnoteReferenceMark _:
+                // Znacznik auto-numeru w TREŚCI przypisu — numer renderujemy jako tekst przy
+                // odwołaniu, więc sam znacznik nie emituje nic (bez pustego widma w treści).
+                return string.Empty;
             case NoBreakHyphen _:
                 return "&#8209;";
             case SoftHyphen _:
@@ -3114,105 +3263,169 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Fonty, których znaki są kodowane w układzie GLYFOWYM (a nie Unicode) — kod znaku to
-    /// pozycja w foncie, nie punkt kodowy. Dla nich zwykły znak z niskiego bajtu renderuje się
-    /// poprawnie tylko z tym konkretnym fontem (Word ma je zawsze), więc emitujemy go w spanie
-    /// z font-family (writer odtwarza <c>w:rFonts</c>, glif przeżywa round-trip).
-    /// </summary>
-    private static readonly HashSet<string> GlyphEncodedFonts = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Wingdings", "Wingdings 2", "Wingdings 3", "Webdings", "Symbol"
-    };
-
-    /// <summary>
-    /// Konwertuje <c>w:sym</c> (znak z tablicy symboli, np. strzałka z fontu Symbol albo checkbox
-    /// z Wingdings) na widoczny HTML. Wcześniej reader emitował surowy punkt kodowy z Private Use
-    /// Area (<c>&amp;#xF0E0;</c>), który BEZ fontu symbolicznego renderuje się jako „tofu"/pusto,
-    /// a po round-tripie wracał jako niewidoczny znak — stąd „strzałki nie widać w edytorze i nie
-    /// ma jej w finalnym dokumencie". Teraz: (1) znane glify → prawdziwy Unicode (widoczny wszędzie),
-    /// (2) reszta → znak w oryginalnym foncie symbolicznym (renderuje się tam, gdzie font jest
-    /// zainstalowany — w Wordzie zawsze — i round-tripuje jako <c>w:rFonts</c> + tekst).
+    /// Znak wstawiony jako symbol (<c>w:sym</c>, np. strzałka z Wingdings/Symbol). Word renderuje
+    /// go glifem fontu symbolicznego spod kodu w Private Use Area (U+F000..U+F0FF) — goła encja
+    /// PUA w HTML (dotychczasowe zachowanie) dawała w przeglądarce tofu/kwadrat, bo znak nie ma
+    /// publicznej semantyki, a font symboliczny nie był nawet wskazany. Mapujemy na odpowiednik
+    /// Unicode (renderuje się wszędzie, round-tripuje jako zwykły tekst); kod bez mapowania
+    /// emitujemy jako encję w spanie z font-family fontu symbolicznego (fonty Wingdings/Symbol/
+    /// Webdings są na Windows — lepsze przybliżenie niż tofu, a writer odtwarza rFonts z CSS).
     /// </summary>
     private string ConvertSymbolCharToHtml(SymbolChar sym)
     {
         var hex = sym.Char?.Value;
-        if (string.IsNullOrEmpty(hex)) return string.Empty;
+        if (string.IsNullOrEmpty(hex) ||
+            !int.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture, out var codePoint))
+        {
+            return string.Empty;
+        }
 
-        int codePoint;
-        try { codePoint = System.Convert.ToInt32(hex, 16); }
-        catch { return string.Empty; }
+        var font = sym.Font?.Value;
+        if (TryMapSymbolicChar(codePoint, font, out var mapped))
+            return EscapeHtml(mapped);
 
-        var font = sym.Font?.Value ?? string.Empty;
-
-        // Word często koduje symbol w Private Use Area (F000..F0FF) — to ten sam glif co 0xXX,
-        // tylko „przesunięty". Do mapowania i do renderu przez font glifowy liczy się młodszy bajt.
-        bool isPuaShifted = codePoint >= 0xF000 && codePoint <= 0xF0FF;
-        int low = isPuaShifted ? codePoint & 0xFF : codePoint;
-
-        // (1) Znany glif → prawdziwy Unicode: widoczny bez fontu symbolicznego i round-tripuje
-        // jako zwykły tekst (traci font symboliczny, ale wygląda identycznie — np. strzałka →).
-        var mapped = MapSymbolCharToUnicode(low, font);
-        if (mapped != null) return EscapeHtml(mapped);
-
-        // (2) Brak mapowania: zachowaj znak w ORYGINALNYM foncie glifowym.
-        string glyph;
-        try { glyph = char.ConvertFromUtf32(GlyphEncodedFonts.Contains(font) || isPuaShifted ? low : codePoint); }
-        catch { return string.Empty; }
-
-        if (!string.IsNullOrEmpty(font) && (GlyphEncodedFonts.Contains(font) || isPuaShifted))
-            return $"<span style=\"font-family:'{EscapeHtml(font)}'\">{EscapeHtml(glyph)}</span>";
-        return EscapeHtml(glyph);
+        var style = string.IsNullOrEmpty(font)
+            ? string.Empty
+            : $" style=\"font-family:'{EscapeHtml(font)}';\"";
+        return $"<span{style}>&#x{codePoint:X};</span>";
     }
 
     /// <summary>
-    /// Mapuje kod znaku z fontu symbolicznego (Symbol/Wingdings) na odpowiadający punkt Unicode,
-    /// albo <c>null</c> gdy nie znamy pewnego odwzorowania (wtedy woła się fallback z fontem).
-    /// Zakres celowo wąski i pewny: strzałki + najczęstsze operatory (Symbol) oraz checkboxy/haczyki
-    /// (Wingdings). Reszta glifów wraca fallbackiem, żeby nie ryzykować błędnego mapowania.
+    /// Word zapisuje znaki fontów symbolicznych także w ZWYKŁYM <c>w:t</c> — jako kod PUA
+    /// (U+F0xx) albo znak bajtowy (autokorekta „--&gt;" wstawia <c>è</c> w foncie Wingdings).
+    /// Bez mapowania edytor pokazywał kwadrat (PUA) lub literalną literę zamiast symbolu.
+    /// Mapujemy znaki, dla których znamy odpowiednik Unicode; resztę zostawiamy nietkniętą
+    /// (run niesie font-family fontu symbolicznego w CSS — renderuje się tam, gdzie font jest).
     /// </summary>
-    private static string? MapSymbolCharToUnicode(int low, string font)
+    private string MapSymbolicTextRun(Text text)
     {
-        if (font.Equals("Symbol", StringComparison.OrdinalIgnoreCase))
+        var value = text.Text ?? string.Empty;
+        if (value.Length == 0) return value;
+
+        var hasPua = false;
+        foreach (var c in value)
         {
-            return low switch
-            {
-                0xAB => "↔", // ↔
-                0xAC => "←", // ←
-                0xAD => "↑", // ↑
-                0xAE => "→", // →
-                0xAF => "↓", // ↓
-                0xDA => "⇔", // ⇔
-                0xDB => "⇐", // ⇐
-                0xDC => "⇑", // ⇑
-                0xDD => "⇒", // ⇒
-                0xDE => "⇓", // ⇓
-                0xB1 => "±", // ±
-                0xA3 => "≤", // ≤
-                0xB3 => "≥", // ≥
-                0xB9 => "≠", // ≠
-                0xBB => "≈", // ≈
-                0xB4 => "×", // ×
-                0xB8 => "÷", // ÷
-                0xA5 => "∞", // ∞
-                0xB0 => "°", // °
-                0xB7 => "•", // •
-                _ => null
-            };
+            if (c >= '\uF000' && c <= '\uF0FF') { hasPua = true; break; }
         }
-        if (font.StartsWith("Wingdings", StringComparison.OrdinalIgnoreCase))
+
+        var runFonts = (text.Parent as Run)?.RunProperties?.RunFonts;
+        if (!hasPua && runFonts == null) return value;
+
+        var font = GetFontName(runFonts);
+        var symbolicFont = NormalizeSymbolFontName(font) != null;
+        if (!hasPua && !symbolicFont) return value;
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
         {
-            return low switch
-            {
-                0xFE => "☑", // ☑ zaznaczony checkbox
-                0xA8 => "☐", // ☐ pusty checkbox
-                0xFC => "✔", // ✔ haczyk
-                0xA7 => "■", // ■ wypełniony kwadrat
-                0x6C => "•", // • bullet
-                _ => null
-            };
+            var isPua = c >= '\uF000' && c <= '\uF0FF';
+            if ((isPua || symbolicFont) && TryMapSymbolicChar(c, font, out var mapped))
+                sb.Append(mapped);
+            else
+                sb.Append(c);
         }
-        return null;
+        return sb.ToString();
     }
+
+    /// <summary>
+    /// Rozpoznaje WYŁĄCZNIE klasyczne fonty symboliczne (glify pod kodami bajtowymi/PUA).
+    /// Celowo dokładne dopasowanie nazwy, nie Contains — „Segoe UI Symbol" to normalny font
+    /// Unicode i jego znaków NIE wolno przemapowywać po młodszym bajcie.
+    /// </summary>
+    private static string? NormalizeSymbolFontName(string? font)
+    {
+        var f = font?.Trim().ToLowerInvariant();
+        return f is "symbol" or "wingdings" or "wingdings 2" or "wingdings 3" or "webdings"
+            ? f
+            : null;
+    }
+
+    /// <summary>
+    /// Mapuje kod znaku z fontu symbolicznego (po zdjęciu przesunięcia PUA U+F000..U+F0FF)
+    /// na odpowiednik Unicode. Dla fontu niesymbolicznego kod poza PUA emitowany wprost
+    /// (<c>w:sym</c> bywa używany ze zwykłym fontem i normalnym code-pointem).
+    /// </summary>
+    private static bool TryMapSymbolicChar(int codePoint, string? font, out string mapped)
+    {
+        mapped = string.Empty;
+        var canonical = NormalizeSymbolFontName(font);
+        var isPua = codePoint is >= 0xF000 and <= 0xF0FF;
+        var lookup = isPua ? codePoint & 0xFF : codePoint;
+
+        if (canonical == null)
+        {
+            // PUA bez fontu symbolicznego nie ma publicznego znaczenia — nie zgadujemy.
+            if (isPua) return false;
+            try { mapped = char.ConvertFromUtf32(codePoint); return true; }
+            catch { return false; }
+        }
+
+        var table = canonical switch
+        {
+            "symbol" => SymbolFontMap,
+            "wingdings" => WingdingsFontMap,
+            _ => null,
+        };
+        if (table != null && table.TryGetValue(lookup, out var s))
+        {
+            mapped = s;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Font „Symbol" (kodowanie Adobe) → Unicode: greka, operatory matematyczne, strzałki.</summary>
+    private static readonly Dictionary<int, string> SymbolFontMap = new()
+    {
+        [0x22] = "∀", [0x24] = "∃", [0x27] = "∍", [0x40] = "≅",
+        [0x41] = "Α", [0x42] = "Β", [0x43] = "Χ", [0x44] = "Δ",
+        [0x45] = "Ε", [0x46] = "Φ", [0x47] = "Γ", [0x48] = "Η",
+        [0x49] = "Ι", [0x4A] = "ϑ", [0x4B] = "Κ", [0x4C] = "Λ",
+        [0x4D] = "Μ", [0x4E] = "Ν", [0x4F] = "Ο", [0x50] = "Π",
+        [0x51] = "Θ", [0x52] = "Ρ", [0x53] = "Σ", [0x54] = "Τ",
+        [0x55] = "Υ", [0x56] = "ς", [0x57] = "Ω", [0x58] = "Ξ",
+        [0x59] = "Ψ", [0x5A] = "Ζ", [0x5E] = "⊥",
+        [0x61] = "α", [0x62] = "β", [0x63] = "χ", [0x64] = "δ",
+        [0x65] = "ε", [0x66] = "φ", [0x67] = "γ", [0x68] = "η",
+        [0x69] = "ι", [0x6A] = "ϕ", [0x6B] = "κ", [0x6C] = "λ",
+        [0x6D] = "μ", [0x6E] = "ν", [0x6F] = "ο", [0x70] = "π",
+        [0x71] = "θ", [0x72] = "ρ", [0x73] = "σ", [0x74] = "τ",
+        [0x75] = "υ", [0x76] = "ϖ", [0x77] = "ω", [0x78] = "ξ",
+        [0x79] = "ψ", [0x7A] = "ζ",
+        [0xA2] = "′", [0xA3] = "≤", [0xA4] = "⁄", [0xA5] = "∞",
+        [0xA6] = "ƒ", [0xA7] = "♣", [0xA8] = "♦", [0xA9] = "♥",
+        [0xAA] = "♠", [0xAB] = "↔", [0xAC] = "←", [0xAD] = "↑",
+        [0xAE] = "→", [0xAF] = "↓",
+        [0xB0] = "°", [0xB1] = "±", [0xB2] = "″", [0xB3] = "≥",
+        [0xB4] = "×", [0xB5] = "∝", [0xB6] = "∂", [0xB7] = "•",
+        [0xB8] = "÷", [0xB9] = "≠", [0xBA] = "≡", [0xBB] = "≈",
+        [0xBC] = "…",
+        [0xC0] = "ℵ", [0xC1] = "ℑ", [0xC2] = "ℜ", [0xC3] = "℘",
+        [0xC4] = "⊗", [0xC5] = "⊕", [0xC6] = "∅", [0xC7] = "∩",
+        [0xC8] = "∪", [0xC9] = "⊃", [0xCA] = "⊇", [0xCB] = "⊄",
+        [0xCC] = "⊂", [0xCD] = "⊆", [0xCE] = "∈", [0xCF] = "∉",
+        [0xD0] = "∠", [0xD1] = "∇", [0xD5] = "∏", [0xD6] = "√",
+        [0xD7] = "⋅", [0xD8] = "¬", [0xD9] = "∧", [0xDA] = "∨",
+        [0xDB] = "⇔", [0xDC] = "⇐", [0xDD] = "⇑", [0xDE] = "⇒",
+        [0xDF] = "⇓", [0xE5] = "∑", [0xF2] = "∫",
+    };
+
+    /// <summary>
+    /// Font „Wingdings" → Unicode (podzbiór o pewnym mapowaniu: strzałki, checkboxy, kształty).
+    /// Kody spoza tabeli lecą fallbackiem span+font-family (bez zgadywania złego glifu).
+    /// </summary>
+    private static readonly Dictionary<int, string> WingdingsFontMap = new()
+    {
+        [0x4A] = "☺", [0x4C] = "☹",                                       // ☺ ☹
+        [0x6C] = "●", [0x6E] = "■", [0x6F] = "□", [0x75] = "◆", // ● ■ □ ◆
+        [0xA7] = "■", [0xA8] = "☐",                                       // ■ ☐ (spójne z MapBulletChar)
+        [0xD8] = "❖",                                                          // ❖
+        [0xE8] = "➔",                                                          // ➔ (autokorekta „-->")
+        [0xEF] = "⇦", [0xF0] = "⇨", [0xF1] = "⇧", [0xF2] = "⇩", // ⇦ ⇨ ⇧ ⇩
+        [0xF3] = "⬄", [0xF4] = "⇳",                                       // ⬄ ⇳
+        [0xFB] = "✗", [0xFC] = "✔", [0xFD] = "☒", [0xFE] = "☑", // ✗ ✔ ☒ ☑
+    };
 
     /// <summary>
     /// Word owija nowsze rysunki (obrazy zakotwiczone z efektami, grupy, kanwy, kształty) w
@@ -3374,11 +3587,120 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>Pola tekstowe oczekujące na emisję przed akapitem-kotwicą (patrz <see cref="HoistTextBox"/>).</summary>
     private readonly List<string> _pendingTextBoxes = new();
 
+    // Przypisy dolne. Numer widoczny jest przydzielany przy PIERWSZYM odwołaniu w kolejności
+    // dokumentu (tożsamość OOXML → numer prezentacyjny); kolejne odwołania do tego samego
+    // przypisu współdzielą numer. _footnoteRefOrder trzyma kolejność pierwszych odwołań, po
+    // której ExtractFootnotes buduje listę modelu (jedno źródło prawdy dla treści).
+    private readonly Dictionary<long, int> _footnoteDisplayNumbers = new();
+    private readonly List<long> _footnoteRefOrder = new();
+
+    /// <summary>Stabilny wewnętrzny identyfikator przypisu z numeru OOXML (nie mylić z numerem widocznym).</summary>
+    private static string FootnoteHtmlId(long ooxmlId) => $"fn-{ooxmlId}";
+
+    /// <summary>
+    /// Renderuje odwołanie do przypisu jako semantyczny <c>&lt;sup&gt;</c> z numerem widocznym
+    /// (kolejność pierwszych odwołań) i stabilnym <c>data-footnote-id</c>. Wiele odwołań do tego
+    /// samego przypisu współdzieli numer i identyfikator.
+    /// </summary>
+    private string RenderFootnoteReference(FootnoteReference footnoteRef)
+    {
+        if (footnoteRef.Id?.Value is not long ooxmlId)
+            return string.Empty;
+
+        if (!_footnoteDisplayNumbers.TryGetValue(ooxmlId, out var number))
+        {
+            number = _footnoteRefOrder.Count + 1;
+            _footnoteDisplayNumbers[ooxmlId] = number;
+            _footnoteRefOrder.Add(ooxmlId);
+        }
+
+        var htmlId = FootnoteHtmlId(ooxmlId);
+        return $"<sup class=\"footnote-ref\" data-footnote-id=\"{htmlId}\" " +
+               $"aria-label=\"Przypis {number}\">{number}</sup>";
+    }
+
+    /// <summary>
+    /// Buduje listę przypisów w kolejności pierwszych odwołań w treści. Pomija techniczne
+    /// separatory (separator / continuationSeparator), a treść konwertuje istniejącym
+    /// konwerterem akapitów/tabel. Zwraca null, gdy dokument nie ma żadnych odwołań (brak
+    /// nadmiarowego footnotes.xml na późniejszym eksporcie).
+    /// </summary>
+    private List<DomainFootnote>? ExtractFootnotes(WordprocessingDocument document)
+    {
+        if (_footnoteRefOrder.Count == 0)
+            return null;
+
+        var footnotesPart = document.MainDocumentPart?.FootnotesPart;
+        var contentById = new Dictionary<long, string>();
+        if (footnotesPart?.Footnotes != null)
+        {
+            foreach (var footnote in footnotesPart.Footnotes.Elements<WpFootnote>())
+            {
+                var type = footnote.Type?.Value;
+                if (type == FootnoteEndnoteValues.Separator ||
+                    type == FootnoteEndnoteValues.ContinuationSeparator ||
+                    type == FootnoteEndnoteValues.ContinuationNotice)
+                    continue;
+
+                if (footnote.Id?.Value is not long id)
+                    continue;
+
+                try
+                {
+                    contentById[id] = ConvertFootnoteContent(footnote, document, footnotesPart);
+                }
+                catch (Exception ex)
+                {
+                    // Jeden wadliwy przypis nie może przerwać importu całego dokumentu.
+                    _log.LogWarning(ex, "Nie udało się skonwertować treści przypisu o id {FootnoteId}.", id);
+                    contentById[id] = string.Empty;
+                }
+            }
+        }
+
+        var result = new List<DomainFootnote>(_footnoteRefOrder.Count);
+        foreach (var ooxmlId in _footnoteRefOrder)
+        {
+            if (!contentById.TryGetValue(ooxmlId, out var html))
+            {
+                // Odwołanie wskazuje przypis bez treści (brak lub błędne powiązanie OOXML) —
+                // zachowujemy odwołanie z pustą treścią zamiast osieroconego <sup> i logujemy.
+                _log.LogWarning("Odwołanie do przypisu {FootnoteId} nie ma treści w footnotes.xml.", ooxmlId);
+                html = string.Empty;
+            }
+            result.Add(new DomainFootnote { Id = FootnoteHtmlId(ooxmlId), Html = html });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Konwertuje blokową treść przypisu (akapity/tabele) do HTML przez istniejące konwertery.
+    /// Znacznik auto-numeru (w:footnoteRef) jest pomijany w <see cref="ConvertRunChildToHtml"/>.
+    /// </summary>
+    private string ConvertFootnoteContent(WpFootnote footnote, WordprocessingDocument document, OpenXmlPart sourcePart)
+    {
+        var html = new StringBuilder();
+        foreach (var block in footnote.Elements())
+        {
+            switch (block)
+            {
+                case Paragraph paragraph:
+                    html.Append(ConvertParagraphToHtml(paragraph, document, sourcePart));
+                    break;
+                case Table table:
+                    html.Append(ConvertTableToHtml(table, document, sourcePart));
+                    break;
+            }
+        }
+        return html.ToString();
+    }
+
     /// <summary>
     /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu jako przybliżenie HTML:
     /// preset line/straightConnector → pozioma linia (grubość/kolor z <c>a:ln</c>); prostokąt/
     /// elipsa/zaokrąglony prostokąt z <c>a:solidFill</c> → kolorowy blok (z border-radius);
-    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „ING", ikona „!") → inline
+    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „Qutasator", ikona „!") → inline
     /// <c>&lt;svg&gt;&lt;path&gt;</c> z wypełnieniem kształtu. Kotwica → pozycja absolutna (jak
     /// w Wordzie). Zwraca pusty string dla nieobsługiwanej geometrii (drop bez zmian).
     /// PODGLĄD-only: writer nie odtwarza tych kształtów do DOCX (tak samo jak istniejące
@@ -3456,19 +3778,73 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Kolor wypełnienia kształtu z jego <c>spPr/a:solidFill</c> (nie z obrysu ani ukrytej linii).
-    /// Obsługuje jawny <c>a:srgbClr</c>. Wypełnienie motywowe (<c>a:schemeClr</c>) bez mapowania —
-    /// kształt i tak pozostaje widoczny (fallback czarny w SVG / brak tła w bloku).
+    /// Kolor wypełnienia kształtu (bez „#") z jego <c>spPr/a:solidFill</c> — jawny <c>a:srgbClr</c>
+    /// lub <c>a:schemeClr</c> (kolor motywu) — a gdy brak, z referencji stylu <c>wps:style/a:fillRef</c>.
+    /// Nie bierze koloru z obrysu ani ukrytej linii. Null gdy nierozwiązywalne (fill przez SVG:
+    /// <c>currentColor</c>, w bloku: brak tła) — kształt i tak pozostaje widoczny.
     /// </summary>
     private string? GetShapeFillHex(Drawing drawing, DocumentFormat.OpenXml.Drawing.CustomGeometry? custom)
     {
         var geom = (OpenXmlElement?)custom
             ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>().FirstOrDefault();
         var spPr = geom?.Parent; // wps:spPr / pic:spPr — element właściwości kształtu
-        var fill = spPr?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>().FirstOrDefault()
-                   ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
-                       .FirstOrDefault(f => f.Parent is not DocumentFormat.OpenXml.Drawing.Outline);
-        return HexColorOrNull(fill?.RgbColorModelHex?.Val?.Value);
+
+        // 1) Jawne wypełnienie kształtu: spPr/a:solidFill (a:srgbClr LUB a:schemeClr = kolor motywu).
+        // Bez obsługi schemeClr brandowe logo z fillem motywowym dawało null → czarny blob.
+        var solid = spPr?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>().FirstOrDefault()
+                    ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.SolidFill>()
+                        .FirstOrDefault(f => f.Parent is not DocumentFormat.OpenXml.Drawing.Outline);
+        var hex = SolidFillHex(solid);
+        if (hex != null) return hex;
+
+        // 2) Wypełnienie przez referencję stylu: wps:style/a:fillRef → a:schemeClr/a:srgbClr.
+        // Typowe dla kształtów-logo, które nie mają jawnego solidFill w spPr.
+        var fillRef = spPr?.Parent?.Descendants<DocumentFormat.OpenXml.Drawing.FillReference>().FirstOrDefault();
+        return FillReferenceHex(fillRef);
+    }
+
+    /// <summary>Hex (bez „#") z a:solidFill: jawny a:srgbClr, inaczej a:schemeClr rozwiązany z theme1.xml.</summary>
+    private string? SolidFillHex(DocumentFormat.OpenXml.Drawing.SolidFill? fill)
+        => fill == null ? null
+            : HexColorOrNull(fill.RgbColorModelHex?.Val?.Value)
+              ?? ResolveDrawingSchemeColor(fill.SchemeColor?.Val?.Value);
+
+    /// <summary>Hex (bez „#") z a:fillRef (referencja wypełnienia w stylu kształtu).</summary>
+    private string? FillReferenceHex(DocumentFormat.OpenXml.Drawing.FillReference? fillRef)
+        => fillRef == null ? null
+            : HexColorOrNull(fillRef.RgbColorModelHex?.Val?.Value)
+              ?? ResolveDrawingSchemeColor(fillRef.SchemeColor?.Val?.Value);
+
+    /// <summary>
+    /// Rozwiązuje DrawingML-owy <c>a:schemeClr</c> (dk1/lt1/dk2/lt2/tx1/bg1/tx2/bg2/accent1..6/
+    /// hlink/folHlink) na hex (bez „#") ze schematu kolorów motywu (theme1.xml). Domyślne mapowanie
+    /// clrMap (tx1→dk1, bg1→lt1, …); <c>phClr</c> i braki → null (kształt zostaje widoczny w fallbacku).
+    /// </summary>
+    private string? ResolveDrawingSchemeColor(DocumentFormat.OpenXml.Drawing.SchemeColorValues? scheme)
+    {
+        if (scheme == null || _themePart?.Theme?.ThemeElements?.ColorScheme == null) return null;
+        var cs = _themePart.Theme.ThemeElements.ColorScheme;
+        var s = scheme.Value;
+
+        DocumentFormat.OpenXml.Drawing.Color2Type? c2 = null;
+        if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Dark1 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Text1) c2 = cs.Dark1Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Light1 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Background1) c2 = cs.Light1Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Dark2 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Text2) c2 = cs.Dark2Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Light2 || s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Background2) c2 = cs.Light2Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent1) c2 = cs.Accent1Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent2) c2 = cs.Accent2Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent3) c2 = cs.Accent3Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent4) c2 = cs.Accent4Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent5) c2 = cs.Accent5Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Accent6) c2 = cs.Accent6Color;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.Hyperlink) c2 = cs.Hyperlink;
+        else if (s == DocumentFormat.OpenXml.Drawing.SchemeColorValues.FollowedHyperlink) c2 = cs.FollowedHyperlinkColor;
+        if (c2 == null) return null;
+
+        var srgb = c2.GetFirstChild<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>();
+        if (srgb?.Val?.Value != null) return HexColorOrNull(srgb.Val.Value);
+        var sys = c2.GetFirstChild<DocumentFormat.OpenXml.Drawing.SystemColor>();
+        return HexColorOrNull(sys?.LastColor?.Value);
     }
 
     /// <summary>
@@ -3540,7 +3916,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         if (d.Length == 0 || spaceW <= 0 || spaceH <= 0) return string.Empty;
 
-        var fill = fillHex != null ? $"#{fillHex}" : "#000000";
+        // Brak rozwiązanego wypełnienia: NIE malujemy solidnego czarnego bloba (najgorszy wynik dla
+        // logo/wordmark). currentColor dziedziczy kolor tekstu otoczenia (w stopkach zwykle brand/tekst).
+        var fill = fillHex != null ? $"#{fillHex}" : "currentColor";
         var stroke = strokeHex != null
             ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
             : string.Empty;
@@ -5257,8 +5635,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
 
         // Iteruj wszystkie dzieci komórki, by obsłużyć też SdtBlock i Table osadzone bezpośrednio.
-        foreach (var inner in cell.Elements())
+        // Akapity LISTOWE grupujemy w ol/ul jak w body — bez tego lista w komórce renderowała
+        // się jako gołe akapity (bez numeru) i TRACIŁA numerację przy pierwszym zapisie (R-30).
+        var innerElements = cell.Elements().Cast<OpenXmlElement>().ToList();
+        var innerIndex = 0;
+        while (innerIndex < innerElements.Count)
         {
+            var inner = innerElements[innerIndex];
+            if (inner is Paragraph listPara && IsListParagraph(listPara))
+            {
+                html.Append(ConvertConsecutiveListItems(innerElements, ref innerIndex, document));
+                continue; // indeks przesunięty wewnątrz
+            }
+
             switch (inner)
             {
                 case Paragraph para:
@@ -5271,6 +5660,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     html.Append(ConvertSdtBlockToHtml(sdt, document));
                     break;
             }
+            innerIndex++;
         }
 
         html.Append("</td>");

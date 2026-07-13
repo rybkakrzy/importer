@@ -35,7 +35,7 @@ public sealed class ClaimsCurrentUserProvider : ICurrentUserProvider
         {
             var user = User;
             // UWAGA: Microsoft.Identity.Web używa CaseSensitiveClaimsIdentity, więc
-            // ClaimsPrincipal.FindFirst("corpKey") NIE dopasuje claimu "corpkey". Token z ING-AD
+            // ClaimsPrincipal.FindFirst("corpKey") NIE dopasuje claimu "corpkey". Token z Qutasator-AD
             // niesie klucz pod nazwą "corpkey" — szukamy więc po Type bez rozróżniania wielkości liter,
             // żeby nazwa w konfiguracji ("corpKey"/"corpkey"/"CorpKey") nie decydowała o sukcesie.
             var value = user?.Claims

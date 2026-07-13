@@ -690,7 +690,15 @@ export class EditorToolbarComponent {
    * Sprawdza czy formatowanie jest aktywne
    */
   isActive(format: keyof EditorState['currentFormatting']): boolean {
-    return this.editorState?.currentFormatting?.[format] ?? false;
+    return this.editorState?.currentFormatting?.[format] === true;
+  }
+
+  /**
+   * Stan przycisków wyrównania — jak w Wordzie dokładnie jeden jest aktywny,
+   * domyślnie „do lewej" (brak jawnego text-align = lewa).
+   */
+  isAlignActive(align: 'left' | 'center' | 'right' | 'justify'): boolean {
+    return (this.editorState?.currentFormatting?.alignment ?? 'left') === align;
   }
 
   /**

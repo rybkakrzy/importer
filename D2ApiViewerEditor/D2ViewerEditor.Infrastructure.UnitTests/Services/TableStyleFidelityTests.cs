@@ -636,6 +636,57 @@ public class TableStyleFidelityTests
         firstCellBorders.BottomBorder!.Size!.Value.Should().BeInRange(7u, 9u);   // wewnętrzna 1 pt
     }
 
+    // Regresja: po edycji w przeglądarce getContent serializuje jednolite obramowanie komórki
+    // jako OSOBNE właściwości `border-width`/`border-style`/`border-color`, a kolor normalizuje do
+    // rgb(). Writer rozpoznawał tylko formę skróconą `border-top: .. #hex`, więc po pierwszym zapisie
+    // komórki traciły wszystkie linie (w:tcBorders w ogóle nie powstawało) i tabela „rozpadała się".
+    [Test]
+    public void Write_CellBorderAsSeparateWidthStyleColorProperties_WithRgb_IsPreserved()
+    {
+        var html =
+            "<table style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border-width: 0.7px; border-style: solid; border-color: rgb(0, 0, 0); padding: 0px 7px;\">" +
+            "Lp.</td></tr></table>";
+
+        var cell = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First();
+        var borders = cell.TableCellProperties?.TableCellBorders;
+        borders.Should().NotBeNull("obramowanie z osobnych właściwości border-* musi zostać zapisane");
+        foreach (var b in new BorderType[] { borders!.TopBorder!, borders.LeftBorder!, borders.BottomBorder!, borders.RightBorder! })
+        {
+            b.Val!.Value.Should().Be(BorderValues.Single);
+            b.Size!.Value.Should().BeInRange(3u, 5u);       // 0.7px ≈ 4/8 pt
+            b.Color!.Value.Should().Be("000000");           // rgb(0,0,0) → hex
+        }
+    }
+
+    // Kolor rgb() również w formie skróconej per-strona i `border:` — przeglądarka normalizuje
+    // hex do rgb przy edycji; wcześniej regex akceptował wyłącznie hex i gubił linię.
+    [Test]
+    public void Write_CellBorderShorthandWithRgbColor_IsPreserved()
+    {
+        var html =
+            "<table style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border: 1px solid rgb(255, 0, 0);\">A</td></tr></table>";
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Single);
+        borders.TopBorder!.Color!.Value.Should().Be("FF0000");
+    }
+
+    // border-style:none w formie rozbitej NIE może fałszywie generować obramowań (ani ich kasować
+    // na sztywno) — brak widocznej linii = brak w:tcBorders (styl tabeli decyduje).
+    [Test]
+    public void Write_CellBorderStyleNoneSeparateForm_DoesNotEmitBorders()
+    {
+        var html =
+            "<table data-tbl-style=\"TableGrid\" style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border-style: none; padding: 0px 7px;\">A</td></tr></table>";
+
+        var cell = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First();
+        (cell.TableCellProperties?.TableCellBorders).Should().BeNull();
+    }
+
     [Test]
     public void Write_NestedTable_DoesNotDuplicateInnerRowsInOuterTable()
     {

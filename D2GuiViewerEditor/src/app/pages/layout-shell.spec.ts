@@ -1,10 +1,13 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
+import { of } from 'rxjs';
+import { MsalService } from '@azure/msal-angular';
 import { DashboardComponent } from './dashboard/dashboard';
 import { PdfMaintenanceComponent } from './pdf-maintenance/pdf-maintenance';
 import { DocumentService } from '../services/document.service';
 import { DocumentStorageService } from '../services/document-storage.service';
 import { DocumentNavigationService } from '../core/services/document-navigation.service';
+import { ResourceAccessService } from '../core/services/resource-access.service';
 
 /**
  * Shell-layout contract: routed page wrappers must fill the area the app shell
@@ -33,6 +36,10 @@ describe('Routed page layout — banner must not push content down', () => {
         { provide: DocumentService, useValue: {} },
         { provide: DocumentStorageService, useValue: {} },
         { provide: DocumentNavigationService, useValue: {} },
+        // Dashboard wstrzykuje gating zasobów + MSAL — stub jak w dashboard.spec.ts,
+        // inaczej ścieżka ResourceAccessService → HttpClient wywala NG0201 w jsdom.
+        { provide: ResourceAccessService, useValue: { hasAccessToResource: () => of(false) } },
+        { provide: MsalService, useValue: { instance: { getActiveAccount: () => null, getAllAccounts: () => [] } } },
       ],
     }).compileComponents();
 

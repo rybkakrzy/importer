@@ -31,6 +31,17 @@ export interface SectionHeaderFooter {
   footer?: HeaderFooterContent;
 }
 
+/**
+ * Przypis dolny. `id` to STABILNA wewnętrzna tożsamość (np. "fn-1"), niezależna od numeru
+ * widocznego — numer wynika z kolejności odwołań w treści i jest liczony przy renderowaniu.
+ * `html` to jedyne źródło prawdy dla treści; odwołania w treści dokumentu niosą tylko
+ * `data-footnote-id`, nie kopię treści.
+ */
+export interface Footnote {
+  id: string;
+  html: string;
+}
+
 /** Zawartość dokumentu z konwersji DOCX */
 export interface DocumentContent {
   html: string;
@@ -42,6 +53,12 @@ export interface DocumentContent {
   margins?: PageMargins;
   pageSize?: PageSize;
   sectionHeadersFooters?: SectionHeaderFooter[];
+  footnotes?: Footnote[];
+  /**
+   * Dokument źródłowy jest chroniony przed edycją (settings.xml: wymuszone
+   * w:documentProtection lub w:writeProtection). Edytor otwiera go tylko do odczytu.
+   */
+  isReadOnlyProtected?: boolean;
 }
 
 /** Metadane dokumentu */
@@ -166,6 +183,7 @@ export interface SaveDocumentRequest {
   margins?: PageMargins;
   pageSize?: PageSize;
   sectionHeadersFooters?: SectionHeaderFooter[];
+  footnotes?: Footnote[];
   /** Gdy podane, backend zapisuje przez pass-through oryginalnego pakietu (zachowuje
    *  style tabel/motyw/numerację). Brak → pełna regeneracja pakietu. */
   masterId?: string;
@@ -193,6 +211,11 @@ export interface TextFormatting {
   strikethrough: boolean;
   subscript: boolean;
   superscript: boolean;
+  /** Wyrównanie akapitu pod karetką — stan podświetlenia przycisków toolbara. */
+  alignment?: 'left' | 'center' | 'right' | 'justify';
+  /** Karetka wewnątrz listy punktowanej (ul) / numerowanej (ol). */
+  bulletList?: boolean;
+  numberedList?: boolean;
 }
 
 /** Styl paragrafu */

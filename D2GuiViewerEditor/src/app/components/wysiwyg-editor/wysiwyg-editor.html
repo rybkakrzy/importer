@@ -27,6 +27,7 @@
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
                 spellcheck="true"
                 [attr.placeholder]="''"
+                (beforeinput)="onEditorBeforeInput($event)"
                 (input)="onHeaderInput($event)"
               ></div>
               <!-- Pasek nagłówka przeniesiony do d2-header-footer-panel (dock po lewej). -->
@@ -52,6 +53,7 @@
               [style.--doc-par-margin]="documentDefaultParagraphSpacing()"
               [innerHTML]="getPageContentSafe($index)"
               (focusin)="setActivePage($index, $event)"
+              (beforeinput)="onEditorBeforeInput($event)"
               (input)="onPageInput($index, $event)"
               (mouseup)="saveSelection()"
               (keyup)="saveSelection()"
@@ -73,6 +75,7 @@
               [style.--doc-par-margin]="documentDefaultParagraphSpacing()"
               [innerHTML]="getPageContentSafe($index)"
               (focusin)="setActivePage($index, $event)"
+              (beforeinput)="onEditorBeforeInput($event)"
               (input)="onPageInput($index, $event)"
               (mouseup)="saveSelection()"
               (keyup)="saveSelection()"
@@ -98,6 +101,7 @@
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
                 spellcheck="true"
                 [attr.placeholder]="''"
+                (beforeinput)="onEditorBeforeInput($event)"
                 (input)="onFooterInput($event)"
               ></div>
             } @else {
@@ -123,4 +127,35 @@
       </div>
     }
   </div>
+
+  <!-- Panel przypisów dolnych: treść przypisów w kolejności pierwszych odwołań w dokumencie.
+       Odwołania (<sup class="footnote-ref">) żyją w treści strony; tu jest JEDNO źródło treści,
+       edytowalne osobno (poza contenteditable body). Numer = kolejność (renumeracja po edycji). -->
+  @if (footnoteList().length > 0) {
+    <div class="footnotes-panel" role="region" aria-label="Przypisy dolne" data-testid="footnotes-panel">
+      <div class="footnotes-panel-title">Przypisy</div>
+      @for (fn of footnoteList(); track fn.id) {
+        <div class="footnote-item"
+             [attr.data-footnote-id]="fn.id"
+             [attr.data-testid]="'footnote-item-' + fn.id">
+          <span class="footnote-item-number" aria-hidden="true">{{ $index + 1 }}</span>
+          <div class="footnote-item-content"
+               [attr.contenteditable]="readOnly ? 'false' : 'true'"
+               spellcheck="true"
+               [attr.aria-label]="'Treść przypisu ' + ($index + 1)"
+               [attr.data-testid]="'footnote-content-' + fn.id"
+               [innerHTML]="footnoteSafeHtml(fn)"
+               (blur)="commitFootnoteContent(fn.id, $event)"></div>
+          @if (!readOnly) {
+            <button type="button"
+                    class="footnote-item-delete"
+                    [attr.aria-label]="'Usuń przypis ' + ($index + 1)"
+                    [attr.data-testid]="'footnote-delete-' + fn.id"
+                    title="Usuń przypis"
+                    (click)="removeFootnote(fn.id)">×</button>
+          }
+        </div>
+      }
+    </div>
+  }
 </div>

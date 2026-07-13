@@ -51,6 +51,23 @@ public class SectionHeaderFooter
 }
 
 /// <summary>
+/// Przypis dolny dokumentu. Tożsamość (<see cref="Id"/>) jest STABILNA i niezależna od
+/// numeru widocznego w edytorze — numer wynika z kolejności pierwszych odwołań w treści
+/// i jest liczony przy renderowaniu, a nie przechowywany. Numeryczny identyfikator OOXML
+/// (w:id) jest przydzielany deterministycznie dopiero podczas eksportu do DOCX. Treść
+/// przypisu (<see cref="Html"/>) jest jedynym źródłem prawdy — odwołania w treści dokumentu
+/// niosą tylko <c>data-footnote-id</c>, nie kopię treści.
+/// </summary>
+public class Footnote
+{
+    /// <summary>Stabilna wewnętrzna tożsamość przypisu (np. "fn-1"). Nie mylić z numerem wyświetlanym.</summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>Treść przypisu jako HTML (akapity/formatowanie w tym samym modelu co treść dokumentu).</summary>
+    public string Html { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Reprezentuje dokument z konwersji DOCX do HTML
 /// </summary>
 public class DocumentContent
@@ -65,6 +82,20 @@ public class DocumentContent
     public PageSize? PageSize { get; set; }
     /// <summary>Własne nagłówki/stopki sekcji ≥ 1 (dokumenty wielosekcyjne, R-10/ADR-0023).</summary>
     public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
+    /// <summary>
+    /// Przypisy dolne w kolejności pierwszych odwołań w treści. Puste/null dla dokumentów
+    /// bez przypisów (nie tworzą wtedy nadmiarowej części footnotes.xml na eksporcie).
+    /// </summary>
+    public List<Footnote>? Footnotes { get; set; }
+
+    /// <summary>
+    /// True, gdy dokument źródłowy deklaruje ochronę przed edycją w settings.xml:
+    /// wymuszone w:documentProtection (Ogranicz edycję, tryb inny niż "none") lub
+    /// w:writeProtection (hasło zapisu / zalecenie tylko-do-odczytu). Edytor musi wtedy
+    /// otworzyć dokument w trybie tylko do odczytu — nie umiemy egzekwować trybów
+    /// częściowych (komentarze/formularze), więc każda wymuszona ochrona blokuje edycję.
+    /// </summary>
+    public bool IsReadOnlyProtected { get; set; }
 }
 
 /// <summary>
@@ -158,6 +189,8 @@ public class SaveDocumentRequest
     public PageMargins? Margins { get; set; }
     public PageSize? PageSize { get; set; }
     public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
+    /// <summary>Przypisy dolne (jedno źródło prawdy dla treści; odwołania w Html niosą tylko id).</summary>
+    public List<Footnote>? Footnotes { get; set; }
     /// <summary>Opcjonalne: gdy podane, zapis idzie przez pass-through oryginalnego pakietu
     /// (zachowuje styles.xml/theme/fontTable/numbering). Brak → pełna regeneracja jak dotąd.</summary>
     public Guid? MasterId { get; set; }

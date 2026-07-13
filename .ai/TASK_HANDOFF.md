@@ -2,9 +2,241 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
+## Ostatnia aktualizacja (2026-07-13)
+
+- **Fix: „Inna pierwsza strona" (w:titlePg) ignorowana w podglądzie i gubiona przy zapisie (ADR-0037).**
+   - Root cause GŁÓWNY (GUI `wysiwyg-editor.ts`): settery `[headerContent]` i `[footerContent]`
+     współdzieliły jeden sygnał `_differentFirstPage`/`_differentOddEven` — binding stopki
+     (w szablonie PO nagłówku) zerował flagę nagłówka, gdy stopka nie miała wariantu first
+     → str. 1 renderowała default, a po edycji skorumpowana flaga szła do zapisu (utrata titlePg).
+   - Fix GUI: flagi PER PASMO + wspólny `_resolveHfVariant(pageIndex, kind)` (render, `_editable*`,
+     `_applyEditedHfHtml` — rule 10): first na pierwszej stronie KAŻDEJ sekcji
+     (`_isSectionFirstPage` z `pageSectionIndexes`), even na parzystych, warianty first/even
+     wpisów sekcyjnych honorowane, null = dziedziczenie (jak „Połącz z poprzednim"), '' = celowo
+     puste pasmo (NIE default). `_updateSectionEntry(sectionIndex, kind, variant, html)`.
+     `toggleDifferentFirstPage`/`applyHeaderFooterSettings` ustawiają oba pasma.
+   - Reader: przy titlePg `DifferentFirstPage=true` zawsze; `FirstPageHtml` = treść albo `""`
+     (pusty/brakujący part first = puste pasmo); analogicznie evenAndOddHeaders → `EvenHtml=""`;
+     `Extract*OwnedBySection` emituje wpis też dla first-only/titlePg-only (null=dziedzicz).
+   - Writer: warianty niezależne od default (first-only bez default przeżywa zapis); `titlePg`
+     zawsze przy fladze (pusty first = part z pustym akapitem); **pre-existing bug schematu
+     naprawiony**: pgSz/pgMar wstawiane przed titlePg (`AppendBeforeTitlePage`), titlePg przed
+     textDirection/docGrid — wcześniej KAŻDY eksport z titlePg łamał sekwencję CT_SectPr.
+   - Testy: `TitlePageHeaderFidelityTests` 22/22 (ST_OnOff, pusty/brakujący first, first-only,
+     titlePg sekcji ≥ 1, walidator OOXML, round-tripy), Infrastructure **449/449** — w tym
+     test oznaczony w poprzednim wpisie jako „pre-existing fail z równoległego WIP" (to był
+     WIP TEJ sesji, teraz zielony); GUI `wysiwyg-editor.first-page-header.spec.ts` 9/9,
+     pełne **464/464**, `ng build` + build sln OK.
+   - **Ograniczenia/do rozważenia dalej:** titlePg sekcji dziedziczącej wszystkie referencje
+     przybliżany flagą najbliższego wcześniejszego wpisu (pełna wierność wymaga per-sekcyjnych
+     właściwości w modelu); parzystość even/odd globalna (bez `w:pgNumType/@start`);
+     `ConvertPreservingPackage` nadal regeneruje referencje nagłówków tą samą ścieżką (spójne);
+     dokument zgłoszenia (ING/DEV) niedostępny lokalnie — warto potwierdzić na nim po deployu.
+
+- **Binarny `.doc`: odzyskiwanie formatowania znaków (warstwa CHPX).**
+   - Root cause: `LegacyDocBinaryConverter` odzyskiwał tylko tekst + akapity (FIB + PlcPcd),
+     nigdy warstwy CHPX → bold/italic/underline/strike/kolor ginęły przy imporcie `.doc`.
+   - Fix: parser `PlcfBteChpx` (FIB @0x00FA/@0x00FE, w tablicy) → `PnFkpChpx` (strony FKP
+     w WordDocument) → CHPX FKP (rgfc/rgb/dane, crun@511) → grpprl SPRM-ów. SPRM-y:
+     `sprmCFBold` 0x0835, `sprmCFItalic` 0x0836, `sprmCFStrike` 0x0837, `sprmCKul` 0x2A3E,
+     `sprmCIco` 0x2A42 (paleta 16), `sprmCCv` 0x6870 (COLORREF). Char→FC z piece, grupowanie
+     run-ów po formacie, `w:rPr` w kolejności CT_RPr → dojrzały `DocxToHtmlConverter` renderuje.
+   - Odporność: uszkodzony CHPX → sam tekst (bez wyjątku); uszkodzony FIB/CLX → `null`.
+   - Testy: `LegacyDocBinaryConverterTests` 7/7 (+2: pełne formatowanie + degradacja); syntetyczny
+     `.doc` z realną warstwą CHPX budowany w teście 1:1 wg MS-DOC. Infrastructure 448/449
+     (jedyny fail `TitlePageHeaderFidelityTests…BlankFirstPage` PRE-EXISTING, z równoległego WIP).
+   - **Następne (opcjonalne, gdy zgłoszenia wymuszą):** rozmiar/font znaku (`sprmCHps`
+     0x4A43, `sprmCRgFtc0` 0x4A4F — analogiczne dołożenie w `ParseChpxGrpprl` + `w:sz`/`w:rFonts`);
+     sub/superscript (`sprmCIss` 0x2A48), highlight (`sprmCHighlight` 0x2A0C); formatowanie
+     akapitowe (PAPX FKP @fcPlcfBtePapx 0x0102 — wyrównanie/wcięcia/interlinia). Plik testowy
+     z taska (załącznik) nie był w repo — jeśli konkretny `.doc` nadal odbiega, pozyskać go
+     i przepuścić przez konwerter (tabele SPRM łatwo rozszerzyć).
+
+## Ostatnia aktualizacja (2026-07-12)
+
+- **Zmiana czcionki dla nowo wpisywanego tekstu — zgłoszenie zweryfikowane jako już naprawione.**
+   - Bug „nowy tekst dostaje domyślny krój zamiast wybranego" NIE reprodukuje się na `feature/over_o1`.
+     Naprawiony wcześniej: selektor `<input list>`+`<datalist>`, odtwarzanie selekcji PRZED `focus()`,
+     kotwica ZWS-spana. Empiryczne dowody: headless Chrome + CDP, realne klawisze (skill `verify`),
+     drivery w scratchpadzie `app-drive/repro*.mjs` — wszystkie scenariusze OK.
+   - Jedyna zmiana kodu: `setFontFamily` gałąź świeżego ZWS-spana ustawia `savedSelection` +
+     woła `updateFormattingState()` (parytet z `setFontSize`). Test: `wysiwyg-editor.font-family.spec.ts`.
+   - Otwarte (świadomie poza zakresem): `pendingFontFamily`/`pendingFontSize` są ustawiane, ale
+     nigdy niekonsumowane → ścieżka „brak karetki i brak savedSelection" gubi wybór (wspólne dla
+     rozmiaru i kroju). Do rozważenia: konsumpcja pending w `beforeinput` albo wymuszenie karetki.
+
+- **Listy DOCX — etap 1 wariantu A (ADR-0036): restart, punktatory graficzne, rzadkie właściwości poziomu.**
+   - Decyzja użytkownika: **wariant A** — semantyka specyfikacji „kompletnej obsługi list" na
+     istniejącym transporcie `data-*` (kontrakt na kontenerach ul/ol = serializacja modelu list),
+     BEZ kanonicznego modelu JSON w kontraktach API. Szczegóły i odrzucony wariant B: ADR-0036.
+   - Reader (`DocxToHtmlConverter`): `ListLevelInfo` rozszerzone; **zmiana semantyki `Start`** —
+     teraz ZAWSZE w:start definicji; startOverride instancji jedzie osobno w `data-start-override`.
+     Nowe atrybuty: `data-suffix` (space/nothing), `data-is-legal`, `data-lvl-restart` (surowa
+     wartość jednobazowa), `data-pic-bullet`, `data-ind-left/hanging/first-line-tw`.
+   - Writer (`HtmlToDocxConverter`): abstrakt współdzielony po `data-abstract-num-id`
+     (`_abstractIdByHtmlAbstract`); `CreateNumberingInstance(abstractId, startOverrides)` emituje
+     `w:lvlOverride/w:startOverride`; `TryCreatePictureBullet` (ImagePart na części numeracji +
+     `w:numPicBullet` VML + `w:lvlPicBulletId`, dedup po data URI; SVG/nie-data-URI → stary
+     fallback numFmt=none z obrazem inline); wcięcia poziomu z `data-ind-*-tw` zamiast drabinki
+     720×(lvl+1); kolejność dzieci `w:lvl` = sekwencja CT_Lvl (rPr przenoszony na koniec);
+     `_numberingId`/`_numberingPart`/mapy resetowane per Convert (determinizm + brak przecieku
+     części przy reużytej instancji konwertera).
+   - Testy: `ListNumberingFidelityTests` 18/18 (+6, w tym walidator OOXML Office2013 = 0 błędów
+     dla list z data-* i bez); Infrastructure 418/418; build sln 0 błędów.
+   - **Następne etapy planu (kolejność wg dźwigni):** (a) `lvlRestart=N` w licznikach readera
+     (dziś honorowane tylko 0) + pełny łańcuch `basedOn`/`styleLink` w rozwiązywaniu numeracji
+     ze stylów; (b) silnik etykiet (szablony `%1.%2.%3`, suffix, isLegal) jako czysty komponent
+     + port TS ze wspólnymi fixture'ami JSON; (c) warstwa znacznika w GUI + komendy edytora
+     (Tab/Shift+Tab, kontynuuj/restart/ustaw wartość — nowe listy z edytora wciąż dostają
+     drabinkę domyślną bez data-*); (d) kody diagnostyczne LIST_* + RoundTripComparator.
+   - **Uwaga na pułapkę:** `data-start` w starych zapisanych dokumentach niósł wartość
+     efektywną (z override) — writer odtworzy ją jako w:start abstraktu; wizualnie identycznie,
+     semantycznie akceptowalne (dokument sprzed poprawki nie miał override'u w HTML).
+   - **Runda 2 (weryfikacja kontynuacji/wcięć/rodzaju numeracji) — domknięte:**
+     (a) `ResolveListLevel` — writer honoruje `data-ilvl` (fragment kontynuacji na głębszym
+     poziomie nie jest już spłaszczany do ilvl=0; dotyczy też skanów specyfikacji poziomów);
+     (b) pełne `w:lvlOverride/w:lvl` na instancji przez `data-lvl-override` (wygląd nadpisany
+     per instancja NIE jest zapiekany we wspólnym abstrakcie ani nie zlewa się z pierwszym
+     wygranym — `FindLevelDefinition` zwraca źródło definicji);
+     (c) `UpgradeSharedAbstractLevels` — późniejszy fragment współdzielący abstrakt dosyła
+     definicje poziomów, których fragment tworzący nie używał (miały drabinkę domyślną).
+     Wydzielone `BuildAbstractLevel`/`ResolveLevelOrdered`. Testy: 21/21, Infrastructure 421/421.
+   - **Świadome ograniczenie sharingu:** definicje poziomów NIE-override'owych łączą się po
+     `data-abstract-num-id` zasadą „pierwsza definicja wygrywa" — poziom już zbudowany z data-*
+     nie jest podmieniany przez późniejszy fragment (identyczna zasada jak słownik specs).
+   - **Runda 3 — prezentacja w edytorze Angular:**
+     - `core/utils/list-label.util.ts` — czysty silnik etykiet TS (lustrzany do liczników
+       readera; scenariusze spec-ów odpowiadają backendowym `ListNumberingFidelityTests`).
+       Formaty (litery jak Word: 27=aa), szablony %N z formatem poziomu ODWOŁANIA, isLegal,
+       suffix, lvlRestart=0/N, startOverride raz per numId, licznik per abstrakt.
+     - `wysiwyg-editor.refreshListLabels()` + hooki (content-input, setContent, persist,
+       undo/redo, pageEditorRefs.changes); etykieta w `data-list-label` na li, render CSS
+       `::before` (right:100%, poza edytowalnym tekstem); `stripListLabelAttributes`
+       w `_serializeSingleEditor` — zapis czysty.
+     - Weryfikacja: Vitest 415/415, `ng build` OK, wizualnie headless Chrome+CDP
+       (skill verify): 1./2./2.a)/2.b)/3.(kontynuacja)/1.(restart) na żywym edytorze.
+     - **Następne w prezentacji:** wcięcia znacznika z `data-ind-*-tw` (dziś padding
+       kontenera z readera), styl znacznika (rPr poziomu: bold/kolor/rozmiar — brak w
+       kontrakcie data-*), komendy list (Tab/Shift+Tab poziomy, kontynuuj/restart/ustaw
+       wartość, generowanie data-* dla nowych list z edytora).
+   - **Runda 5 — ENTER i eksport po edycjach (zweryfikowane empirycznie headless Chrome
+     z realnymi zdarzeniami klawiszy, nie tylko jsdom):**
+     - Enter w li → nowy element tej samej listy; etykiety (też dalszych fragmentów)
+       przeliczane w debounce persist. Wyjście z listy (2×Enter) → Chrome KOPIUJE data-*
+       na rozdzielony fragment i wstawia `<div>` — eksport scala fragmenty do jednej
+       instancji, a div konwertuje na akapit (test `Writer_EditorHtmlAfterEnterAndListExit…`
+       na dosłownym HTML przechwyconym z edytora + walidator + reimport start=3/4).
+     - `ensureBulletMarkers` (list-label.util): li utworzony Enterem w liście z marker
+       spanem dostaje znacznik klonem z rodzeństwa; ADD-ONLY (usuwanie węzłów przy kursorze
+       = ryzyko utraty kotwicy); eksport i tak pomija marker spany.
+     - Driver CDP wielokrotnego użytku: scratchpad `verify/cdp-enter.mjs`, `cdp-bullets.mjs`
+       (wg .claude/skills/verify) — wzorzec do kolejnych empirycznych testów edytora.
+   - **AUDYT luk listowych (2026-07-12; 1–2 NAPRAWIONE w rundzie 6, reszta otwarta):**
+     1. ~~Listy w komórkach tabel giną~~ **NAPRAWIONE**: `AppendTableCellHtml` grupuje akapity
+        listowe (`ConvertConsecutiveListItems`), li w komórce niesie inline spacing ADR-0031;
+        kontynuacja przez granicę komórek; test `ListsInTableCells_GroupIntoOlAndSurviveRoundTrip`.
+        PRZY OKAZJI naprawiony pre-existing writer bug: kolejność dzieci `w:tblBorders`
+        (top→left→bottom→right wg CT_TblBorders; było top→bottom→left→right = błąd walidacji
+        każdej tabeli bez data-tbl-style).
+     2. ~~Nieznane `w:numFmt` → decimal~~ **NAPRAWIONE**: surowy token przez `Val.InnerText`
+        w data-num-fmt, writer odtwarza `new NumberFormatValues(token)` z guardem;
+        test `UnknownNumFmt_RoundTripsRawToken…` (ordinal/cardinalText/ordinalText/chicago).
+        Podgląd przybliża takie formaty jako decimal (silnik TS) — plik jest wierny.
+     3. Styl znacznika `w:rPr` poziomu (bold/kolor/rozmiar numeru) i `w:lvlJc` — brak
+        w kontrakcie data-*; writer emituje zawsze lvlJc=left, rPr tylko font bulleta.
+     4. Paste z MS Word: `handlePaste`+`sanitizeHtml` (regexy) wkleja `MsoListParagraph`/
+        `mso-list` jako akapity z LITERALNYM numerem (spec 22.1/9.7 — brak konwersji na kontrakt).
+     5. Paste między dokumentami: brak remapu kolidujących `data-num-id`/`data-abstract-num-id`
+        (spec 9.7) — obce listy mogą się scalić z lokalnymi przy zapisie.
+     6. Długa lista vs paginacja: `<ol>` jest blokiem ATOMOWYM (`_flattenTopBlocks`); tabele
+        mają split+merge (`_mergeSplitTables`), listy nie → lista > 1 strony rozjeżdża layout.
+     7. `refreshListLabels` obejmuje tylko strony body (nagłówek/stopka/panel przypisów bez
+        etykiet silnika); listy w treści PRZYPISÓW pewnie też bez grupowania (per-akapit).
+     8. `ResolveStyleNumbering`: numPr z numId=0 w łańcuchu basedOn nie przerywa dziedziczenia
+        (semantyka „numeracja wyłączona" — FR-IMPORT-002); akapit z samym ilvl bez numId
+        bierze poziom stylu zamiast własnego.
+     9. Skasowanie ostatniego marker spana w liście = brak wzorca dla `ensureBulletMarkers`
+        do końca sesji (wraca po ponownym otwarciu).
+
+## Ostatnia aktualizacja (2026-07-11)
+
+- **Fix: przyciski wyrównania/list nie pokazywały stanu aktywnego (toolbar, mini-toolbar, menu).**
+   - Root cause: `TextFormatting` nie niósł wyrównania ani stanu list (tylko B/I/U/S/sub/sup
+     z queryCommandState), a przyciski wyrównania w `editor-toolbar.html` i mini-toolbarze nie miały
+     ŻADNEGO bindingu `[class.active]` — toolbar nie miał czego podświetlić.
+   - Fix: model +`alignment`/`bulletList`/`numberedList`; `updateFormattingState` liczy wyrównanie
+     z computed `text-align` bloku pod karetką (`start`→left jak w Wordzie), listy z przodka `li`;
+     `isAlignActive()`/`alignmentActive()` (dokładnie jeden aktywny, domyślnie left); bindingi
+     w toolbarze głównym, mini-toolbarze oraz klasa `*-checked` w menu „Formatuj→Wyrównanie"
+     i kontekstowym podmenu wyrównania (nowe style w document-editor.scss).
+   - Testy: nowy `formatting-state.spec` 7/7; pełne GUI 396/396; `ng build` OK.
+
+- **Fix (UAT): komórki tabeli zaczynały się od twardej spacji (&nbsp;) — tekst przesunięty vs Word.**
+   - Root cause: placeholder pustej komórki `td.innerHTML='&nbsp;'` (insertTable + operacje
+     wiersz/kolumna/split/merge) zostawał przed wpisanym tekstem i szedł jako U+00A0 do DOCX.
+   - Fix (tylko front): placeholder komórek → `<br>` (eksport: goły `<br>` w td → pusty akapit);
+     nowy `onEditorBeforeInput` (beforeinput na stronach + nagłówku/stopce) zaznacza samotny
+     placeholder U+00A0 w bloku tuż przed wstawieniem tekstu → pisanie go zastępuje (pokrywa też
+     import DOCX `<td><p>&nbsp;</p></td>` i stare zapisane dokumenty).
+   - Separatory `<p>&nbsp;</p>` po tabeli celowo bez zmian (`<p><br></p>` = w:br → dodatkowa linia).
+   - Testy: nowy `wysiwyg-editor.table-cell-placeholder.spec.ts` 3/3; pełne GUI 389/389.
+   - **Uwaga:** dokumenty zapisane PRZED poprawką mają U+00A0 zapieczone w DOCX — beforeinput czyści
+     je dopiero przy pisaniu w danym bloku; ewentualne czyszczenie hurtowe (import/save) do decyzji.
+
+- **Fix: dokument Word „tylko do odczytu" był edytowalny w DOC2 Editor (ADR-0034).**
+   - Root cause: konwerter nie czytał ochrony z settings.xml; GUI decydowało o trybie wyłącznie
+     z obecności `versionId` w URL.
+   - Reader: `HasEnforcedEditProtection` w `DocxToHtmlConverter` (wymuszone `w:documentProtection`
+     edit≠none — także tryby częściowe; `w:writeProtection` recommended/hash/hashValue) → nowe pole
+     `DocumentContent.IsReadOnlyProtected` (Domain + interfejs TS).
+   - GUI `document-editor`: sygnał `documentEditProtected` (ustawiany w `_applyLoadedContent`,
+     samoresetujący), `editingDisabled` rozszerzone o ten stan, badge + toast, guard `saveDocument()`
+     `readOnly()`→`editingDisabled()`, guard w ticku auto-save, switch Autozapisu ukryty.
+     Przy okazji: `d2-wysiwyg-editor [readOnly]` podpięty pod `editingDisabled()` (wcześniej surowe
+     `readOnly()` — treść była edytowalna w trybie `lockedByOther`).
+   - Testy: `DocumentProtectionImportTests` 8/8; GUI +3 (document-editor.spec), pełna suita 386/386
+     (naprawiony też pre-existing fail `layout-shell.spec` — stub ResourceAccessService/MsalService).
+   - **Do rozważenia dalej:** egzekwowanie ochrony w `SaveDocumentCommandHandler` (risk R-29 —
+     dziś tylko GUI); ewentualny round-trip `w:documentProtection` na eksporcie; dialog hasła
+     writeProtection (dziś zawsze read-only).
+
+- **Fix: znaki specjalne (strzałka → z fontu symbolicznego) renderowane jako kwadrat zamiast glifu.**
+   - Root cause w readerze: `w:sym` emitowany jako goła encja PUA (U+F0xx) bez mapowania i bez
+     font-family → tofu w przeglądarce; symbole w zwykłym `w:t` (PUA lub znak bajtowy w foncie
+     Wingdings — autokorekta „-->" wstawia `è`) przechodziły literalnie.
+   - Fix: `ConvertSymbolCharToHtml`/`MapSymbolicTextRun`/`TryMapSymbolicChar` + tabele
+     `SymbolFontMap`/`WingdingsFontMap` → odpowiednik Unicode (round-trip jako zwykły tekst);
+     kod spoza tabel → encja w spanie z font-family fontu symbolicznego. `NormalizeSymbolFontName`
+     dopasowuje nazwy DOKŁADNIE („Segoe UI Symbol" ≠ font symboliczny). PUA bez fontu nietykane.
+   - Testy: `SymbolCharFidelityTests` 10/10; Infrastructure 412/412; build sln 0 błędów.
+   - **Uwaga:** jeżeli konkretny dokument zgłoszenia nadal pokaże kwadrat — pozyskać DOCX
+     i sprawdzić realny `w:font`/kod (tabele łatwo rozszerzyć); fallback span+font zadziała
+     na Windows nawet bez mapowania.
+
+- **Fix: kursor skakał na początek dokumentu podczas pisania; znaki lądowały w złym miejscu.**
+   - Root cause: `_repaginateNow` porównywał nowy rozkład stron z sygnałem `pageContents`, który jest
+     celowo przestarzały między repaginacjami (`onPageInput` go nie aktualizuje) → przy pisaniu check
+     zawsze false → co ~600 ms (max-wait debounce'a) rebind `[innerHTML]` WSZYSTKICH stron → utrata
+     selekcji (karetka na początek contenteditable) do czasu odroczonego restore (`setTimeout(0)`);
+     znaki wpisane w tym oknie lądowały na początku dokumentu lub ginęły ze starym DOM.
+   - Fix: porównanie z ŻYWYM DOM (serializacja per strona tym samym mechanizmem co `newPageContents`;
+     bez fallbacku `<p></p>` — pusta strona musi wymusić rebind) + wymagana zgodność liczby stron
+     z sygnałem (steruje `@for`). Zwykłe pisanie w środku strony = zero rebindów. Gdy rebind konieczny
+     (przelanie treści), restore karetki przez `afterNextRender` (injector w polu) zamiast `setTimeout(0)`.
+   - Testy: `pagination-overflow.spec` +4 (18/18); pełne GUI 382/383 (fail = pre-existing layout-shell).
+
+## Ostatnia aktualizacja (2026-07-10)
+
+- **Kompletna obsługa przypisów dolnych DOCX (ADR-0032).**
+   - Kontrakt: `Footnote { Id, Html }`; `DocumentContent.Footnotes` / `SaveDocumentRequest.Footnotes` (backend+TS). Odwołania w treści = `<sup class="footnote-ref" data-footnote-id="fn-N" aria-label="Przypis N">N</sup>`; treść przypisów żyje wyłącznie w liście `Footnotes` (jedno źródło prawdy). Tożsamość `fn-<ooxmlId>` stabilna; numer widoczny = kolejność pierwszych odwołań (reader przy emisji `<sup>`, GUI `syncFootnotesWithBody`); `w:id` OOXML przydzielany dopiero na eksporcie (1..N; separatory techniczne -1/0). ID NIE round-tripują 1:1 — deterministyczne przemapowanie.
+   - Reader `ExtractFootnotes` (po `ConvertBodyToHtml`, bo numeracja ustala się przy renderze) czyta `FootnotesPart`, pomija separator/continuationSeparator/continuationNotice, treść przez `ConvertParagraphToHtml`/`ConvertTableToHtml`; `FootnoteReferenceMark` w treści pomijany. Writer `AddFootnotes` (`AddNewPart<FootnotesPart>` → relacja+content type auto) + `ConvertHtmlToBody` na treść (relacje obrazów zakresowane do części przypisów). Alias `DomainFootnote`/`WpFootnote` w obu konwerterach (kolizja `Footnote` OOXML vs domena).
+   - GUI: panel `.footnotes-panel` POZA contenteditable (nie serializuje się w `getContent`); odwołania w body renderują się same z HTML; edycja treści commitowana na `blur`; `syncFootnotesWithBody` renumeruje odwołania w DOM i przycina osierocone treści (wpięte w `_schedulePersist`). `addFootnoteAtCursor`/`removeFootnote` publiczne.
+   - Testy: backend `FootnoteFidelityTests` 18/18 (fixture `FootnoteTestDocuments` na czystym OpenXML SDK, walidacja OOXML), GUI `wysiwyg-editor.footnotes.spec` 7/7 + `document-editor.footnotes.spec` 2/2. Solucja 0 fail; GUI 378/379 (pre-existing `spec-layout-shell`).
+   - **Do rozważenia dalej:** obsługa przypisów w ścieżce `Sign` (dziś nie przenosi); przypisanie treści przypisu do konkretnej strony (dziś panel dla całego dokumentu); przypisy końcowe (endnotes) analogicznym mechanizmem; round-trip `w:footnotePr` (format numeracji/restart) — dziś nieodwzorowany.
+
 ## Ostatnia aktualizacja (2026-07-09)
 
-- **Edytor: ENTER na dole strony nie rozciąga już kartki i nie duplikuje treści (ADR-0032).**
+- **Edytor: ENTER na dole strony nie rozciąga już kartki i nie duplikuje treści (ADR-0038).**
    - Dwie przyczyny (zdiagnozowane w REALNEJ przeglądarce przez headless Chrome + CDP — jsdom/stubowane testy tego nie łapały): (1) desync — Angular nie nadpisuje `[innerHTML]` strony o niezmienionej wartości SafeHtml (cache w `getPageContentSafe`), więc strona z żywymi edycjami użytkownika nie jest resetowana do rozkładu paginacji (rośnie w pion + duplikuje nadmiar na kolejne strony i do `getContent`/zapisu); (2) CSS — `.page{min-height}` + `.editor-content{flex:1}` pozwalały flex-kontenerowi rosnąć do max-content, więc `overflow:hidden` nie przycinał.
    - Fix: `_syncPageEditorDom(newPageContents)` po repaginacji wymusza `innerHTML` edytorów = obliczony rozkład (tylko rozjechane strony, guard `!==`, re-wrap obrazów); `.page` ma definitywną `height` (`pageHeightPx`, było `pageMinHeightPx`/`min-height`).
    - Zoom był OK od początku (czysto wizualny `transform:scale` na `.editor-wrapper`) — rozmiar strony/model niezależne od zoomu jak w Wordzie.
@@ -56,18 +288,18 @@
    - Testy: nowy `DocxAnchorPositionFidelityTests` 8/8; zaktualizowane `Doc2ImportFidelityTests.AnchoredTextBox…` i `ImageFloatingRoundTripTests`; Infrastructure 339/339, build solucji 0 błędów.
    - **Do rozważenia dalej:** dokładniejszy Y (pomiar realnego pasma nagłówka zamiast założenia „≈ górny margines"), `wp:align` pionowy center/bottom, rozróżnienie inside/outside dla stron parzystych, `wrapSquare`/`wrapTight` (opływanie tekstem) zamiast obecnego front/behind.
 
-- **SVG „puste białe logo" w nagłówku (Doc2/ING) — sanitizer naprawiony u źródła.**
+- **SVG „puste białe logo" w nagłówku (Doc2/Qutalo) — sanitizer naprawiony u źródła.**
    - `GraphicConversionService.SanitizeSvg`: (1) wewnętrzny `<use href="#id">` ZOSTAJE (wcześniej wycinany bezwarunkowo — logo z `<defs>`+`<use>` = pusty biały obraz o poprawnych wymiarach), zewnętrzny/data:/bez href usuwany (`HasInternalFragmentHref`); (2) UTF-8 BOM trimowany przed parsowaniem (wcześniej cały SVG odrzucany); (3) `SafeParse`: `DtdProcessing.Prohibit`→`Ignore` (DOCTYPE Illustratora przechodzi; XXE nadal null — encje niezdefiniowane rzucają).
    - Testy: `GraphicConversionSecurityTests` +4 i zaktualizowany `SanitizeSvg_KeepsSafeDataHrefAndFragment` (poprzednio pilnował usuwania use), `Doc2ImportFidelityTests` +2 E2E (defs/use w data-URI, BOM). SVG-testy 25/25; Infrastructure 325/328 w czystym worktree (3 faile = WIP hMerge/tab-in-cell z sesji tabelowej, niezwiązane).
    - **Triage gdy logo nadal puste po wdrożeniu:** logi backendu „SVG part pominięty…" / „Media part bez rastra web…"; w DOM edytora `data-legacy-graphic="blank"` na `<img>` ⇒ metafile EMF+ (poza etapem 1 ADR-0027 — patrz kandydaci etapu 2: parsowanie EMF+ z GDICOMMENT). Najlepiej pozyskać źródłowy DOCX i przepuścić przez `tools/docx-diagnostics/inspect-docx`.
    - Ograniczenie bez zmian: writer dropuje SVG na eksporcie HTML→DOCX (utrata na 1. autosave; roadmapa `asvg:svgBlip`/rasteryzacja SVG→PNG).
 
-- **Tabele Doc2/ING — druga runda (screenshot edytor vs Word):**
+- **Tabele Doc2/Qutalo — druga runda (screenshot edytor vs Word):**
    - `w:hMerge` (legacy scalanie poziome) obsłużony w readerze: `BuildRowRenderPlan` + `GetHMerge` w `DocxToHtmlConverter` (restart pochłania continue jako colspan; continue pomijane jak kontynuacje vMerge; pominięty val = continue; sierota renderowana normalnie). Fix „deficytu kolumn" z 2026-07-06 zostaje — dotyczył KRÓTKICH wierszy, ten dokument używał hMerge.
    - Taby POZYCYJNE wyłączone wewnątrz komórek tabel (`usePositionedTabs && !paragraph.Ancestors<TableCell>().Any()`) — absolutne segmenty wyjeżdżały poza wąską komórkę (nałożone nagłówki) i wyłączały text-align komórki. W komórce: inline spacer/flex jak dawniej; `data-tab-stops` dalej round-tripuje.
    - Testy: `Doc2ImportFidelityTests` 24/24 (+4). Infrastructure 321/322.
    - **Wyjaśnione:** fail `SanitizeSvg_KeepsSafeDataHrefAndFragment` pochodził z RÓWNOLEGŁEJ sesji SVG w tym samym drzewie (produkcja już zachowywała `<use>`, test chwilowo stary) — domknięte wpisem „SVG puste białe logo" wyżej, test zaktualizowany, komplet zielony.
-   - Jeśli tabela ING nadal odbiega: kandydaci = warunkowe formatowanie TEKSTU ze stylu tabeli (jc/bold nagłówka ze stylu — znane ograniczenie ADR-0026) oraz reguła „tab skacze do NASTĘPNEGO stopu za bieżącą pozycją x" (k-ty tab → k-ty stop).
+   - Jeśli tabela Qutalo nadal odbiega: kandydaci = warunkowe formatowanie TEKSTU ze stylu tabeli (jc/bold nagłówka ze stylu — znane ograniczenie ADR-0026) oraz reguła „tab skacze do NASTĘPNEGO stopu za bieżącą pozycją x" (k-ty tab → k-ty stop).
 
 - **Własny tłumacz wektorowy EMF/WMF → SVG, etap 1 (ADR-0027).**
    - Nowy `MetafileVectorTranslator` (Infrastructure, internal, pure-managed — zero zależności) tłumaczy podzbiór rekordów GDI na SVG; wpięty jako strategia `vector-translate` w `GraphicConversionService.ConvertMetafile` po `dib-rasterize`, przed blankiem. SVG tylko podgląd — eksport zawsze niesie oryginalny metafile (data-original-src / pass-through), `LoadImageFromPart` nie podmienia bajtów na SVG.

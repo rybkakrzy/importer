@@ -10,8 +10,11 @@ using HtmlAgilityPack;
 using OoxmlPageSize = DocumentFormat.OpenXml.Wordprocessing.PageSize;
 using Microsoft.Extensions.Options;
 using A = DocumentFormat.OpenXml.Drawing;
+using V = DocumentFormat.OpenXml.Vml;
 using Wp = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
+using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
+using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -31,6 +34,30 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     // rozdzielone akapitem, ale należące do tej samej listy logicznej Worda, współdzielą jedną
     // NumberingInstance — Word kontynuuje wtedy numerację. Różne data-num-id → osobne instancje.
     private readonly Dictionary<string, int> _numIdByHtmlList = new();
+    // HTML data-abstract-num-id (tożsamość DEFINICJI z readera) → abstractNumId w generowanym
+    // pakiecie. Listy współdzielące abstrakt w oryginale (np. „Rozpocznij od nowa" = nowy w:num
+    // ze startOverride na TEN SAM abstrakt) współdzielą go też po zapisie — bez tego restart
+    // degradował się do niezależnej listy z przepisanym w:start.
+    private readonly Dictionary<string, int> _abstractIdByHtmlAbstract = new();
+    // Poziomy z WYEKSPORTOWANYM punktatorem graficznym (w:lvlPicBulletId) per abstrakt/numId —
+    // dla nich marker <span class="list-marker"><img/></span> NIE jest bake'owany w treść runu.
+    private readonly Dictionary<int, HashSet<int>> _picBulletLevelsByAbstract = new();
+    private readonly Dictionary<int, HashSet<int>> _picBulletLevelsByNum = new();
+    // Poziomy abstraktu zbudowane z jawnych data-* (nie z drabinki domyślnej) — późniejszy
+    // fragment współdzielący abstrakt może dosłać definicje brakujących poziomów
+    // (UpgradeSharedAbstractLevels), ale nigdy nie podmienia już zdefiniowanych.
+    private readonly Dictionary<int, HashSet<int>> _specLevelsByAbstract = new();
+    // Deduplikacja obrazów punktatorów: data URI → numPicBulletId (jeden w:numPicBullet
+    // dla wielu poziomów/list używających tego samego obrazu).
+    private readonly Dictionary<string, int> _picBulletIdByDataUri = new();
+    private int _picBulletId = 1;
+
+    // Przypisy dolne. Identyfikatory OOXML są przydzielane DETERMINISTYCZNIE po kolejności listy
+    // przekazanej do Convert (htmlId → 1..N); technicznym separatorom rezerwujemy -1 i 0, więc
+    // przypisy użytkownika nigdy z nimi nie kolidują. _referencedFootnoteHtmlIds notuje, które
+    // przypisy faktycznie mają odwołanie w treści (walidacja: brak osieroconych odwołań/treści).
+    private readonly Dictionary<string, long> _footnoteOoxmlIdByHtmlId = new();
+    private readonly HashSet<string> _referencedFootnoteHtmlIds = new();
 
     // Domyślne ustawienia dokumentu (firmowa czcionka itp.). Wstrzykiwane przez DI;
     // dla benchmarków / testów konstruktor bezparametrowy używa wartości domyślnych.
@@ -117,7 +144,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null, IReadOnlyList<DomainFootnote>? footnotes = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -131,7 +158,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _firstSectionProps = null;
             _emittedSectionProps.Clear();
             _numIdByHtmlList.Clear();
+            _abstractIdByHtmlAbstract.Clear();
+            _picBulletLevelsByAbstract.Clear();
+            _picBulletLevelsByNum.Clear();
+            _specLevelsByAbstract.Clear();
+            _picBulletIdByDataUri.Clear();
+            _picBulletId = 1;
+            _numberingId = 1;
+            _numberingPart = null; // część należy do POPRZEDNIEGO pakietu — EnsureNumberingPart utworzy nową
             _pendingTextBoxDrawings.Clear();
+            _footnoteOoxmlIdByHtmlId.Clear();
+            _referencedFootnoteHtmlIds.Clear();
+            AssignFootnoteOoxmlIds(footnotes);
             _hasSectionMarkers = false;
             _headerBandCm = header?.Height;
             _footerBandCm = footer?.Height;
@@ -172,6 +210,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Własne nagłówki/stopki sekcji ≥ 1 (po AddPageSettings — body-level sectPr istnieje)
             AddSectionHeadersFooters(document, sectionHeadersFooters);
 
+            // Część przypisów (footnotes.xml + relacja + content type) — tylko gdy dokument ma przypisy.
+            AddFootnotes(footnotes);
+
             document.Save();
         }
 
@@ -181,9 +222,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     public byte[] ConvertPreservingPackage(string html, Stream? originalPackage,
         DocumentMetadata? metadata = null, HeaderFooterContent? header = null,
         HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null,
-        IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null)
+        IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null,
+        IReadOnlyList<DomainFootnote>? footnotes = null)
     {
-        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters);
+        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters, footnotes);
 
         if (originalPackage == null || !originalPackage.CanRead)
             return generated;
@@ -256,46 +298,55 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     /// <summary>
-    /// Writes the document's headers and footers. The default variant is always emitted;
-    /// first-page (DifferentFirstPage + FirstPageHtml) and even (DifferentOddEven + EvenHtml)
-    /// variants are emitted as additional parts with type=First/Even references, and the
-    /// section/settings opt-ins (titlePg, evenAndOddHeaders) are written so Word/round-trip
-    /// import picks them up.
+    /// Writes the document's headers and footers. Each variant (default / first / even) is
+    /// emitted independently as its own part with a type=Default/First/Even reference, and
+    /// the section/settings opt-ins (titlePg, evenAndOddHeaders) are written so Word and a
+    /// round-trip import pick them up — including titlePg with a blank first-page band.
     /// </summary>
     private void AddHeaderAndFooter(WordprocessingDocument document, HeaderFooterContent? header, HeaderFooterContent? footer)
     {
         if (_mainPart == null) return;
 
-        if (header != null && !string.IsNullOrWhiteSpace(header.Html))
+        if (header != null)
         {
-            WriteHeaderPart(header.Html, HeaderFooterValues.Default);
+            // Variants are written independently of the default part: a titlePg document
+            // may legitimately have a first-page header and NO default one (blank ordinary
+            // pages) — skipping variants when Html is empty destroyed them on first save.
+            if (!string.IsNullOrWhiteSpace(header.Html))
+                WriteHeaderPart(header.Html, HeaderFooterValues.Default);
 
-            if (header.DifferentFirstPage && !string.IsNullOrWhiteSpace(header.FirstPageHtml))
+            if (header.DifferentFirstPage)
             {
-                WriteHeaderPart(header.FirstPageHtml!, HeaderFooterValues.First);
+                // titlePg must survive even when the first-page band is blank; dropping it
+                // would leak the default header onto page 1 after reopening in Word.
+                // Null FirstPageHtml = no explicit part (Word inherits/blank), empty = blank part.
+                if (header.FirstPageHtml != null)
+                    WriteHeaderPart(header.FirstPageHtml, HeaderFooterValues.First);
                 EnsureTitlePage();
             }
 
-            if (header.DifferentOddEven && !string.IsNullOrWhiteSpace(header.EvenHtml))
+            if (header.DifferentOddEven && header.EvenHtml != null)
             {
-                WriteHeaderPart(header.EvenHtml!, HeaderFooterValues.Even);
+                WriteHeaderPart(header.EvenHtml, HeaderFooterValues.Even);
                 EnsureEvenAndOddHeaders(document);
             }
         }
 
-        if (footer != null && !string.IsNullOrWhiteSpace(footer.Html))
+        if (footer != null)
         {
-            WriteFooterPart(footer.Html, HeaderFooterValues.Default);
+            if (!string.IsNullOrWhiteSpace(footer.Html))
+                WriteFooterPart(footer.Html, HeaderFooterValues.Default);
 
-            if (footer.DifferentFirstPage && !string.IsNullOrWhiteSpace(footer.FirstPageHtml))
+            if (footer.DifferentFirstPage)
             {
-                WriteFooterPart(footer.FirstPageHtml!, HeaderFooterValues.First);
+                if (footer.FirstPageHtml != null)
+                    WriteFooterPart(footer.FirstPageHtml, HeaderFooterValues.First);
                 EnsureTitlePage();
             }
 
-            if (footer.DifferentOddEven && !string.IsNullOrWhiteSpace(footer.EvenHtml))
+            if (footer.DifferentOddEven && footer.EvenHtml != null)
             {
-                WriteFooterPart(footer.EvenHtml!, HeaderFooterValues.Even);
+                WriteFooterPart(footer.EvenHtml, HeaderFooterValues.Even);
                 EnsureEvenAndOddHeaders(document);
             }
         }
@@ -329,6 +380,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _inHeaderFooter = prevInHF;
             _currentSectionStyleId = prevSection;
         }
+
+        // CT_HdrFtr requires at least one block-level element — a blank band (titlePg with
+        // an intentionally empty first page) is expressed as a single empty paragraph.
+        if (!headerElement.HasChildren)
+            headerElement.Append(new Paragraph());
 
         headerPart.Header = headerElement;
         headerPart.Header.Save();
@@ -364,6 +420,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _currentSectionStyleId = prevSection;
         }
 
+        // See WriteHeaderPart: CT_HdrFtr requires at least one block-level element.
+        if (!footerElement.HasChildren)
+            footerElement.Append(new Paragraph());
+
         footerPart.Footer = footerElement;
         footerPart.Footer.Save();
 
@@ -374,10 +434,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var sectionProps = targetSection ?? GetReferenceSectionProps();
         if (sectionProps == null) return;
-        if (!sectionProps.Elements<TitlePage>().Any())
-        {
-            sectionProps.Append(new TitlePage());
-        }
+        if (sectionProps.Elements<TitlePage>().Any()) return;
+
+        // CT_SectPr sequence: titlePg precedes textDirection/bidi/rtlGutter/docGrid/
+        // printerSettings — a plain Append lands after docGrid on preserved packages.
+        var tail = sectionProps.ChildElements.FirstOrDefault(c =>
+            c is TextDirection or BiDi or GutterOnRight or DocGrid or PrinterSettingsReference);
+        var titlePg = new TitlePage();
+        if (tail != null) sectionProps.InsertBefore(titlePg, tail);
+        else sectionProps.Append(titlePg);
     }
 
     private static void EnsureEvenAndOddHeaders(WordprocessingDocument document)
@@ -561,7 +626,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 case "header":
                 case "footer":
                 {
-                    // Pole tekstowe (np. adres w stopce ING) — do bufora, przypinane do
+                    // Pole tekstowe (np. adres w stopce Qutasator) — do bufora, przypinane do
                     // następnego akapitu; pozostałe kontenery — zejdź w dzieci.
                     if (IsTextBoxNode(child))
                     {
@@ -668,32 +733,39 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 target = bodySectPr; // ostatnia sekcja
             if (target == null) continue; // markery usunięte z treści → sekcja nie istnieje
 
-            if (entry.Header is { } h && !string.IsNullOrWhiteSpace(h.Html))
+            // See AddHeaderAndFooter: variants are independent of the default part (empty
+            // Html = the section inherits the default in Word), and titlePg survives even
+            // with no explicit first part (null FirstPageHtml = inherit from previous section).
+            if (entry.Header is { } h)
             {
-                WriteHeaderPart(h.Html, HeaderFooterValues.Default, target);
-                if (h.DifferentFirstPage && !string.IsNullOrWhiteSpace(h.FirstPageHtml))
+                if (!string.IsNullOrWhiteSpace(h.Html))
+                    WriteHeaderPart(h.Html, HeaderFooterValues.Default, target);
+                if (h.DifferentFirstPage)
                 {
-                    WriteHeaderPart(h.FirstPageHtml!, HeaderFooterValues.First, target);
+                    if (h.FirstPageHtml != null)
+                        WriteHeaderPart(h.FirstPageHtml, HeaderFooterValues.First, target);
                     EnsureTitlePage(target);
                 }
-                if (h.DifferentOddEven && !string.IsNullOrWhiteSpace(h.EvenHtml))
+                if (h.DifferentOddEven && h.EvenHtml != null)
                 {
-                    WriteHeaderPart(h.EvenHtml!, HeaderFooterValues.Even, target);
+                    WriteHeaderPart(h.EvenHtml, HeaderFooterValues.Even, target);
                     EnsureEvenAndOddHeaders(document);
                 }
             }
 
-            if (entry.Footer is { } f && !string.IsNullOrWhiteSpace(f.Html))
+            if (entry.Footer is { } f)
             {
-                WriteFooterPart(f.Html, HeaderFooterValues.Default, target);
-                if (f.DifferentFirstPage && !string.IsNullOrWhiteSpace(f.FirstPageHtml))
+                if (!string.IsNullOrWhiteSpace(f.Html))
+                    WriteFooterPart(f.Html, HeaderFooterValues.Default, target);
+                if (f.DifferentFirstPage)
                 {
-                    WriteFooterPart(f.FirstPageHtml!, HeaderFooterValues.First, target);
+                    if (f.FirstPageHtml != null)
+                        WriteFooterPart(f.FirstPageHtml, HeaderFooterValues.First, target);
                     EnsureTitlePage(target);
                 }
-                if (f.DifferentOddEven && !string.IsNullOrWhiteSpace(f.EvenHtml))
+                if (f.DifferentOddEven && f.EvenHtml != null)
                 {
-                    WriteFooterPart(f.EvenHtml!, HeaderFooterValues.Even, target);
+                    WriteFooterPart(f.EvenHtml, HeaderFooterValues.Even, target);
                     EnsureEvenAndOddHeaders(document);
                 }
             }
@@ -1181,7 +1253,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private List<OpenXmlElement> ConvertListElement(HtmlNode node, bool ordered, int level = 0, int? parentNumId = null)
     {
         var elements = new List<OpenXmlElement>();
-        
+
+        // Fragment listy może zaczynać się na głębszym poziomie (data-ilvl z readera, np.
+        // kontynuacja poziomu 1 po zwykłym akapicie) — bez tego eksport spłaszczał go do
+        // ilvl=0: złe wcięcie i format poziomu 0 zamiast właściwego.
+        level = ResolveListLevel(node, level);
+
         int numId;
         if (parentNumId.HasValue)
         {
@@ -1208,19 +1285,73 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
                 // Wykryj poziomy z punktatorem obrazkowym (DocxToHtmlConverter wstawia
                 // <span class="list-marker"><img .../></span> jako wizualny marker).
-                // Dla takich poziomów wyłączymy automatyczny punktator Worda, żeby nie
-                // dublować markera (kropka + grafika).
-                var pictureBulletLevels = new HashSet<int>();
+                // Osadzalny obraz (data URI) → prawdziwy w:numPicBullet + w:lvlPicBulletId;
+                // nieosadzalny → jak dotąd: numFmt=none i obraz inline w treści.
+                var pictureBulletLevels = new Dictionary<int, string?>();
                 ScanPictureBulletLevels(node, level, pictureBulletLevels);
 
                 // Definicje poziomów round-tripowane z readera (data-num-fmt / data-lvl-text /
-                // data-start / data-bullet-font) — zachowują oryginalny format numeracji
-                // (np. upperRoman, "%1)", start=5) zamiast hardkodowanej drabinki.
+                // data-start / data-bullet-font / data-suffix / data-is-legal / data-lvl-restart /
+                // data-ind-*-tw) — zachowują oryginalny format numeracji zamiast hardkodowanej drabinki.
                 var levelSpecs = new Dictionary<int, HtmlListLevelSpec>();
                 ScanListLevelSpecs(node, level, levelSpecs);
 
-                var abstractNumId = CreateAbstractNumbering(levelFormats, pictureBulletLevels, levelSpecs);
-                numId = CreateNumberingInstance(abstractNumId);
+                // Poziomy z data-lvl-override = pełne w:lvlOverride/w:lvl NA INSTANCJI —
+                // ich definicje nie trafiają do abstraktu (inne instancje tego samego
+                // abstraktu wyglądają inaczej).
+                var overrideSpecs = levelSpecs
+                    .Where(kv => kv.Value.IsLvlOverride)
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+                var abstractSpecs = levelSpecs
+                    .Where(kv => !kv.Value.IsLvlOverride)
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+                var abstractPicLevels = pictureBulletLevels
+                    .Where(kv => !overrideSpecs.ContainsKey(kv.Key))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+                // Definicja (w:abstractNum) współdzielona między listami o tym samym
+                // data-abstract-num-id; instancja (w:num) per data-num-id. „Rozpocznij od nowa"
+                // = nowa instancja ze startOverride na wspólny abstrakt (FR-EXPORT-004),
+                // a nie kopia definicji z przepisanym w:start.
+                var htmlAbstractId = node.GetAttributeValue("data-abstract-num-id", "");
+                int abstractNumId;
+                if (htmlAbstractId.Length > 0 && _abstractIdByHtmlAbstract.TryGetValue(htmlAbstractId, out var existingAbstract))
+                {
+                    abstractNumId = existingAbstract;
+                    // Ten fragment może używać poziomów, których fragment tworzący abstrakt
+                    // nie widział (miały drabinkę domyślną) — dosyłamy ich definicje.
+                    UpgradeSharedAbstractLevels(abstractNumId, levelFormats, abstractPicLevels, abstractSpecs);
+                }
+                else
+                {
+                    abstractNumId = CreateAbstractNumbering(levelFormats, abstractPicLevels, abstractSpecs);
+                    if (htmlAbstractId.Length > 0)
+                        _abstractIdByHtmlAbstract[htmlAbstractId] = abstractNumId;
+                }
+
+                var startOverrides = levelSpecs
+                    .Where(kv => kv.Value.StartOverride > 0)
+                    .ToDictionary(kv => kv.Key, kv => kv.Value.StartOverride);
+
+                // Pełne nadpisania poziomów budowane tym samym mechanizmem co poziomy abstraktu.
+                var instancePicLevels = new HashSet<int>();
+                var fullLevelOverrides = new Dictionary<int, Level>();
+                foreach (var (lvl, overrideSpec) in overrideSpecs)
+                {
+                    string? overridePicUri = null;
+                    var hasOverridePic = pictureBulletLevels.TryGetValue(lvl, out overridePicUri);
+                    fullLevelOverrides[lvl] = BuildAbstractLevel(
+                        lvl, ResolveLevelOrdered(levelFormats, lvl),
+                        hasOverridePic, overridePicUri, overrideSpec, instancePicLevels);
+                }
+
+                numId = CreateNumberingInstance(abstractNumId, startOverrides, fullLevelOverrides);
+
+                var numPicLevels = new HashSet<int>(instancePicLevels);
+                if (_picBulletLevelsByAbstract.TryGetValue(abstractNumId, out var picLevels))
+                    numPicLevels.UnionWith(picLevels);
+                if (numPicLevels.Count > 0)
+                    _picBulletLevelsByNum[numId] = numPicLevels;
                 if (htmlListId.Length > 0)
                     _numIdByHtmlList[htmlListId] = numId;
             }
@@ -1270,15 +1401,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 // <span class="list-marker"> jest artefaktem prezentacyjnym dodanym przez
                 // DocxToHtmlConverter, żeby przeglądarka pokazała niestandardowy punktator
                 // (obrazek lub znak Wingdings/Symbol). Przy eksporcie:
-                //   - jeżeli zawiera <img> (picture bullet) — zachowaj sam obrazek jako
-                //     wiodący inline run; poziom ma format=None, więc Word nie doda
-                //     dodatkowej kropki.
+                //   - obrazek, którego poziom dostał PRAWDZIWY w:numPicBullet — pomijamy
+                //     (Word narysuje go sam z definicji numeracji; inline run by go zdublował),
+                //   - obrazek nieosadzalny (poziom z numFmt=none) — zachowaj jako wiodący
+                //     inline run, żeby grafika nie zginęła,
                 //   - tekstowy marker (np. ✓, ✗) pomijamy — Word wstawi własny automatyczny
                 //     punktator z definicji numeracji.
                 if (liChildName == "span" && IsListMarkerSpan(liChild))
                 {
                     var img = liChild.SelectSingleNode(".//img");
-                    if (img != null)
+                    var levelHasPicBullet = _picBulletLevelsByNum.TryGetValue(numId, out var picBulletLevels)
+                        && picBulletLevels.Contains(level);
+                    if (img != null && !levelHasPicBullet)
                     {
                         foreach (var run in CreateRunsFromNode(img, liBaseProps))
                             para.Append(run);
@@ -1304,6 +1438,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 foreach (var nestedList in nestedLists)
                 {
                     var isOrdered = nestedList.Name.ToLower() == "ol";
+                    // ResolveListLevel wewnątrz honoruje data-ilvl zagnieżdżonego kontenera
+                    // (skoki poziomów, np. 0 → 2, są legalne w WordprocessingML).
                     elements.AddRange(ConvertListElement(nestedList, isOrdered, level + 1, numId));
                 }
             }
@@ -1315,11 +1451,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Definicja poziomu listy odczytana z data-* kontenera (round-trip z DocxToHtmlConverter).
     /// </summary>
-    private readonly record struct HtmlListLevelSpec(string? Fmt, string? LvlText, int Start, string? BulletFont);
+    private readonly record struct HtmlListLevelSpec(
+        string? Fmt, string? LvlText, int Start, string? BulletFont,
+        int StartOverride, string? Suffix, bool IsLegal, int LvlRestart,
+        string? IndLeftTw, string? IndHangingTw, string? IndFirstLineTw,
+        bool IsLvlOverride);
 
     /// <summary>
-    /// Zbiera definicje poziomów z atrybutów data-num-fmt / data-lvl-text / data-start /
-    /// data-bullet-font na kontenerach ul/ol (każdy zagnieżdżony kontener opisuje swój poziom).
+    /// Zbiera definicje poziomów z atrybutów data-* na kontenerach ul/ol (każdy zagnieżdżony
+    /// kontener opisuje swój poziom): data-num-fmt / data-lvl-text / data-start / data-bullet-font
+    /// / data-start-override / data-suffix / data-is-legal / data-lvl-restart / data-ind-*-tw.
     /// Pierwsze napotkane wystąpienie poziomu wygrywa.
     /// </summary>
     private static void ScanListLevelSpecs(HtmlNode node, int level, Dictionary<int, HtmlListLevelSpec> specs)
@@ -1330,14 +1471,34 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var lvlText = node.GetAttributeValue("data-lvl-text", "");
             var startRaw = node.GetAttributeValue("data-start", "");
             var bulletFont = node.GetAttributeValue("data-bullet-font", "");
-            if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0)
+            var startOverrideRaw = node.GetAttributeValue("data-start-override", "");
+            var suffix = node.GetAttributeValue("data-suffix", "");
+            var isLegal = node.GetAttributeValue("data-is-legal", "") == "1";
+            var lvlRestartRaw = node.GetAttributeValue("data-lvl-restart", "");
+            var indLeft = node.GetAttributeValue("data-ind-left-tw", "");
+            var indHanging = node.GetAttributeValue("data-ind-hanging-tw", "");
+            var indFirstLine = node.GetAttributeValue("data-ind-first-line-tw", "");
+            var isLvlOverride = node.GetAttributeValue("data-lvl-override", "") == "1";
+            if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0
+                || startOverrideRaw.Length > 0 || suffix.Length > 0 || isLegal
+                || lvlRestartRaw.Length > 0 || indLeft.Length > 0)
             {
                 _ = int.TryParse(startRaw, out var start);
+                var startOverride = int.TryParse(startOverrideRaw, out var so) && so > 0 ? so : -1;
+                var lvlRestart = int.TryParse(lvlRestartRaw, out var lr) && lr >= 0 ? lr : -1;
                 specs[level] = new HtmlListLevelSpec(
                     fmt.Length > 0 ? fmt : null,
                     lvlText.Length > 0 ? HtmlEntity.DeEntitize(lvlText) : null,
                     start > 0 ? start : 1,
-                    bulletFont.Length > 0 ? HtmlEntity.DeEntitize(bulletFont) : null);
+                    bulletFont.Length > 0 ? HtmlEntity.DeEntitize(bulletFont) : null,
+                    startOverride,
+                    suffix is "space" or "nothing" ? suffix : null,
+                    isLegal,
+                    lvlRestart,
+                    indLeft.Length > 0 ? indLeft : null,
+                    indHanging.Length > 0 ? indHanging : null,
+                    indFirstLine.Length > 0 ? indFirstLine : null,
+                    isLvlOverride);
             }
         }
 
@@ -1347,8 +1508,21 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var nested = child.SelectNodes("./ul|./ol");
             if (nested == null) continue;
             foreach (var nestedList in nested)
-                ScanListLevelSpecs(nestedList, level + 1, specs);
+                ScanListLevelSpecs(nestedList, ResolveListLevel(nestedList, level + 1), specs);
         }
+    }
+
+    /// <summary>
+    /// Efektywny poziom listy dla kontenera ul/ol: data-ilvl z readera (fragment listy może
+    /// zaczynać się na GŁĘBSZYM poziomie, np. kontynuacja ilvl=1 po zwykłym akapicie),
+    /// z fallbackiem do poziomu wynikającego z zagnieżdżenia HTML.
+    /// </summary>
+    private static int ResolveListLevel(HtmlNode node, int fallback)
+    {
+        var raw = node.GetAttributeValue("data-ilvl", "");
+        if (int.TryParse(raw, out var ilvl) && ilvl is >= 0 and <= 8)
+            return ilvl;
+        return Math.Clamp(fallback, 0, 8);
     }
 
     /// <summary>Mapuje token data-num-fmt (nazwy w:numFmt) na NumberFormatValues.</summary>
@@ -1364,7 +1538,19 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             case "upperRoman": fmt = NumberFormatValues.UpperRoman; return true;
             case "bullet": fmt = NumberFormatValues.Bullet; return true;
             case "none": fmt = NumberFormatValues.None; return true;
-            default: fmt = NumberFormatValues.Decimal; return false;
+            default:
+                // Token spoza mapy pochodzi z data-num-fmt readera (surowa wartość w:numFmt
+                // z importowanego dokumentu: ordinal/cardinalText/ordinalText/chicago/
+                // formaty językowe…) — odtwórz 1:1 zamiast degradować do decimal
+                // (pkt 22.10 specyfikacji list). Guard na kształt tokenu odsiewa śmieci
+                // z ręcznie edytowanego HTML.
+                if (Regex.IsMatch(token, "^[a-zA-Z][a-zA-Z0-9]*$"))
+                {
+                    fmt = new NumberFormatValues(token);
+                    return true;
+                }
+                fmt = NumberFormatValues.Decimal;
+                return false;
         }
     }
 
@@ -1384,7 +1570,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             foreach (var nestedList in nested)
             {
                 var isOrdered = nestedList.Name.ToLower() == "ol";
-                ScanListLevels(nestedList, isOrdered, level + 1, levelFormats);
+                ScanListLevels(nestedList, isOrdered, ResolveListLevel(nestedList, level + 1), levelFormats);
             }
         }
     }
@@ -1392,9 +1578,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Wykrywa poziomy listy, które używają punktatora obrazkowego — czyli mają
     /// <c>&lt;span class="list-marker"&gt;&lt;img/&gt;&lt;/span&gt;</c> wewnątrz &lt;li&gt;.
-    /// Dla takich poziomów wyłączymy automatyczny punktator Worda.
+    /// Wartość = data URI obrazu (eksport jako w:numPicBullet) albo null, gdy źródło nie jest
+    /// osadzalne — wtedy fallback: obraz zostaje inline w treści, poziom bez markera Worda.
     /// </summary>
-    private static void ScanPictureBulletLevels(HtmlNode node, int level, HashSet<int> pictureBulletLevels)
+    private static void ScanPictureBulletLevels(HtmlNode node, int level, Dictionary<int, string?> pictureBulletLevels)
     {
         foreach (var child in node.ChildNodes)
         {
@@ -1405,9 +1592,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 if (liChild.Name.ToLower() != "span") continue;
                 if (!IsListMarkerSpan(liChild)) continue;
-                if (liChild.SelectSingleNode(".//img") != null)
+                var img = liChild.SelectSingleNode(".//img");
+                if (img != null)
                 {
-                    pictureBulletLevels.Add(level);
+                    if (!pictureBulletLevels.ContainsKey(level))
+                    {
+                        var src = img.GetAttributeValue("src", "");
+                        pictureBulletLevels[level] = src.StartsWith("data:") ? src : null;
+                    }
                     break;
                 }
             }
@@ -1415,7 +1607,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var nested = child.SelectNodes("./ul|./ol");
             if (nested == null) continue;
             foreach (var nestedList in nested)
-                ScanPictureBulletLevels(nestedList, level + 1, pictureBulletLevels);
+                ScanPictureBulletLevels(nestedList, ResolveListLevel(nestedList, level + 1), pictureBulletLevels);
         }
     }
 
@@ -1451,7 +1643,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// </summary>
     private int CreateAbstractNumbering(
         Dictionary<int, bool> levelFormats,
-        HashSet<int>? pictureBulletLevels = null,
+        Dictionary<int, string?>? pictureBulletLevels = null,
         Dictionary<int, HtmlListLevelSpec>? levelSpecs = null)
     {
         var abstractNumId = _numberingId++;
@@ -1463,23 +1655,72 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         abstractNum.Append(new Nsid { Val = nsidValue });
         abstractNum.Append(new MultiLevelType { Val = MultiLevelValues.HybridMultilevel });
 
+        var exportedPicBulletLevels = new HashSet<int>();
+        var specLevels = new HashSet<int>();
+
         // Zdefiniuj 9 poziomów — każdy poziom ma format zgodny ze strukturą HTML
         for (int lvl = 0; lvl < 9; lvl++)
         {
-            // Określ format dla danego poziomu (domyślnie jak poziom najwyższy)
-            var isOrdered = levelFormats.TryGetValue(lvl, out var fmt)
-                ? fmt
-                : (levelFormats.TryGetValue(0, out var defaultFmt) && defaultFmt);
-
+            var isOrdered = ResolveLevelOrdered(levelFormats, lvl);
             HtmlListLevelSpec? spec = levelSpecs != null && levelSpecs.TryGetValue(lvl, out var s) ? s : null;
+            string? picBulletUri = null;
+            var hasPicBulletMarker = pictureBulletLevels != null
+                && pictureBulletLevels.TryGetValue(lvl, out picBulletUri);
 
+            // Poziomy zbudowane z jawnych data-* notujemy — późniejszy fragment współdzielący
+            // abstrakt może dosłać definicje poziomów, których ten fragment nie używał
+            // (UpgradeSharedAbstractLevels podmienia wtedy poziomy z drabinki domyślnej).
+            if (spec != null || hasPicBulletMarker) specLevels.Add(lvl);
+
+            abstractNum.Append(BuildAbstractLevel(
+                lvl, isOrdered, hasPicBulletMarker, picBulletUri, spec, exportedPicBulletLevels));
+        }
+
+        _specLevelsByAbstract[abstractNumId] = specLevels;
+        if (exportedPicBulletLevels.Count > 0)
+            _picBulletLevelsByAbstract[abstractNumId] = exportedPicBulletLevels;
+
+        // Wstaw na początku (przed instancjami)
+        var firstInstance = _numberingPart!.Numbering.Elements<NumberingInstance>().FirstOrDefault();
+        if (firstInstance != null)
+            _numberingPart.Numbering.InsertBefore(abstractNum, firstInstance);
+        else
+            _numberingPart.Numbering.Append(abstractNum);
+
+        _numberingPart.Numbering.Save();
+        return abstractNumId;
+    }
+
+    /// <summary>Format poziomu (ordered/unordered) — domyślnie jak poziom najwyższy.</summary>
+    private static bool ResolveLevelOrdered(Dictionary<int, bool> levelFormats, int lvl) =>
+        levelFormats.TryGetValue(lvl, out var fmt)
+            ? fmt
+            : (levelFormats.TryGetValue(0, out var defaultFmt) && defaultFmt);
+
+    /// <summary>
+    /// Buduje definicję pojedynczego poziomu (w:lvl) w kolejności sekwencji CT_Lvl — używane
+    /// zarówno dla poziomów abstraktu, jak i pełnych nadpisań w:lvlOverride/w:lvl na instancji.
+    /// </summary>
+    private Level BuildAbstractLevel(int lvl, bool isOrdered, bool hasPicBulletMarker,
+        string? picBulletUri, HtmlListLevelSpec? spec, HashSet<int> exportedPicBulletLevels)
+    {
             var levelDef = new Level { LevelIndex = lvl };
             levelDef.Append(new StartNumberingValue { Val = spec?.Start ?? 1 });
 
-            // Poziom z punktatorem obrazkowym — wyłącz automatyczny marker Worda,
-            // grafika została wstawiona jako wiodący inline run w paragrafie.
-            if (pictureBulletLevels != null && pictureBulletLevels.Contains(lvl))
+            if (hasPicBulletMarker && picBulletUri != null
+                && TryCreatePictureBullet(picBulletUri, out var numPicBulletId))
             {
+                // Prawdziwy punktator graficzny (FR-EXPORT-006): znak z lvlText jest w Wordzie
+                // zastępowany obrazem wskazanym przez w:lvlPicBulletId.
+                levelDef.Append(new NumberingFormat { Val = NumberFormatValues.Bullet });
+                levelDef.Append(new LevelText { Val = "" });
+                levelDef.Append(new LevelPictureBulletId { Val = numPicBulletId });
+                exportedPicBulletLevels.Add(lvl);
+            }
+            else if (hasPicBulletMarker)
+            {
+                // Obraz nieosadzalny (src nie jest data URI / SVG) — grafika zostaje inline
+                // w treści runu, automatyczny marker Worda wyłączony.
                 levelDef.Append(new NumberingFormat { Val = NumberFormatValues.None });
                 levelDef.Append(new LevelText { Val = string.Empty });
             }
@@ -1555,40 +1796,216 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 }
             }
             
+            // Kolejność schematu CT_Lvl (sequence!): start, numFmt, lvlRestart, isLgl, suff,
+            // lvlText, lvlPicBulletId, lvlJc, pPr, rPr. Gałęzie wyżej dołożyły start/numFmt/
+            // lvlText(/lvlPicBulletId) — nowe elementy wstawiamy tuż PO numFmt.
+            if (spec is { } specProps && levelDef.GetFirstChild<NumberingFormat>() is { } numFmtAnchor)
+            {
+                OpenXmlElement anchor = numFmtAnchor;
+                if (specProps.LvlRestart >= 0)
+                {
+                    // Surowa wartość w:lvlRestart (jednobazowa; 0 = poziom nigdy nie restartuje).
+                    var lvlRestartEl = new LevelRestart { Val = specProps.LvlRestart };
+                    levelDef.InsertAfter(lvlRestartEl, anchor);
+                    anchor = lvlRestartEl;
+                }
+                if (specProps.IsLegal)
+                {
+                    // w:isLgl — etykieta „legal": wszystkie poziomy formatowane jako decimal.
+                    var isLglEl = new IsLegalNumberingStyle();
+                    levelDef.InsertAfter(isLglEl, anchor);
+                    anchor = isLglEl;
+                }
+                if (specProps.Suffix is { } suffixToken)
+                {
+                    // w:suff — separator znacznik→tekst; tab jest domyślny, emitujemy odstępstwa.
+                    levelDef.InsertAfter(new LevelSuffix
+                    {
+                        Val = suffixToken == "space" ? LevelSuffixValues.Space : LevelSuffixValues.Nothing
+                    }, anchor);
+                }
+            }
+
+            // w:rPr musi być OSTATNIM dzieckiem w:lvl — gałęzie dokładają go po lvlText,
+            // więc przenosimy go za lvlJc/pPr (wcześniej lądował przed nimi, poza schematem).
+            var markerRunProps = levelDef.GetFirstChild<NumberingSymbolRunProperties>();
+            markerRunProps?.Remove();
+
             levelDef.Append(new LevelJustification { Val = LevelJustificationValues.Left });
-            
-            var indent = 720 * (lvl + 1);
-            levelDef.Append(new PreviousParagraphProperties(
-                new Indentation { Left = indent.ToString(), Hanging = "360" }
-            ));
-            
-            abstractNum.Append(levelDef);
-        }
-        
-        // Wstaw na początku (przed instancjami)
-        var firstInstance = _numberingPart!.Numbering.Elements<NumberingInstance>().FirstOrDefault();
-        if (firstInstance != null)
-            _numberingPart.Numbering.InsertBefore(abstractNum, firstInstance);
-        else
-            _numberingPart.Numbering.Append(abstractNum);
-        
-        _numberingPart.Numbering.Save();
-        return abstractNumId;
+
+            // Wcięcia: dokładne twips z definicji poziomu oryginału (data-ind-*-tw); bez nich
+            // dotychczasowa drabinka 720×(lvl+1) z wcięciem wiszącym 360.
+            var indentation = new Indentation();
+            if (spec is { IndLeftTw: not null } or { IndHangingTw: not null } or { IndFirstLineTw: not null })
+            {
+                if (spec.Value.IndLeftTw != null) indentation.Left = spec.Value.IndLeftTw;
+                if (spec.Value.IndHangingTw != null) indentation.Hanging = spec.Value.IndHangingTw;
+                if (spec.Value.IndFirstLineTw != null) indentation.FirstLine = spec.Value.IndFirstLineTw;
+            }
+            else
+            {
+                indentation.Left = (720 * (lvl + 1)).ToString();
+                indentation.Hanging = "360";
+            }
+            levelDef.Append(new PreviousParagraphProperties(indentation));
+
+            if (markerRunProps != null)
+                levelDef.Append(markerRunProps);
+
+            return levelDef;
     }
 
     /// <summary>
-    /// Tworzy instancję numeracji
+    /// Dosyła do WSPÓŁDZIELONEGO abstraktu definicje poziomów, których fragment tworzący
+    /// abstrakt nie używał (dostały drabinkę domyślną). Poziomy zbudowane wcześniej z jawnych
+    /// data-* nie są podmieniane (pierwsza definicja wygrywa — spójnie z resztą kontraktu).
+    /// Bezpieczne: fragment tworzący abstrakt nie miał elementów na upgradowanym poziomie
+    /// (inaczej niosłyby data-*), więc wygląd żadnego wcześniejszego akapitu się nie zmienia.
     /// </summary>
-    private int CreateNumberingInstance(int abstractNumId)
+    private void UpgradeSharedAbstractLevels(
+        int abstractNumId,
+        Dictionary<int, bool> levelFormats,
+        Dictionary<int, string?> pictureBulletLevels,
+        Dictionary<int, HtmlListLevelSpec> levelSpecs)
+    {
+        var abstractNum = _numberingPart?.Numbering.Elements<AbstractNum>()
+            .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
+        if (abstractNum == null) return;
+
+        if (!_specLevelsByAbstract.TryGetValue(abstractNumId, out var specLevels))
+            _specLevelsByAbstract[abstractNumId] = specLevels = new HashSet<int>();
+        var exportedPic = _picBulletLevelsByAbstract.TryGetValue(abstractNumId, out var pic)
+            ? pic
+            : new HashSet<int>();
+
+        var changed = false;
+        foreach (var lvl in levelSpecs.Keys.Union(pictureBulletLevels.Keys).OrderBy(l => l))
+        {
+            if (lvl is < 0 or > 8 || specLevels.Contains(lvl)) continue;
+
+            HtmlListLevelSpec? spec = levelSpecs.TryGetValue(lvl, out var s) ? s : null;
+            string? picBulletUri = null;
+            var hasPicBulletMarker = pictureBulletLevels.TryGetValue(lvl, out picBulletUri);
+            var isOrdered = ResolveLevelOrdered(levelFormats, lvl);
+
+            var newLevel = BuildAbstractLevel(
+                lvl, isOrdered, hasPicBulletMarker, picBulletUri, spec, exportedPic);
+            var oldLevel = abstractNum.Elements<Level>()
+                .FirstOrDefault(l => l.LevelIndex?.Value == lvl);
+            if (oldLevel != null)
+                abstractNum.ReplaceChild(newLevel, oldLevel);
+            else
+                abstractNum.Append(newLevel);
+
+            specLevels.Add(lvl);
+            changed = true;
+        }
+
+        if (exportedPic.Count > 0)
+            _picBulletLevelsByAbstract[abstractNumId] = exportedPic;
+        if (changed)
+            _numberingPart!.Numbering.Save();
+    }
+
+    /// <summary>
+    /// Tworzy (lub reużywa — deduplikacja po data URI) w:numPicBullet w części numeracji:
+    /// ImagePart + relacja + VML v:shape/v:imagedata (wariant, który zapisuje sam Word).
+    /// Zwraca false dla nieparsowalnego data URI lub SVG (imagedata na SVG psuje pakiet) —
+    /// wtedy caller zostawia obraz inline w treści (kontrolowana degradacja, zero utraty).
+    /// </summary>
+    private bool TryCreatePictureBullet(string dataUri, out int numPicBulletId)
+    {
+        if (_picBulletIdByDataUri.TryGetValue(dataUri, out numPicBulletId))
+            return true;
+
+        numPicBulletId = -1;
+        var m = Regex.Match(dataUri, @"data:([^;]+);base64,(.+)");
+        if (!m.Success) return false;
+        var contentType = m.Groups[1].Value;
+        if (contentType == "image/svg+xml") return false;
+        if (!Regex.IsMatch(contentType, @"^image/[\w.+-]+$")) return false;
+
+        byte[] bytes;
+        try { bytes = System.Convert.FromBase64String(m.Groups[2].Value); }
+        catch { return false; }
+
+        PartTypeInfo? knownType = contentType switch
+        {
+            "image/png" => ImagePartType.Png,
+            "image/jpeg" or "image/jpg" => ImagePartType.Jpeg,
+            "image/gif" => ImagePartType.Gif,
+            "image/bmp" => ImagePartType.Bmp,
+            "image/tiff" or "image/tif" => ImagePartType.Tiff,
+            _ => (PartTypeInfo?)null
+        };
+
+        EnsureNumberingPart();
+        var imagePart = knownType is { } t
+            ? _numberingPart!.AddImagePart(t)
+            : _numberingPart!.AddImagePart(contentType);
+        using (var stream = new MemoryStream(bytes))
+        {
+            imagePart.FeedData(stream);
+        }
+        var relId = _numberingPart!.GetIdOfPart(imagePart);
+
+        numPicBulletId = _picBulletId++;
+        var numPicBullet = new NumberingPictureBullet(
+            new PictureBulletBase(
+                new V.Shape(new V.ImageData { RelationshipId = relId })
+                {
+                    Id = $"picBullet{numPicBulletId}",
+                    Style = "width:12pt;height:12pt"
+                }))
+        { NumberingPictureBulletId = numPicBulletId };
+
+        // Kolejność schematu w:numbering: numPicBullet* → abstractNum* → num*.
+        var firstAbstract = _numberingPart.Numbering.Elements<AbstractNum>().FirstOrDefault();
+        var firstNum = _numberingPart.Numbering.Elements<NumberingInstance>().FirstOrDefault();
+        if (firstAbstract != null)
+            _numberingPart.Numbering.InsertBefore(numPicBullet, firstAbstract);
+        else if (firstNum != null)
+            _numberingPart.Numbering.InsertBefore(numPicBullet, firstNum);
+        else
+            _numberingPart.Numbering.Append(numPicBullet);
+        _numberingPart.Numbering.Save();
+
+        _picBulletIdByDataUri[dataUri] = numPicBulletId;
+        return true;
+    }
+
+    /// <summary>
+    /// Tworzy instancję numeracji. „Rozpocznij od nowa"/„Ustaw wartość" = w:lvlOverride
+    /// z w:startOverride na instancji (FR-EXPORT-004) — restart bez kopiowania definicji.
+    /// Pełne nadpisanie wyglądu poziomu (data-lvl-override) = w:lvlOverride z własnym w:lvl.
+    /// </summary>
+    private int CreateNumberingInstance(
+        int abstractNumId,
+        Dictionary<int, int>? startOverrides = null,
+        Dictionary<int, Level>? fullLevelOverrides = null)
     {
         var numId = _numberingId++;
-        
+
         var numInstance = new NumberingInstance { NumberID = numId };
         numInstance.Append(new AbstractNumId { Val = abstractNumId });
-        
+
+        var overrideLevels = (startOverrides?.Keys ?? Enumerable.Empty<int>())
+            .Union(fullLevelOverrides?.Keys ?? Enumerable.Empty<int>())
+            .OrderBy(l => l);
+        foreach (var lvl in overrideLevels)
+        {
+            // Sekwencja CT_NumLvl: w:startOverride, potem w:lvl.
+            var levelOverride = new LevelOverride { LevelIndex = lvl };
+            if (startOverrides != null && startOverrides.TryGetValue(lvl, out var startValue))
+                levelOverride.Append(new StartOverrideNumberingValue { Val = startValue });
+            if (fullLevelOverrides != null && fullLevelOverrides.TryGetValue(lvl, out var fullLevel))
+                levelOverride.Append(fullLevel);
+            numInstance.Append(levelOverride);
+        }
+
         _numberingPart!.Numbering.Append(numInstance);
         _numberingPart.Numbering.Save();
-        
+
         return numId;
     }
 
@@ -1604,10 +2021,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Wcześniej wymuszaliśmy solid-black jako default, co powodowało fałszywe czarne linie
         // w tabelach, które w oryginalnym DOCX miały `w:tblBorders` z val=nil/none lub w ogóle bez
         // definicji (bordery per-komórka są w pełni opisane przez ApplyCellBorders).
+        // Kolejność dzieci wg sekwencji CT_TblBorders: top, left, bottom, right, insideH,
+        // insideV (bottom przed left = błąd walidacji — jak tcBorders w ADR-0031).
         var defaultBorders = new TableBorders(
             new TopBorder { Val = BorderValues.None, Size = 0 },
-            new BottomBorder { Val = BorderValues.None, Size = 0 },
             new LeftBorder { Val = BorderValues.None, Size = 0 },
+            new BottomBorder { Val = BorderValues.None, Size = 0 },
             new RightBorder { Val = BorderValues.None, Size = 0 },
             new InsideHorizontalBorder { Val = BorderValues.None, Size = 0 },
             new InsideVerticalBorder { Val = BorderValues.None, Size = 0 }
@@ -1694,8 +2113,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
             defaultBorders = new TableBorders(
                 new TopBorder { Val = bStyle, Size = bSize, Color = bColor },
-                new BottomBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new LeftBorder { Val = bStyle, Size = bSize, Color = bColor },
+                new BottomBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new RightBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new InsideHorizontalBorder { Val = bStyle, Size = bSize, Color = bColor },
                 new InsideVerticalBorder { Val = bStyle, Size = bSize, Color = bColor }
@@ -2147,16 +2566,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         var sides = new[] { ("border-top", typeof(TopBorder)), ("border-left", typeof(LeftBorder)),
                             ("border-bottom", typeof(BottomBorder)), ("border-right", typeof(RightBorder)) };
-        
+
         foreach (var (prefix, borderType) in sides)
         {
-            var match = Regex.Match(style, $@"{Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{{3,6}})");
-            if (match.Success)
+            if (TryParseBorderShorthand(style, prefix, out var size, out var bStyle, out var color))
             {
-                var size = CssPxToBorderEighthPoints(match.Groups[1].Value);
-                var bStyle = ParseBorderStyle(match.Groups[2].Value);
-                var color = NormalizeColor(match.Groups[3].Value);
-                
                 var border = (BorderType)Activator.CreateInstance(borderType)!;
                 border.Val = bStyle;
                 border.Size = size;
@@ -2173,27 +2587,88 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 hasBorders = true;
             }
         }
-        
-        // Parsuj border shorthand
+
+        // Parsuj border shorthand (border: 0.7px solid #000 / rgb(...))
+        if (!hasBorders && TryParseBorderShorthand(style, "border", out var aSize, out var aStyle, out var aColor))
+        {
+            borders.Append(new TopBorder { Val = aStyle, Size = aSize, Color = aColor });
+            borders.Append(new LeftBorder { Val = aStyle, Size = aSize, Color = aColor });
+            borders.Append(new BottomBorder { Val = aStyle, Size = aSize, Color = aColor });
+            borders.Append(new RightBorder { Val = aStyle, Size = aSize, Color = aColor });
+            hasBorders = true;
+        }
+
+        // Forma rozbita na osobne właściwości: `border-width` + `border-style` + `border-color`.
+        // Tak przeglądarka SERIALIZUJE jednolite obramowanie komórki przy zapisie edytora
+        // (getContent/outerHTML zwija cztery identyczne border-top/left/bottom/right do tej trójki),
+        // a kolor normalizuje do rgb(). Bez tej gałęzi writer nie rozpoznawał obramowania po
+        // pierwszym zapisie → komórki traciły linie, a tabela „rozpadała się" wizualnie.
         if (!hasBorders)
         {
-            var borderAll = Regex.Match(style, @"(?<![a-z-])border:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
-            if (borderAll.Success)
+            var uniformStyle = GetCssDeclarationValue(style, "border-style");
+            if (uniformStyle != null)
             {
-                var size = CssPxToBorderEighthPoints(borderAll.Groups[1].Value);
-                var bStyle = ParseBorderStyle(borderAll.Groups[2].Value);
-                var color = NormalizeColor(borderAll.Groups[3].Value);
-                
-                borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new LeftBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
-                borders.Append(new RightBorder { Val = bStyle, Size = size, Color = color });
-                hasBorders = true;
+                var bStyle = ParseBorderStyle(uniformStyle);
+                if (bStyle != BorderValues.None)
+                {
+                    var widthDecl = GetCssDeclarationValue(style, "border-width");
+                    var widthMatch = widthDecl != null ? Regex.Match(widthDecl, @"([\d.]+)px") : Match.Empty;
+                    var size = widthMatch.Success ? CssPxToBorderEighthPoints(widthMatch.Groups[1].Value) : 6u;
+                    var color = NormalizeCssColorToken(GetCssDeclarationValue(style, "border-color")) ?? "auto";
+
+                    borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
+                    borders.Append(new LeftBorder { Val = bStyle, Size = size, Color = color });
+                    borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
+                    borders.Append(new RightBorder { Val = bStyle, Size = size, Color = color });
+                    hasBorders = true;
+                }
             }
         }
-        
+
         if (hasBorders)
             cellProps.Append(borders);
+    }
+
+    /// <summary>
+    /// Parsuje deklarację obramowania w formie skróconej „width style color" (np.
+    /// <c>border-top: 0.7px solid #000</c> lub <c>border: 1px solid rgb(0,0,0)</c>). Akceptuje kolor
+    /// hex ORAZ rgb()/rgba() — przeglądarka po edycji często normalizuje kolor do rgb, a poprzednia
+    /// wersja rozpoznawała tylko hex, przez co obramowania ginęły przy zapisie.
+    /// </summary>
+    private bool TryParseBorderShorthand(string style, string prefix, out uint size, out BorderValues bStyle, out string color)
+    {
+        size = 0; bStyle = BorderValues.Single; color = "auto";
+        var match = Regex.Match(style,
+            $@"(?<![a-z-]){Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+(#?[0-9a-fA-F]{{3,6}}|rgba?\([^)]*\))");
+        if (!match.Success)
+            return false;
+        size = CssPxToBorderEighthPoints(match.Groups[1].Value);
+        bStyle = ParseBorderStyle(match.Groups[2].Value);
+        color = NormalizeCssColorToken(match.Groups[3].Value) ?? "auto";
+        return true;
+    }
+
+    /// <summary>Wartość pojedynczej deklaracji CSS (np. „border-color") lub null, gdy jej brak.</summary>
+    private static string? GetCssDeclarationValue(string style, string property)
+    {
+        var match = Regex.Match(style, $@"(?<![a-z-]){Regex.Escape(property)}\s*:\s*([^;]+)");
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    /// <summary>Normalizuje token koloru CSS (hex #rgb/#rrggbb, rgb(), rgba()) do 6-znakowego hex; null gdy nie kolor.</summary>
+    private string? NormalizeCssColorToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        token = token.Trim();
+        if (token.StartsWith("#"))
+        {
+            var hex = token.TrimStart('#');
+            return Regex.IsMatch(hex, "^(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$") ? NormalizeColor(hex) : null;
+        }
+        var rgb = Regex.Match(token, @"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)");
+        if (rgb.Success)
+            return $"{int.Parse(rgb.Groups[1].Value):X2}{int.Parse(rgb.Groups[2].Value):X2}{int.Parse(rgb.Groups[3].Value):X2}";
+        return null;
     }
 
     /// <summary>
@@ -3030,6 +3505,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     break;
                 }
 
+                // Odwołanie do przypisu dolnego: <sup class="footnote-ref" data-footnote-id="fn-N">.
+                // Emituje w:footnoteReference z identyfikatorem OOXML przypisanym w AssignFootnoteOoxmlIds.
+                // Odwołanie do nieistniejącego przypisu jest POMIJANE (brak osieroconego w:footnoteReference).
+                if (node.Name.Equals("sup", StringComparison.OrdinalIgnoreCase) && node.HasClass("footnote-ref"))
+                {
+                    var run = CreateFootnoteReferenceRun(node, inheritedProps);
+                    if (run != null) runs.Add(run);
+                    break;
+                }
+
                 // Segment pozycyjny tab-stopu (reader: nagłówek/stopka z w:tabs) — segment
                 // zaczyna się od tabulatora; pozycję odtwarza pPr/w:tabs z data-tab-stops.
                 if (node.HasClass("docx-tab-seg"))
@@ -3123,6 +3608,138 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         return runs;
+    }
+
+    // Zarezerwowane identyfikatory OOXML dla technicznych elementów części przypisów.
+    // Przypisy użytkownika zaczynają się od 1, więc nigdy z nimi nie kolidują.
+    private const long FootnoteSeparatorId = -1;
+    private const long FootnoteContinuationSeparatorId = 0;
+
+    /// <summary>
+    /// Deterministycznie przydziela identyfikatory OOXML przypisom po kolejności listy modelu
+    /// (htmlId → 1..N). Odwołania w treści odwzorowują się przez ten słownik; sama treść jest
+    /// jednym źródłem prawdy (numer widoczny nie jest tożsamością).
+    /// </summary>
+    private void AssignFootnoteOoxmlIds(IReadOnlyList<DomainFootnote>? footnotes)
+    {
+        if (footnotes == null) return;
+        long next = 1;
+        foreach (var footnote in footnotes)
+        {
+            if (string.IsNullOrEmpty(footnote.Id) || _footnoteOoxmlIdByHtmlId.ContainsKey(footnote.Id))
+                continue;
+            _footnoteOoxmlIdByHtmlId[footnote.Id] = next++;
+        }
+    }
+
+    /// <summary>
+    /// Buduje run z <c>w:footnoteReference</c> dla odwołania <c>&lt;sup class="footnote-ref"&gt;</c>.
+    /// Zwraca null, gdy odwołanie wskazuje przypis spoza listy (nie emitujemy osieroconego odwołania).
+    /// </summary>
+    private Run? CreateFootnoteReferenceRun(HtmlNode node, RunProperties? inheritedProps)
+    {
+        var htmlId = node.GetAttributeValue("data-footnote-id", "");
+        if (string.IsNullOrEmpty(htmlId) || !_footnoteOoxmlIdByHtmlId.TryGetValue(htmlId, out var ooxmlId))
+            return null;
+
+        _referencedFootnoteHtmlIds.Add(htmlId);
+
+        var props = (inheritedProps?.CloneNode(true) as RunProperties) ?? new RunProperties();
+        if (!props.Elements<VerticalTextAlignment>().Any())
+            props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript });
+
+        var run = new Run();
+        run.Append(props);
+        run.Append(new FootnoteReference { Id = ooxmlId });
+        return run;
+    }
+
+    /// <summary>
+    /// Tworzy część <c>word/footnotes.xml</c> (relacja + content type przez <see cref="MainDocumentPart.AddNewPart"/>)
+    /// z wymaganymi separatorami technicznymi i treścią przypisów użytkownika. Nic nie tworzy dla
+    /// dokumentów bez przypisów (brak nadmiarowej części). Zapisujemy wyłącznie przypisy z listy
+    /// modelu — reader zwraca je w kolejności odwołań, więc każdy ma odpowiadające odwołanie.
+    /// </summary>
+    private void AddFootnotes(IReadOnlyList<DomainFootnote>? footnotes)
+    {
+        if (_mainPart == null || footnotes == null || footnotes.Count == 0)
+            return;
+        if (_footnoteOoxmlIdByHtmlId.Count == 0)
+            return;
+
+        var footnotesPart = _mainPart.FootnotesPart ?? _mainPart.AddNewPart<FootnotesPart>();
+        var root = new Footnotes();
+        root.Append(CreateSeparatorFootnote(FootnoteSeparatorId, FootnoteEndnoteValues.Separator));
+        root.Append(CreateSeparatorFootnote(FootnoteContinuationSeparatorId, FootnoteEndnoteValues.ContinuationSeparator));
+
+        foreach (var footnote in footnotes)
+        {
+            if (!_footnoteOoxmlIdByHtmlId.TryGetValue(footnote.Id, out var ooxmlId))
+                continue;
+            root.Append(BuildFootnoteElement(footnote, ooxmlId, footnotesPart));
+        }
+
+        footnotesPart.Footnotes = root;
+        footnotesPart.Footnotes.Save();
+    }
+
+    /// <summary>
+    /// Odtwarza treść przypisu z HTML przez istniejące konwertery treści (akapity/runy/listy/linki),
+    /// aby nie duplikować logiki mapowania. Pierwszy akapit dostaje run ze znacznikiem auto-numeru
+    /// (<c>w:footnoteRef</c>). Relacje obrazów są zakresowane do części przypisów.
+    /// </summary>
+    private WpFootnote BuildFootnoteElement(DomainFootnote model, long ooxmlId, FootnotesPart footnotesPart)
+    {
+        var footnote = new WpFootnote { Id = ooxmlId };
+
+        var tempBody = new Body();
+        var htmlDoc = new HtmlDocument();
+        htmlDoc.LoadHtml(model.Html ?? string.Empty);
+
+        var prevContainer = _currentImageContainer;
+        _currentImageContainer = footnotesPart;
+        try
+        {
+            ConvertHtmlToBody(htmlDoc.DocumentNode, tempBody);
+        }
+        finally
+        {
+            _currentImageContainer = prevContainer;
+        }
+
+        var blocks = tempBody.ChildElements
+            .Where(e => e is Paragraph || e is Table)
+            .Select(e => e.CloneNode(true))
+            .ToList();
+
+        if (blocks.Count == 0)
+            blocks.Add(new Paragraph());
+
+        // Znacznik auto-numeru na początku pierwszego akapitu (po pPr, jeśli istnieje).
+        if (blocks[0] is Paragraph firstParagraph)
+        {
+            var markRun = new Run(new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }),
+                                  new FootnoteReferenceMark());
+            var pPr = firstParagraph.GetFirstChild<ParagraphProperties>();
+            if (pPr != null)
+                firstParagraph.InsertAfter(markRun, pPr);
+            else
+                firstParagraph.InsertAt(markRun, 0);
+        }
+
+        foreach (var block in blocks)
+            footnote.Append(block);
+
+        return footnote;
+    }
+
+    /// <summary>Techniczny przypis-separator (w:separator / w:continuationSeparator) z zarezerwowanym id.</summary>
+    private static WpFootnote CreateSeparatorFootnote(long id, FootnoteEndnoteValues type)
+    {
+        OpenXmlElement mark = type == FootnoteEndnoteValues.Separator
+            ? new SeparatorMark()
+            : new ContinuationSeparatorMark();
+        return new WpFootnote(new Paragraph(new Run(mark))) { Id = id, Type = type };
     }
 
     /// <summary>
@@ -3732,7 +4349,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Round-trip the authored page size/orientation; fall back to A4 portrait when unknown.
         if (!sectionProps.Elements<OoxmlPageSize>().Any())
         {
-            sectionProps.Append(BuildPageSize(geometry.PageSize));
+            AppendBeforeTitlePage(sectionProps, BuildPageSize(geometry.PageSize));
         }
 
         int defaultMarginTwips = OoxmlUnits.TwipsPerInch;
@@ -3757,7 +4374,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         if (!sectionProps.Elements<PageMargin>().Any())
         {
-            sectionProps.Append(new PageMargin
+            AppendBeforeTitlePage(sectionProps, new PageMargin
             {
                 Top    = topTwips,
                 Right  = (uint)rightTwips,
@@ -3767,6 +4384,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 Footer = footerDistance
             });
         }
+    }
+
+    /// <summary>
+    /// pgSz/pgMar must precede titlePg in CT_SectPr, but AddHeaderAndFooter (which sets
+    /// titlePg) runs before AddPageSettings — a plain Append would put them after it.
+    /// </summary>
+    private static void AppendBeforeTitlePage(SectionProperties sectionProps, OpenXmlElement element)
+    {
+        var titlePg = sectionProps.GetFirstChild<TitlePage>();
+        if (titlePg != null) sectionProps.InsertBefore(element, titlePg);
+        else sectionProps.Append(element);
     }
 
     private static OoxmlPageSize BuildPageSize(Domain.Models.PageSize? pageSize)

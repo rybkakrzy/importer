@@ -960,6 +960,47 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
     expect(component.isFinishing()).toBe(false);
   });
 
+  // Dokument z ochroną przed edycją w pliku źródłowym (settings.xml: w:documentProtection /
+  // w:writeProtection) — konwersja zwraca isReadOnlyProtected=true i edytor MUSI zablokować edycję.
+  describe('dokument chroniony przed edycją (isReadOnlyProtected)', () => {
+    const content = (isReadOnlyProtected: boolean) => ({
+      html: '<p>Plik tylko do odczytu</p>',
+      metadata: {},
+      images: [],
+      styles: [],
+      isReadOnlyProtected
+    });
+
+    it('otwiera dokument w trybie tylko do odczytu i informuje użytkownika', () => {
+      const showError = vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+
+      (component as any)._applyLoadedContent(content(true), 'chroniony.docx');
+
+      expect(component.documentEditProtected()).toBe(true);
+      expect(component.editingDisabled()).toBe(true);
+      expect(showError).toHaveBeenCalledWith(expect.stringContaining('chroniony przed edycją'));
+    });
+
+    it('zapis chronionego dokumentu jest zablokowany (persistDocument nie jest wołany)', () => {
+      vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+      const persist = vi.spyOn(component as any, 'persistDocument');
+
+      (component as any)._applyLoadedContent(content(true), 'chroniony.docx');
+      component.saveDocument();
+
+      expect(persist).not.toHaveBeenCalled();
+    });
+
+    it('kolejny, niechroniony dokument zdejmuje blokadę', () => {
+      vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+
+      (component as any)._applyLoadedContent(content(true), 'chroniony.docx');
+      (component as any)._applyLoadedContent(content(false), 'zwykly.docx');
+
+      expect(component.documentEditProtected()).toBe(false);
+    });
+  });
+
   // Req 1: „wysyłka w toku" (status Sending) to stan PRZEJŚCIOWY, nie błąd.
   it('wynik ze statusem „Sending" (delivered=false) NIE pokazuje modalu błędu', async () => {
     finishResult = { next: { deliveryId: 'd-1', status: 'Sending', documentStatus: 'Sending', delivered: false, error: null } };

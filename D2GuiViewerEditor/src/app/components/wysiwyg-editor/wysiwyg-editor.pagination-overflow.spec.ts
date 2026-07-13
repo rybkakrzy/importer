@@ -310,4 +310,64 @@ describe('WysiwygEditorComponent — przepełnienie strony tworzy nową stronę 
       expect(p0.querySelector('p')).toBe(nodeBefore);
     });
   });
+
+  /**
+   * Regresja: „w trakcie pisania kursor na ułamek sekundy skacze na początek dokumentu,
+   * a niektóre znaki lądują w złym miejscu".
+   *
+   * Root cause: sygnał pageContents jest celowo przestarzały między repaginacjami
+   * (onPageInput go nie aktualizuje), więc stary check `identical` (porównanie nowego
+   * rozkładu Z SYGNAŁEM) był przy pisaniu zawsze false — każda repaginacja (max-wait 600 ms)
+   * rebindowała [innerHTML] wszystkich stron mimo że żaden blok nie zmienił strony.
+   * Podmiana DOM kasowała selekcję (karetka spadała na początek contenteditable), a znaki
+   * wpisane w oknie rebind→restore lądowały w złym miejscu lub ginęły ze starym DOM.
+   * Fix: porównanie z ŻYWYM DOM — bez zmiany rozkładu bloków zero rebindów.
+   */
+  describe('_repaginateNow — brak rebindu stron, gdy rozkład bloków się nie zmienił', () => {
+    it('pisanie bez przelania strony NIE wymienia DOM (pageContents nietknięte)', () => {
+      const editor = pageWith('<p>alfa</p><p>beta</p>');
+      stubBlockHeights(10); // wszystko mieści się na jednej stronie
+      component.pageContents.set(['<p>alfa</p><p>beta</p>']);
+      const setSpy = vi.spyOn(component.pageContents, 'set');
+
+      // Symulacja pisania: żywy DOM odjeżdża od sygnału, ale bloki zostają na stronie.
+      (editor.children[0] as HTMLElement).textContent = 'alfaX';
+      (component as any)._repaginateNow();
+
+      expect(setSpy).not.toHaveBeenCalled();
+      // Sygnał celowo przestarzały (DOM jest źródłem prawdy do czasu realnego przelania).
+      expect(component.pageContents()).toEqual(['<p>alfa</p><p>beta</p>']);
+    });
+
+    it('przelanie bloku na nową stronę nadal rebinduje strony', () => {
+      const editor = pageWith('<p>alfa</p><p>beta</p>');
+      stubBlockHeights(700); // 2 bloki nie mieszczą się na jednej stronie
+      component.pageContents.set(['<p>alfa</p><p>beta</p>']);
+
+      (editor.children[0] as HTMLElement).textContent = 'alfaX';
+      (component as any)._repaginateNow();
+
+      expect(component.pageContents()).toEqual(['<p>alfaX</p>', '<p>beta</p>']);
+    });
+
+    it('opróżnienie strony (usunięcie całej treści) rebinduje syntetyczny pusty akapit', () => {
+      pageWith(''); // użytkownik skasował wszystko — contenteditable bez bloków
+      stubBlockHeights(10);
+      component.pageContents.set(['<p>stare</p>']);
+
+      (component as any)._repaginateNow();
+
+      expect(component.pageContents()).toEqual(['<p></p>']);
+    });
+
+    it('rozjazd liczby stron sygnału z DOM wymusza rebind (scalanie w górę po usunięciu)', () => {
+      pageWith('<p>zostaje</p>');
+      stubBlockHeights(10);
+      component.pageContents.set(['<p>zostaje</p>', '<p></p>']);
+
+      (component as any)._repaginateNow();
+
+      expect(component.pageContents()).toEqual(['<p>zostaje</p>']);
+    });
+  });
 });

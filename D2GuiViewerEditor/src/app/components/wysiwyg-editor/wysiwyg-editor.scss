@@ -272,6 +272,14 @@
    wysiwyg-editor z data-default-after-tw kontenera), fallback = dotychczasowe 10px. */
 .editor-content p {
   margin: 0 0 var(--doc-par-margin, 10px) 0;
+  /* Interlinia jak w MS Word: nadmiar odstępu ma iść PONIŻEJ linii tekstu, a nie być
+     rozkładany symetrycznie (CSS half-leading centruje glif w linii). `trim-start` przycina
+     wiodące U GÓRY pierwszej linii akapitu (edge `text` = do wysokości wznoszenia fontu, więc
+     polskie znaki diakrytyczne Ą/Ó/Ź NIE są obcinane), przez co tekst przylega do góry, a
+     odstęp interlinii leci w dół — jak w Wordzie. Wspierane od Chrome 133; w starszych
+     przeglądarkach to no-op (zachowanie bez zmian). */
+  text-box-trim: trim-start;
+  text-box-edge: text alphabetic;
 }
 
 .editor-content > p:last-child {
@@ -319,6 +327,35 @@ img[data-legacy-graphic='blank'] {
 
 .editor-content li {
   margin: 2px 0;
+}
+
+/* Etykiety list DOCX liczone silnikiem (data-list-label z list-label.util) — natywne
+   markery przeglądarki nie umieją szablonów wielopoziomowych ("2.4.1."), sufiksów
+   lvlText ("1)"), numeracji legal ani kontynuacji fragmentów po edycji. Pseudo-element
+   jest POZA edytowalnym tekstem: nie łapie się w zaznaczenie, nie kopiuje i nie
+   serializuje; atrybut zdejmowany przy zapisie. Pozycjonowanie right:100% = prawa
+   krawędź etykiety przy lewej krawędzi tekstu (wiersze zawijane zaczynają się na
+   pozycji tekstu, jak w Wordzie). */
+.editor-content li[data-list-label] {
+  list-style: none;
+  position: relative;
+}
+
+.editor-content li[data-list-label]::before {
+  content: attr(data-list-label);
+  position: absolute;
+  right: 100%;
+  top: 0;
+  padding-right: 0.4em;
+  white-space: nowrap;
+}
+
+.editor-content li[data-list-label][data-list-suffix='nothing']::before {
+  padding-right: 0;
+}
+
+.editor-content li[data-list-label][data-list-suffix='space']::before {
+  padding-right: 0.25em;
 }
 
 .editor-content a {
@@ -405,6 +442,18 @@ body.table-resizing * {
   // width/height kept by wrapExistingImages and rescale the image on entering
   // edit mode (rule 14).
   pointer-events: none;
+}
+
+// Obrazy w pozycjonowanych segmentach tab-stopów (.docx-tab-seg ma
+// position:absolute → szerokość shrink-to-fit). Procentowe max-width:100%
+// (inline z importera i z wrapExistingImages) tworzy cykl rozmiaru: wkład
+// obrazka do intrinsic width kontenera liczy się jako 0, kontener zapada się,
+// a obraz renderuje się jako pionowy pasek ~0px szerokości przy zachowanym
+// height. Obrazy z importera zawsze niosą jawne width/height w px, więc
+// `none` jest bezpieczne. !important — max-width:100% siedzi w stylu inline.
+.docx-tab-seg .editor-image-wrapper,
+.docx-tab-seg img {
+  max-width: none !important;
 }
 
 // Word-like floating modes — wrapper is absolute-positioned inside .page
@@ -1030,3 +1079,90 @@ body.image-moving * {
 
 /* ==================== */
 /* Etykieta sekcji - ukryta żeby nie przesłaniać zawartości */
+
+/* ==================== */
+/* Przypisy dolne       */
+/* ==================== */
+
+/* Odwołanie w treści — semantyczny <sup> z numerem przypisu (aria-label z numerem). */
+.editor-content sup.footnote-ref {
+  color: #0563c1;
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+  padding: 0 1px;
+}
+
+/* Panel treści przypisów — jedno źródło prawdy, edytowalne poza contenteditable body. */
+.footnotes-panel {
+  max-width: 816px;
+  margin: 12px auto 32px;
+  padding: 12px 16px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-top: 2px solid #0563c1;
+  border-radius: 2px;
+  font-size: 10pt;
+  color: #222;
+}
+
+.footnotes-panel-title {
+  font-weight: 600;
+  font-size: 9pt;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5f6368;
+  margin-bottom: 8px;
+}
+
+.footnote-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px solid #f1f3f4;
+
+  &:first-of-type {
+    border-top: none;
+  }
+}
+
+.footnote-item-number {
+  flex: 0 0 auto;
+  min-width: 18px;
+  font-weight: 600;
+  color: #0563c1;
+  vertical-align: super;
+  font-size: 9pt;
+}
+
+.footnote-item-content {
+  flex: 1 1 auto;
+  min-height: 1.4em;
+  outline: none;
+
+  &:focus {
+    background: #f8f9ff;
+    box-shadow: 0 0 0 2px rgba(5, 99, 193, 0.15);
+    border-radius: 2px;
+  }
+
+  p {
+    margin: 0 0 4px;
+  }
+}
+
+.footnote-item-delete {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: #b0b0b0;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+
+  &:hover {
+    color: #d93025;
+  }
+}

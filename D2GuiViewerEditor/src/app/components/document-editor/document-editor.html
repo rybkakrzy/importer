@@ -4,7 +4,7 @@
     <div class="header-left">
       <!-- Logo i nazwa -->
       <div class="app-logo" (click)="goToDashboard()" style="cursor:pointer" title="Wróć do strony głównej">
-        <img src="logo.svg" alt="ING Bank Śląski" width="32" height="32">
+        <img src="logo.svg" alt="Qutasator" width="32" height="32">
         <span class="app-name">Qutas</span>
       </div>
       
@@ -306,19 +306,19 @@
                 </button>
                 @if (activeSubmenu() === 'align') {
                   <div class="submenu">
-                    <button class="dropdown-item" (click)="alignLeft()">
+                    <button class="dropdown-item" [class.dropdown-item-checked]="alignmentActive('left')" (click)="alignLeft()">
                       <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zm0 8h18v-2H3v2zM3 3v2h18V3H3z"/></svg>
                       Wyrównaj do lewej
                     </button>
-                    <button class="dropdown-item" (click)="alignCenter()">
+                    <button class="dropdown-item" [class.dropdown-item-checked]="alignmentActive('center')" (click)="alignCenter()">
                       <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/></svg>
                       Wyrównaj do środka
                     </button>
-                    <button class="dropdown-item" (click)="alignRight()">
+                    <button class="dropdown-item" [class.dropdown-item-checked]="alignmentActive('right')" (click)="alignRight()">
                       <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/></svg>
                       Wyrównaj do prawej
                     </button>
-                    <button class="dropdown-item" (click)="alignJustify()">
+                    <button class="dropdown-item" [class.dropdown-item-checked]="alignmentActive('justify')" (click)="alignJustify()">
                       <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 21h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18V7H3v2zm0-6v2h18V3H3z"/></svg>
                       Wyjustuj
                     </button>
@@ -514,7 +514,7 @@
 
       <!-- Przełącznik Autozapis — tylko switch + etykieta. Status zapisu wędruje do stopki.
            Ukrywany, gdy aplikacja źródłowa wysłała showSaveState=false. -->
-      @if (documentVersionId() && showSaveState()) {
+      @if (documentVersionId() && showSaveState() && !documentEditProtected()) {
         <label class="autosave-switch" [title]="autoSaveEnabled() ? 'Autozapis włączony' : 'Autozapis wyłączony'">
           <input type="checkbox" [checked]="autoSaveEnabled()" (change)="toggleAutoSave()">
           <span class="autosave-slider"></span>
@@ -525,6 +525,8 @@
       @if (editingDisabled()) {
         @if (lockedByOther()) {
           <span class="readonly-badge" title="Dokument jest obecnie edytowany przez kogoś innego">Tylko do odczytu — ktoś inny edytuje</span>
+        } @else if (documentEditProtected()) {
+          <span class="readonly-badge" title="Plik źródłowy ma włączoną ochronę przed edycją (Word: Ogranicz edycję / hasło zapisu)">Tylko do odczytu — dokument chroniony przed edycją</span>
         } @else {
           <span class="readonly-badge" title="Tylko do odczytu">Podgląd (tylko do odczytu)</span>
         }
@@ -773,7 +775,7 @@
             }
             <d2-wysiwyg-editor
               [content]="documentContent()"
-              [readOnly]="readOnly()"
+              [readOnly]="editingDisabled()"
               [pageMargins]="pageSettings().margins"
               [pageOrientation]="pageSettings().orientation"
               [pageSize]="documentPageSize()"
@@ -781,6 +783,8 @@
               [headerContent]="headerContent()"
               [footerContent]="footerContent()"
               [sectionHeadersFooters]="sectionHeadersFooters() ?? undefined"
+              [footnotes]="footnotes() ?? undefined"
+              (footnotesChange)="footnotes.set($event)"
               (contentChange)="onContentChange($event)"
               (stateChange)="onStateChange($event)"
               (selectionChange)="onEditorSelectionChange()"
@@ -1322,14 +1326,14 @@
         <!-- Font family -->
         <select class="mt-font-family" [value]="miniToolbarFontFamily()"
                 (change)="miniToolbarSetFontFamily($any($event.target).value)" title="Czcionka">
-          @for (f of commonFonts(); track f) {
+          @for (f of miniToolbarFontOptions(); track f) {
             <option [value]="f" [selected]="miniToolbarFontFamily() === f">{{ f }}</option>
           }
         </select>
 
         <!-- Font size -->
         <input type="number" class="mt-font-size"
-               [value]="editorState()?.fontSize || 11"
+               [value]="editorState()?.currentStyle?.fontSize || 11"
                min="1" max="400" step="1"
                (change)="miniToolbarSetFontSize($event)"
                title="Rozmiar czcionki">
@@ -1399,26 +1403,32 @@
         <div class="mt-sep"></div>
 
         <!-- Wyrównanie -->
-        <button class="mt-btn" (click)="miniToolbarCommand('justifyLeft')" title="Wyrównaj do lewej">
+        <button class="mt-btn" [class.mt-btn-active]="alignmentActive('left')"
+                (click)="miniToolbarCommand('justifyLeft')" title="Wyrównaj do lewej">
           <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zm0 8h18v-2H3v2zM3 3v2h18V3H3z"/></svg>
         </button>
-        <button class="mt-btn" (click)="miniToolbarCommand('justifyCenter')" title="Wyśrodkuj">
+        <button class="mt-btn" [class.mt-btn-active]="alignmentActive('center')"
+                (click)="miniToolbarCommand('justifyCenter')" title="Wyśrodkuj">
           <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/></svg>
         </button>
-        <button class="mt-btn" (click)="miniToolbarCommand('justifyRight')" title="Wyrównaj do prawej">
+        <button class="mt-btn" [class.mt-btn-active]="alignmentActive('right')"
+                (click)="miniToolbarCommand('justifyRight')" title="Wyrównaj do prawej">
           <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/></svg>
         </button>
-        <button class="mt-btn" (click)="miniToolbarCommand('justifyFull')" title="Wyjustuj">
+        <button class="mt-btn" [class.mt-btn-active]="alignmentActive('justify')"
+                (click)="miniToolbarCommand('justifyFull')" title="Wyjustuj">
           <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M3 21h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18V7H3v2zm0-6v2h18V3H3z"/></svg>
         </button>
 
         <div class="mt-sep"></div>
 
         <!-- Listy -->
-        <button class="mt-btn" (click)="miniToolbarCommand('insertUnorderedList')" title="Lista punktowana">
+        <button class="mt-btn" [class.mt-btn-active]="editorState()?.currentFormatting?.bulletList === true"
+                (click)="miniToolbarCommand('insertUnorderedList')" title="Lista punktowana">
           <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M4 10.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5 1.5-.67 1.5-1.5-.67-1.5-1.5-1.5zm0-6c-.83 0-1.5.67-1.5 1.5S3.17 7.5 4 7.5 5.5 6.83 5.5 6 4.83 4.5 4 4.5zm0 12c-.83 0-1.5.68-1.5 1.5s.68 1.5 1.5 1.5 1.5-.68 1.5-1.5-.67-1.5-1.5-1.5zM7 19h14v-2H7v2zm0-6h14v-2H7v2zm0-8v2h14V5H7z"/></svg>
         </button>
-        <button class="mt-btn" (click)="miniToolbarCommand('insertOrderedList')" title="Lista numerowana">
+        <button class="mt-btn" [class.mt-btn-active]="editorState()?.currentFormatting?.numberedList === true"
+                (click)="miniToolbarCommand('insertOrderedList')" title="Lista numerowana">
           <svg viewBox="0 0 24 24" width="13" height="13"><path fill="currentColor" d="M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z"/></svg>
         </button>
 
@@ -1498,19 +1508,19 @@
         <span class="context-menu-arrow">&#9654;</span>
         @if (contextSubmenu() === 'align') {
           <div class="context-submenu">
-            <button class="context-menu-item" (click)="contextMenuAlignLeft()">
+            <button class="context-menu-item" [class.context-menu-item-checked]="alignmentActive('left')" (click)="contextMenuAlignLeft()">
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zm0 8h18v-2H3v2zM3 3v2h18V3H3z"/></svg>
               <span>Wyrównaj do lewej</span><span class="context-menu-shortcut">Ctrl+L</span>
             </button>
-            <button class="context-menu-item" (click)="contextMenuAlignCenter()">
+            <button class="context-menu-item" [class.context-menu-item-checked]="alignmentActive('center')" (click)="contextMenuAlignCenter()">
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/></svg>
               <span>Wyśrodkuj</span><span class="context-menu-shortcut">Ctrl+E</span>
             </button>
-            <button class="context-menu-item" (click)="contextMenuAlignRight()">
+            <button class="context-menu-item" [class.context-menu-item-checked]="alignmentActive('right')" (click)="contextMenuAlignRight()">
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/></svg>
               <span>Wyrównaj do prawej</span><span class="context-menu-shortcut">Ctrl+R</span>
             </button>
-            <button class="context-menu-item" (click)="contextMenuAlignJustify()">
+            <button class="context-menu-item" [class.context-menu-item-checked]="alignmentActive('justify')" (click)="contextMenuAlignJustify()">
               <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 21h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18V7H3v2zm0-6v2h18V3H3z"/></svg>
               <span>Wyjustuj</span><span class="context-menu-shortcut">Ctrl+J</span>
             </button>

@@ -69,13 +69,20 @@ przeglądarce) **nie** jest zapisywany jako font dokumentu — w DOCX zostaje or
 
 - **Zwykłe wklejenie (Ctrl+V):** `handlePaste` — sanitizuje `text/html` (usuwa script/style/
   komentarze/`on*`), wstawia przez `insertHtml`. Brak HTML → `text/plain` znormalizowany.
-- **Wklej bez formatowania:** Ctrl+Shift+V (okno czasowe `plainTextPasteUntil`) **lub** menu
-  „Edytuj → Wklej bez formatowania" / menu kontekstowe → `pasteWithoutFormatting()` →
-  `navigator.clipboard.readText()` (tylko `text/plain`) → `editor.insertText`.
-- **Root cause Issue 4:** klik w pozycję menu **zabierał fokus** edytorowi, więc
-  `execCommand('insertText')` nie miał karetki i nic nie wstawiał. `insertText` **odtwarza
-  zapisaną selekcję i fokus** przed wstawieniem (jak `setFontSize`). Brak dostępu do schowka →
-  ciche niepowodzenie (zostaje skrót Ctrl+Shift+V).
+- **Wklej bez formatowania:** Ctrl+Shift+V (okno czasowe `plainTextPasteUntil`, ścieżka
+  natywnego `paste` z żywą selekcją) **lub** menu „Edytuj → Wklej bez formatowania" / menu
+  kontekstowe / mini-toolbar → `pasteWithoutFormatting()` / `paste()` / `miniToolbarPaste()`.
+- **Ścieżka menu (async):** `editor.captureSelectionBookmark()` **synchronicznie** (przed
+  `closeAllMenus()` i przed `readText()`) zapisuje zakres docelowy → `navigator.clipboard.readText()`
+  (tylko `text/plain`) → `editor.pastePlainTextAt(bookmark, text)`.
+- **Root cause (dwa objawy, jedna przyczyna):** ścieżka menu wstawiała w **żywą/nieaktualną
+  selekcję** po `await readText()` — zwykle zakres ŹRÓDŁOWY. Wstawienie w run źródłowy dawało
+  jednocześnie (a) złą pozycję i (b) „zachowanie formatowania źródła" (tekst dziedziczył styl
+  źródłowego runu). `pastePlainTextAt` wstawia goły `TextNode` w bookmark docelowy przez Range
+  (nie `execCommand`, nie `innerHTML`): dziedziczy styl DOCELOWY, nie niesie marków źródła,
+  `<`/`>`/`&` zostają dosłowne, `\n` → miękkie `<br>`, jedno `onContentChange()` = jeden undo,
+  karetka za tekstem. Guard: bookmark musi wciąż być w bieżącym edytorze (async swap/unmount →
+  bezpieczny abort). `insertText` (ścieżka natywnego paste) bez zmian.
 - Clipboard API `readText()` wymaga bezpiecznego kontekstu (HTTPS/localhost) i zgody.
 
 ## 4. Interlinia (line spacing) — mapowanie Word → CSS
@@ -156,7 +163,9 @@ Uruchomienie:
 | font-size | `wysiwyg-editor.toolbar-actions.spec.ts` | odrzucenie 0/NaN/zakresu; akceptacja poprawnego |
 | font-family | `FontFamilyWriteTests.cs` | `&quot;`/wielowyraz/single-quote+fallback/unquoted → `w:rFonts` bez cudzysłowów |
 | font-family (front) | `wysiwyg-editor.toolbar-actions.spec.ts` | `setFontFamily` odtwarza zapisaną selekcję **przed** `focus()` (wybór z `<select>` gubi selekcję → bez tego ZWS-span lądował na początku dokumentu i nowy tekst dziedziczył domyślną czcionkę) |
+| font-family karetka | `wysiwyg-editor.font-family.spec.ts` | zwinięta karetka → ZWS-span w wybranym kroju + karetka w środku (nowy tekst dziedziczy); parytet `savedSelection`+`updateFormattingState` z `setFontSize`; drugi wybór REUŻYWA spana (bez zagnieżdżania); selekcja → owinięcie tekstu; guard bez edytora. Manualnie (headless Chrome+CDP): pusty akapit / karetka po tekście / realny combobox / dwukrotna zmiana / pick→utrata-fokusu→pick→wpisz — nowy tekst zawsze w wybranym kroju |
 | paste plain | `wysiwyg-editor.toolbar-actions.spec.ts` | `insertText` odtwarza selekcję po utracie fokusu |
+| paste plain (bookmark) | `wysiwyg-editor.paste-plain.spec.ts` | `pastePlainTextAt` wstawia w bookmark DOCELOWY (nie żywą/źródłową selekcję), bez marków źródła, replace selekcji, `\n`→`<br>`, `<img>` dosłowny (brak injekcji), jeden `onContentChange`, abort gdy bookmark poza edytorem, no-op pustego; `captureSelectionBookmark` klonuje żywą selekcję |
 | line spacing | `LineSpacingMappingTests.cs` | single/1.5/double/exact/atLeast/before/after |
 | linki | `wysiwyg-editor.toolbar-actions.spec.ts` | normalizacja URL + escaping + no-op pustego |
 | `.doc` | `DocumentControllerTests.cs` | `.doc` → 400 z instrukcją; `.pdf`/inne → 400 |

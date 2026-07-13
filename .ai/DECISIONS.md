@@ -14,7 +14,275 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
-## ADR-0032: Paginacja edytora wymusza DOM = obliczony rozkład (`_syncPageEditorDom`); strona ma stałą wysokość zamiast `min-height`
+## ADR-0037: Semantyka wariantów nagłówka/stopki (titlePg / evenAndOddHeaders) — flagi per pasmo, null = dziedzicz, "" = jawnie puste, wariant per pierwsza strona sekcji
+- Date: 2026-07-13
+- Status: Accepted
+
+### Context
+Zgłoszenie: DOC2 Viewer ignorował „Inną pierwszą stronę" — str. 1 renderowała nagłówek default,
+a zapis gubił `w:titlePg`. Trzy współdziałające przyczyny: (1) GUI trzymało JEDNĄ flagę
+`differentFirstPage` wspólną dla nagłówka i stopki, nadpisywaną przez setter wykonany później
+(kontrakt `HeaderFooterContent` raportuje flagę per pasmo — nagłówek może mieć wariant first,
+stopka nie); (2) reader traktował pusty/brakujący part first przy aktywnym titlePg jako „brak
+wariantu" → default wyciekał na stronę 1, choć Word pokazuje puste pasmo; (3) writer pisał
+warianty first/even TYLKO wewnątrz gałęzi niepustego default i tylko przy niepustym first —
+dokument first-only (Qutalo/ING) tracił nagłówek przy pierwszym zapisie, a `EnsureTitlePage`
+appendował `w:titlePg` przed późniejszym dopisaniem pgSz/pgMar (błąd sekwencji CT_SectPr
+w każdym eksporcie z titlePg). Dodatkowo wybór wariantu first opierał się na `pageIndex === 0`
+(pierwsza strona CAŁEGO dokumentu), a wpisy sekcyjne ignorowały własne warianty first/even.
+
+### Decision
+1. **Flagi per pasmo w GUI** (`_headerDifferentFirstPage`/`_footerDifferentFirstPage` + odd/even);
+   publiczne `differentFirstPage()` = OR obu (checkbox), toggle/dialog ustawiają OBA pasma
+   (w DOCX titlePg jest właściwością sekcji wspólną dla nagłówka i stopki).
+2. **Kontrakt wartości wariantów** w `HeaderFooterContent`: `null` = wariant niezdefiniowany
+   (sekcja dziedziczy go z wcześniejszej sekcji / bazy — odpowiednik „Połącz z poprzednim");
+   `""` = wariant zdefiniowany i celowo pusty (puste pasmo, NIE fallback do default).
+   Baza (sekcja 0) przy titlePg zawsze niesie `FirstPageHtml != null` (brak poprzednika →
+   puste pasmo); wpisy sekcyjne ≥ 1 mogą nieść null (dziedziczenie rozwiązuje GUI).
+3. **Jeden resolver wariantu** w edytorze (`_resolveHfVariant`) używany przez rendering,
+   ładowanie edycji i routing zapisu (rule 10): first na pierwszej stronie KAŻDEJ sekcji
+   (z `pageSectionIndexes`), potem even (strony parzyste globalnie), potem default;
+   właściciel treści = najbliższy wpis definiujący wariant, inaczej sygnały bazowe.
+4. **Writer**: default/first/even emitowane niezależnie; `w:titlePg` zawsze przy
+   `DifferentFirstPage` (pusty first = part z pustym akapitem — CT_HdrFtr wymaga bloku);
+   pgSz/pgMar wstawiane PRZED titlePg (`AppendBeforeTitlePage`), titlePg przed
+   textDirection/bidi/rtlGutter/docGrid (`EnsureTitlePage` pozycjonuje wg CT_SectPr).
+
+### Consequences
+- Strona 1 (i pierwsza strona każdej sekcji) respektuje titlePg także dla pustych pasm;
+  zapis→otwarcie nie gubi `w:titlePg`/referencji first; eksport z titlePg przechodzi
+  walidator OOXML (wcześniej błąd sekwencji).
+- Świadome przybliżenia: titlePg sekcji BEZ własnych referencji (brak wpisu w modelu)
+  przybliżany flagą najbliższego wcześniejszego wpisu (titlePg w OOXML nie jest dziedziczone,
+  ale Word kopiuje je przy tworzeniu sekcji — rozjazd tylko gdy użytkownik ręcznie wyłączył
+  titlePg w sekcji dziedziczącej wszystkie party); parzystość even/odd liczona globalnie
+  po indeksie strony (bez `w:pgNumType/@start` i restartów numeracji).
+- Dokumenty z `w:evenAndOddHeaders` bez referencji even pokazują PUSTE strony parzyste
+  (jak Word) — wcześniej pokazywały default (niezgodnie z Wordem).
+
+### Alternatives considered
+- Wspólna flaga + „OR" setterów (nie da się wyłączyć titlePg per pasmo, dalej gubi stan).
+- Pełne per-sekcyjne `TitlePg` w modelu `DocumentContent` (osobna lista właściwości sekcji)
+  — odrzucone jako zmiana kontraktu API nieproporcjonalna do zysku; do rewizji przy
+  ewentualnym renderingu `pgNumType`.
+
+## ADR-0036: Kompletna obsługa list DOCX — wariant A: semantyka specyfikacji na istniejącym transporcie `data-*` (bez kanonicznego modelu w kontraktach API)
+- Date: 2026-07-12
+- Status: Accepted
+
+### Context
+Przyjęta specyfikacja „kompletnej obsługi list" wymaga m.in. rozdziału definicja/instancja/
+przypisanie (abstractNum/num/numPr), eksportu restartów przez `w:lvlOverride/w:startOverride`,
+punktatorów graficznych (`w:numPicBullet`), silnika liczenia etykiet wspólnego dla podglądu
+i eksportu oraz kanonicznego modelu JSON niezależnego od HTML. Tymczasem CAŁA aplikacja
+(przypisy ADR-0032, sekcje ADR-0023, kotwice ADR-0030, docDefaults ADR-0031) używa HTML
+z kontraktem `data-*` jako transportu Domain↔GUI; pełny model kanoniczny w kontraktach API
+= przebudowa `DocumentContent`/`SaveDocumentRequest` i modelu stanu edytora (zakazany „broad
+refactor"). Writer dodatkowo NIE emitował w ogóle `startOverride`/`lvlOverride` ani
+`numPicBullet` — restart numeracji i punktator graficzny ginęły przy pierwszym autosave.
+
+### Decision
+1. **Wariant A**: semantyka specyfikacji realizowana na obecnym transporcie — kontrakt `data-*`
+   na kontenerach `ol/ul` jest formalną serializacją modelu list (definicja poziomu + tożsamość
+   instancji + przypisanie), bez zmian kontraktów API. Wariant B (kanoniczny model JSON
+   w odpowiedzi importu / żądaniu zapisu) odrzucony na teraz — do rewizji, gdyby powstał
+   frontowy silnik etykiet wymagający pełnych definicji poza DOM.
+2. Kontrakt `data-*` list rozszerzony o: `data-start-override` (w:startOverride instancji,
+   emitowany ODDZIELNIE od `data-start` = w:start definicji), `data-suffix` (w:suff ≠ tab),
+   `data-is-legal` (w:isLgl), `data-lvl-restart` (surowa wartość w:lvlRestart, jednobazowa),
+   `data-pic-bullet` (poziom z w:lvlPicBulletId), `data-ind-left/hanging/first-line-tw`
+   (wcięcia definicji poziomu w twips).
+3. Writer: `w:abstractNum` współdzielony po `data-abstract-num-id` (`_abstractIdByHtmlAbstract`),
+   instancja per `data-num-id` jak dotąd; restart = `w:lvlOverride/w:startOverride` na instancji
+   (FR-EXPORT-004), NIE kopia definicji z przepisanym w:start. Wcięcia poziomu z `data-ind-*-tw`
+   zamiast hardkodowanej drabinki 720×(lvl+1).
+4. Punktator graficzny (FR-EXPORT-006): marker `<span class="list-marker"><img data:URI/></span>`
+   → `TryCreatePictureBullet` tworzy ImagePart na CZĘŚCI NUMERACJI + `w:numPicBullet`
+   (wariant VML `w:pict/v:shape/v:imagedata` — ten sam, który zapisuje Word) + `w:lvlPicBulletId`;
+   deduplikacja po data URI; obraz NIE jest już bake'owany jako inline run (dublował się);
+   nieosadzalny src/SVG → dotychczasowy fallback (numFmt=none + obraz inline w treści).
+5. Kolejność dzieci `w:lvl` naprawiona do sekwencji CT_Lvl (start, numFmt, lvlRestart, isLgl,
+   suff, lvlText, lvlPicBulletId, lvlJc, pPr, rPr) — wcześniej rPr szedł przed lvlJc (poza
+   schematem). `w:numPicBullet` przed `w:abstractNum` przed `w:num`.
+6. Stan konwertera resetowany per `Convert` (`_numberingId`, `_numberingPart`, mapy list) —
+   deterministyczny wynik dla tego samego wejścia (FR-EXPORT-002) i brak przecieku części
+   między konwersjami.
+7. Pełne nadpisanie wyglądu poziomu na instancji (`w:lvlOverride` z własnym `w:lvl`, nie tylko
+   startOverride) round-tripuje przez `data-lvl-override="1"`: reader znaczy poziomy, których
+   efektywna definicja pochodzi z lvlOverride instancji; writer buduje dla nich `w:lvl`
+   WEWNĄTRZ `w:lvlOverride` i NIE wkłada ich definicji do współdzielonego abstraktu
+   (dwie instancje wspólnego abstraktu mogą wyglądać różnie — bez tego zlewały się w jeden wygląd).
+8. Fragment listy zaczynający się na głębszym poziomie (top-level `ol` z `data-ilvl=N`, np.
+   kontynuacja poziomu 1 po zwykłym akapicie) eksportuje się z właściwym `w:ilvl` —
+   `ResolveListLevel` honoruje `data-ilvl` w `ConvertListElement` i wszystkich skanach poziomów
+   (wcześniej spłaszczany do ilvl=0: złe wcięcie i format poziomu 0).
+9. Współdzielony abstrakt jest UZUPEŁNIANY (`UpgradeSharedAbstractLevels`): fragment tworzący
+   abstrakt definiuje tylko poziomy, których używa (reszta = drabinka domyślna); późniejszy
+   fragment współdzielący abstrakt dosyła definicje brakujących poziomów. Poziomy już zbudowane
+   z jawnych data-* nie są podmieniane (pierwsza definicja wygrywa). Bezpieczne, bo fragment
+   tworzący nie miał elementów na upgradowanym poziomie.
+
+### Consequences
+- „Rozpocznij od nowa" z Worda przeżywa zapis (wspólny abstrakt + nowa instancja z override);
+  restart nie zmienia numeracji wcześniejszych elementów po round-tripie.
+- Punktatory graficzne przechodzą pełny cykl import→zapis→import bez degradacji do kropki.
+- Niestandardowe wcięcia list, suffix, isLgl i lvlRestart nie giną przy pierwszym autosave.
+- Eksport listy waliduje się czysto (`OpenXmlValidator` Office2013 = 0 błędów — test).
+- Kontynuacja na głębszym poziomie, mieszanie wyglądów instancji wspólnego abstraktu
+  i doposażanie poziomów abstraktu przez późniejsze fragmenty — pokryte testami round-trip.
+- Silnik etykiet w GUI ZROBIONY (runda 3): `core/utils/list-label.util.ts` (TS, lustrzany do
+  liczników readera) + `data-list-label` renderowane przez CSS `::before` poza edytowalnym
+  tekstem; atrybuty prezentacyjne zdejmowane przy serializacji. Kontynuacja fragmentów
+  przelicza się także po edycji (statyczny `<ol start>` tego nie umiał).
+- NADAL poza zakresem (kolejne etapy planu): komendy edytora (Tab/Shift+Tab, kontynuuj/
+  restart/ustaw wartość; nowe listy z edytora bez data-* = drabinka domyślna), wcięcia
+  znacznika z `data-ind-*-tw` w podglądzie, styl znacznika (rPr poziomu) w kontrakcie,
+  pełny łańcuch `basedOn`/`styleLink` w resolverze, `lvlRestart=N` w licznikach READERA
+  (silnik TS już honoruje), diagnostyka kodów LIST_*.
+
+### Alternatives considered
+Wariant B (pełny kanoniczny model JSON w kontraktach API, ListDefinitionDto/ListInstanceDto) —
+zgodny w 100% ze specyfikacją, odrzucony na tym etapie: zmiana kontraktów API i modelu stanu
+edytora, wielotygodniowy refactor sprzeczny z zasadą małych zmian; wariant A pokrywa ~90%
+wymagań bez ruszania architektury. Emisja `w:numPicBullet` w wariancie DrawingML — odrzucona:
+Word sam zapisuje wariant VML, walidator i starsze wersje Worda przyjmują go bez zastrzeżeń.
+
+## ADR-0035: Placeholder pustych bloków edytora — `<br>` w komórkach tabel, `&nbsp;` tylko w akapitach, czyszczenie na beforeinput
+- Date: 2026-07-11
+- Status: Accepted
+
+### Context
+Puste komórki nowych tabel dostawały placeholder `&nbsp;` (żeby kursor miał się gdzie ustawić).
+Twarda spacja zostawała przed wpisanym tekstem (UAT: `&nbsp;test` w DOM), przesuwała zawartość
+względem MS Word i trafiała jako U+00A0 do zapisanego DOCX. Ten sam problem mają bloki z importu
+(reader emituje `&nbsp;` dla pustych akapitów, w tym w `<td><p>&nbsp;</p></td>`).
+
+### Decision
+1. Placeholder NOWYCH komórek tabel = `<br>` (insertTable + wstaw wiersz/kolumnę, split/merge).
+   Goły `<br>` jako dziecko `td` eksportuje się do pustego akapitu (`ConvertHtmlNode` case "br").
+2. Placeholder pustych AKAPITÓW (separator po tabeli, import) zostaje `&nbsp;` — `<p><br></p>`
+   eksportowałby się do akapitu z `w:br` (dodatkowa pusta linia w Wordzie).
+3. `onEditorBeforeInput` (beforeinput na stronach, nagłówku i stopce): gdy blok
+   (p/h1-6/li/td/th) zawiera wyłącznie U+00A0, placeholder jest zaznaczany tuż przed wstawieniem
+   tekstu, więc pisanie go zastępuje. Pokrywa import i dokumenty zapisane przed poprawką.
+
+### Consequences
+- Tekst w komórce zaczyna się od lewej krawędzi jak w Wordzie; DOCX bez zbędnych U+00A0.
+- Dokumenty zapisane przed poprawką czyszczą się dopiero przy edycji danego bloku.
+- Kod sprawdzający „pustość" komórki musi akceptować oba placeholdery (robi to merge w
+  `document-editor.tableMergeCells`).
+
+### Alternatives considered
+- Strip wiodących U+00A0 przy zapisie/imporcie — odrzucone: nie odróżnimy placeholdera od
+  celowej twardej spacji użytkownika.
+- `<br>` także w akapitach — odrzucone: zmienia eksport (`w:br`), regresja pionowego rytmu.
+
+## ADR-0034: Ochrona przed edycją z DOCX (documentProtection/writeProtection) = tryb tylko-do-odczytu w edytorze
+- Date: 2026-07-11
+- Status: Accepted
+
+### Context
+Dokument Word z „Ogranicz edycję" (settings.xml: `w:documentProtection w:edit="readOnly"
+w:enforcement="1"`) albo z hasłem zapisu / zaleceniem tylko-do-odczytu (`w:writeProtection`)
+otwierał się w DOC2 Editor jako w pełni edytowalny — konwerter w ogóle nie czytał tych ustawień.
+Zgłoszenie: niezgodność zachowania względem dokumentu źródłowego.
+
+### Decision
+1. Reader wykrywa ochronę i zwraca `DocumentContent.IsReadOnlyProtected`; GUI otwiera taki
+   dokument w istniejącym trybie read-only (badge + toast + blokada zapisu/auto-save).
+2. KAŻDY wymuszony tryb `w:edit` ≠ none (readOnly, comments, trackedChanges, forms) = pełna
+   blokada edycji — edytor nie umie egzekwować trybów częściowych, więc bezpieczniej blokować
+   całość niż pozwolić na edycję ponad uprawnienia.
+3. `w:writeProtection` z hasłem = zawsze tylko-do-odczytu (haseł nie weryfikujemy, brak dialogu
+   „podaj hasło zapisu"); `w:recommended` traktowane jak ochrona (strona bezpieczna).
+4. Egzekwowanie na poziomie GUI; API zapisu nie sprawdza ochrony (patrz RISKS_ASSUMPTIONS).
+
+### Consequences
+- Zachowanie zgodne z Wordem dla enforced readOnly; surowsze dla trybów częściowych i samego
+  `w:recommended` (Word pozwala wybrać edycję — my nie; użytkownik dostaje jasny komunikat).
+- Ochrona NIE jest round-tripowana do eksportu (dokument chroniony i tak nie jest zapisywany).
+
+### Alternatives considered
+- Tylko komunikat ostrzegawczy bez blokady — odrzucone: nadal łamie ograniczenie źródła.
+- Weryfikacja hasła writeProtection (legacy hash Worda) — odrzucone: niestandardowy algorytm,
+  marginalny zysk.
+- Egzekwowanie częściowych trybów (comments/forms) w edytorze — poza zasięgiem obecnego WYSIWYG.
+
+## ADR-0033: Wypełnienie kształtu custom-geometry — rozwiązywanie `a:schemeClr`/`a:fillRef` z motywu; brak czarnego fallbacku
+- Date: 2026-07-11
+- Status: Accepted
+
+### Context
+Kształt DrawingML z własną geometrią (`a:custGeom`) bez obrazu/tekstu (np. logo/wordmark Qutalo w stopce)
+renderował się jako **czarny wypełniony blob** („czarny knefel"). `GetShapeFillHex` czytał wyłącznie
+`spPr/a:solidFill/a:srgbClr` (jawny hex); gdy fill był kolorem motywu (`a:schemeClr val="accent1"`) lub
+zdefiniowany przez referencję stylu (`wps:style/a:fillRef`), zwracał null, a `BuildCustomGeometrySvg`
+wpadał w `fill="#000000"`. `ResolveThemeColor` obsługuje tylko enum `w:themeColor` (wordprocessing),
+nie DrawingML-owy `a:schemeClr`.
+
+### Decision
+1. `GetShapeFillHex` rozwiązuje fill w kolejności: (a) `spPr/a:solidFill` → `a:srgbClr` albo `a:schemeClr`;
+   (b) fallback do `wps:style/a:fillRef` → `a:srgbClr`/`a:schemeClr`.
+2. Nowy `ResolveDrawingSchemeColor` mapuje DrawingML `a:schemeClr` (dk1/lt1/dk2/lt2/tx1/bg1/tx2/bg2/
+   accent1..6/hlink/folHlink; domyślny clrMap) na hex ze schematu kolorów theme1.xml.
+3. Fallback nierozwiązywalnego wypełnienia w SVG: `currentColor` (dziedziczy kolor tekstu otoczenia),
+   NIE solidny `#000000`.
+
+### Consequences
+- Brandowe logo z fillem motywowym pokolorowane poprawnie (np. pomarańcz Qutalo z `accent1`).
+- Nierozwiązywalny fill degraduje do koloru tekstu zamiast czarnego bloba zasłaniającego grafikę.
+- Tylko podgląd (reader); writer nie odtwarza tych kształtów do DOCX — oryginał v1 nietykalny.
+
+### Alternatives considered
+- `fill="none"`+stroke (sam kontur) — odrzucone: dla kształtów powierzchniowych gubi masę wizualną.
+- Neutralny szary placeholder — odrzucone: `currentColor` lepiej trafia w kolor brandu w stopkach.
+
+## ADR-0032: Przypisy dolne — treść w bocznym modelu (`Footnotes`), odwołania jako `<sup data-footnote-id>` w HTML; tożsamość stabilna, numeracja i `w:id` OOXML liczone osobno
+- Date: 2026-07-10
+- Status: Accepted
+
+### Context
+Aplikacja nie obsługiwała przypisów dolnych Worda (reader je cicho dropował, writer nie tworzył
+`footnotes.xml`). Wewnętrzny „model" dokumentu to ciąg HTML (`DocumentContent.Html`) + boczne pola
+(nagłówki/stopki/marginesy/sekcje). Przypis musi rozdzielać: miejsce odwołania w treści, treść
+przypisu, stabilną tożsamość, numer widoczny i numeryczny `w:id` OOXML — i nie duplikować treści
+przy każdym odwołaniu.
+
+### Decision
+1. **Model**: nowy `Footnote { Id, Html }`; `DocumentContent.Footnotes` / `SaveDocumentRequest.Footnotes`
+   (backend + TS). Treść przypisu = jedno źródło prawdy; odwołania w treści niosą tylko
+   `data-footnote-id`. To jest spójne z istniejącym wzorcem „boczne pola obok Html" (jak
+   `SectionHeadersFooters`), a NIE osadzanie treści przypisu w body HTML.
+2. **Tożsamość vs numer vs `w:id`**: `Id` (np. `fn-1`) stabilny w obrębie importu; numer widoczny
+   liczony przy renderowaniu z kolejności PIERWSZYCH odwołań (reader — przy emisji `<sup>`; GUI —
+   `syncFootnotesWithBody` po edycji); numeryczny `w:id` OOXML przydzielany dopiero na eksporcie
+   (1..N wg kolejności listy). ID nie round-tripują 1:1 — writer je przemapowuje deterministycznie,
+   reader odtwarza `fn-<ooxmlId>`. Separatory techniczne mają zarezerwowane id -1 / 0.
+3. **Import/eksport przez ISTNIEJĄCE konwertery**: treść przypisu (akapity/runy/formatowanie/tabele)
+   idzie przez `ConvertParagraphToHtml`/`ConvertTableToHtml` (reader) i `ConvertHtmlToBody` (writer)
+   — bez osobnego, konkurencyjnego konwertera treści.
+4. **GUI**: odwołania renderują się w treści strony jako `<sup class="footnote-ref">`; treść
+   przypisów w dedykowanym panelu POZA contenteditable body (jedno źródło prawdy, edytowalne
+   osobno). Renumeracja/przycięcie osieroconych przy każdej operacji edycyjnej.
+
+### Consequences
+Pełny pionowy przepływ DOCX → import → model/API → render+edycja Angular → eksport → poprawny DOCX
+→ ponowny import, potwierdzony testami (backend `FootnoteFidelityTests` 18/18 z walidacją OOXML;
+GUI 9 speców TestBed). Dokument bez przypisów nie dostaje `footnotes.xml`. Brak infrastruktury E2E
+(tylko Vitest) → headless przepływ pokryty TestBed + backend round-trip zamiast Playwright
+(dodanie E2E = nieproporcjonalne). Panel przypisów jest podglądowo-edycyjny dla całego dokumentu
+(bez przypisania do konkretnej strony — świadome uproszczenie, jak brak wiarygodnego modelu stron
+dla przypisów).
+
+### Alternatives considered
+(a) Osadzić treść przypisów w body HTML (ukryta sekcja) — odrzucone: łamie „jedno źródło prawdy",
+miesza treść przypisu z treścią dokumentu, utrudnia serializację i walidację odwołań.
+(b) Użyć numeru widocznego jako tożsamości — odrzucone wprost przez wymagania (niestabilne przy
+edycji/reorderze). (c) Zachować identyczne `w:id` OOXML w round-tripie — zbędne: liczy się
+semantyka; deterministyczne przemapowanie jest prostsze i odporne na edycję.
+
+## ADR-0038: Paginacja edytora wymusza DOM = obliczony rozkład (`_syncPageEditorDom`); strona ma stałą wysokość zamiast `min-height`
 
 - Date: 2026-07-09
 - Status: Accepted
@@ -70,7 +338,7 @@ Pola tekstowe (`div.docx-textbox`) nie miały żadnej obsługi w writerze — sp
 - Znacznik kotwicy w edytorze = overlay w `.page` (poza contenteditable), pozycjonowany w px układu strony (zoom/scroll bez przeliczeń), czysto informacyjny (pointer-events:none, aria-label). Drag zachowuje kotwicę (zmieniają się tylko offsety) — reguła przewidywalna, bez skoków.
 
 ### Consequences
-- Pola tekstowe (np. adres ING w stopce) przeżywają autosave z pozycją, rozmiarem, ramką i kotwicą; Word odzyskuje opływanie tekstem dla wrap=square/topAndBottom.
+- Pola tekstowe (np. adres Qutalo w stopce) przeżywają autosave z pozycją, rozmiarem, ramką i kotwicą; Word odzyskuje opływanie tekstem dla wrap=square/topAndBottom.
 - Ograniczenia: `wps:wsp` bez `mc:AlternateContent`+VML fallback (Word < 2010); wrapTight/Through ≈ wrapSquare (HTML nie niesie wrapPolygon); usunięcie akapitu-kotwicy usuwa obraz w nim zawarty (jak Word), textbox-brat dopina się do kolejnego akapitu; inline textbox w akapicie z tekstem po jednym cyklu ląduje we własnym akapicie przed kotwicą (wizualnie bez zmian — parser i tak go wyjmował).
 
 ### Alternatives considered
@@ -84,7 +352,7 @@ Pola tekstowe (`div.docx-textbox`) nie miały żadnej obsługi w writerze — sp
 - Status: Accepted
 
 ### Context
-Obiekty pływające (logo, pola tekstowe z adresem) w dokumentach ING renderowały się w edytorze w innym miejscu niż w MS Word — zwykle o cały margines za bardzo w lewo / za wysoko, albo wyrównane do lewej zamiast do prawej. Przyczyna: reader (`ConvertDrawingToHtml`, `BuildTextBoxLayoutCss`) brał surowy `wp:posOffset`, ignorując `relativeFrom` (page/margin/column/…) oraz `wp:align` (right/center/…). Offset kotwiczony do marginesu/kolumny startuje od obszaru treści, nie od krawędzi strony; a wyrównanie bez jawnego offsetu (klasyczny letterhead: logo do prawego marginesu) zeruje się do lewego górnego rogu. Dodatkowo writer eksportował pionową kotwicę jako `RelativeFrom=Page`, mimo że edytor traktuje Y względem góry obszaru treści.
+Obiekty pływające (logo, pola tekstowe z adresem) w dokumentach Qutalo renderowały się w edytorze w innym miejscu niż w MS Word — zwykle o cały margines za bardzo w lewo / za wysoko, albo wyrównane do lewej zamiast do prawej. Przyczyna: reader (`ConvertDrawingToHtml`, `BuildTextBoxLayoutCss`) brał surowy `wp:posOffset`, ignorując `relativeFrom` (page/margin/column/…) oraz `wp:align` (right/center/…). Offset kotwiczony do marginesu/kolumny startuje od obszaru treści, nie od krawędzi strony; a wyrównanie bez jawnego offsetu (klasyczny letterhead: logo do prawego marginesu) zeruje się do lewego górnego rogu. Dodatkowo writer eksportował pionową kotwicę jako `RelativeFrom=Page`, mimo że edytor traktuje Y względem góry obszaru treści.
 
 ### Decision
 - Reader rozwiązuje kotwicę do współrzędnych **układu edytora**: X = lewa krawędź strony (page-relative wprost), Y = góra obszaru treści (od page-relative odjęty górny margines, bo pasmo body zaczyna się pod nagłówkiem). `ResolveAxis` wybiera bazę + rozpiętość wg `relativeFrom`, po czym stosuje jawny offset ALBO wyrównanie `wp:align` w obrębie tej rozpiętości. Rozmiar obiektu do `align` brany z `wp:extent`. Geometria pierwszej sekcji trzymana w polach instancji (`LoadPageGeometry`); brak marginesów → domyślne 1440 twips (jak w Wordzie).

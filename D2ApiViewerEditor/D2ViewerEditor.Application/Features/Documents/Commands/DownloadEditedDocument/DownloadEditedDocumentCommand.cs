@@ -21,7 +21,8 @@ public record DownloadEditedDocumentCommand(
     HeaderFooterContent? Footer,
     PageMargins? Margins,
     PageSize? PageSize = null,
-    List<SectionHeaderFooter>? SectionHeadersFooters = null
+    List<SectionHeaderFooter>? SectionHeadersFooters = null,
+    List<Footnote>? Footnotes = null
 ) : IRequest<Result<DownloadEditedDocumentResult>>;
 
 public record DownloadEditedDocumentResult(byte[] DocxBytes, string FileName);

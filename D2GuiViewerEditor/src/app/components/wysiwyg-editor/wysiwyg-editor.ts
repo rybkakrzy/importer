@@ -27,9 +27,15 @@ import {
   PageMargins,
   PageSize,
   HeaderFooterContent,
-  SectionHeaderFooter
+  SectionHeaderFooter,
+  Footnote
 } from '../../models/document.model';
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
+import {
+  applyListLabels,
+  ensureBulletMarkers,
+  stripListLabelAttributes,
+} from '../../core/utils/list-label.util';
 import { syncTableColgroup } from '../../core/utils/table-grid.util';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 import {
@@ -124,6 +130,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.pageGeometries.set(this._deriveGeometriesForPages(pages));
       // Po Angular re-render zaktualizuj aktywny edytor i zrepaginuj
       this._schedulePaginate('content-input');
+      // Etykiety list DOCX liczy silnik (nie przeglądarka) — po renderze stron; przy okazji
+      // zsynchronizuj toolbar z pierwszym fragmentem świeżo załadowanego dokumentu (rozmiar/
+      // krój czcionki itd.) — bez tego pole pokazuje domyślne 11 do 1. kliknięcia użytkownika.
+      setTimeout(() => {
+        this.refreshListLabels();
+        this._syncInitialFormatting();
+      }, 0);
     }
   }
   
@@ -214,48 +227,53 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   @Input() readOnly = false;
   @Input() showMarginGuides = false;
   
-  // Nagłówek i stopka
+  // Nagłówek i stopka. Każde pasmo trzyma WŁASNE flagi wariantów: inputy headerContent
+  // i footerContent są aplikowane jeden po drugim, więc wspólna flaga była nadpisywana
+  // przez binding wykonany później (dokument z nagłówkiem first bez stopki first tracił
+  // titlePg nagłówka — strona 1 renderowała wariant default).
   @Input() set headerContent(value: HeaderFooterContent | undefined) {
     if (value) {
       this._headerHtml.set(value.html || '');
       this._headerHeight.set(value.height || 1.27);
       if (value.differentFirstPage !== undefined) {
-        this._differentFirstPage.set(value.differentFirstPage);
+        this._headerDifferentFirstPage.set(value.differentFirstPage ?? false);
       }
       if (value.firstPageHtml !== undefined) {
-        this._headerFirstPageHtml.set(value.firstPageHtml);
+        this._headerFirstPageHtml.set(value.firstPageHtml ?? '');
       }
       if (value.differentOddEven !== undefined) {
-        this._differentOddEven.set(value.differentOddEven);
+        this._headerDifferentOddEven.set(value.differentOddEven ?? false);
       }
       if (value.oddHtml !== undefined) {
-        this._headerOddHtml.set(value.oddHtml);
+        this._headerOddHtml.set(value.oddHtml ?? '');
       }
       if (value.evenHtml !== undefined) {
-        this._headerEvenHtml.set(value.evenHtml);
+        this._headerEvenHtml.set(value.evenHtml ?? '');
       }
+      this.invalidateHeaderFooterCache();
     }
   }
-  
+
   @Input() set footerContent(value: HeaderFooterContent | undefined) {
     if (value) {
       this._footerHtml.set(value.html || '');
       this._footerHeight.set(value.height || 1.27);
       if (value.differentFirstPage !== undefined) {
-        this._differentFirstPage.set(value.differentFirstPage);
+        this._footerDifferentFirstPage.set(value.differentFirstPage ?? false);
       }
       if (value.firstPageHtml !== undefined) {
-        this._footerFirstPageHtml.set(value.firstPageHtml);
+        this._footerFirstPageHtml.set(value.firstPageHtml ?? '');
       }
       if (value.differentOddEven !== undefined) {
-        this._differentOddEven.set(value.differentOddEven);
+        this._footerDifferentOddEven.set(value.differentOddEven ?? false);
       }
       if (value.oddHtml !== undefined) {
-        this._footerOddHtml.set(value.oddHtml);
+        this._footerOddHtml.set(value.oddHtml ?? '');
       }
       if (value.evenHtml !== undefined) {
-        this._footerEvenHtml.set(value.evenHtml);
+        this._footerEvenHtml.set(value.evenHtml ?? '');
       }
+      this.invalidateHeaderFooterCache();
     }
   }
   
@@ -411,10 +429,180 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this._safeFooterCache.clear();
   }
 
+  // ── Przypisy dolne ────────────────────────────────────────────────────────
+  // Treść przypisów (jedno źródło prawdy) trzymana w sygnale, renderowana w panelu
+  // POZA contenteditable body. Odwołania (<sup class="footnote-ref">) żyją w treści
+  // strony; numer widoczny wynika z kolejności pierwszych odwołań i jest przeliczany
+  // po każdej operacji edycyjnej (add/remove/reorder).
+
+  private readonly _footnotes = signal<Footnote[]>([]);
+  readonly footnoteList = computed(() => this._footnotes());
+
+  @Input() set footnotes(value: Footnote[] | undefined) {
+    // Kopia obronna — nie mutujemy tablicy wejściowej rodzica.
+    this._footnotes.set(value ? value.map(f => ({ ...f })) : []);
+  }
+
+  @Output() footnotesChange = new EventEmitter<Footnote[]>();
+
+  /** Cache SafeHtml treści przypisu (klucz = id + treść) — bez tego rebinding kasuje kursor. */
+  private _footnoteHtmlCache = new Map<string, SafeHtml>();
+
+  footnoteSafeHtml(fn: Footnote): SafeHtml {
+    const key = `${fn.id}\x00${fn.html}`;
+    let safe = this._footnoteHtmlCache.get(key);
+    if (!safe) {
+      safe = this._sanitizer.bypassSecurityTrustHtml(fn.html || '<p></p>');
+      this._footnoteHtmlCache.set(key, safe);
+    }
+    return safe;
+  }
+
+  /** Zwraca aktualny model przypisów (dla zapisu / testów). */
+  getFootnotes(): Footnote[] {
+    return this._footnotes().map(f => ({ ...f }));
+  }
+
+  /** Commit treści przypisu po edycji w panelu (blur) → aktualizacja modelu + emisja. */
+  commitFootnoteContent(id: string, event: Event): void {
+    if (this.readOnly) return;
+    const el = event.target as HTMLElement | null;
+    if (!el) return;
+    const html = el.innerHTML;
+    const current = this._footnotes();
+    const idx = current.findIndex(f => f.id === id);
+    if (idx < 0 || current[idx].html === html) return;
+
+    const updated = current.map(f => (f.id === id ? { ...f, html } : f));
+    this._footnotes.set(updated);
+    this.footnotesChange.emit(this.getFootnotes());
+  }
+
+  /** Wszystkie odwołania w treści stron, w kolejności dokumentu (DOM). */
+  private _footnoteReferenceElements(): HTMLElement[] {
+    const refs: HTMLElement[] = [];
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      page.nativeElement
+        .querySelectorAll<HTMLElement>('sup.footnote-ref[data-footnote-id]')
+        .forEach(el => refs.push(el));
+    }
+    return refs;
+  }
+
+  /**
+   * Uzgadnia model przypisów z odwołaniami w treści: numeruje odwołania wg kolejności
+   * pierwszego wystąpienia, porządkuje listę treści tak samo, usuwa treści bez odwołania
+   * (brak osieroconych) i emituje zmianę. Woływane po każdej operacji edycyjnej.
+   */
+  syncFootnotesWithBody(): void {
+    const refEls = this._footnoteReferenceElements();
+
+    // Kolejność pierwszych wystąpień + mapa id → numer (współdzielony przez powtórzone odwołania).
+    const order: string[] = [];
+    const numberById = new Map<string, number>();
+    for (const el of refEls) {
+      const id = el.getAttribute('data-footnote-id') ?? '';
+      if (!id) continue;
+      if (!numberById.has(id)) {
+        numberById.set(id, order.length + 1);
+        order.push(id);
+      }
+    }
+
+    // Odśwież numer + etykietę na KAŻDYM odwołaniu (także powtórzonych).
+    for (const el of refEls) {
+      const id = el.getAttribute('data-footnote-id') ?? '';
+      const number = numberById.get(id);
+      if (!number) continue;
+      if (el.textContent !== String(number)) el.textContent = String(number);
+      el.setAttribute('aria-label', `Przypis ${number}`);
+    }
+
+    // Uporządkuj listę treści wg kolejności odwołań; treści bez odwołania są usuwane.
+    const byId = new Map(this._footnotes().map(f => [f.id, f]));
+    const reordered: Footnote[] = order.map(id => byId.get(id) ?? { id, html: '<p></p>' });
+
+    if (this._footnotesChanged(reordered)) {
+      this._footnotes.set(reordered);
+      this.footnotesChange.emit(this.getFootnotes());
+    }
+  }
+
+  private _footnotesChanged(next: Footnote[]): boolean {
+    const cur = this._footnotes();
+    if (cur.length !== next.length) return true;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i].id !== next[i].id || cur[i].html !== next[i].html) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Wstawia nowy przypis w bieżącej pozycji kursora: odwołanie <sup> w treści + pusty
+   * wpis treści w modelu, po czym przelicza numerację. Zwraca id nowego przypisu.
+   */
+  addFootnoteAtCursor(): string | null {
+    if (this.readOnly) return null;
+    const editor = this.getActiveEditor();
+    if (!editor) return null;
+
+    const id = `fn-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const sup = document.createElement('sup');
+    sup.className = 'footnote-ref';
+    sup.setAttribute('data-footnote-id', id);
+    sup.setAttribute('aria-label', 'Przypis');
+    sup.textContent = '?';
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(sup);
+      range.setStartAfter(sup);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } else {
+      editor.appendChild(sup);
+    }
+
+    // Dodaj wpis treści; kolejność/numer ustali syncFootnotesWithBody wg pozycji w DOM.
+    this._footnotes.set([...this._footnotes(), { id, html: '<p></p>' }]);
+    this.syncFootnotesWithBody();
+    this.contentChange.emit(this.getContent());
+    return id;
+  }
+
+  /**
+   * Usuwa przypis: kasuje WSZYSTKIE jego odwołania z treści oraz wpis treści, po czym
+   * przelicza numerację. Bez osieroconych odwołań ani nieużywanych przypisów.
+   */
+  removeFootnote(id: string): void {
+    if (this.readOnly) return;
+
+    let removedFromDom = false;
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      page.nativeElement
+        .querySelectorAll<HTMLElement>(`sup.footnote-ref[data-footnote-id="${id}"]`)
+        .forEach(el => { el.remove(); removedFromDom = true; });
+    }
+
+    // Nie usuwamy z modelu ręcznie — syncFootnotesWithBody przytnie treść bez odwołania,
+    // przenumeruje pozostałe i wyemituje footnotesChange. Przypis bez odwołania w DOM też
+    // zostanie przycięty (brak nieużywanych przypisów).
+    this.syncFootnotesWithBody();
+    if (removedFromDom) this.contentChange.emit(this.getContent());
+  }
+
   // Paginator: debounce + safety flag
   private _paginateTimer: ReturnType<typeof setTimeout> | null = null;
   private _paginateRafHandle: number | null = null;
   private _isRepaginating = false;
+  // Guards the corrective repagination that runs once fonts/images finish loading.
+  // The generation token lets a newer import cancel an in-flight resource wait so a
+  // stale document never repaginates over a fresh one.
+  private _isDestroyed = false;
+  private _resourceRepaginateGen = 0;
 
   // Bieżący rozmiar czcionki (dla nowego tekstu gdy nie ma zaznaczenia)
   private currentFontSize = 11;
@@ -453,8 +641,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * domyślny font i data-default-* (writer regenerował pakiet z hardkodowanymi 11pt/259).
    */
   private _documentContainerAttrs: { name: string; value: string }[] | null = null;
-  private _differentFirstPage = signal<boolean>(false);
-  private _differentOddEven = signal<boolean>(false);
+  // Flagi wariantów PER PASMO (patrz settery headerContent/footerContent) — w DOCX
+  // titlePg jest właściwością sekcji wspólną dla nagłówka i stopki, ale kontrakt
+  // HeaderFooterContent raportuje ją per pasmo (nagłówek może mieć wariant first,
+  // a stopka nie), więc wspólna flaga gubiła stan jednego z pasm.
+  private _headerDifferentFirstPage = signal<boolean>(false);
+  private _footerDifferentFirstPage = signal<boolean>(false);
+  private _headerDifferentOddEven = signal<boolean>(false);
+  private _footerDifferentOddEven = signal<boolean>(false);
   editingSection = signal<'header' | 'footer' | 'body'>('body');
   /** Strona, na której trwa edycja nagłówka/stopki — edycja pasma sekcji ≥ 1 odbywa się
    *  na stronie tej sekcji (właściciel treści = wpis sekcyjny albo baza). */
@@ -467,8 +661,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // Publiczne gettery dla template
   headerHeight = computed(() => this._headerHeight());
   footerHeight = computed(() => this._footerHeight());
-  differentFirstPage = computed(() => this._differentFirstPage());
-  differentOddEven = computed(() => this._differentOddEven());
+  differentFirstPage = computed(() => this._headerDifferentFirstPage() || this._footerDifferentFirstPage());
+  differentOddEven = computed(() => this._headerDifferentOddEven() || this._footerDifferentOddEven());
 
   // Computed: zawartość nagłówka/stopki per strona (reaktywna na zmiany sygnałów).
   // Iterujemy pageContents() — RZECZYWISTĄ listę stron. Wcześniej używano martwego
@@ -521,6 +715,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       syncActiveEditor();
       // Po repaginacji ponownie podpinamy listenery do nowych edytorów
       this.setupEventListeners();
+      // Nowe/usunięte strony mogą przecinać listy — przelicz etykiety w kolejności dokumentu.
+      this.refreshListLabels();
     });
 
     this.initializeEditor();
@@ -530,6 +726,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     setTimeout(() => {
       this.calculatePages();
       this._schedulePaginate('init');
+      // Pomiar wstępny leci na metrykach dostępnych „teraz"; po doładowaniu web-fontów/obrazów
+      // skoryguj liczbę stron jednym przebiegiem (patrz _repaginateAfterResources).
+      this._repaginateAfterResources();
     }, 100);
     
     // Sprawdzaj podział na strony co 500ms
@@ -539,6 +738,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this._isDestroyed = true;
     if (this.pageCheckInterval) {
       clearInterval(this.pageCheckInterval);
     }
@@ -2472,13 +2672,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       span.innerHTML = '\u200B';
       
       range.insertNode(span);
-      
+
       const newRange = document.createRange();
       newRange.setStart(span.firstChild!, 1);
       newRange.setEnd(span.firstChild!, 1);
       selection.removeAllRanges();
       selection.addRange(newRange);
-      
+      // Keep the saved caret and toolbar state in sync with the fresh span (parity with
+      // setFontSize): a follow-up combobox pick restores INTO the span instead of the
+      // pre-span caret, and the selector reflects the chosen font before any typing.
+      this.savedSelection = newRange.cloneRange();
+      this.updateFormattingState();
+
       return;
     }
 
@@ -2950,6 +3155,82 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Snapshots the current editor selection as a bookmark for a deferred paste.
+   *
+   * Captured synchronously at command-invocation time (e.g. the moment a menu item
+   * is clicked) so that a later async clipboard read, menu teardown or focus change
+   * cannot move the paste target. Falls back to the continuously-tracked
+   * `savedSelection` when the live selection has already left the editor.
+   */
+  captureSelectionBookmark(): Range | null {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && this.isSelectionInEditor(sel)) {
+      return sel.getRangeAt(0).cloneRange();
+    }
+    return this.savedSelection ? this.savedSelection.cloneRange() : null;
+  }
+
+  /**
+   * Pastes plain text at a previously captured bookmark ("Wklej bez formatowania").
+   *
+   * Unlike insertText() this NEVER trusts the transient live selection: after a menu
+   * click plus an async clipboard read the live selection is unreliable and used to
+   * point back at the source range, which is why the pasted text both landed in the
+   * wrong place AND kept the source formatting (it inherited the source run's style).
+   * We insert a bare text node at the target instead, so the run inherits the target
+   * context formatting and no source marks survive. Newlines become soft <br> breaks.
+   * The whole insertion emits a single content change → a single undo entry, and the
+   * caret is left directly after the inserted text.
+   */
+  pastePlainTextAt(bookmark: Range | null, rawText: string): void {
+    const text = normalizeWhitespace(rawText);
+    if (!text) return;
+
+    const editor = this.getActiveEditor();
+    // The bookmark must still live inside the current editor DOM. Async clipboard
+    // reads, a document swap or an unmount can invalidate it — abort rather than
+    // paste into the wrong place (or throw on a detached range).
+    if (!editor || !bookmark || !editor.contains(bookmark.startContainer)) return;
+
+    const range = bookmark.cloneRange();
+    range.deleteContents(); // replace the target selection when it was non-empty
+
+    const fragment = this.buildPlainTextFragment(text);
+    const lastNode = fragment.lastChild;
+    range.insertNode(fragment);
+
+    const sel = window.getSelection();
+    if (sel && lastNode) {
+      const caret = document.createRange();
+      caret.setStartAfter(lastNode);
+      caret.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(caret);
+      this.savedSelection = caret.cloneRange();
+    }
+
+    editor.focus();
+    this.onContentChange();
+  }
+
+  /**
+   * Builds a DOM fragment for plain text: newlines become <br>, the rest are text
+   * nodes. Text nodes (not innerHTML) guarantee that `<`, `>`, `&` stay literal — the
+   * pasted string is never parsed as HTML.
+   */
+  private buildPlainTextFragment(text: string): DocumentFragment {
+    const fragment = document.createDocumentFragment();
+    const lines = text.split('\n');
+    lines.forEach((line, index) => {
+      if (index > 0) {
+        fragment.appendChild(document.createElement('br'));
+      }
+      fragment.appendChild(document.createTextNode(line));
+    });
+    return fragment;
+  }
+
+  /**
    * Wstawia HTML
    */
   insertHtml(html: string): void {
@@ -3155,7 +3436,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       for (let j = 0; j < cols; j++) {
         const td = document.createElement('td');
         td.style.cssText = `border:1px solid #ccc;padding:8px;min-width:30px;width:${colWidth}%;`;
-        td.innerHTML = '&nbsp;';
+        // <br> a nie &nbsp; — twarda spacja zostawała przed wpisanym tekstem i szła do DOCX
+        td.innerHTML = '<br>';
         tr.appendChild(td);
       }
       table.appendChild(tr);
@@ -3322,8 +3604,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._content.set(previous);
       this.contentChange.emit(previous);
       this._schedulePaginate('undo');
-      
+
       this.updateState();
+      // Snapshot undo jest bez atrybutów etykiet (strip przy serializacji) — przelicz po renderze.
+      setTimeout(() => this.refreshListLabels(), 0);
     }
   }
 
@@ -3340,8 +3624,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._content.set(next);
       this.contentChange.emit(next);
       this._schedulePaginate('redo');
-      
+
       this.updateState();
+      setTimeout(() => this.refreshListLabels(), 0);
     }
   }
 
@@ -3372,28 +3657,39 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aktualizuje stan formatowania
    */
   private updateFormattingState(): void {
-    const formatting: TextFormatting = {
-      bold: document.queryCommandState('bold'),
-      italic: document.queryCommandState('italic'),
-      underline: document.queryCommandState('underline'),
-      strikethrough: document.queryCommandState('strikeThrough'),
-      subscript: document.queryCommandState('subscript'),
-      superscript: document.queryCommandState('superscript')
-    };
-
     // Pobierz rzeczywisty rozmiar i czcionkę z computed styles
     const selection = window.getSelection();
     let fontSize = 11;
     let fontFamily = 'Calibri';
     let textColor = '#000000';
     let currentBlockFormat = 'p';
+    // Wyrównanie/listy liczone z DOM (nie queryCommandState) — komendy justify* zapisują
+    // inline text-align na bloku, a import DOCX niesie je i inline, i przez style;
+    // computed style pokrywa oba źródła. Domyślne 'start' = lewa (jak w Wordzie).
+    let alignment: 'left' | 'center' | 'right' | 'justify' = 'left';
+    let bulletList = false;
+    let numberedList = false;
 
-    if (selection && selection.rangeCount > 0) {
+    // Read from the live selection when it exists and is either inside the editor OR there
+    // is no mounted editor to fall back to (the latter keeps direct-call unit tests working).
+    // Otherwise — e.g. right after a document loads, before the user clicks — resolve the
+    // formatting context from the first editable run so the toolbar reflects the real
+    // document (9pt) instead of the hard-coded default (11pt). The fallback never touches
+    // focus, selection, dirty state or the undo stack; it only reads computed styles.
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const hasEditors = refs.length > 0;
+    const selInEditor =
+      !!selection && selection.rangeCount > 0 && this.isSelectionInEditor(selection);
+    const fromSelection =
+      !!selection && selection.rangeCount > 0 && (selInEditor || !hasEditors);
+
+    let element: HTMLElement | null = null;
+    if (fromSelection) {
       // Wyznacz „element pod karetką" tak, żeby na granicach spanów
       // (np. selection.anchorNode wskazuje na sam <h1> z offsetem dziecka)
       // wejść w głąb do faktycznego text-node/span — inaczej odczyt computed
       // font-family/size wraca z <h1>/<p> zamiast z konkretnego runa.
-      const range = selection.getRangeAt(0);
+      const range = selection!.getRangeAt(0);
       let node: Node | null = range.startContainer;
       if (node && node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
@@ -3407,36 +3703,66 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           node = (node as HTMLElement).firstChild;
         }
       }
-      let element: HTMLElement | null = null;
       if (node?.nodeType === Node.TEXT_NODE) {
         element = node.parentElement;
       } else if (node instanceof HTMLElement) {
         element = node;
       }
-
-      if (element) {
-        const computedStyle = window.getComputedStyle(element);
-        
-        // Rozmiar czcionki - konwersja px na pt
-        const fontSizePx = parseFloat(computedStyle.fontSize);
-        fontSize = Math.round(fontSizePx * 0.75); // px to pt (96dpi / 72pt)
-        
-        // Czcionka - usuń cudzysłowy i weź pierwszą
-        fontFamily = computedStyle.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
-        
-        // Kolor tekstu
-        textColor = this.rgbToHex(computedStyle.color);
-
-        // Znajdź blok nadrzędny (p, h1, h2, etc.)
-        let blockElement = element;
-        while (blockElement && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'LI'].includes(blockElement.tagName)) {
-          blockElement = blockElement.parentElement!;
-        }
-        if (blockElement) {
-          currentBlockFormat = blockElement.tagName.toLowerCase();
-        }
-      }
+    } else {
+      element = this._firstEditableContextElement();
     }
+
+    if (element) {
+      const computedStyle = window.getComputedStyle(element);
+
+      // Rozmiar czcionki - konwersja px na pt
+      const fontSizePx = parseFloat(computedStyle.fontSize);
+      fontSize = Math.round(fontSizePx * 0.75); // px to pt (96dpi / 72pt)
+
+      // Czcionka - usuń cudzysłowy i weź pierwszą
+      fontFamily = computedStyle.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+
+      // Kolor tekstu
+      textColor = this.rgbToHex(computedStyle.color);
+
+      // Znajdź blok nadrzędny (p, h1, h2, etc.)
+      let blockElement = element;
+      while (blockElement && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'LI'].includes(blockElement.tagName)) {
+        blockElement = blockElement.parentElement!;
+      }
+      if (blockElement) {
+        currentBlockFormat = blockElement.tagName.toLowerCase();
+        const ta = window.getComputedStyle(blockElement).textAlign;
+        alignment = ta === 'center' ? 'center'
+          : (ta === 'right' || ta === 'end') ? 'right'
+          : ta === 'justify' ? 'justify'
+          : 'left';
+      }
+
+      const li = element.closest('li');
+      const listTag = li?.parentElement?.tagName;
+      bulletList = listTag === 'UL';
+      numberedList = listTag === 'OL';
+    }
+
+    // Bold/italic/underline/… come from queryCommandState when a real selection drives the
+    // read; on the load-time fallback there is no selection, so derive them from the first
+    // run's computed style to keep the whole toolbar consistent with the shown font size.
+    const formatting: TextFormatting = {
+      ...(fromSelection
+        ? {
+            bold: document.queryCommandState('bold'),
+            italic: document.queryCommandState('italic'),
+            underline: document.queryCommandState('underline'),
+            strikethrough: document.queryCommandState('strikeThrough'),
+            subscript: document.queryCommandState('subscript'),
+            superscript: document.queryCommandState('superscript'),
+          }
+        : this._readInlineFormattingFromElement(element)),
+      alignment,
+      bulletList,
+      numberedList
+    };
 
     // Detect a selection that spans more than one font family so the toolbar can
     // show a mixed (blank) state instead of an arbitrary single font (item 6).
@@ -3455,6 +3781,75 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }));
 
     this.stateChange.emit(this.editorState());
+  }
+
+  /**
+   * Resolves the element whose formatting the toolbar should reflect when there is no
+   * selection inside the editor (initial load / document switch). Anchors to the FIRST
+   * block like Word's caret: prefers the first real text run in that block (its inline
+   * run carries the size), falling back to the block itself for an empty first paragraph
+   * so the toolbar shows the inherited style/docDefault size rather than the editor default.
+   */
+  private _firstEditableContextElement(): HTMLElement | null {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const editor = refs[0]?.nativeElement ?? this.editorContent?.nativeElement ?? null;
+    if (!editor) return null;
+
+    const firstBlock =
+      editor.querySelector('p, h1, h2, h3, h4, h5, h6, li, td, th, div') as HTMLElement | null;
+
+    const walker = document.createTreeWalker(firstBlock ?? editor, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n: Node) =>
+        (n.textContent ?? '').replace(/[\u200B\uFEFF\u00A0]/g, '').trim().length > 0
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT,
+    });
+    const textNode = walker.nextNode();
+    // Prefer the first real text run; else the first block (empty paragraph \u2192 inherited size).
+    // A structureless, empty editor yields null so the caller keeps the neutral default.
+    return (textNode?.parentElement as HTMLElement | null) ?? firstBlock;
+  }
+
+  /**
+   * Derives bold/italic/underline/strike/sub/sup from an element's computed style. Used on
+   * the load-time fallback where `document.queryCommandState` has no selection to report on.
+   */
+  private _readInlineFormattingFromElement(
+    element: HTMLElement | null,
+  ): Pick<TextFormatting, 'bold' | 'italic' | 'underline' | 'strikethrough' | 'subscript' | 'superscript'> {
+    const empty = {
+      bold: false, italic: false, underline: false,
+      strikethrough: false, subscript: false, superscript: false,
+    };
+    if (!element) return empty;
+    try {
+      const cs = window.getComputedStyle(element);
+      const weight = parseInt(cs.fontWeight, 10);
+      const decoration = `${cs.textDecorationLine || cs.textDecoration || ''}`;
+      return {
+        bold: (Number.isFinite(weight) && weight >= 600)
+          || cs.fontWeight === 'bold' || cs.fontWeight === 'bolder',
+        italic: cs.fontStyle === 'italic' || cs.fontStyle === 'oblique',
+        underline: decoration.includes('underline'),
+        strikethrough: decoration.includes('line-through'),
+        subscript: !!element.closest('sub') || cs.verticalAlign === 'sub',
+        superscript: !!element.closest('sup') || cs.verticalAlign === 'super',
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  /**
+   * Populates the toolbar from the freshly loaded document, without focus, selection, dirty
+   * flag, undo entry or scrolling. Must be called AFTER the content has rendered (the callers
+   * invoke it from the same post-render `setTimeout` that already reads the live DOM). The
+   * `updateFormattingState` fallback is a no-op once the user has placed the caret, so this is
+   * safe to run on every external content load (including document switches).
+   */
+  private _syncInitialFormatting(): void {
+    if (this._isDestroyed) return;
+    this.updateFormattingState();
   }
 
   /**
@@ -3587,11 +3982,60 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.updateFormattingState();
   }
 
+  /** Placeholder &nbsp; pustych bloków (komórki tabel, akapity z importu DOCX) musi
+   *  zniknąć w chwili rozpoczęcia pisania — inaczej tekst zaczyna się od twardej
+   *  spacji, której nie ma w Wordzie. Zamiast usuwać węzeł (kursor straciłby kotwicę),
+   *  zaznaczamy nbsp, więc domyślne wstawienie tekstu go zastępuje. */
+  onEditorBeforeInput(event: InputEvent): void {
+    if (event.inputType !== 'insertText' && event.inputType !== 'insertFromPaste') return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+    const anchor = sel.anchorNode;
+    if (!anchor) return;
+    const el = anchor.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor.parentElement;
+    const block = el?.closest('p, h1, h2, h3, h4, h5, h6, li, td, th');
+    if (!block || block.textContent !== '\u00A0') return;
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+    let nbspNode: Text | null = null;
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if ((n as Text).data.includes('\u00A0')) { nbspNode = n as Text; break; }
+    }
+    if (!nbspNode) return;
+    const range = document.createRange();
+    range.selectNodeContents(nbspNode);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  /**
+   * Przelicza etykiety list DOCX silnikiem z `list-label.util` na wszystkich stronach
+   * W KOLEJNOŚCI DOKUMENTU (kontynuacja działa przez granice stron i fragmentów listy).
+   * Render robi CSS ::before z data-list-label — poza edytowalnym tekstem; serializacja
+   * zapisu zdejmuje atrybuty (stripListLabelAttributes w _serializeSingleEditor).
+   */
+  refreshListLabels(): void {
+    const roots = (this.pageEditorRefs?.toArray() ?? []).map(r => r.nativeElement);
+    if (roots.length === 0 && this.editorContent?.nativeElement) {
+      roots.push(this.editorContent.nativeElement);
+    }
+    if (roots.length === 0) return;
+    applyListLabels(roots);
+    // li utworzony Enterem nie dziedziczy marker spana (własny symbol / "TODO:" / obraz
+    // punktatora) — uzupełnij klonem z rodzeństwa, żeby nowy element miał znacznik.
+    ensureBulletMarkers(roots);
+  }
+
   /** Debounce ciężkich operacji (undo snapshot + emit contentChange) — 500 ms. */
   private _schedulePersist(): void {
     if (this._persistTimer) clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
+      // Renumeruj przypisy i przytnij osierocone treści PRZED serializacją — edycja treści
+      // (usunięcie/przeniesienie odwołania) musi uaktualnić numerację i model przypisów.
+      this.syncFootnotesWithBody();
+      // Przelicz etykiety list (dodanie/usunięcie li zmienia numery dalszych elementów,
+      // także w innych fragmentach tej samej listy — natywny <ol start> tego nie umie).
+      this.refreshListLabels();
       const html = this.getContent();
       this._isInternalUpdate = true;
       this._content.set(html);
@@ -3825,6 +4269,58 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Jednorazowa KOREKCYJNA repaginacja po ustabilizowaniu zasobów wpływających na wysokość
+   * bloków. Pierwsza paginacja (init/setContent) mierzy bloki, zanim doładują się web-fonty
+   * i obrazy, więc korzysta z metryk fallbacku (inne wznoszenie/opadanie/interlinia niż
+   * docelowa czcionka) i potrafi policzyć INNĄ liczbę stron niż finalny układ — a to właśnie
+   * finalny układ ma odpowiadać Wordowi. Czekamy na `document.fonts.ready` oraz doładowanie
+   * obrazów, a potem robimy JEDEN przebieg (`_flushPaginateNow`). `_repaginateNow` i tak
+   * rebinduje DOM tylko, gdy rozkład bloków REALNIE się zmienił, więc brak zmian metryk =
+   * brak przeliczeń (bez wyścigów i migotania). Token generacji anuluje oczekiwanie, gdy w
+   * międzyczasie wjechał nowy dokument.
+   */
+  private _repaginateAfterResources(): void {
+    const gen = ++this._resourceRepaginateGen;
+    // jsdom (Vitest) nie ma FontFaceSet — traktuj brak jako „gotowe".
+    const fontSet = (document as unknown as { fonts?: { ready?: Promise<unknown> } }).fonts;
+    const fontsReady: Promise<unknown> =
+      fontSet && typeof fontSet.ready?.then === 'function' ? fontSet.ready : Promise.resolve();
+    Promise.all([fontsReady, this._pendingImagesSettled()])
+      .then(() => {
+        if (this._isDestroyed || gen !== this._resourceRepaginateGen) return;
+        this._flushPaginateNow();
+      })
+      .catch(() => {
+        /* Oczekiwanie na zasoby nie może wywrócić edytora — najwyżej zostaje pomiar wstępny. */
+      });
+  }
+
+  /**
+   * Rozwiązuje się, gdy wszystkie jeszcze-ładujące się obrazy w edytorach stron załadują się
+   * (lub zwrócą błąd). Safety-timeout gwarantuje, że zawieszony/uszkodzony obraz nigdy nie
+   * zablokuje przebiegu korekcyjnego.
+   */
+  private _pendingImagesSettled(): Promise<void> {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const pending: Promise<void>[] = [];
+    for (const ref of refs) {
+      const imgs = ref.nativeElement.querySelectorAll('img');
+      imgs.forEach((img: HTMLImageElement) => {
+        if (img.complete) return;
+        pending.push(
+          new Promise<void>(resolve => {
+            const done = () => resolve();
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+            setTimeout(done, 3000);
+          })
+        );
+      });
+    }
+    return pending.length ? Promise.all(pending).then(() => undefined) : Promise.resolve();
+  }
+
+  /**
    * Główna paginacja: bierze zawartość każdej strony, łączy, dzieli na kartki A4
    * z zachowaniem reguły "block-atomic" (paragraf w całości na 1 stronie),
    * z wyjątkiem tabel — te dzielimy między wierszami.
@@ -3841,11 +4337,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const caret = this._saveGlobalCaret(refs);
 
       const allBlocks: HTMLElement[] = [];
+      // Serializacja ŻYWEGO DOM per strona (tym samym mechanizmem co newPageContents niżej)
+      // — potrzebna do decyzji, czy rebind [innerHTML] jest w ogóle konieczny. Celowo BEZ
+      // fallbacku '<p></p>': pusta strona w DOM musi różnić się od syntetycznego akapitu,
+      // żeby rebind przywrócił edytowalny <p>.
+      const livePageContents: string[] = [];
+      const liveTmp = document.createElement('div');
       for (const ref of refs) {
         const kids = this._flattenTopBlocks(ref.nativeElement);
+        liveTmp.innerHTML = '';
         kids.forEach(child => {
-          allBlocks.push(child.cloneNode(true) as HTMLElement);
+          const clone = child.cloneNode(true) as HTMLElement;
+          allBlocks.push(clone);
+          liveTmp.appendChild(clone);
         });
+        livePageContents.push(liveTmp.innerHTML);
       }
       if (allBlocks.length === 0) {
         allBlocks.push(document.createElement('p'));
@@ -3984,10 +4490,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
       this.pageGeometries.set(pageGeos);
       this.pageSectionIndexes.set(pageSections);
-      const current = this.pageContents();
-      const identical = current.length === newPageContents.length
-        && current.every((v, i) => v === newPageContents[i]);
-      if (!identical) {
+      // Rebind [innerHTML] tylko gdy rozkład bloków na strony REALNIE się zmienił — porównanie
+      // z ŻYWYM DOM, nie z sygnałem pageContents. Sygnał jest celowo przestarzały między
+      // repaginacjami (onPageInput go nie aktualizuje), więc przy pisaniu różnił się ZAWSZE
+      // i każda repaginacja (max-wait 600 ms) wymieniała DOM stron: selekcja ginęła, kursor
+      // na ułamek sekundy spadał na początek dokumentu, a znaki wpisane przed odtworzeniem
+      // karetki lądowały w złym miejscu / ginęły. Zgodność liczby stron z sygnałem jest
+      // wymagana, bo to sygnał steruje @for stron (żywy DOM opisuje tylko wyrenderowane).
+      const domAlreadyCorrect = newPageContents.length === this.pageContents().length
+        && newPageContents.length === livePageContents.length
+        && newPageContents.every((v, i) => v === livePageContents[i]);
+      if (!domAlreadyCorrect) {
         this.pageContents.set(newPageContents);
         setTimeout(() => {
           // KRYTYCZNE: Angular NIE nadpisuje `[innerHTML]`, gdy obliczona treść strony jest
@@ -4511,6 +5024,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // trafił (np. przez wklejenie) — usuń przy serializacji.
     clone.querySelectorAll('.anchor-badge').forEach(b => b.remove());
 
+    // Etykiety list (data-list-label/-suffix) są czysto prezentacyjne — liczy je silnik
+    // przy każdym renderze; w zapisie byłyby szumem i groziłyby dryfem po edycjach.
+    stripListLabelAttributes(clone);
+
     clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;
       wrapper.classList.remove('selected');
@@ -4549,15 +5066,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // avoids doubling them.
     this._content.set(pages.join(''));
     this._isDirty = false;
-    // Po Angular re-render: opakuj obrazki, zapisz snapshot, repaginuj
+    // Po Angular re-render: opakuj obrazki, przelicz etykiety list, zapisz snapshot, repaginuj
     setTimeout(() => {
       this.wrapExistingImages();
+      this.refreshListLabels();
       const merged = this.getContent();
       this.lastSavedContent = merged;
       this.undoStack = [merged];
       this.redoStack = [];
       this.updateState();
       this._schedulePaginate('setContent');
+      this._syncInitialFormatting();
+      // Import zwykle wnosi nowe czcionki/obrazy — skoryguj paginację, gdy się doładują,
+      // żeby liczba stron odpowiadała finalnemu układowi (a nie metrykom fallbacku).
+      this._repaginateAfterResources();
     }, 0);
   }
 
@@ -4820,29 +5342,25 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return Number.isFinite(n) && n >= 1 ? n - 1 : 0;
   }
 
-  /** HTML wariantu edytowanego na danej stronie: wpis sekcyjny albo warianty bazy. */
+  /** HTML wariantu edytowanego na danej stronie — TEN SAM resolver co rendering (rule 10:
+   *  klikasz to, co widzisz; edytujesz dokładnie wyświetlany wariant). */
   private _editableHeaderHtml(pageIndex: number): string {
-    const entry = this._sectionEntryFor(pageIndex, 'header');
-    if (entry?.header) return entry.header.html || '';
-    return this._differentFirstPage() && pageIndex === 0
-      ? this._headerFirstPageHtml()
-      : this._headerHtml();
+    return this._resolveHfVariant(pageIndex, 'header').html;
   }
 
   private _editableFooterHtml(pageIndex: number): string {
-    const entry = this._sectionEntryFor(pageIndex, 'footer');
-    if (entry?.footer) return entry.footer.html || '';
-    return this._differentFirstPage() && pageIndex === 0
-      ? this._footerFirstPageHtml()
-      : this._footerHtml();
+    return this._resolveHfVariant(pageIndex, 'footer').html;
   }
 
-  /** Aktualizuje html WŁASNEGO nagłówka/stopki sekcji i emituje zmianę (autosave rodzica). */
-  private _updateSectionEntry(sectionIndex: number, kind: 'header' | 'footer', html: string): void {
+  /** Aktualizuje WSKAZANY wariant nagłówka/stopki wpisu sekcyjnego i emituje zmianę. */
+  private _updateSectionEntry(sectionIndex: number, kind: 'header' | 'footer', variant: 'default' | 'first' | 'even', html: string): void {
     const updated = this._sectionHF().map(e => {
       if (e.sectionIndex !== sectionIndex) return e;
       const current = kind === 'header' ? e.header : e.footer;
-      const next: HeaderFooterContent = { ...(current ?? { html: '', height: 1.27 }), html };
+      const next: HeaderFooterContent = { ...(current ?? { html: '', height: 1.27 }) };
+      if (variant === 'first') next.firstPageHtml = html;
+      else if (variant === 'even') next.evenHtml = html;
+      else next.html = html;
       return kind === 'header' ? { ...e, header: next } : { ...e, footer: next };
     });
     this._sectionHF.set(updated);
@@ -4909,26 +5427,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * editing): wpis sekcyjny strony edycji > wariant first-page (tylko strona 0) > default.
    */
   private _applyEditedHeaderHtml(content: string): void {
-    const pageIndex = this.editingHfPageIndex();
-    const entry = this._sectionEntryFor(pageIndex, 'header');
-    if (entry) {
-      this._updateSectionEntry(entry.sectionIndex, 'header', content);
-    } else if (this._differentFirstPage() && pageIndex === 0) {
-      this._headerFirstPageHtml.set(content);
-    } else {
-      this._headerHtml.set(content);
-    }
+    this._applyEditedHfHtml(content, 'header');
   }
 
   private _applyEditedFooterHtml(content: string): void {
+    this._applyEditedHfHtml(content, 'footer');
+  }
+
+  /** Zapis edytowanej treści do WŁAŚCICIELA wyświetlanego wariantu (wpis sekcyjny, który
+   *  go definiuje — także dziedziczony, jak edycja połączonego nagłówka w Wordzie — albo
+   *  odpowiedni sygnał bazowy sekcji 0). */
+  private _applyEditedHfHtml(content: string, kind: 'header' | 'footer'): void {
     const pageIndex = this.editingHfPageIndex();
-    const entry = this._sectionEntryFor(pageIndex, 'footer');
-    if (entry) {
-      this._updateSectionEntry(entry.sectionIndex, 'footer', content);
-    } else if (this._differentFirstPage() && pageIndex === 0) {
-      this._footerFirstPageHtml.set(content);
+    const { variant, ownerEntry } = this._resolveHfVariant(pageIndex, kind);
+    if (ownerEntry) {
+      this._updateSectionEntry(ownerEntry.sectionIndex, kind, variant, content);
+      return;
+    }
+    if (variant === 'first') {
+      (kind === 'header' ? this._headerFirstPageHtml : this._footerFirstPageHtml).set(content);
+    } else if (variant === 'even') {
+      (kind === 'header' ? this._headerEvenHtml : this._footerEvenHtml).set(content);
     } else {
-      this._footerHtml.set(content);
+      (kind === 'header' ? this._headerHtml : this._footerHtml).set(content);
     }
   }
 
@@ -4959,45 +5480,76 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Wpis sekcyjny (własny nagłówek/stopka) obowiązujący na danej stronie: wpis o NAJWYŻSZYM
-   * indeksie sekcji ≤ sekcji strony — sekcje bez wpisu dziedziczą z poprzedniej (jak Word).
-   * Brak wpisu ≤ sekcji strony → null (obowiązuje nagłówek bazowy sekcji 0).
+   * Strona otwierająca sekcję (pierwsza strona CAŁEGO dokumentu albo strona, na której
+   * indeks sekcji różni się od poprzedniej strony). Wariant first (titlePg) dotyczy
+   * pierwszej strony KAŻDEJ sekcji, nie tylko strony 0 dokumentu.
    */
-  private _sectionEntryFor(pageIndex: number, kind: 'header' | 'footer'): SectionHeaderFooter | null {
-    const entries = this._sectionHF();
-    if (!entries.length) return null;
+  private _isSectionFirstPage(pageIndex: number): boolean {
+    if (pageIndex === 0) return true;
+    const sections = this.pageSectionIndexes();
+    const s = sections[pageIndex];
+    return s !== undefined && s !== sections[pageIndex - 1];
+  }
+
+  private _bandContent(entry: SectionHeaderFooter, kind: 'header' | 'footer'): HeaderFooterContent | undefined {
+    return kind === 'header' ? entry.header : entry.footer;
+  }
+
+  /**
+   * Rozwiązuje wariant nagłówka/stopki dla strony w semantyce DOCX:
+   * 1. Flagi (titlePg / evenAndOddHeaders) pochodzą z NAJBLIŻSZEGO wpisu sekcyjnego
+   *    ≤ sekcji strony (Word kopiuje ustawienia poprzedniej sekcji przy tworzeniu nowej),
+   *    a bez wpisów — z flag bazowych sekcji 0 danego pasma.
+   * 2. Wariant: first na pierwszej stronie sekcji (wygrywa z even), even na stronach
+   *    parzystych przy evenAndOddHeaders, inaczej default.
+   * 3. Treść: najbliższy wpis, który DEFINIUJE wariant; null/'' (dla default) = dziedziczenie
+   *    z wcześniejszej sekcji jak w Wordzie, ostatecznie sygnały bazowe. Pusty string
+   *    zdefiniowanego wariantu first/even = celowo puste pasmo (NIE fallback do default).
+   */
+  private _resolveHfVariant(pageIndex: number, kind: 'header' | 'footer'): {
+    variant: 'default' | 'first' | 'even';
+    ownerEntry: SectionHeaderFooter | null;
+    html: string;
+  } {
     const pageSection = this.pageSectionIndexes()[pageIndex] ?? 0;
-    let best: SectionHeaderFooter | null = null;
-    for (const e of entries) {
-      const content = kind === 'header' ? e.header : e.footer;
-      if (!content || !content.html) continue;
-      if (e.sectionIndex <= pageSection && (!best || e.sectionIndex > best.sectionIndex)) {
-        best = e;
-      }
+    const candidates = this._sectionHF()
+      .filter(e => e.sectionIndex <= pageSection && this._bandContent(e, kind))
+      .sort((a, b) => b.sectionIndex - a.sectionIndex);
+
+    const flagSource = candidates.length ? this._bandContent(candidates[0], kind)! : null;
+    const differentFirstPage = flagSource
+      ? flagSource.differentFirstPage === true
+      : (kind === 'header' ? this._headerDifferentFirstPage() : this._footerDifferentFirstPage());
+    const differentOddEven = flagSource
+      ? flagSource.differentOddEven === true
+      : (kind === 'header' ? this._headerDifferentOddEven() : this._footerDifferentOddEven());
+
+    const variant: 'default' | 'first' | 'even' =
+      differentFirstPage && this._isSectionFirstPage(pageIndex) ? 'first'
+        : differentOddEven && (pageIndex + 1) % 2 === 0 ? 'even'
+          : 'default';
+
+    for (const entry of candidates) {
+      const c = this._bandContent(entry, kind)!;
+      const value = variant === 'first' ? (c.firstPageHtml ?? null)
+        : variant === 'even' ? (c.evenHtml ?? null)
+          : (c.html || null);
+      if (value !== null) return { variant, ownerEntry: entry, html: value };
     }
-    return best;
+
+    const base = variant === 'first'
+      ? (kind === 'header' ? this._headerFirstPageHtml() : this._footerFirstPageHtml())
+      : variant === 'even'
+        ? (kind === 'header' ? this._headerEvenHtml() : this._footerEvenHtml())
+        : (kind === 'header' ? this._headerHtml() : this._footerHtml());
+    return { variant, ownerEntry: null, html: base };
   }
 
   /**
    * Wylicza zawartość nagłówka dla danej strony (używane wewnętrznie przez computed)
    */
   private _computeHeaderContent(pageIndex: number): string {
-    // Sekcja z WŁASNYM nagłówkiem wygrywa nad bazowym (dokumenty wielosekcyjne).
-    const sectionEntry = this._sectionEntryFor(pageIndex, 'header');
-    if (sectionEntry?.header) {
-      return sectionEntry.header.html || '';
-    }
-    // First-page variant wins over odd/even for page 0.
-    if (this._differentFirstPage() && pageIndex === 0) {
-      return this._headerFirstPageHtml();
-    }
-    // In odd/even mode, "default" (Word's reference type=default) IS the odd content
-    // — the canonical source is _headerHtml. Even pages use the dedicated even signal.
-    if (this._differentOddEven()) {
-      const isOdd = (pageIndex + 1) % 2 === 1;
-      return isOdd ? this._headerHtml() : this._headerEvenHtml();
-    }
-    return this._headerHtml();
+    return this._resolveHfVariant(pageIndex, 'header').html;
   }
 
   /**
@@ -5012,21 +5564,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wylicza zawartość stopki dla danej strony (używane wewnętrznie przez computed)
    */
   private _computeFooterContent(pageIndex: number): string {
-    let content: string;
-    const sectionEntry = this._sectionEntryFor(pageIndex, 'footer');
-    if (sectionEntry?.footer) {
-      content = sectionEntry.footer.html || '';
-    }
-    else if (this._differentFirstPage() && pageIndex === 0) {
-      content = this._footerFirstPageHtml();
-    }
-    // See _computeHeaderContent: "default" = odd; canonical source is _footerHtml.
-    else if (this._differentOddEven()) {
-      const isOdd = (pageIndex + 1) % 2 === 1;
-      content = isOdd ? this._footerHtml() : this._footerEvenHtml();
-    } else {
-      content = this._footerHtml();
-    }
+    let content = this._resolveHfVariant(pageIndex, 'footer').html;
     // Zamień placeholder na numer strony
     content = content.replace(/\{page\}/gi, String(pageIndex + 1));
     content = content.replace(/\{pages\}/gi, String(this.pageContents().length));
@@ -5082,13 +5620,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       header: {
         html: this._headerHtml(),
         height: this._headerHeight(),
-        differentFirstPage: this._differentFirstPage(),
+        differentFirstPage: this._headerDifferentFirstPage(),
         firstPageHtml: this._headerFirstPageHtml()
       },
       footer: {
         html: this._footerHtml(),
         height: this._footerHeight(),
-        differentFirstPage: this._differentFirstPage(),
+        differentFirstPage: this._footerDifferentFirstPage(),
         firstPageHtml: this._footerFirstPageHtml()
       }
     };
@@ -5152,7 +5690,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Toggle "Inna pierwsza strona"
    */
   toggleDifferentFirstPage(): void {
-    this._differentFirstPage.update(v => !v);
+    // Word's "Different first page" checkbox is a SECTION property shared by the header
+    // and footer bands — toggling flips both flags to the same new value.
+    const next = !this.differentFirstPage();
+    this._headerDifferentFirstPage.set(next);
+    this._footerDifferentFirstPage.set(next);
+    this.invalidateHeaderFooterCache();
     this.emitHeaderFooterChanges();
   }
 
@@ -5180,8 +5723,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.openHeaderFooterSettings.emit({
       headerMargin: this._headerHeight(),
       footerMargin: this._footerHeight(),
-      differentFirstPage: this._differentFirstPage(),
-      differentOddEven: this._differentOddEven()
+      differentFirstPage: this.differentFirstPage(),
+      differentOddEven: this.differentOddEven()
     });
   }
 
@@ -5196,9 +5739,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }): void {
     this._headerHeight.set(settings.headerMargin);
     this._footerHeight.set(settings.footerMargin);
-    this._differentFirstPage.set(settings.differentFirstPage);
-    this._differentOddEven.set(settings.differentOddEven);
-    
+    // Dialog exposes the section-wide setting — apply to both bands (like Word).
+    this._headerDifferentFirstPage.set(settings.differentFirstPage);
+    this._footerDifferentFirstPage.set(settings.differentFirstPage);
+    this._headerDifferentOddEven.set(settings.differentOddEven);
+    this._footerDifferentOddEven.set(settings.differentOddEven);
+    this.invalidateHeaderFooterCache();
     this.emitHeaderFooterChanges();
   }
 
@@ -5317,18 +5863,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.headerChange.emit({
       html: this._headerHtml(),
       height: this._headerHeight(),
-      differentFirstPage: this._differentFirstPage(),
+      differentFirstPage: this._headerDifferentFirstPage(),
       firstPageHtml: this._headerFirstPageHtml(),
-      differentOddEven: this._differentOddEven(),
+      differentOddEven: this._headerDifferentOddEven(),
       oddHtml: this._headerOddHtml(),
       evenHtml: this._headerEvenHtml()
     });
     this.footerChange.emit({
       html: this._footerHtml(),
       height: this._footerHeight(),
-      differentFirstPage: this._differentFirstPage(),
+      differentFirstPage: this._footerDifferentFirstPage(),
       firstPageHtml: this._footerFirstPageHtml(),
-      differentOddEven: this._differentOddEven(),
+      differentOddEven: this._footerDifferentOddEven(),
       oddHtml: this._footerOddHtml(),
       evenHtml: this._footerEvenHtml()
     });
