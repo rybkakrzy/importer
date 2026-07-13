@@ -10,7 +10,7 @@ namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
 
 /// <summary>
 /// Regresja dla wady odwzorowania dokumentów Word zgłoszonych na dokumencie "Doc2"
-/// (wyciąg bankowy ING): tabulatory lewe/prawe w treści, pionowe wyśrodkowanie komórek,
+/// (wyciąg bankowy Qutasator): tabulatory lewe/prawe w treści, pionowe wyśrodkowanie komórek,
 /// scalone kolumny w wierszach nieregularnych oraz bezpieczne SVG jako data-URI.
 /// </summary>
 [TestFixture]
@@ -157,7 +157,7 @@ public class Doc2ImportFidelityTests
     public void ShortSingleCellRow_SpansFullGrid()
     {
         // 3-column grid; a row with ONE cell and no gridSpan must span all three columns
-        // (the ING "Umowa wieloproduktowa…" defect where content was pinned to column 1).
+        // (the Qutasator "Umowa wieloproduktowa…" defect where content was pinned to column 1).
         var table = ThreeColTable(
             Row(Cell("H1"), Cell("H2"), Cell("H3")),
             Row(Cell("MERGED-ALL")));
@@ -278,7 +278,7 @@ public class Doc2ImportFidelityTests
     {
         // Absolutne segmenty tabów (left:{stop}px na position:relative akapicie) w wąskiej
         // komórce wyjeżdżają poza komórkę i nakładają się na sąsiednią kolumnę (nagłówki
-        // "Waluta"/"Termin spłaty" z dokumentu ING). W komórce tab renderuje się inline,
+        // "Waluta"/"Termin spłaty" z dokumentu Qutasator). W komórce tab renderuje się inline,
         // a stopy przeżywają w data-tab-stops (round-trip bez zmian).
         var cellPara = new Paragraph(
             new ParagraphProperties(new Tabs(new TabStop { Val = TabStopValues.Right, Position = 9000 })),
@@ -428,7 +428,7 @@ public class Doc2ImportFidelityTests
     [Test]
     public void CustomGeometryShape_WithoutImage_RendersAsInlineSvgPath()
     {
-        // Kształt DrawingML z własną ścieżką (a:custGeom) — np. wordmark „ING" / ikona „!".
+        // Kształt DrawingML z własną ścieżką (a:custGeom) — np. wordmark „Qutasator" / ikona „!".
         // Wcześniej dropowany w całości (RenderVectorShape zwracał ""), więc grafika z
         // oryginału NIE rysowała się w edytorze. Teraz → inline <svg><path> z kolorem kształtu.
         const string body = @"<w:p><w:r>
@@ -459,6 +459,87 @@ public class Doc2ImportFidelityTests
         html.Should().Contain("fill=\"#000066\"");
         // a:ln = noFill → brak obrysu (jak w Wordzie).
         html.Should().NotContain("stroke=");
+    }
+
+    [Test]
+    public void CustomGeometryShape_ThemeFill_ResolvesSchemeColorFromTheme()
+    {
+        // Fill kształtu jako kolor motywu (a:schemeClr val="accent1"), nie jawny hex — częste w
+        // brandowych logo (np. pomarańcz Qutalo). Wcześniej GetShapeFillHex czytał tylko a:srgbClr →
+        // null → czarny blob. Teraz mapujemy accent1 na hex z theme1.xml (tu FF6200).
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""817245"" cy=""276860""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp><wps:spPr>
+        <a:custGeom><a:pathLst>
+          <a:path w=""100"" h=""50""><a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo>
+            <a:lnTo><a:pt x=""100"" y=""0""/></a:lnTo><a:lnTo><a:pt x=""100"" y=""50""/></a:lnTo><a:close/></a:path>
+        </a:pathLst></a:custGeom>
+        <a:solidFill><a:schemeClr val=""accent1""/></a:solidFill>
+      </wps:spPr></wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        using var ms = DocxFromRawBodyWithTheme(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-custgeom");
+        html.Should().Contain("fill=\"#FF6200\"");
+        html.Should().NotContain("#000000");
+    }
+
+    [Test]
+    public void CustomGeometryShape_StyleFillRef_ResolvesSchemeColorFromTheme()
+    {
+        // Fill nie w spPr, lecz przez referencję stylu wps:style/a:fillRef → a:schemeClr accent1.
+        // Typowe dla kształtów-logo bez jawnego solidFill; wcześniej → null → czarny blob.
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""817245"" cy=""276860""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp>
+        <wps:spPr><a:custGeom><a:pathLst>
+          <a:path w=""100"" h=""50""><a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo>
+            <a:lnTo><a:pt x=""100"" y=""0""/></a:lnTo><a:lnTo><a:pt x=""100"" y=""50""/></a:lnTo><a:close/></a:path>
+        </a:pathLst></a:custGeom></wps:spPr>
+        <wps:style><a:fillRef idx=""1""><a:schemeClr val=""accent1""/></a:fillRef></wps:style>
+      </wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        using var ms = DocxFromRawBodyWithTheme(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-custgeom").And.Contain("fill=\"#FF6200\"");
+        html.Should().NotContain("#000000");
+    }
+
+    [Test]
+    public void CustomGeometryShape_NoResolvableFill_DoesNotRenderBlackBlob()
+    {
+        // Kształt bez żadnego rozwiązywalnego wypełnienia (brak solidFill/fillRef). Wcześniej svg
+        // dostawał fill="#000000" → czarny „knefel" zamiast grafiki. Teraz currentColor (dziedziczy
+        // kolor tekstu otoczenia), nigdy solidny czarny blob.
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""817245"" cy=""276860""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp><wps:spPr>
+        <a:custGeom><a:pathLst>
+          <a:path w=""100"" h=""50""><a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo>
+            <a:lnTo><a:pt x=""100"" y=""0""/></a:lnTo><a:lnTo><a:pt x=""100"" y=""50""/></a:lnTo><a:close/></a:path>
+        </a:pathLst></a:custGeom>
+      </wps:spPr></wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        using var ms = DocxFromRawBody(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-custgeom");
+        html.Should().Contain("fill=\"currentColor\"");
+        html.Should().NotContain("#000000");
     }
 
     [Test]
@@ -495,6 +576,68 @@ public class Doc2ImportFidelityTests
             var mainPart = wpd.AddMainDocumentPart();
             using var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8);
             w.Write(doc.Replace("{BODY}", bodyInnerXml));
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
+    /// <summary>
+    /// Jak <see cref="DocxFromRawBody"/>, ale z dołączonym ThemePart, którego schemat kolorów ma
+    /// accent1 = FF6200 (pomarańcz Qutalo). Pozwala testować rozwiązywanie <c>a:schemeClr</c> na hex.
+    /// </summary>
+    private static MemoryStream DocxFromRawBodyWithTheme(string bodyInnerXml)
+    {
+        const string doc = @"<?xml version=""1.0"" encoding=""UTF-8"" standalone=""yes""?>
+<w:document xmlns:w=""http://schemas.openxmlformats.org/wordprocessingml/2006/main""
+  xmlns:wp=""http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing""
+  xmlns:a=""http://schemas.openxmlformats.org/drawingml/2006/main""
+  xmlns:mc=""http://schemas.openxmlformats.org/markup-compatibility/2006""
+  xmlns:wps=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape""
+  xmlns:v=""urn:schemas-microsoft-com:vml""
+  xmlns:w10=""urn:schemas-microsoft-com:office:word"">
+  <w:body>{BODY}</w:body>
+</w:document>";
+
+        const string theme = @"<?xml version=""1.0"" encoding=""UTF-8"" standalone=""yes""?>
+<a:theme xmlns:a=""http://schemas.openxmlformats.org/drawingml/2006/main"" name=""Test"">
+  <a:themeElements>
+    <a:clrScheme name=""Test"">
+      <a:dk1><a:srgbClr val=""000000""/></a:dk1>
+      <a:lt1><a:srgbClr val=""FFFFFF""/></a:lt1>
+      <a:dk2><a:srgbClr val=""1F1F1F""/></a:dk2>
+      <a:lt2><a:srgbClr val=""EEEEEE""/></a:lt2>
+      <a:accent1><a:srgbClr val=""FF6200""/></a:accent1>
+      <a:accent2><a:srgbClr val=""112233""/></a:accent2>
+      <a:accent3><a:srgbClr val=""112233""/></a:accent3>
+      <a:accent4><a:srgbClr val=""112233""/></a:accent4>
+      <a:accent5><a:srgbClr val=""112233""/></a:accent5>
+      <a:accent6><a:srgbClr val=""112233""/></a:accent6>
+      <a:hlink><a:srgbClr val=""0000FF""/></a:hlink>
+      <a:folHlink><a:srgbClr val=""800080""/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name=""Test"">
+      <a:majorFont><a:latin typeface=""Calibri""/><a:ea typeface=""""/><a:cs typeface=""""/></a:majorFont>
+      <a:minorFont><a:latin typeface=""Calibri""/><a:ea typeface=""""/><a:cs typeface=""""/></a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name=""Test"">
+      <a:fillStyleLst><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill></a:fillStyleLst>
+      <a:lnStyleLst><a:ln><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill></a:ln></a:lnStyleLst>
+      <a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>
+      <a:bgFillStyleLst><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill><a:solidFill><a:schemeClr val=""phClr""/></a:solidFill></a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+</a:theme>";
+
+        var ms = new MemoryStream();
+        using (var wpd = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = wpd.AddMainDocumentPart();
+            using (var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8))
+                w.Write(doc.Replace("{BODY}", bodyInnerXml));
+
+            var themePart = mainPart.AddNewPart<ThemePart>();
+            using var tw = new StreamWriter(themePart.GetStream(FileMode.Create), Encoding.UTF8);
+            tw.Write(theme);
         }
         ms.Position = 0;
         return ms;
