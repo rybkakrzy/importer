@@ -144,14 +144,8 @@
                        [attr.data-testid]="'endnote-content-' + entry.en.id"
                        [innerHTML]="endnoteSafeHtml(entry.en)"
                        (blur)="commitEndnoteContent(entry.en.id, $event)"></div>
-                  @if (!readOnly) {
-                    <button type="button"
-                            class="footnote-item-delete"
-                            [attr.aria-label]="'Usuń przypis końcowy ' + entry.number"
-                            [attr.data-testid]="'endnote-delete-' + entry.en.id"
-                            title="Usuń przypis końcowy"
-                            (click)="removeEndnote(entry.en.id)">×</button>
-                  }
+                  <!-- Bez przycisku usuwania (jak w Wordzie): przypis znika po skasowaniu
+                       odwołania w treści — syncEndnotesWithBody przycina osierocone wpisy. -->
                 </div>
               }
             </div>
@@ -186,7 +180,10 @@
         <div class="footnote-item"
              [attr.data-footnote-id]="fn.id"
              [attr.data-testid]="'footnote-item-' + fn.id">
-          <span class="footnote-item-number" aria-hidden="true">{{ $index + 1 }}</span>
+          <span class="footnote-item-number"
+                aria-hidden="true"
+                title="Przejdź do odwołania w treści"
+                (click)="scrollToNoteReference('footnote', fn.id)">{{ $index + 1 }}</span>
           <div class="footnote-item-content"
                [attr.contenteditable]="readOnly ? 'false' : 'true'"
                spellcheck="true"
@@ -194,14 +191,8 @@
                [attr.data-testid]="'footnote-content-' + fn.id"
                [innerHTML]="footnoteSafeHtml(fn)"
                (blur)="commitFootnoteContent(fn.id, $event)"></div>
-          @if (!readOnly) {
-            <button type="button"
-                    class="footnote-item-delete"
-                    [attr.aria-label]="'Usuń przypis ' + ($index + 1)"
-                    [attr.data-testid]="'footnote-delete-' + fn.id"
-                    title="Usuń przypis"
-                    (click)="removeFootnote(fn.id)">×</button>
-          }
+          <!-- Bez przycisku usuwania (jak w Wordzie): przypis znika po skasowaniu
+               odwołania w treści — syncFootnotesWithBody przycina osierocone wpisy. -->
         </div>
       }
     </div>

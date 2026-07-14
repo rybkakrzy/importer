@@ -1110,20 +1110,12 @@ body.image-moving * {
 /* Przypisy dolne       */
 /* ==================== */
 
-/* Odwołanie w treści — semantyczny <sup> z numerem przypisu (aria-label z numerem). */
-.editor-content sup.footnote-ref {
-  color: #0563c1;
-  cursor: pointer;
-  font-weight: 600;
-  user-select: none;
-  padding: 0 1px;
-}
-
-/* Odwołanie do przypisu końcowego — jak footnote-ref, ale osobny kolor (odróżnienie typu). */
+/* Odwołanie w treści — semantyczny <sup> z numerem przypisu (aria-label z numerem).
+   Kolor DZIEDZICZONY z otaczającego tekstu (jak w MS Word) — bez własnego akcentu. */
+.editor-content sup.footnote-ref,
 .editor-content sup.endnote-ref {
-  color: #9b1fa8;
+  color: inherit;
   cursor: pointer;
-  font-weight: 600;
   user-select: none;
   padding: 0 1px;
 }
@@ -1138,7 +1130,8 @@ body.image-moving * {
   border-top: 2px solid #0563c1;
   border-radius: 2px;
   font-size: 10pt;
-  color: #222;
+  /* Czarna treść listy przypisów — jak tekst przypisów w MS Word. */
+  color: #000;
 }
 
 /* ============================================================= */
@@ -1175,10 +1168,6 @@ body.image-moving * {
   padding: 1px 0;
 }
 
-/* Numer wpisu przypisu końcowego w kolorze odwołania (odróżnienie od dolnych). */
-.endnote-entry .footnote-item-number {
-  color: #9b1fa8;
-}
 
 .footnotes-panel-title {
   font-weight: 600;
@@ -1207,7 +1196,8 @@ body.image-moving * {
   flex: 0 0 auto;
   min-width: 18px;
   font-weight: 600;
-  color: #0563c1;
+  /* Czarny jak treść przypisu (jak w MS Word) — bez kolorowego akcentu. */
+  color: #000;
   vertical-align: super;
   font-size: 9pt;
   /* Klik w numer wraca do odwołania w treści (scrollToNoteReference). */
@@ -1241,17 +1231,3 @@ body.image-moving * {
   }
 }
 
-.footnote-item-delete {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: #b0b0b0;
-  cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  padding: 0 4px;
-
-  &:hover {
-    color: #d93025;
-  }
-}
