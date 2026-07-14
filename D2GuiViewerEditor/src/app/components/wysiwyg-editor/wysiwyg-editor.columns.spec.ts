@@ -95,10 +95,11 @@ describe('WysiwygEditorComponent — kolumny (ADR-0039)', () => {
     expect(component.pageColumnGapPx(0)).toBeGreaterThan(0);
     expect(component.pageColumnRule(0)).toContain('solid');
 
-    // Po zniesieniu kolumn (setBaseColumns(1)) strona wraca do jednej kolumny, bez reguły.
+    // Po zniesieniu kolumn (setBaseColumns(1)) strona wraca do jednej kolumny: null zdejmuje
+    // column-count/rule z bindingu — strona nie jest wtedy kontenerem multicol.
     component.setBaseColumns(1);
-    expect(component.pageColumnCount(0)).toBe(1);
-    expect(component.pageColumnRule(0)).toBe('none');
+    expect(component.pageColumnCount(0)).toBeNull();
+    expect(component.pageColumnRule(0)).toBeNull();
   });
 
   // ---------- paginacja: podział kolumny atomowy ----------
@@ -109,6 +110,99 @@ describe('WysiwygEditorComponent — kolumny (ADR-0039)', () => {
     const blocks = (component as any)._flattenTopBlocks(host);
     expect(blocks.length).toBe(1);
     expect((blocks[0] as HTMLElement).classList.contains('docx-column-break')).toBe(true);
+  });
+
+  // ---------- paginacja: pojemność strony wielokolumnowej ----------
+
+  const bodyEditors: HTMLElement[] = [];
+  afterEach(() => bodyEditors.splice(0).forEach(el => el.remove()));
+
+  function pageWith(html: string): HTMLDivElement {
+    const editor = document.createElement('div');
+    editor.innerHTML = html;
+    document.body.appendChild(editor);
+    bodyEditors.push(editor);
+    (component as any).pageEditorRefs = { toArray: () => [{ nativeElement: editor }] };
+    return editor;
+  }
+
+  /** Stub pomiaru (jsdom bez layoutu): wysokość bloku z atrybutu data-h. */
+  function stubBlockHeights(): void {
+    (component as any)._measureBlockRunHeights = (_m: HTMLElement, blocks: HTMLElement[]) =>
+      blocks.map(b => parseFloat(b.getAttribute('data-h') ?? '0') || 0);
+  }
+
+  function setTwoColumnBase(): void {
+    (component as any)._captureDocumentDefaults(
+      '<div class="document-content" data-col-count="2" data-col-space-tw="708" data-col-equal="1"><p>x</p></div>'
+    );
+  }
+
+  it('strona 2-kolumnowa mieści ~2× więcej treści niż 1-kolumnowa (pojemność = n×kolumna)', () => {
+    // A4, marginesy domyślne → kolumna ~933 px. 5 bloków × 600 px:
+    // 1 kolumna: 2 bloki > 933 → blok na stronę (5 stron);
+    // 2 kolumny: pojemność ~1847 px → 3 bloki na stronę 1, 2 na stronę 2.
+    setTwoColumnBase();
+    pageWith('<p data-h="600">1</p><p data-h="600">2</p><p data-h="600">3</p><p data-h="600">4</p><p data-h="600">5</p>');
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('<p data-h="600">3</p>');
+    expect(pages[0]).not.toContain('<p data-h="600">4</p>');
+    expect(pages.join('')).toContain('<p data-h="600">5</p>');
+  });
+
+  it('bez kolumn te same bloki łamią się per kolumna strony (regresja 1-kolumnowa)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    pageWith('<p data-h="600">1</p><p data-h="600">2</p><p data-h="600">3</p>');
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    expect(component.pageContents().length).toBe(3);
+  });
+
+  it('docx-column-break konsumuje resztę kolumny (treść za nim liczy się od następnej kolumny)', () => {
+    setTwoColumnBase();
+    // 600 + skok do kolumny 2 (933) + 600 = ~1533 ≤ pojemność (~1847) → wszystko na 1 stronie;
+    // bez skoku trzeci blok też by się zmieścił — pinujemy, że skok jest KONSUMOWANY,
+    // dokładając blok, który przez skok już się nie mieści.
+    pageWith(
+      '<p data-h="600">A</p><div class="docx-column-break"></div>' +
+      '<p data-h="600">B</p><p data-h="600">C</p>'
+    );
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('>A</p>');
+    expect(pages[0]).toContain('docx-column-break');
+    expect(pages[0]).toContain('>B</p>');
+    expect(pages[1]).toContain('>C</p>');
+  });
+
+  it('docx-column-break w ostatniej kolumnie otwiera nową stronę (marker jedzie z dalszą treścią)', () => {
+    setTwoColumnBase();
+    pageWith(
+      '<p data-h="600">A</p><div class="docx-column-break"></div>' +
+      '<p data-h="600">B</p><div class="docx-column-break"></div>' +
+      '<p data-h="600">C</p>'
+    );
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('>B</p>');
+    expect(pages[0]).not.toContain('>C</p>');
+    expect(pages[1]).toContain('docx-column-break');
+    expect(pages[1]).toContain('>C</p>');
   });
 
   // ---------- round-trip atrybutów kontenera ----------

@@ -239,6 +239,26 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   /** Geometria per strona (indeks = strona). Wypełniana przy split/repaginacji; brak → baza. */
   readonly pageGeometries = signal<PageGeometry[]>([]);
 
+  /**
+   * Wysokość body per strona (px) policzona w `_repaginateNow` (ta sama co `availableFor`,
+   * z realnie zmierzonymi pasmami nagłówka/stopki). Używana TYLKO dla stron wielokolumnowych:
+   * fragmentacja CSS multicol (column-fill:auto) wymaga JEDNOZNACZNEJ wysokości kontenera —
+   * wysokość nadana przez flex:1 jest dla niej nieokreślona i Chrome zostawia całą treść
+   * w pierwszej, przepełnionej kolumnie (kolumna 2 pusta, treść przycięta przy dole strony).
+   */
+  readonly pageBodyHeights = signal<number[]>([]);
+
+  /** Jawna wysokość body strony wielokolumnowej; null = strona jednokolumnowa (flex jak dotąd). */
+  pageBodyHeightPx(index: number): number | null {
+    if (this.pageColumnCount(index) === null) return null;
+    return this.pageBodyHeights()[index] ?? null;
+  }
+
+  /** Strona wielokolumnowa wyłącza flex body (jawna wysokość musi wygrać z flex-basis). */
+  pageBodyFlex(index: number): string | null {
+    return this.pageBodyHeightPx(index) !== null ? 'none' : null;
+  }
+
   /** Indeks sekcji (0-based) per strona — do doboru nagłówka/stopki sekcji. Brak → sekcja 0. */
   readonly pageSectionIndexes = signal<number[]>([]);
 
@@ -259,20 +279,24 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   pageMarginPx(index: number, side: 'top' | 'bottom' | 'left' | 'right'): number {
     return this.geometryFor(index).margins[side] * CSS_PX_PER_CM;
   }
-  /** Liczba kolumn treści strony (ADR-0039). 1 = układ jednokolumnowy (bez CSS columns). */
-  pageColumnCount(index: number): number {
+  /**
+   * Liczba kolumn treści strony (ADR-0039). null = układ jednokolumnowy — binding zdejmuje
+   * własność, więc strona NIE jest kontenerem multicol (column-count:1 tworzyłby kontekst
+   * fragmentacji: zabłąkany docx-column-break wypychałby treść do przyciętej kolumny overflow).
+   */
+  pageColumnCount(index: number): number | null {
     const c = this.geometryFor(index).columns;
-    return c && c.count > 1 ? c.count : 1;
+    return c && c.count > 1 ? c.count : null;
   }
-  /** Odstęp między kolumnami w px (column-gap). */
-  pageColumnGapPx(index: number): number {
+  /** Odstęp między kolumnami w px (column-gap); null = strona jednokolumnowa. */
+  pageColumnGapPx(index: number): number | null {
     const c = this.geometryFor(index).columns;
-    return c ? Math.max(0, c.spaceCm) * CSS_PX_PER_CM : 0;
+    return c && c.count > 1 ? Math.max(0, c.spaceCm) * CSS_PX_PER_CM : null;
   }
   /** Separator kolumn (column-rule) — cienka linia jak w Wordzie, albo brak. */
-  pageColumnRule(index: number): string {
+  pageColumnRule(index: number): string | null {
     const c = this.geometryFor(index).columns;
-    return c && c.separator ? '1px solid #bbb' : 'none';
+    return c && c.count > 1 && c.separator ? '1px solid #bbb' : null;
   }
   /**
    * Geometria pasma nagłówka/stopki jak w Wordzie: pasmo zaczyna się `headerDistance`
@@ -4503,6 +4527,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const container = tmp.querySelector('.document-content') as HTMLElement | null;
     if (!container) {
       this._documentContainerAttrs = null;
+      // Nowy dokument bez wrappera w pełni nadpisuje stan — kolumny poprzedniego pliku
+      // nie mogą wyciekać na jednokolumnowy dokument (analogicznie do resetu nagłówka/stopki).
+      this._baseColumns.set(null);
       return null;
     }
     if (container.style.fontSize) this.documentDefaultFontSize.set(container.style.fontSize);
@@ -4813,6 +4840,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const contentWidthPx = (geo: PageGeometry): number =>
         Math.max(2, geo.widthCm - geo.margins.left - geo.margins.right) * CSS_PX_PER_CM;
 
+      // Kolumny sekcji (ADR-0039): render (CSS multicol) układa bloki w kolumnach o szerokości
+      // (szerokość treści − gap×(n−1))/n i wypełnia je sekwencyjnie (column-fill:auto), więc
+      // strona mieści n kolumn długości treści. Pomiar bloków i pojemność strony MUSZĄ używać
+      // tych samych wielkości — pomiar na pełnej szerokości zaniża wysokości ~n-krotnie i
+      // paginator przepełnia/niedopełnia strony względem tego, co przeglądarka faktycznie ułoży.
+      const columnCountFor = (geo: PageGeometry): number =>
+        geo.columns && geo.columns.count > 1 ? geo.columns.count : 1;
+      const columnWidthPx = (geo: PageGeometry): number => {
+        const count = columnCountFor(geo);
+        if (count <= 1) return contentWidthPx(geo);
+        const gapPx = Math.max(0, geo.columns?.spaceCm ?? 0) * CSS_PX_PER_CM;
+        return Math.max(2, (contentWidthPx(geo) - gapPx * (count - 1)) / count);
+      };
+
       const baseGeo = this.baseGeometry();
       let curGeo = baseGeo;
 
@@ -4823,7 +4864,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const innerW = probeEd.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       const baseContentPx = contentWidthPx(baseGeo);
       const widthScale = innerW > 0 && baseContentPx > 0 ? innerW / baseContentPx : 1;
-      const measurerWidthFor = (geo: PageGeometry): number => contentWidthPx(geo) * widthScale;
+      const measurerWidthFor = (geo: PageGeometry): number => columnWidthPx(geo) * widthScale;
+      // Linia nie dzieli się na granicy kolumny — każda kolumna poza ostatnią może zostawić
+      // przy dole do jednej niepełnej linii. Pojemność strony wielokolumnowej dostaje więc
+      // zapas (n−1) linii; bez niego ostatnia linia strony bywa przycinana przez overflow:hidden.
+      const lineHeightPx =
+        parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2 || 16;
+      const capacityFor = (geo: PageGeometry, pageIdx: number): number => {
+        const count = columnCountFor(geo);
+        const column = availableFor(geo, pageIdx);
+        return count <= 1 ? column : count * column - (count - 1) * lineHeightPx;
+      };
       const measurer = this._createBlockMeasurer(cs, measurerWidthFor(curGeo));
       document.body.appendChild(measurer);
 
@@ -4839,15 +4890,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const pageGeos: PageGeometry[] = [curGeo];
       let curSection = 0;
       const pageSections: number[] = [0];
+      // currentHeight = skonsumowana DŁUGOŚĆ treści strony (suma wysokości bloków przy
+      // szerokości kolumny); availableHeight = pojemność całej strony (n kolumn),
+      // columnHeight = wysokość jednej kolumny (obszar body). Dla 1 kolumny obie równe.
       let currentHeight = 0;
-      let availableHeight = availableFor(curGeo, 0);
+      let columnHeight = availableFor(curGeo, 0);
+      let availableHeight = capacityFor(curGeo, 0);
 
       const openPage = () => {
         pages.push([]);
         pageGeos.push(curGeo);
         pageSections.push(curSection);
         currentHeight = 0;
-        availableHeight = availableFor(curGeo, pages.length - 1);
+        columnHeight = availableFor(curGeo, pages.length - 1);
+        availableHeight = capacityFor(curGeo, pages.length - 1);
       };
 
       const pushMeasured = (block: HTMLElement, h: number) => {
@@ -4871,7 +4927,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           if (pages[pages.length - 1].length === 1) {
             pageGeos[pageGeos.length - 1] = curGeo;
             pageSections[pageSections.length - 1] = curSection;
-            availableHeight = availableFor(curGeo, pages.length - 1);
+            columnHeight = availableFor(curGeo, pages.length - 1);
+            availableHeight = capacityFor(curGeo, pages.length - 1);
           }
           measurer.style.width = `${measurerWidthFor(curGeo)}px`;
           bi++;
@@ -4885,16 +4942,40 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           bi++;
           continue;
         }
+        if (this._isColumnBreakBlock(block)) {
+          // Podział kolumny (w:br type=column, render: break-before:column na markerze):
+          // dalsza treść zaczyna się od góry NASTĘPNEJ kolumny, więc paginator konsumuje
+          // resztę bieżącej. Skok poza ostatnią kolumnę = nowa strona (marker jedzie z dalszą
+          // treścią; forsowany break na początku świeżego kontenera jest przez CSS ignorowany).
+          const nextColumnTop = (Math.floor(currentHeight / columnHeight) + 1) * columnHeight;
+          if (nextColumnTop >= availableHeight && pages[pages.length - 1].length > 0) {
+            openPage();
+          } else if (nextColumnTop < availableHeight) {
+            currentHeight = nextColumnTop;
+          }
+          pages[pages.length - 1].push(block);
+          bi++;
+          continue;
+        }
         if (block.tagName === 'TABLE') {
+          // Tabela mieści się w jednej KOLUMNIE (nie w całej szerokości strony wielokolumnowej),
+          // więc fragmenty tnie wysokość kolumny; kolejny fragment idzie do następnej kolumny,
+          // a na nową stronę dopiero, gdy kolumny się skończą.
+          const usedInColumn = columnHeight > 0 ? currentHeight % columnHeight : 0;
           const split = this._splitTableForPagination(
             block as HTMLTableElement,
-            Math.max(80, availableHeight - currentHeight),
-            availableHeight,
+            Math.max(80, columnHeight - usedInColumn),
+            columnHeight,
             measurer
           );
           for (let i = 0; i < split.length; i++) {
             if (i > 0) {
-              openPage();
+              const nextColumnTop = (Math.floor(currentHeight / columnHeight) + 1) * columnHeight;
+              if (nextColumnTop < availableHeight) {
+                currentHeight = nextColumnTop;
+              } else {
+                openPage();
+              }
             }
             pages[pages.length - 1].push(split[i]);
             currentHeight += measureBlock(split[i]);
@@ -4908,6 +4989,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           runEnd < allBlocks.length &&
           !this._isSectionBreakMarker(allBlocks[runEnd]) &&
           !this._isPageBreakBlock(allBlocks[runEnd]) &&
+          !this._isColumnBreakBlock(allBlocks[runEnd]) &&
           allBlocks[runEnd].tagName !== 'TABLE'
         ) {
           runEnd++;
@@ -4959,8 +5041,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         };
 
         let enPageIdx = pages.length - 1;
-        let enUsed = currentHeight;
-        let enAvail = availableHeight;
+        // Region przypisów renderuje się na PEŁNEJ szerokości pod treścią. Na stronie
+        // wielokolumnowej kolumna 1 wypełnia się pierwsza (column-fill:auto), więc region
+        // zaczyna się pod najgłębszą kolumną: min(zużyta długość, wysokość kolumny);
+        // wolne miejsce dla wpisów to reszta wysokości KOLUMNY (nie pojemności n kolumn).
+        let enUsed = Math.min(currentHeight, columnHeight);
+        let enAvail = columnHeight;
         let curRegion: EndnotePageRegion = {
           pageIndex: enPageIdx,
           topPx: regionTopFor(curGeo, enPageIdx, enUsed),
@@ -5014,6 +5100,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
       this._endnoteLayout.set(endnoteRegions);
       this.pageGeometries.set(pageGeos);
+      this.pageBodyHeights.set(pageGeos.map((g, i) => availableFor(g, i)));
       this.pageSectionIndexes.set(pageSections);
       // Rebind [innerHTML] tylko gdy rozkład bloków na strony REALNIE się zmienił — porównanie
       // z ŻYWYM DOM, nie z sygnałem pageContents. Sygnał jest celowo przestarzały między
@@ -5154,6 +5241,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (el.classList?.contains('page-break')) return true;
     const nested = el.querySelector?.('.page-break');
     return !!nested && (el.textContent ?? '').trim().length === 0;
+  }
+
+  /** Marker podziału kolumny (div.docx-column-break z w:br type=column, ADR-0039). */
+  private _isColumnBreakBlock(el: HTMLElement): boolean {
+    return !!el && el.nodeType === 1 && !!el.classList?.contains('docx-column-break');
   }
 
   /**
