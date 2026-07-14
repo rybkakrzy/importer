@@ -4053,9 +4053,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   undo(): void {
     if (this.undoStack.length > 1) {
+      // Kotwica kursora PRZED podmianą treści: rebind [innerHTML] przebudowuje DOM stron
+      // i kasuje selekcję, więc bez przywrócenia karetka lądowała na początku dokumentu.
+      const caret = this._captureCaretForHistory();
       const current = this.undoStack.pop()!;
       this.redoStack.push(current);
-      
+
       const previous = this.undoStack[this.undoStack.length - 1];
       const pages = this._splitHtmlIntoPages(previous);
       this.pageContents.set(pages);
@@ -4065,7 +4068,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
       this.updateState();
       // Snapshot undo jest bez atrybutów etykiet (strip przy serializacji) — przelicz po renderze.
-      setTimeout(() => this.refreshListLabels(), 0);
+      setTimeout(() => {
+        this.refreshListLabels();
+        this._restoreGlobalCaret(caret);
+        this.updateFormattingState();
+      }, 0);
     }
   }
 
@@ -4074,9 +4081,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   redo(): void {
     if (this.redoStack.length > 0) {
+      const caret = this._captureCaretForHistory();
       const next = this.redoStack.pop()!;
       this.undoStack.push(next);
-      
+
       const pages = this._splitHtmlIntoPages(next);
       this.pageContents.set(pages);
       this._content.set(next);
@@ -4084,8 +4092,28 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._schedulePaginate('redo');
 
       this.updateState();
-      setTimeout(() => this.refreshListLabels(), 0);
+      setTimeout(() => {
+        this.refreshListLabels();
+        this._restoreGlobalCaret(caret);
+        this.updateFormattingState();
+      }, 0);
     }
+  }
+
+  /**
+   * Kotwica karetki dla undo/redo. Preferuje żywą selekcję; gdy klik w przycisk toolbara
+   * zdążył ją zabrać z edytora, mapuje ostatnią realną pozycję z `savedSelection`.
+   * Kotwica { blok, offset } przeżywa przebudowę DOM stron (patrz `_saveGlobalCaret`),
+   * a offset spoza przywróconej treści jest domykany do końca bloku/dokumentu.
+   */
+  private _captureCaretForHistory(): { block: number; offset: number } | null {
+    const refs = this.pageEditorRefs?.toArray() ?? [];
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const fromLive = this._globalCaretFromRange(sel.getRangeAt(0), refs);
+      if (fromLive) return fromLive;
+    }
+    return this.savedSelection ? this._globalCaretFromRange(this.savedSelection, refs) : null;
   }
 
   /**
@@ -5494,7 +5522,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private _saveGlobalCaret(refs: ElementRef<HTMLDivElement>[]): { block: number; offset: number } | null {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
-    const range = sel.getRangeAt(0);
+    return this._globalCaretFromRange(sel.getRangeAt(0), refs);
+  }
+
+  /** Mapuje dowolny Range (żywa selekcja lub `savedSelection`) na kotwicę { blok, offset }. */
+  private _globalCaretFromRange(range: Range, refs: ElementRef<HTMLDivElement>[]): { block: number; offset: number } | null {
     let blockBase = 0;
     for (let i = 0; i < refs.length; i++) {
       const editor = refs[i].nativeElement;
@@ -5558,6 +5590,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         return;
       }
       blockBase += blocks.length;
+    }
+    // Kotwica poza zakresem — undo mogło usunąć bloki, w których stał kursor. Domknij do
+    // KOŃCA dokumentu zamiast gubić selekcję (objaw: kursor skakał na początek dokumentu).
+    for (let i = refs.length - 1; i >= 0; i--) {
+      const blocks = this._flattenTopBlocks(refs[i].nativeElement);
+      if (blocks.length === 0) continue;
+      const target = blocks[blocks.length - 1];
+      this._placeCaretAtTextOffset(target, Number.MAX_SAFE_INTEGER);
+      refs[i].nativeElement.focus();
+      target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      this.editorContent = refs[i];
+      this.activePageIndex.set(i);
+      return;
     }
   }
 
