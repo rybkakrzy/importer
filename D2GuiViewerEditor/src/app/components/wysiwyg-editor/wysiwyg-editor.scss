@@ -1129,8 +1129,7 @@ body.image-moving * {
 }
 
 /* Panel treści przypisów — jedno źródło prawdy, edytowalne poza contenteditable body. */
-.footnotes-panel,
-.endnotes-panel {
+.footnotes-panel {
   max-width: 816px;
   margin: 12px auto 32px;
   padding: 12px 16px;
@@ -1142,9 +1141,43 @@ body.image-moving * {
   color: #222;
 }
 
-/* Odróżnienie panelu przypisów końcowych od dolnych (kolor akcentu = kolor odwołania). */
-.endnotes-panel {
-  border-top-color: #9b1fa8;
+/* ============================================================= */
+/* Przypisy końcowe — region WEWNĄTRZ strony (jak w MS Word)      */
+/* ============================================================= */
+
+/* Pozycjonowany absolutnie w .page (top z repaginacji = zaraz pod ostatnim blokiem
+   treści), w świetle marginesów strony (left/right z bindingu). Rysowany NAD
+   .editor-content (pusta część body pod tekstem), stąd z-index. */
+.endnotes-region {
+  position: absolute;
+  z-index: 3;
+  color: #000;
+}
+
+/* Separator jak w Wordzie: krótka pozioma linia nad przypisami;
+   na stronie kontynuacji — linia na całą szerokość kolumny tekstu. */
+.endnotes-separator {
+  width: 33%;
+  height: 0;
+  border-top: 1px solid #000;
+  margin: 10px 0 6px;
+}
+
+.endnotes-separator-continuation {
+  width: 100%;
+}
+
+/* Wpis przypisu końcowego: bez linii-rozdzielaczy i z ciasnym paddingiem — jak w Wordzie.
+   Klasa na WPISIE (nie selektor potomka .endnotes-region), bo klony wpisów są mierzone
+   w measurerze paginacji bez kontenera regionu — style muszą być identyczne w obu miejscach. */
+.footnote-item.endnote-entry {
+  border-top: none;
+  padding: 1px 0;
+}
+
+/* Numer wpisu przypisu końcowego w kolorze odwołania (odróżnienie od dolnych). */
+.endnote-entry .footnote-item-number {
+  color: #9b1fa8;
 }
 
 .footnotes-panel-title {
@@ -1162,6 +1195,8 @@ body.image-moving * {
   gap: 8px;
   padding: 4px 0;
   border-top: 1px solid #f1f3f4;
+  font-size: 10pt;
+  line-height: 1.15;
 
   &:first-of-type {
     border-top: none;
@@ -1175,6 +1210,19 @@ body.image-moving * {
   color: #0563c1;
   vertical-align: super;
   font-size: 9pt;
+  /* Klik w numer wraca do odwołania w treści (scrollToNoteReference). */
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Chwilowe podświetlenie wpisu po skoku z odwołania w treści (jak wyróżnienie w Wordzie). */
+@keyframes note-item-flash {
+  0% { background: rgba(155, 31, 168, 0.16); }
+  100% { background: transparent; }
+}
+
+.footnote-item.note-item-flash {
+  animation: note-item-flash 1.2s ease-out;
 }
 
 .footnote-item-content {

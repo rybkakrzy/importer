@@ -1,11 +1,10 @@
+import { vi } from 'vitest';
 import { TestBed, ComponentFixture } from '@angular/core/testing';
 import { WysiwygEditorComponent } from './wysiwyg-editor';
 import { Endnote, Footnote } from '../../models/document.model';
 
 /**
- * Endnote rendering + editing in the REAL editor component, asserted against the REAL DOM. Mirrors
- * the footnote spec but on the SEPARATE endnote channel (class="endnote-ref", data-endnote-id,
- * endnotesChange, .endnotes-panel). Also asserts footnotes and endnotes coexist without collision.
+ * Endnote rendering + editing in the REAL editor component, asserted against the REAL DOM.
  */
 describe('WysiwygEditorComponent — przypisy końcowe', () => {
   let fixture: ComponentFixture<WysiwygEditorComponent>;
@@ -30,10 +29,17 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     component = fixture.componentInstance;
   });
 
+  /** Rozkład regionu przypisów liczy repaginacja (debounce) — wymuś przebieg synchronicznie. */
+  function flushPagination(): void {
+    (component as unknown as { _flushPaginateNow(): void })._flushPaginateNow();
+    fixture.detectChanges();
+  }
+
   function load(body = BODY, endnotes = ENDNOTES): HTMLElement {
     component.content = body;
     component.endnotes = endnotes.map(e => ({ ...e }));
     fixture.detectChanges();
+    flushPagination();
     return fixture.nativeElement as HTMLElement;
   }
 
@@ -49,13 +55,18 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     expect(refs[1].getAttribute('aria-label')).toBe('Przypis końcowy 2');
   });
 
-  it('renderuje treści przypisów końcowych w panelu, w kolejności odwołań', () => {
+  it('renderuje region przypisów WEWNĄTRZ ostatniej strony (nie pod dokumentem), z separatorem', () => {
     const host = load();
 
-    const panel = host.querySelector('.endnotes-panel');
-    expect(panel).not.toBeNull();
+    const region = host.querySelector('.endnotes-region');
+    expect(region).not.toBeNull();
+    expect(region!.closest('.page')).not.toBeNull();
+    expect(host.querySelector('.endnotes-panel')).toBeNull();
+    const separator = region!.querySelector('.endnotes-separator');
+    expect(separator).not.toBeNull();
+    expect(separator!.classList.contains('endnotes-separator-continuation')).toBe(false);
 
-    const items = Array.from(host.querySelectorAll('.endnotes-panel .footnote-item')) as HTMLElement[];
+    const items = Array.from(host.querySelectorAll('.endnotes-region .footnote-item')) as HTMLElement[];
     expect(items.length).toBe(2);
     expect(items[0].getAttribute('data-endnote-id')).toBe('en-1');
     expect(items[1].getAttribute('data-endnote-id')).toBe('en-2');
@@ -84,7 +95,7 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     component.endnotesChange.subscribe(v => (emitted = v));
 
     component.removeEndnote('en-1');
-    fixture.detectChanges();
+    flushPagination();
 
     expect(host.querySelector('sup.endnote-ref[data-endnote-id="en-1"]')).toBeNull();
     expect(host.querySelector('.footnote-item[data-endnote-id="en-1"]')).toBeNull();
@@ -92,6 +103,8 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     const remainingRef = host.querySelector('sup.endnote-ref[data-endnote-id="en-2"]') as HTMLElement;
     expect(remainingRef.textContent).toBe('1');
     expect(remainingRef.getAttribute('aria-label')).toBe('Przypis końcowy 1');
+    const remainingItem = host.querySelector('.footnote-item[data-endnote-id="en-2"] .footnote-item-number');
+    expect(remainingItem?.textContent).toBe('1');
 
     const model = emitted as unknown as Endnote[];
     expect(model.map(e => e.id)).toEqual(['en-2']);
@@ -102,21 +115,21 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     component.setActivePage(0, new Event('focusin'));
 
     const newId = component.addEndnoteAtCursor();
-    fixture.detectChanges();
+    flushPagination();
 
     expect(newId).not.toBeNull();
     expect(host.querySelector(`sup.endnote-ref[data-endnote-id="${newId}"]`)).not.toBeNull();
     expect(host.querySelector(`.footnote-item[data-endnote-id="${newId}"]`)).not.toBeNull();
-    expect(host.querySelectorAll('.endnotes-panel .footnote-item').length).toBe(3);
+    expect(host.querySelectorAll('.endnotes-region .footnote-item').length).toBe(3);
   });
 
-  it('dokument bez przypisów końcowych nie renderuje panelu', () => {
+  it('dokument bez przypisów końcowych nie renderuje regionu', () => {
     const host = load('<div class="document-content"><p>Bez przypisów.</p></div>', []);
-    expect(host.querySelector('.endnotes-panel')).toBeNull();
+    expect(host.querySelector('.endnotes-region')).toBeNull();
     expect(host.querySelector('sup.endnote-ref')).toBeNull();
   });
 
-  it('footnotes i endnotes współistnieją bez kolizji (osobne panele i odwołania)', () => {
+  it('footnotes i endnotes współistnieją bez kolizji (panel dolnych + region końcowych)', () => {
     const body =
       '<div class="document-content"><p>Tekst' +
       '<sup class="footnote-ref" data-footnote-id="fn-1" aria-label="Przypis 1">1</sup>' +
@@ -125,11 +138,87 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     component.footnotes = [{ id: 'fn-1', html: '<p>Dolny.</p>' } as Footnote];
     component.endnotes = [{ id: 'en-1', html: '<p>Końcowy.</p>' }];
     fixture.detectChanges();
+    flushPagination();
     const host = fixture.nativeElement as HTMLElement;
 
     expect(host.querySelector('.footnotes-panel')).not.toBeNull();
-    expect(host.querySelector('.endnotes-panel')).not.toBeNull();
+    expect(host.querySelector('.endnotes-region')).not.toBeNull();
     expect(host.querySelector('.footnotes-panel [data-testid="footnote-content-fn-1"]')?.textContent).toContain('Dolny.');
-    expect(host.querySelector('.endnotes-panel [data-testid="endnote-content-en-1"]')?.textContent).toContain('Końcowy.');
+    expect(host.querySelector('.endnotes-region [data-testid="endnote-content-en-1"]')?.textContent).toContain('Końcowy.');
+  });
+
+  it('klik w odnośnik w treści przenosi do wpisu przypisu (scroll + fokus + podświetlenie)', () => {
+    const host = load();
+
+    const item = host.querySelector('.footnote-item[data-endnote-id="en-1"]') as HTMLElement;
+    expect(item).not.toBeNull();
+    const scrollSpy = vi.fn();
+    item.scrollIntoView = scrollSpy;
+
+    const ref = host.querySelector('sup.endnote-ref[data-endnote-id="en-1"]') as HTMLElement;
+    ref.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(item.classList.contains('note-item-flash')).toBe(true);
+  });
+
+  it('klik w numer wpisu wraca do odwołania w treści', () => {
+    const host = load();
+
+    const ref = host.querySelector('sup.endnote-ref[data-endnote-id="en-2"]') as HTMLElement;
+    const scrollSpy = vi.fn();
+    ref.scrollIntoView = scrollSpy;
+
+    const numberEl = host.querySelector(
+      '.footnote-item[data-endnote-id="en-2"] .footnote-item-number'
+    ) as HTMLElement;
+    numberEl.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it('przypisy niemieszczące się na ostatniej stronie przelewają się na strony tylko-przypisowe z pustym body (poza zapisem)', async () => {
+    const measureStub = (_m: HTMLElement, blocks: HTMLElement[]): number[] =>
+      blocks.map(b => {
+        if (b.classList?.contains('footnote-item')) return 700;
+        if (b.classList?.contains('endnotes-separator')) return 20;
+        return 10;
+      });
+    (component as unknown as { _measureBlockRunHeights: typeof measureStub })._measureBlockRunHeights = measureStub;
+
+    const body =
+      '<div class="document-content">' +
+      '<p>Treść<sup class="endnote-ref" data-endnote-id="en-1">1</sup>' +
+      '<sup class="endnote-ref" data-endnote-id="en-2">2</sup>' +
+      '<sup class="endnote-ref" data-endnote-id="en-3">3</sup>.</p>' +
+      '</div>';
+    const notes: Endnote[] = [
+      { id: 'en-1', html: '<p>Pierwszy.</p>' },
+      { id: 'en-2', html: '<p>Drugi.</p>' },
+      { id: 'en-3', html: '<p>Trzeci.</p>' },
+    ];
+    const host = load(body, notes);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    const pages = Array.from(host.querySelectorAll('.page'));
+    expect(pages.length).toBeGreaterThan(1);
+
+    const items = Array.from(host.querySelectorAll('.endnotes-region .footnote-item')) as HTMLElement[];
+    expect(items.map(i => i.getAttribute('data-endnote-id'))).toEqual(['en-1', 'en-2', 'en-3']);
+    expect(items.map(i => i.querySelector('.footnote-item-number')?.textContent)).toEqual(['1', '2', '3']);
+
+    const regions = Array.from(host.querySelectorAll('.endnotes-region'));
+    expect(regions.length).toBeGreaterThan(1);
+    const contSeparators = regions.slice(1).map(r => r.querySelector('.endnotes-separator'));
+    contSeparators.forEach(sep =>
+      expect(sep?.classList.contains('endnotes-separator-continuation')).toBe(true));
+
+    const saved = component.getContent();
+    expect(saved).toContain('Treść');
+    expect(saved).not.toContain('Pierwszy.');
+    expect(saved).not.toContain('footnote-item');
+    const editors = Array.from(host.querySelectorAll('.editor-content')) as HTMLElement[];
+    expect(editors[editors.length - 1].textContent?.trim()).toBe('');
   });
 });

@@ -89,6 +89,19 @@ export interface PageGeometry {
   columns?: ColumnLayoutGeo;
 }
 
+/**
+ * Region przypisów końcowych na konkretnej stronie (jak w MS Word: zaraz po ostatnim
+ * bloku treści, z separatorem; nadmiar przelewa się na kolejne strony). Liczony w
+ * `_repaginateNow` tym samym measurerem co bloki treści; `topPx` = offset od góry `.page`.
+ */
+export interface EndnotePageRegion {
+  pageIndex: number;
+  topPx: number;
+  ids: string[];
+  /** Kontynuacja z poprzedniej strony — separator na całą szerokość (jak w Wordzie). */
+  continuation: boolean;
+}
+
 /** Twipy → cm (1440 twipów = 1 cal = 2.54 cm). Centralne przeliczenie dla data-col-*-tw. */
 const TWIPS_PER_CM = 1440 / 2.54;
 export function parseColumnDataAttributes(el: Element): ColumnLayoutGeo | undefined {
@@ -446,6 +459,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   activePageIndex = signal<number>(0);
 
   private _sanitizer = inject(DomSanitizer);
+  private _hostRef = inject(ElementRef<HTMLElement>);
   /** Cache trusted-HTML per strona — KLUCZOWE dla wydajności i contenteditable.
    *  Bez tego każde change detection tworzy nowy obiekt SafeHtml, Angular widzi
    *  „zmianę" i rebinduje innerHTML co kasuje kursor + uniemożliwia pisanie. */
@@ -658,13 +672,42 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   // ── Przypisy końcowe ──────────────────────────────────────────────────────
   // Osobny model od dolnych (inna semantyka: koniec dokumentu). Odwołania w treści =
-  // <sup class="endnote-ref">; treść w panelu POZA contenteditable body, na końcu.
+  // <sup class="endnote-ref">; treść renderowana WEWNĄTRZ ostatniej strony, zaraz po
+  // ostatnim bloku treści (jak w MS Word), z przelewaniem na kolejne strony. Elementy
+  // regionu żyją POZA contenteditable body — nie wchodzą do getContent().
 
   private readonly _endnotes = signal<Endnote[]>([]);
   readonly endnoteList = computed(() => this._endnotes());
 
+  /** Rozkład regionów przypisów końcowych na strony — liczony w `_repaginateNow`. */
+  private readonly _endnoteLayout = signal<EndnotePageRegion[]>([]);
+
+  /** Region przypisów końcowych danej strony (null = strona bez przypisów). */
+  endnoteRegionFor(pageIndex: number): EndnotePageRegion | null {
+    const region = this._endnoteLayout().find(r => r.pageIndex === pageIndex);
+    if (!region) return null;
+    // Układ może być chwilowo przestarzały względem modelu (repaginacja jest
+    // debounce'owana) — pokazuj tylko wpisy nadal obecne w modelu.
+    return this.endnoteEntriesFor(region).length > 0 ? region : null;
+  }
+
+  /** Wpisy regionu z numeracją GLOBALNĄ (pozycja w modelu, ciągła przez strony). */
+  endnoteEntriesFor(region: EndnotePageRegion): { en: Endnote; number: number }[] {
+    const list = this.endnoteList();
+    const indexById = new Map(list.map((e, i) => [e.id, i]));
+    const entries: { en: Endnote; number: number }[] = [];
+    for (const id of region.ids) {
+      const idx = indexById.get(id);
+      if (idx === undefined) continue;
+      entries.push({ en: list[idx], number: idx + 1 });
+    }
+    return entries;
+  }
+
   @Input() set endnotes(value: Endnote[] | undefined) {
     this._endnotes.set(value ? value.map(e => ({ ...e })) : []);
+    // Region przypisów jest częścią układu strony — przelicz rozkład.
+    this._schedulePaginate('endnotes-input');
   }
 
   @Output() endnotesChange = new EventEmitter<Endnote[]>();
@@ -697,6 +740,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const updated = current.map(e => (e.id === id ? { ...e, html } : e));
     this._endnotes.set(updated);
     this.endnotesChange.emit(this.getEndnotes());
+    // Zmiana treści zmienia wysokość wpisu — region może przelać się inaczej.
+    this._schedulePaginate('endnote-edit');
   }
 
   private _endnoteReferenceElements(): HTMLElement[] {
@@ -742,6 +787,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this._endnotesChanged(reordered)) {
       this._endnotes.set(reordered);
       this.endnotesChange.emit(this.getEndnotes());
+      this._schedulePaginate('endnotes-sync');
     }
   }
 
@@ -797,6 +843,72 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     this.syncEndnotesWithBody();
     if (removedFromDom) this.contentChange.emit(this.getContent());
+  }
+
+  // ── Nawigacja odnośnik ↔ treść przypisu (jak w MS Word) ──────────────────
+
+  /**
+   * Klik w treści strony: jeżeli trafił w odnośnik przypisu (dolnego lub końcowego),
+   * przenieś do jego wpisu (scroll + fokus + podświetlenie). Niezależnie od tego klik
+   * w body kończy edycję nagłówka/stopki (dotychczasowe zachowanie).
+   */
+  onEditorClick(ev: MouseEvent): void {
+    this._navigateToNoteFromRef(ev);
+    this.stopEditingHeaderFooter();
+  }
+
+  private _navigateToNoteFromRef(ev: MouseEvent): void {
+    const target = ev.target as HTMLElement | null;
+    const ref = target?.closest?.(
+      'sup.endnote-ref[data-endnote-id], sup.footnote-ref[data-footnote-id]'
+    ) as HTMLElement | null;
+    if (!ref) return;
+    const endnoteId = ref.getAttribute('data-endnote-id');
+    const footnoteId = ref.getAttribute('data-footnote-id');
+    const selector = endnoteId
+      ? `.footnote-item[data-endnote-id="${endnoteId}"]`
+      : `.footnote-item[data-footnote-id="${footnoteId}"]`;
+    const item = (this._hostRef.nativeElement as HTMLElement).querySelector<HTMLElement>(selector);
+    if (!item) return;
+    item.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    this._flashNoteItem(item);
+    item.querySelector<HTMLElement>('.footnote-item-content')?.focus?.({ preventScroll: true });
+  }
+
+  /** Klik w numer wpisu przypisu: powrót do odwołania w treści (scroll + karetka za nim). */
+  scrollToNoteReference(kind: 'footnote' | 'endnote', id: string): void {
+    const sel = kind === 'endnote'
+      ? `sup.endnote-ref[data-endnote-id="${id}"]`
+      : `sup.footnote-ref[data-footnote-id="${id}"]`;
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      const el = page.nativeElement.querySelector<HTMLElement>(sel);
+      if (!el) continue;
+      el.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      if (!this.readOnly) {
+        (el.closest('.editor-content') as HTMLElement | null)?.focus?.({ preventScroll: true });
+        this._placeCaretAfterElement(el);
+      }
+      return;
+    }
+  }
+
+  private _placeCaretAfterElement(el: HTMLElement): void {
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.setStartAfter(el);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  /** Chwilowe podświetlenie wpisu po skoku z odwołania (odpowiednik wyróżnienia w Wordzie). */
+  private _flashNoteItem(item: HTMLElement): void {
+    item.classList.remove('note-item-flash');
+    // Restart animacji, gdy użytkownik klika ten sam odnośnik ponownie.
+    void item.offsetWidth;
+    item.classList.add('note-item-flash');
+    setTimeout(() => item.classList.remove('note-item-flash'), 1300);
   }
 
   // Paginator: debounce + safety flag
@@ -4808,6 +4920,88 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         bi = runEnd;
       }
 
+      // ── Przypisy końcowe: rozkład jak w MS Word — region zaczyna się zaraz po
+      // ostatnim bloku treści na ostatniej stronie (separator + wpisy); wpisy, które
+      // się nie mieszczą, przelewają się na kolejne strony (kontynuacja z separatorem
+      // na całą szerokość). Strony tylko-przypisowe mają PUSTE body ('' w pageContents)
+      // — getContent() je odfiltrowuje, więc nie wchodzą do zapisu dokumentu.
+      const endnoteRegions: EndnotePageRegion[] = [];
+      const endnotesForLayout = this._endnotes();
+      let endnoteExtraPages = 0;
+      if (endnotesForLayout.length > 0) {
+        const sepProbe = document.createElement('div');
+        sepProbe.className = 'endnotes-separator';
+        const contSepProbe = document.createElement('div');
+        contSepProbe.className = 'endnotes-separator endnotes-separator-continuation';
+        const itemProbes = endnotesForLayout.map((en, i) => {
+          const item = document.createElement('div');
+          item.className = 'footnote-item endnote-entry';
+          const num = document.createElement('span');
+          num.className = 'footnote-item-number';
+          num.textContent = String(i + 1);
+          const content = document.createElement('div');
+          content.className = 'footnote-item-content';
+          content.innerHTML = en.html || '<p></p>';
+          item.append(num, content);
+          return item;
+        });
+        const measuredEn = measureRun([sepProbe, contSepProbe, ...itemProbes]);
+        const sepH = measuredEn[0] ?? 0;
+        const contSepH = measuredEn[1] ?? 0;
+        const itemHs = measuredEn.slice(2);
+
+        // Offset początku regionu od góry `.page`: dystans nagłówka + realnie zajęte
+        // pasmo nagłówka (jak w availableFor) + wysokość treści body na stronie.
+        const regionTopFor = (geo: PageGeometry, pageIdx: number, usedPx: number): number => {
+          const headerBand = Math.max(this._bandCmFor(geo, 'header') * CSS_PX_PER_CM,
+            pageIdx === 0 ? measuredBands.headerFirst : measuredBands.headerRest);
+          return this._distanceCmFor(geo, 'header') * CSS_PX_PER_CM + headerBand + usedPx;
+        };
+
+        let enPageIdx = pages.length - 1;
+        let enUsed = currentHeight;
+        let enAvail = availableHeight;
+        let curRegion: EndnotePageRegion = {
+          pageIndex: enPageIdx,
+          topPx: regionTopFor(curGeo, enPageIdx, enUsed),
+          ids: [],
+          continuation: false,
+        };
+        let sepPending = sepH;
+
+        const openEndnotePage = () => {
+          if (curRegion.ids.length) endnoteRegions.push(curRegion);
+          enPageIdx++;
+          endnoteExtraPages++;
+          pageGeos.push(curGeo);
+          pageSections.push(curSection);
+          enUsed = 0;
+          enAvail = availableFor(curGeo, enPageIdx);
+          curRegion = {
+            pageIndex: enPageIdx,
+            topPx: regionTopFor(curGeo, enPageIdx, 0),
+            ids: [],
+            continuation: true,
+          };
+          sepPending = contSepH;
+        };
+
+        for (let i = 0; i < endnotesForLayout.length; i++) {
+          const needed = sepPending + (itemHs[i] ?? 0);
+          // Wpis atomowy: nie mieści się → nowa strona. Na ŚWIEŻEJ stronie przypisów
+          // (kontynuacja bez wpisów) kładziemy mimo przepełnienia — inaczej pętla.
+          if (enUsed + needed > enAvail && (curRegion.ids.length > 0 || !curRegion.continuation)) {
+            openEndnotePage();
+            i--;
+            continue;
+          }
+          enUsed += needed;
+          sepPending = 0;
+          curRegion.ids.push(endnotesForLayout[i].id);
+        }
+        if (curRegion.ids.length) endnoteRegions.push(curRegion);
+      }
+
       measurer.remove();
 
       const newPageContents = pages.map(blocks => {
@@ -4815,7 +5009,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         blocks.forEach(b => tmp.appendChild(b));
         return tmp.innerHTML || '<p></p>';
       });
+      // Strony wyłącznie na przelane przypisy końcowe: puste body (patrz komentarz wyżej).
+      for (let i = 0; i < endnoteExtraPages; i++) newPageContents.push('');
 
+      this._endnoteLayout.set(endnoteRegions);
       this.pageGeometries.set(pageGeos);
       this.pageSectionIndexes.set(pageSections);
       // Rebind [innerHTML] tylko gdy rozkład bloków na strony REALNIE się zmienił — porównanie
