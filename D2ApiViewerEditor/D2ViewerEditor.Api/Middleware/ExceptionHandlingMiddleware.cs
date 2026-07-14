@@ -1,5 +1,6 @@
 ﻿using System.Net;
 using System.Text.Json;
+using D2ViewerEditor.Application.Common;
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 
@@ -70,13 +71,24 @@ public class ExceptionHandlingMiddleware
                 g => g.Select(e => e.ErrorMessage).ToArray()
             );
 
-        return ((int)HttpStatusCode.BadRequest, new ValidationProblemDetails(errors)
+        var problemDetails = new ValidationProblemDetails(errors)
         {
             Title = "Błąd walidacji",
             Status = (int)HttpStatusCode.BadRequest,
             Detail = "Jeden lub więcej błędów walidacji",
             Type = "https://tools.ietf.org/html/rfc7231#section-6.5.1"
-        });
+        };
+
+        // Wystaw stabilny kod maszynowy (np. DOCUMENT_CONTENT_EMPTY) obok listy błędów, aby GUI mogło
+        // rozpoznać przypadek domenowy niezależnie od treści komunikatu — tak samo jak w odpowiedziach
+        // { code, error }. Ignoruje domyślne kody FluentValidation, bierze pierwszy znany kod domenowy.
+        var domainCode = exception.Errors
+            .Select(e => e.ErrorCode)
+            .FirstOrDefault(ErrorCodes.IsKnown);
+        if (domainCode is not null)
+            problemDetails.Extensions["code"] = domainCode;
+
+        return ((int)HttpStatusCode.BadRequest, problemDetails);
     }
 
     private static (int, ProblemDetails) HandleArgumentException(ArgumentException exception)

@@ -20,6 +20,25 @@ export interface PageSize {
   orientation: 'portrait' | 'landscape';
 }
 
+/** Pojedyncza kolumna nierównego układu (twipy — jednostka DOCX). */
+export interface SectionColumn {
+  widthTwips: number;
+  spaceTwips: number;
+}
+
+/**
+ * Układ kolumn sekcji (odwzorowuje w:cols). Domyślnie 1 kolumna. `columns` wypełnione
+ * tylko dla kolumn nierównych (equalWidth=false z jawnymi w:col); dla równych wystarczą
+ * `count` + `spaceTwips` (ADR-0039).
+ */
+export interface ColumnLayout {
+  count: number;
+  equalWidth: boolean;
+  spaceTwips: number;
+  separator: boolean;
+  columns?: SectionColumn[];
+}
+
 /**
  * Nagłówek/stopka JEDNEJ sekcji dokumentu wielosekcyjnego (indeks 0-based w kolejności
  * dokumentu). Wpisy istnieją tylko dla sekcji ≥ 1 z WŁASNYMI referencjami; sekcja bez
@@ -42,6 +61,17 @@ export interface Footnote {
   html: string;
 }
 
+/**
+ * Przypis końcowy. Tożsamość/numer jak w {@link Footnote} (`id` np. "en-1", stabilne;
+ * numer z kolejności odwołań), ale ODDZIELNY typ — endnotes mają inną semantykę
+ * renderowania (koniec dokumentu) i osobną część OOXML (word/endnotes.xml). Odwołania
+ * w treści niosą tylko `data-endnote-id`.
+ */
+export interface Endnote {
+  id: string;
+  html: string;
+}
+
 /** Zawartość dokumentu z konwersji DOCX */
 export interface DocumentContent {
   html: string;
@@ -52,8 +82,11 @@ export interface DocumentContent {
   footer?: HeaderFooterContent;
   margins?: PageMargins;
   pageSize?: PageSize;
+  /** Układ kolumn sekcji bazowej (0). Null/1 kolumna = jednokolumnowy (ADR-0039). */
+  columns?: ColumnLayout;
   sectionHeadersFooters?: SectionHeaderFooter[];
   footnotes?: Footnote[];
+  endnotes?: Endnote[];
   /**
    * Dokument źródłowy jest chroniony przed edycją (settings.xml: wymuszone
    * w:documentProtection lub w:writeProtection). Edytor otwiera go tylko do odczytu.
@@ -184,6 +217,7 @@ export interface SaveDocumentRequest {
   pageSize?: PageSize;
   sectionHeadersFooters?: SectionHeaderFooter[];
   footnotes?: Footnote[];
+  endnotes?: Endnote[];
   /** Gdy podane, backend zapisuje przez pass-through oryginalnego pakietu (zachowuje
    *  style tabel/motyw/numerację). Brak → pełna regeneracja pakietu. */
   masterId?: string;

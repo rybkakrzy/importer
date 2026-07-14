@@ -16,7 +16,8 @@ import { ApiConfigService } from '../core/services/api-config.service';
 export type OpenDocumentErrorCode =
   | 'PASSWORD_REQUIRED'
   | 'WRONG_PASSWORD'
-  | 'UNSUPPORTED_LEGACY_DOC';
+  | 'UNSUPPORTED_LEGACY_DOC'
+  | 'DOCUMENT_CONTENT_EMPTY';
 
 /** Błąd otwarcia z opcjonalnym `code` (hasło wymagane/błędne, binarny .doc). */
 export class OpenDocumentError extends Error {

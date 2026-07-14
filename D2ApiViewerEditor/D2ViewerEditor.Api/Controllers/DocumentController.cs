@@ -1,4 +1,5 @@
-﻿using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocument;
+﻿using D2ViewerEditor.Application.Common;
+using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.SignDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadImage;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetNewDocument;
@@ -28,8 +29,14 @@ public class DocumentController : BaseApiController
     [RequestSizeLimit(50 * 1024 * 1024)]
     public async Task<IActionResult> OpenDocument(IFormFile file, [FromForm] string? password = null)
     {
-        if (file == null || file.Length == 0)
+        if (file == null)
             return BadRequest(new { error = "Nie przesłano pliku" });
+
+        // Plik JEST przesłany, ale ma zerową długość = dokument bez treści. To osobny przypadek
+        // domenowy (nie „brak pliku") — zwracamy stabilny kod, po którym GUI pokazuje jednolity
+        // komunikat, taki sam jak na ścieżce uploadu ze strony startowej.
+        if (file.Length == 0)
+            return BadRequest(new { code = ErrorCodes.DocumentContentEmpty, error = "Zawartość dokumentu nie może być pusta." });
 
         // .doc i .docx przepuszczamy do normalizera (detekcja formatu po zawartości, nie po rozszerzeniu):
         // .docx zwykły / zaszyfrowany hasłem oraz .doc będący w istocie DOCX są obsługiwane; binarny .doc
@@ -73,6 +80,7 @@ public class DocumentController : BaseApiController
             request.PageSize,
             request.SectionHeadersFooters,
             request.Footnotes,
+            request.Endnotes,
             request.MasterId
         );
 

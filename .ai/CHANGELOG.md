@@ -11,6 +11,218 @@ Istotne zmiany dla kontynuacji pracy (nie zastępuje changeloga produktu).
 ### Notes
 ```
 
+## 2026-07-14 — Rozbudowa funkcji „Zgłoś problem" (adresat + diagnostyka + kopiuj do schowka)
+
+### Changed
+- Nowy `LastHttpErrorService` (`core/services`): przechowuje migawkę OSTATNIEGO błędu HTTP
+  (status/metoda/url/detal/czas). Wcześniej błąd tylko trafiał do `console.error` + toast i przepadał.
+- `httpErrorInterceptor`: rejestruje każdy błąd (ścieżka 403 i pozostałe) przez `recordLastError`.
+- `environment.ts` / `environment.development.ts`: dodane `supportEmail: 'test@testowy.pl'`
+  (PLACEHOLDER — do podmiany na docelowy adres wsparcia).
+- `document-editor.ts` `openReportEmail()`: mailto z adresatem z configu; treść wzbogacona o
+  przeglądarkę/OS, viewport, ekran, język, stan połączenia, datę+źródło buildu oraz sekcję
+  „Ostatni błąd" (gdy istnieje). Wydzielone `collectDiagnosticRows`/`formatDiagnostics`/`buildDiagnosticsBlock`.
+- Nowa metoda `copyDiagnostics()` + pozycja menu „Kopiuj dane diagnostyczne" (fallback, gdy
+  `mailto:` nie zadziała lub przeglądarka utnie długą treść). Powiadomienie o wyniku kopiowania.
+- `document-editor.html`: przycisk „Zgłoś" → „Zgłoś problem" + druga pozycja kopiowania.
+
+### Verified
+- `ng test --include document-editor.spec.ts` → 81/81 (75 istniejących + 6 nowych: adresat,
+  rozszerzona diagnostyka, dołączanie/pomijanie ostatniego błędu HTTP, kopiowanie do schowka).
+- Wcześniejszy pełny przebieg całego zestawu: 498/498.
+
+### Notes
+- Zakres wyłącznie frontendowy, backend nietknięty (świadomie — wysyłka do API to osobna, większa zmiana).
+- `buildInfo.*` w `collectDiagnosticRows` czytane defensywnie (`?.()`), bo część stubów testowych ich nie dostarcza.
+- Ryzyko długości `body` w `mailto:` (≈2000 zn. w części przeglądarek) świadomie zaadresowane przyciskiem kopiowania.
+
+## 2026-07-14 — Fix: obcięta górna część dużego tytułu na początku dokumentu (usunięto text-box-trim)
+
+### Changed
+- `wysiwyg-editor.scss`: usunięto `text-box-trim: trim-start; text-box-edge: text alphabetic;`
+  z reguły `.editor-content p` (dodane w 7959f06). Reguła przesuwała TUSZ pierwszej linii
+  akapitu w górę o połowę interlinii, poza box akapitu; dla PIERWSZEGO akapitu strony trafiał
+  ~37px (przy 40pt) powyżej górnej krawędzi `.editor-content`, którą `overflow:hidden`
+  (paginacja, ADR-0038) przycina → górna część znaków znikała (objaw „nagłówek nachodzi na
+  tytuł"). Ten sam mechanizm nasuwał duży tytuł w środku strony na akapit powyżej. Komentarz
+  na miejscu ostrzega przed ponownym dodaniem.
+
+### Verified
+- Root cause i fix potwierdzone w realnym Chrome 150 (headless + CDP): repro 1:1 struktury
+  `.page > .page-header + .editor-content > p.doc-title`. Pomiar: z regułą tusz tytułu 37px
+  nad krawędzią kontenera (przycięty), bez reguły 2px (OK). Before/after screenshot: tytuł i
+  śródtytuł w pełni widoczne z polskimi diakrytykami (Ł Ć ó ą ż), bez przycięcia i nakładania.
+- Nowy `wysiwyg-editor.title-clip.spec.ts` 2/2 (strażnik skompilowanego CSS komponentu —
+  brak `text-box-trim`/`text-box-edge`); pełne `src/app/components/wysiwyg-editor` 180/180;
+  `ng build` OK (tylko pre-existing ostrzeżenia budżetu rozmiaru).
+
+### Notes
+- Zmiana czysto prezentacyjna (styl komponentu, nie inline) — NIE dotyka getContent/serializacji,
+  eksport DOCX bez zmian, brak dirty/undo. `text-box-trim` nie jest layoutowane przez jsdom,
+  więc wizualna regresja pinowana headless Chrome (skill `verify`), a `ng test` strzeże źródła.
+- Dokument zgłoszenia i MS Word niedostępne lokalnie — potwierdzone na wiernym repro CSS.
+
+## 2026-07-14 — Spójny komunikat dla pustego dokumentu (stały kod `DOCUMENT_CONTENT_EMPTY`)
+
+### Changed
+- Backend: nowy stały kod maszynowy `ErrorCodes.DocumentContentEmpty = "DOCUMENT_CONTENT_EMPTY"`
+  (`Application/Common/ErrorCodes.cs`).
+  - `POST /api/document/open` rozdziela `file == null` („Nie przesłano pliku") od `file.Length == 0`
+    (dokument bez treści → `{ code, error }`), zamiast mylącego „Nie przesłano pliku" dla pustego pliku.
+  - Walidatory `UploadDocumentCommandValidator` i `SaveDocumentVersionCommandValidator`:
+    `.WithErrorCode(DOCUMENT_CONTENT_EMPTY)` na regule pustej zawartości.
+  - `ExceptionHandlingMiddleware.HandleValidationException`: wystawia `code` (pierwszy znany kod
+    domenowy) w rozszerzeniach ProblemDetails — GUI rozpoznaje przypadek po kodzie, nie po treści.
+- Frontend: jedno źródło prawdy `core/errors/document-error.util.ts`
+  (`EMPTY_DOCUMENT_MESSAGE` = „Nie można otworzyć dokumentu, ponieważ nie zawiera on treści.",
+  `isEmptyDocumentError(err)` obsługuje `{code,error}` i ProblemDetails). Wpięte w: interceptor
+  (centralny toast), edytor (`_convertAndLoad`), dashboard (upload DOCX/PDF). `OpenDocumentErrorCode`
+  rozszerzony o `DOCUMENT_CONTENT_EMPTY`.
+
+### Verified
+- `dotnet test` (API.UnitTests middleware 11/11, Application.UnitTests walidatory 14/14) — zielone.
+- Vitest: nowy `document-error.util.spec.ts` 5/5; pełna sucie 495 passed (2 wcześniejsze, niezwiązane
+  awarie WIP: `wysiwyg-editor.title-clip.spec.ts` — import `node:*`, `wysiwyg-editor.columns.spec.ts`).
+
+### Notes
+- Komunikaty backendu pozostały bez zmian (frontend decyduje o treści dla użytkownika); teksty
+  techniczne nie są ujawniane. Ta sama treść na stronie startowej i w edytorze.
+
+## 2026-07-13 — Przypisy końcowe (endnotes) — pełna obsługa end-to-end (ADR-0039)
+
+### Changed
+- Model: `Endnote { Id, Html }` + `DocumentContent.Endnotes` + `SaveDocumentRequest.Endnotes`
+  (Domain `DocumentModels.cs`, TS `document.model.ts`).
+- Reader `DocxToHtmlConverter`: `w:endnoteReference` → `<sup class="endnote-ref" data-endnote-id="en-N">`
+  (osobna sekwencja numeracji), `ExtractEndnotes` z `EndnotesPart` (pomija separatory),
+  `EndnoteReferenceMark` pomijany w treści; aliasy `DomainEndnote`/`WpEndnote`.
+- Writer `HtmlToDocxConverter`: `AssignEndnoteOoxmlIds`/`CreateEndnoteReferenceRun`/`AddEndnotes`
+  (`AddNewPart<EndnotesPart>` = `word/endnotes.xml` + relacja + content type)/`BuildEndnoteElement`
+  (`w:endnoteRef` w 1. akapicie, obrazy → część endnotes)/`CreateSeparatorEndnote`; nowy param
+  `endnotes` przewleczony przez `Convert`/`ConvertPreservingPackage` + `IHtmlToDocxConverter`
+  + `SaveDocumentCommand`/`DownloadEditedDocumentCommand`(+handlery) + oba kontrolery.
+- GUI `wysiwyg-editor`: input `endnotes`/output `endnotesChange`, panel `.endnotes-panel`
+  („Przypisy końcowe", POZA contenteditable), `syncEndnotesWithBody`/`addEndnoteAtCursor`/
+  `removeEndnote`/`commitEndnoteContent` (wpięte w `_schedulePersist`); `document-editor`
+  sygnał `endnotes` z importu → `[endnotes]`/`(endnotesChange)` + `buildSaveRequest`.
+- Naprawiona współbieżna niekompilacja `SectionPropertiesReader.cs` (alias `OoxmlPageSize`) —
+  patrz Notes.
+
+### Verified
+- `EndnoteFidelityTests` 21/21 (import/eksport z inspekcją ZIP + [Content_Types] + rels,
+  walidator OOXML Office2013 = 0 błędów, brak osieroconych/duplikatów id, round-trip, add/edit/
+  delete/reorder, dokument mieszany footnote+endnote, regresja bez endnotes); `FootnoteFidelityTests`
+  18/18 bez zmian. Infrastructure **473/473**, Application **311/311**, Api **130/130**, build sln OK.
+- GUI: nowy `wysiwyg-editor.endnotes.spec.ts` 7/7 (w tym współistnienie footnote+endnote),
+  `wysiwyg-editor.footnotes.spec`/`document-editor.footnotes.spec` 9/9 bez regresji, `ng build` OK.
+
+### Notes
+- Endnotes to typ ODDZIELNY (nie wspólny abstrakt) — semantyka renderu/eksportu nie mieszana.
+- Otwarcie w realnym MS Word niepotwierdzone w tym środowisku (brak Worda) — zamiast tego
+  walidacja schematu OOXML (Office2013) = 0 błędów + inspekcja archiwum ZIP.
+- Współbieżna sesja edytowała równolegle `DocxToHtmlConverter.cs`/`SectionPropertiesReader.cs`
+  (feature „section columns", `_baseSectionColumns`); chwilowo nie kompilowały. Dołożony alias
+  `OoxmlPageSize` był konieczny do zbudowania/testów; jeśli tamta sesja nadpisze plik, alias
+  trzeba odtworzyć.
+
+## 2026-07-13 — Fix: wczytanie nowego dokumentu bez nagłówka/stopki pokazywało nagłówek/stopkę z poprzedniego
+
+### Changed
+- `document-editor.ts _applyLoadedContent`: nagłówek i stopka podawane do edytora z KAŻDYM polem
+  wariantu JAWNIE (`differentFirstPage`/`firstPageHtml`/`differentOddEven`/`oddHtml`/`evenHtml`
+  z `?? false`/`?? ''`), zamiast `{ ...content.header }`. Setter `headerContent`/`footerContent`
+  w `wysiwyg-editor.ts` aktualizuje sygnał tylko dla pól `!== undefined`, więc dokument bez
+  nagłówka/stopki (reader nie zwraca `content.header/footer`) zostawiał w edytorze warianty
+  first-page/even z POPRZEDNIO wczytanego pliku. Baza (`_headerHtml`) była czyszczona, ale
+  `_headerFirstPageHtml`/`_headerEvenHtml`/`_headerDifferentFirstPage` (i footer) — nie; na
+  stronie 1 (`_resolveHfVariant` → wariant `first`) render sięgał po stary `firstPageHtml`.
+
+### Verified
+- Nowy `document-editor.header-footer-reset.spec.ts` 1/1 (doc A z first-page+even → doc B bez
+  nagłówka/stopki → oba pasma i wszystkie warianty puste). `document-editor.spec` 76/76 +
+  `wysiwyg-editor.first-page-header.spec` 13/13 bez regresji. `ng build` OK.
+
+### Notes
+- Fix czysto frontendowy, na granicy parent→child (bez zmian semantyki setterów ADR-0037:
+  `undefined` = dziedzicz nadal działa dla wpisów sekcyjnych, które idą osobnym inputem
+  `sectionHeadersFooters` i tak resetowanym przez `?? []`). Reader/writer nietknięte.
+
+## 2026-07-13 — Fix: zagnieżdżony font/rozmiar/kolor per-słowo gubiony przy zapisie (całe zdanie jedną czcionką)
+
+### Changed
+- `HtmlToDocxConverter.ApplyRunStyle`: `font-family`, `font-size` i `color` NADPISUJĄ wartość
+  odziedziczoną po przodku zamiast ją pomijać. Stary strażnik `!props.Elements<...>().Any()`
+  blokował nadpisanie, gdy `props` niósł już element sklonowany z rodzica → zagnieżdżony span
+  z własnym krojem/rozmiarem/kolorem był ignorowany.
+- Nowy helper `SetOrReplaceFontSize`; font-family aktualizuje `Ascii`/`HighAnsi` w istniejącym
+  `RunFonts` (zachowuje odziedziczone EastAsia/ComplexScript/Hint i kolejność schematu CT_RPr).
+
+### Verified
+- Root cause udowodniony harnessem konwertera (scratchpad) + repro DOM w jsdom: edytor NESTuje
+  spany fontu wewnątrz spana oryginalnego runu (`extractContents`+`insertNode` zostawia zakres
+  w środku spana), więc akapit będący jednym runem z jawnym krojem kolapsował do kroju przodka.
+  Akapit bez jawnego kroju (spany-rodzeństwo) eksportował się poprawnie — stąd sporadyczność.
+- `FontFamilyWriteTests` 6/6 (+3: font/rozmiar/kolor nadpisanie zagnieżdżone), pełne
+  Infrastructure **452/452** (0 regresji goldenów).
+
+### Notes
+- Słowa BEZ jawnego kroju nadal dziedziczą krój przodka (poprawne, tak jak render w edytorze).
+- Strażniki `!.Any()` dla bold/italic/underline zostawione — są addytywne (dziecko boldowanego
+  przodka JEST bold), nie ma tam nadpisania „w dół".
+
+## 2026-07-13 — Follow-up ADR-0037: nagłówek FIRST pokazywał się też na stronie 2 (titlePg nie może dziedziczyć się między sekcjami)
+
+### Changed
+- `wysiwyg-editor.ts` `_resolveHfVariant`: flaga `differentFirstPage` pochodzi WYŁĄCZNIE
+  z WŁASNEGO wpisu sekcji strony (`candidates[0].sectionIndex === pageSection`; sekcja 0 =
+  flagi bazowe pasma) — wcześniej brana z najbliższego wcześniejszego wpisu/bazy, przez co
+  dokument z przerwą sekcji po stronie 1 (sekcja 2 bez własnych referencji i bez titlePg)
+  renderował nagłówek/stopkę FIRST na stronach 1 ORAZ 2, a default dopiero od strony 3.
+  W OOXML `w:titlePg` nie jest dziedziczone (sekcja bez elementu = wyłączone), a reader po
+  ADR-0037 gwarantuje wpis (choćby flag-only) dla każdej sekcji ≥ 1 z aktywnym titlePg —
+  brak wpisu jednoznacznie oznacza titlePg OFF. `differentOddEven` nadal dziedziczy
+  z najbliższego wpisu/bazy (evenAndOddHeaders jest globalne w settings.xml).
+- To NIE był off-by-one indeksu: kontrakt numeracji potwierdzony — `pageIndex` 0-based
+  wszędzie wewnątrz komponentu, 1-based tylko `data-page-number` (DOM/`_pageIndexFromEvent`)
+  i placeholder `{page}` (konwersje ±1 wyłącznie na tych granicach).
+
+### Verified
+- `wysiwyg-editor.first-page-header.spec.ts` +4 (regresja zgłoszenia: sekcja dziedzicząca
+  bez titlePg → default na jej 1. stronie; wpis flag-only → first dziedziczony; titlePg
+  jawnie OFF we wpisie; even/odd globalne dla sekcji bez wpisu); pełne GUI **474/474**
+  (51 plików; pojedynczy błąd async-po-teardown w 1. przebiegu = flake, nie reprodukuje się);
+  `ng build` OK. Backend bez zmian (eksport był poprawny — wada tylko w podglądzie).
+
+### Notes
+- Domyka ograniczenie (a) z risk R-31/ADR-0037. Pozostaje: parzystość even/odd globalna
+  (bez `pgNumType`), pierwsza strona sekcji continuous = następna strona.
+
+## 2026-07-13 — Dashboard: „Otwórz plik" wczytuje teraz też .doc
+
+### Changed
+- **GUI `dashboard.ts` (`openFile`):** usunięta świadoma blokada `.doc` (wcześniej pokazywała komunikat
+  „otwórz w edytorze przez Plik → Otwórz"). `.doc` idzie teraz TĄ SAMĄ ścieżką co `.docx`
+  (`uploadDocument` surowych bajtów jako v1+v2 → `saveDocumentVersion` → nawigacja do
+  `/editor?masterId&versionId`), z jawnym `mimeType: 'application/msword'` (zamiast polegać na
+  `file.type` przeglądarki) — reszta stosu (`GetDocumentMetadata` → `loadFromStorage` w
+  `document-editor.ts`, stała `DOC_MIME` już tam istniejąca → `/open` → `DocumentInputNormalizer`
+  → `LegacyDocBinaryConverter`) już w pełni obsługiwała ten mimeType, więc zmiana jest czysto
+  frontendowa (żadna logika backendu nie została ruszona).
+- Komunikat błędu nieobsługiwanego rozszerzenia zaktualizowany na „Obsługiwane są pliki DOCX, DOC i PDF.".
+
+### Verified
+- Nowe testy w `dashboard.spec.ts`: `.doc` → `uploadDocument` z `mimeType: 'application/msword'` +
+  nawigacja do edytowalnego dokumentu; nieobsługiwane rozszerzenie nadal odrzucane z komunikatem.
+  Pełna suita GUI **474/474** (było 464/464), `ng build` OK (0 błędów, warningi budżetu bundla
+  pre-existing, niezwiązane).
+
+### Notes
+- Ograniczenie świadome, bez zmian: DOCX zabezpieczony hasłem nadal trzeba otwierać przez
+  „Plik → Otwórz" w edytorze (ta ścieżka w dashboardzie robi surowy upload bez dekrypcji).
+  Binarny `.doc`, którego `LegacyDocBinaryConverter` nie potrafi sparsować, zwróci z `/open`
+  kontrolowany błąd `UNSUPPORTED_LEGACY_DOC` dopiero PO nawigacji do edytora (dashboard nie
+  waliduje zawartości pliku z wyprzedzeniem — takie samo zachowanie jak dla uszkodzonego .docx).
+
 ## 2026-07-13 — „Inna pierwsza strona" (w:titlePg): nagłówek/stopka first ignorowane w podglądzie i gubione przy zapisie (ADR-0037)
 
 ### Changed

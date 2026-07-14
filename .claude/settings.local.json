@@ -37,7 +37,16 @@
       "PowerShell(npx ng test --watch=false 2>&1)",
       "PowerShell(foreach \\($p in @\\(\"D2ViewerEditor.Application.UnitTests\",\"D2ViewerEditor.Api.UnitTests\",\"D2ViewerEditor.Domain.UnitTests\"\\)\\) { Write-Output \"=== $p ===\"; dotnet test $p --nologo 2>&1 | Select-String -Pattern \"Powodzenie!|Niepowodzenie!|error CS\" | Select-Object -Last 3 })",
       "PowerShell(dotnet test D2ViewerEditor.Application.UnitTests --nologo 2>&1)",
-      "PowerShell(\"---\")"
+      "PowerShell(\"---\")",
+      "Bash(node drive.mjs \"$\\(pwd\\)/title.html\" \"$\\(pwd\\)/shot.png\")",
+      "Bash(node drive.mjs \"$\\(pwd\\)/title.html\" \"$\\(pwd\\)/shot2.png\")",
+      "Bash(dotnet test *)",
+      "Bash(node drive.mjs \"$\\(pwd\\)/title.html\" \"$\\(pwd\\)/shot3.png\")",
+      "Bash(npx vitest *)",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\(JSON.stringify\\(p.scripts,null,1\\)\\)\")",
+      "Bash(npx ng *)",
+      "Bash(node -e \"const a=require\\('./angular.json'\\);const t=Object.values\\(a.projects\\)[0].architect.test;console.log\\(JSON.stringify\\(t,null,1\\)\\)\")",
+      "Bash(node -e \"const a=require\\('./angular.json'\\); const p=Object.values\\(a.projects\\)[0]; console.log\\(p.architect?.test?.builder\\)\")"
     ]
   }
 }

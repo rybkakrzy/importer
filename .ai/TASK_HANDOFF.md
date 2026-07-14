@@ -2,7 +2,133 @@
 
 > Bezpieczne przekazanie pracy kolejnej sesji/agentowi.
 
-## Ostatnia aktualizacja (2026-07-13)
+## Ostatnia aktualizacja (2026-07-14)
+
+- **Fix GUI: obcięta górna część dużego tytułu na początku dokumentu.**
+   - Objaw (DEV): duży „Title" na 1. stronie — widoczna tylko dolna część znaków, górna
+     obcięta („wygląda jak nachodzenie nagłówka"); reszta OK.
+   - Root cause (Chrome ≥133; udowodniony headless + CDP, repro 1:1): reguła
+     `.editor-content p { text-box-trim: trim-start; text-box-edge: text alphabetic }`
+     (7959f06) przesuwa tusz PIERWSZEJ linii akapitu w górę o połowę interlinii, poza box.
+     Pierwszy akapit strony → tusz ~37px (przy 40pt) nad krawędzią `.editor-content`, którą
+     `overflow:hidden` (paginacja, ADR-0038) PRZYCINA. To PRZYCIĘCIE, nie okluzja — nagłówek
+     przezroczysty. Efekt ∝ rozmiar fontu (dotykał tylko dużych tytułów). Ten sam mechanizm
+     nakładał duży tytuł w środku strony na akapit powyżej.
+   - Fix (tylko `wysiwyg-editor.scss`): usunięto obie deklaracje z `.editor-content p`
+     (zostaje `margin`) + komentarz ostrzegawczy. Standardowa interlinia = zgodne z Wordem,
+     bez przycięcia. Czysto prezentacyjne — bez wpływu na getContent/eksport/dirty/undo/zoom.
+   - Testy: nowy `wysiwyg-editor.title-clip.spec.ts` 2/2 (strażnik skompilowanego CSS —
+     `text-box-trim` nie wróci; jsdom nie layoutuje trim, więc wizualnie headless Chrome),
+     `wysiwyg-editor` 180/180, `ng build` OK.
+   - **Uwaga:** jeśli wróci potrzeba „interlinii jak w Wordzie" (nadmiar leadingu POD linią),
+     NIE przez `text-box-trim` na kontenerze z `overflow:hidden` — rozwiązać poza paginacją.
+     Dokument zgłoszenia/MS Word niedostępne lokalnie — potwierdzone na wiernym repro CSS.
+
+- **Fix (UAT): ujednolicony komunikat dla pustego dokumentu (stały kod `DOCUMENT_CONTENT_EMPTY`).**
+   - Problem: strona startowa i edytor pokazywały różne, mylące komunikaty dla tego samego
+     pustego dokumentu (generyczny „Spróbuj ponownie." vs „Nie przesłano pliku"); backend znał
+     precyzyjną przyczynę, ale brakowało STABILNEGO kodu maszynowego i obsługa była zduplikowana.
+   - Backend: `ErrorCodes.DocumentContentEmpty` (`Application/Common/ErrorCodes.cs`); `/open`
+     rozdziela `file==null` od `file.Length==0` (`{code,error}`); walidatory upload/save-version
+     `.WithErrorCode(...)`; `ExceptionHandlingMiddleware` wystawia `code` w Extensions ProblemDetails.
+   - Front (jedno źródło prawdy): `core/errors/document-error.util.ts`
+     (`EMPTY_DOCUMENT_MESSAGE` + `isEmptyDocumentError`), wpięte w interceptor, edytor
+     `_convertAndLoad`, dashboard (DOCX+PDF); `OpenDocumentErrorCode` +`DOCUMENT_CONTENT_EMPTY`.
+   - Testy: middleware 11/11 (+2), walidatory 14/14 (ErrorCode), Vitest `document-error.util.spec`
+     5/5, pełna suita GUI 495 passed. `dotnet build` API 0 błędów.
+   - **Uwaga o środowisku:** pełny `ng test` blokują 2 niezwiązane, NIE-moje pliki WIP tej gałęzi
+     (untracked `wysiwyg-editor.title-clip.spec.ts` importuje `node:*` → wywala bundling całej
+     suity; `wysiwyg-editor.columns.spec.ts` — jeden failujący asert geometrii kolumn). Suitę
+     walidowałem tymczasowo odsuwając title-clip i przywracając 1:1.
+   - **Do rozważenia dalej:** analogiczny kod można dołożyć do pozostałych walidatorów pustej
+     zawartości (Ingest/FinishAndSend/UpdateVersion), jeśli ich ścieżki też mają trafiać do GUI;
+     `LastHttpErrorService` wstrzyknięty w interceptorze (zmiana równoległa) czeka na użycie.
+
+- **Przypisy końcowe (endnotes) — pełna obsługa end-to-end (ADR-0039).**
+   - Diagnoza: footnotes działały (18/18); realna luka = endnotes cicho dropowane
+     (reader `default` na `w:endnoteReference`, writer bez `endnotes.xml`).
+   - Implementacja lustrzana do footnotes (ADR-0032) jako typ ODDZIELNY (semantyka renderu/
+     eksportu nie mieszana): `Endnote { Id, Html }` + `DocumentContent.Endnotes`/
+     `SaveDocumentRequest.Endnotes`; reader `ExtractEndnotes`/`RenderEndnoteReference`
+     (`<sup class="endnote-ref" data-endnote-id="en-N">`, osobna numeracja); writer
+     `AddEndnotes` (`AddNewPart<EndnotesPart>`)/`CreateEndnoteReferenceRun`/`BuildEndnoteElement`;
+     param `endnotes` przez Convert/ConvertPreservingPackage/interfejs/komendy/kontrolery;
+     GUI panel `.endnotes-panel` + `syncEndnotesWithBody` (w `_schedulePersist`).
+   - Testy: `EndnoteFidelityTests` 21/21 (walidator OOXML 0 błędów, ZIP/rels/content-types,
+     round-trip, edycja, dokument mieszany, regresja) + `wysiwyg-editor.endnotes.spec` 7/7;
+     Infrastructure 473/473, Application 311/311, Api 130/130, `ng build` OK.
+   - **Do rozważenia dalej:** round-trip `w:endnotePr` (format numeracji, endSect vs docEnd —
+     dziś fallback „koniec dokumentu"); przypisy w ścieżce `Sign` (nie dostaje footnotes ani
+     endnotes — te same braki co footnotes); UI „Wstaw przypis końcowy" w toolbarze (metody
+     `addEndnoteAtCursor` istnieją, brak przycisku); potwierdzenie na realnym MS Word.
+   - **Współbieżność:** równoległa sesja dodawała „section columns" w `DocxToHtmlConverter.cs`/
+     `SectionPropertiesReader.cs`; dołożony alias `OoxmlPageSize` (SectionPropertiesReader) był
+     konieczny do builda — odtworzyć, jeśli tamta sesja nadpisze plik.
+
+- **Fix: wczytanie nowego dokumentu bez nagłówka/stopki pokazywało je z poprzedniego.**
+   - Zgłoszenie: cache podczas edycji OK, ale plik bez stopki/nagłówka pokazywał pasma
+     z wcześniej wczytanego dokumentu (edytor otwierany w tej samej instancji — „Otwórz plik").
+   - Root cause (granica parent→child): `document-editor._applyLoadedContent` robił
+     `{ ...content.header, html, height }`; setter `headerContent`/`footerContent` w
+     `wysiwyg-editor.ts` aktualizuje sygnał wariantu tylko dla pól `!== undefined`
+     (ADR-0037: undefined=dziedzicz). Brak `content.header/footer` → warianty
+     first-page/even/odd + flagi zostawały z POPRZEDNIEGO pliku; `_resolveHfVariant`
+     na stronie 1 renderował stary `firstPageHtml`.
+   - Fix (tylko front): `_applyLoadedContent` podaje oba pasma z KAŻDYM polem wariantu
+     jawnie (`?? false`/`?? ''`) → pełny reset przy każdym wczytaniu; wartości readera
+     zachowane. Wpisy sekcyjne bez zmian (input `sectionHeadersFooters`, reset `?? []`).
+   - Testy: nowy `document-editor.header-footer-reset.spec.ts` 1/1; `document-editor.spec`
+     76/76 + `wysiwyg-editor.first-page-header.spec` 13/13 bez regresji; `ng build` OK.
+
+- **Fix: per-słowo font/rozmiar/kolor gubiony przy zapisie — „całe zdanie jedną czcionką".**
+   - Zgłoszenie: słowo=Arial, kilka kolejnych=Tahoma, reszta=nic → finalny plik = całe zdanie
+     jednym krojem. Root cause (writer): `HtmlToDocxConverter.ApplyRunStyle` miał strażnik
+     `!props.Elements<RunFonts>().Any()` (też `FontSize`/`Color`) — gdy `props` niósł element
+     ODZIEDZICZONY po przodku (`CreateRunsFromNode` klonuje `inheritedProps`), jawny krój
+     dziecka był POMIJANY. Edytor NESTuje spany fontu w spanie oryginalnego runu
+     (`extractContents`+`insertNode`), więc akapit-jeden-run z jawnym krojem kolapsował do
+     kroju przodka. Akapit bez jawnego kroju = spany-rodzeństwo → eksport OK (stąd sporadyczność).
+   - Fix (tylko `HtmlToDocxConverter.cs`): font-family/font-size/color NADPISUJĄ wartość
+     odziedziczoną (font-family aktualizuje `Ascii`/`HighAnsi` istniejącego `RunFonts`; nowy
+     helper `SetOrReplaceFontSize`). Bold/italic/underline bez zmian (addytywne).
+   - Dowód: harness konwertera + repro DOM jsdom (scratchpad, nietrwałe). Testy:
+     `FontFamilyWriteTests` 6/6 (+3), Infrastructure 452/452 (0 regresji).
+   - **Do rozważenia dalej:** edytor generuje zbędne zagnieżdżenie spanów fontu — można by je
+     spłaszczać przy `getContent`/zmianie kroju (kosmetyka DOM, nie wpływa już na zapis).
+
+- **GUI: Dashboard „Otwórz plik" pozwala teraz wczytać `.doc`.**
+   - Prośba: umożliwić wczytanie `.doc` z poziomu dashboardu (wcześniej trzeba było iść do
+     edytora — „Plik → Otwórz").
+   - `dashboard.ts openFile()` świadomie blokował `.doc` mimo że reszta stosu już go w pełni
+     obsługiwała: `document-editor.ts loadFromStorage` ma stałą `DOC_MIME='application/msword'`
+     i KAŻDE otwarcie dokumentu z bazy (masterId/versionId) przepuszcza pobrane bajty przez
+     `/open` (`DocumentInputNormalizer`→`LegacyDocBinaryConverter` dla binarnego `.doc`) —
+     ten sam mechanizm co „Plik → Otwórz" w edytorze.
+   - Fix (czysto front, zero zmian backendu): usunięty wczesny return dla `.doc`; idzie teraz
+     identyczną ścieżką jak `.docx` (`uploadDocument` surowych bajtów jako v1+v2 →
+     `saveDocumentVersion` → nawigacja `/editor?masterId&versionId`) z jawnym
+     `mimeType: 'application/msword'`. v1 zostaje binarnym `.doc` na zawsze (niezmienny);
+     v2 startuje identyczny, ale PIERWSZY zapis/autosave (zawsze `/save`→realny DOCX)
+     konwertuje ją na prawdziwy DOCX.
+   - Testy: nowe w `dashboard.spec.ts` (upload `.doc` z poprawnym mimeType + nawigacja;
+     rozszerzenie nieobsługiwane nadal odrzucane), pełne GUI **474/474**, `ng build` OK.
+   - **Bez zmian (świadomie poza zakresem):** DOCX z hasłem nadal wymaga „Plik → Otwórz"
+     w edytorze (dashboard nie dekryptuje); binarny `.doc` nie do sparsowania przez
+     `LegacyDocBinaryConverter` zwróci kontrolowany błąd dopiero po nawigacji do edytora
+     (dashboard nie zagląda w zawartość pliku z wyprzedzeniem, tak jak dla `.docx`).
+
+- **Follow-up ADR-0037: FIRST na stronach 1 i 2 — titlePg nie dziedziczy się między sekcjami.**
+   - Zgłoszenie „off-by-one indeksu stron" — wykluczone (kontrakt: `pageIndex` 0-based
+     wewnątrz, 1-based tylko `data-page-number`/`{page}` na granicach). Realna przyczyna:
+     `_resolveHfVariant` brał flagę first z najbliższego wcześniejszego wpisu/bazy, a sekcja
+     bez własnego `w:titlePg` ma je WYŁĄCZONE → dokument z przerwą sekcji po str. 1 pokazywał
+     FIRST także na pierwszej stronie sekcji dziedziczącej (str. 2).
+   - Fix (tylko GUI): flaga first z WŁASNEGO wpisu sekcji strony (sekcja 0 = baza); brak wpisu
+     = titlePg OFF (reader gwarantuje wpis flag-only dla każdej sekcji ≥ 1 z titlePg);
+     even/odd bez zmian (globalne). Eksport był poprawny.
+   - Testy: `first-page-header.spec` +4, pełne GUI 474/474, `ng build` OK.
+   - **Pozostałe ograniczenia:** parzystość even/odd globalna (bez `pgNumType/@start`);
+     pierwsza strona sekcji CONTINUOUS = następna strona (marker w środku strony).
 
 - **Fix: „Inna pierwsza strona" (w:titlePg) ignorowana w podglądzie i gubiona przy zapisie (ADR-0037).**
    - Root cause GŁÓWNY (GUI `wysiwyg-editor.ts`): settery `[headerContent]` i `[footerContent]`

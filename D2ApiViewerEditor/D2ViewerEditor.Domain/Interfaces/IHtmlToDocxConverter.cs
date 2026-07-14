@@ -14,7 +14,8 @@ public interface IHtmlToDocxConverter
                    HeaderFooterContent? header = null, HeaderFooterContent? footer = null,
                    PageMargins? margins = null, PageSize? pageSize = null,
                    IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null,
-                   IReadOnlyList<Footnote>? footnotes = null);
+                   IReadOnlyList<Footnote>? footnotes = null,
+                   IReadOnlyList<Endnote>? endnotes = null);
 
     /// <summary>
     /// Pass-through wariant: konwertuje HTML jak <see cref="Convert"/>, a następnie zachowuje
@@ -30,5 +31,6 @@ public interface IHtmlToDocxConverter
                    HeaderFooterContent? header = null, HeaderFooterContent? footer = null,
                    PageMargins? margins = null, PageSize? pageSize = null,
                    IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null,
-                   IReadOnlyList<Footnote>? footnotes = null);
+                   IReadOnlyList<Footnote>? footnotes = null,
+                   IReadOnlyList<Endnote>? endnotes = null);
 }

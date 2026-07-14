@@ -94,6 +94,37 @@ public class ExceptionHandlingMiddlewareTests
     }
 
     [Test]
+    public async Task InvokeAsync_ValidationException_WithDomainErrorCode_SurfacesStableCode()
+    {
+        var ex = new ValidationException(new[]
+        {
+            new ValidationFailure("Content", "Zawartość dokumentu nie może być pusta")
+            {
+                ErrorCode = "DOCUMENT_CONTENT_EMPTY"
+            }
+        });
+
+        var (_, _, body) = await InvokeWith(ex);
+
+        // GUI rozpoznaje pusty dokument po stabilnym kodzie, nie po treści komunikatu.
+        body.RootElement.GetProperty("code").GetString().Should().Be("DOCUMENT_CONTENT_EMPTY");
+    }
+
+    [Test]
+    public async Task InvokeAsync_ValidationException_WithoutDomainErrorCode_DoesNotEmitCode()
+    {
+        var ex = new ValidationException(new[]
+        {
+            new ValidationFailure("Name", "Name is required")
+        });
+
+        var (_, _, body) = await InvokeWith(ex);
+
+        // Domyślne kody FluentValidation (np. NotEmptyValidator) nie przeciekają jako `code`.
+        body.RootElement.TryGetProperty("code", out _).Should().BeFalse();
+    }
+
+    [Test]
     public async Task InvokeAsync_ArgumentException_Returns400WithMessage()
     {
         var (statusCode, _, body) = await InvokeWith(new ArgumentException("zła wartość"));

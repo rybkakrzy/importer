@@ -4,6 +4,8 @@ import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
 import { NotificationService } from '../services/notification.service';
 import { ConnectionStatusService } from '../services/connection-status.service';
+import { LastHttpErrorService } from '../services/last-http-error.service';
+import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../errors/document-error.util';
 
 /**
  * Interceptor HTTP — centralna obsługa błędów API (RFC 7807 ProblemDetails)
@@ -11,6 +13,7 @@ import { ConnectionStatusService } from '../services/connection-status.service';
 export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
   const notificationService = inject(NotificationService);
   const connectionStatus = inject(ConnectionStatusService);
+  const lastHttpError = inject(LastHttpErrorService);
   const router = inject(Router);
 
   return next(req).pipe(
@@ -20,6 +23,7 @@ export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
       if (error.status === 403) {
         // 403 → dedicated "Brak uprawnień" view (not a toast, and distinct from 401/404/500).
         // Route guards may also redirect here; navigating to the same target is idempotent.
+        recordLastError(lastHttpError, error, req, 'Brak uprawnień (403)');
         void router.navigateByUrl('/brak-uprawnien');
         return throwError(() => error);
       }
@@ -27,6 +31,10 @@ export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
       if (error.status === 0) {
         connectionStatus.reportApiError();
         errorMessage = 'Nie można połączyć się z serwerem. Sprawdź połączenie sieciowe.';
+      } else if (isEmptyDocumentError(error)) {
+        // Pusty dokument — jednolity komunikat (stabilny kod `DOCUMENT_CONTENT_EMPTY`), niezależnie
+        // od kształtu odpowiedzi ({code,error} z /open lub ProblemDetails walidacji uploadu).
+        errorMessage = EMPTY_DOCUMENT_MESSAGE;
       } else if (error.error) {
         // ProblemDetails (RFC 7807) from backend ExceptionHandlingMiddleware
         if (error.error.detail) {
@@ -50,9 +58,28 @@ export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
       // Loguj szczegóły do konsoli w trybie deweloperskim
       console.error(`[HTTP ${error.status}] ${req.method} ${req.url}:`, error);
 
+      // Zapamiętaj ostatni błąd na potrzeby diagnostyki „Zgłoś problem".
+      recordLastError(lastHttpError, error, req, errorMessage);
+
       notificationService.error(errorMessage);
 
       return throwError(() => error);
     })
   );
 };
+
+/** Zapisuje migawkę błędu do serwisu diagnostycznego (wspólne dla ścieżki 403 i pozostałych). */
+function recordLastError(
+  service: LastHttpErrorService,
+  error: HttpErrorResponse,
+  req: { method: string; url: string },
+  detail: string,
+): void {
+  service.record({
+    status: error.status,
+    method: req.method,
+    url: req.url,
+    detail,
+    at: new Date().toLocaleString('pl-PL'),
+  });
+}

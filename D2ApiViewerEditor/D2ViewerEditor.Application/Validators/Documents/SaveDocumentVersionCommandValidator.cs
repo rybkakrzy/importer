@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common;
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using FluentValidation;
 
@@ -15,7 +16,7 @@ public class SaveDocumentVersionCommandValidator : AbstractValidator<SaveDocumen
 
         RuleFor(x => x.Content)
             .NotNull().WithMessage("Zawartość dokumentu jest wymagana")
-            .Must(x => x != null && x.Length > 0).WithMessage("Zawartość dokumentu nie może być pusta")
+            .Must(x => x != null && x.Length > 0).WithMessage("Zawartość dokumentu nie może być pusta").WithErrorCode(ErrorCodes.DocumentContentEmpty)
             .Must(x => x == null || x.Length <= 100 * 1024 * 1024).WithMessage("Rozmiar dokumentu nie może przekraczać 100 MB");
 
         RuleFor(x => x.CreatedBy)

@@ -22,6 +22,7 @@ import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
 import { RulerComponent } from '../ruler/ruler';
 import { DocumentService, OpenDocumentError } from '../../services/document.service';
+import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../../core/errors/document-error.util';
 import { 
   DocumentContent, 
   DocumentMetadata, 
@@ -37,9 +38,12 @@ import {
   SectionHeaderFooter,
   DigitalSignatureInfo,
   SignDocumentRequest,
-  Footnote
+  Footnote,
+  Endnote
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { LastHttpErrorService } from '../../core/services/last-http-error.service';
+import { NotificationService } from '../../core/services/notification.service';
 import { FontProviderService } from '../../services/font-provider.service';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 import { DocumentStorageService, DeliveryStatus } from '../../services/document-storage.service';
@@ -95,6 +99,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   readonly buildInfo = inject(BuildInfoService);
+  private readonly lastHttpError = inject(LastHttpErrorService);
+  private readonly notification = inject(NotificationService);
   private readonly msal = inject(MsalService);
   private readonly fontProvider = inject(FontProviderService);
 
@@ -593,6 +599,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   sectionHeadersFooters = signal<SectionHeaderFooter[] | null>(null);
   /** Przypisy dolne z importu (jedno źródło prawdy treści; round-trip przez zapis). */
   footnotes = signal<Footnote[] | null>(null);
+  /** Przypisy końcowe z importu (osobny model; round-trip przez zapis). */
+  endnotes = signal<Endnote[] | null>(null);
   marginPresets = MARGIN_PRESETS;
 
   // Dialog nagłówka i stopki
@@ -782,6 +790,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       pageSize: this.documentPageSize(),
       sectionHeadersFooters: this.sectionHeadersFooters() ?? undefined,
       footnotes: this.footnotes() ?? undefined,
+      endnotes: this.endnotes() ?? undefined,
       // Pass-through: backend zachowa style tabel/motyw/numerację oryginału (definicje,
       // nie tylko formatowanie bezpośrednie). Brak masterId (np. nowy dokument) → regeneracja.
       masterId: this.documentMasterId() ?? undefined
@@ -1062,6 +1071,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
           return;
         }
 
+        // Pusty dokument — jednolity komunikat (ten sam co na stronie startowej), nie surowa
+        // treść backendu ("Nie przesłano pliku"), która myląco sugerowała brak pliku.
+        if (isEmptyDocumentError(err)) {
+          this.showError(EMPTY_DOCUMENT_MESSAGE);
+          return;
+        }
+
         // Binarny .doc / inny błąd — komunikat z backendu wskazuje, co zrobić.
         if (err?.status === 404) {
           this.documentNotFound.set(true);
@@ -1085,16 +1101,27 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.documentMetadata.set(content.metadata);
     this.documentStyles.set(content.styles || []);
     this.originalFileName.set(fileName);
-    // Spread całego obiektu nagłówka/stopki, by warianty first-page/odd-even nie ginęły.
+    // Nagłówek/stopka: KAŻDE pole wariantu podawane JAWNIE (spread nie wystarcza — brak pola
+    // w nowym dokumencie zostawiał w edytorze wariant z POPRZEDNIEGO: setter wysiwyg-editora
+    // aktualizuje sygnał tylko dla pól `!== undefined`, więc dokument bez nagłówka/stopki
+    // pokazywał first-page/even z wcześniej wczytanego pliku). Reset = „wczytaj od zera".
     this.headerContent.set({
-      ...content.header,
       html: content.header?.html || '',
-      height: content.header?.height || 1.25
+      height: content.header?.height || 1.25,
+      differentFirstPage: content.header?.differentFirstPage ?? false,
+      firstPageHtml: content.header?.firstPageHtml ?? '',
+      differentOddEven: content.header?.differentOddEven ?? false,
+      oddHtml: content.header?.oddHtml ?? '',
+      evenHtml: content.header?.evenHtml ?? ''
     });
     this.footerContent.set({
-      ...content.footer,
       html: content.footer?.html || '',
-      height: content.footer?.height || 1.25
+      height: content.footer?.height || 1.25,
+      differentFirstPage: content.footer?.differentFirstPage ?? false,
+      firstPageHtml: content.footer?.firstPageHtml ?? '',
+      differentOddEven: content.footer?.differentOddEven ?? false,
+      oddHtml: content.footer?.oddHtml ?? '',
+      evenHtml: content.footer?.evenHtml ?? ''
     });
     if (content.margins) {
       this.pageSettings.update(s => ({ ...s, margins: content.margins! }));
@@ -1107,6 +1134,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.sectionHeadersFooters.set(content.sectionHeadersFooters ?? null);
     // Przypisy dolne — treść przekazywana do edytora i z powrotem w zapisie (jedno źródło prawdy).
     this.footnotes.set(content.footnotes ?? null);
+    this.endnotes.set(content.endnotes ?? null);
     if (this.editor) {
       this.editor.setContent(content.html);
     }
@@ -2224,43 +2252,87 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   openReportEmail(): void {
     // Triggered from the Pomoc dropdown — close it like the other menu actions do.
     this.closeAllMenus();
-    const masterId = this.documentMasterId() ?? '—';
-    // VersionId aktualnie otwartej wersji edytowalnej (sygnał ustawiany z query param `versionId`).
-    // Fallback „—" TYLKO gdy faktycznie brak wersji (tryb podglądu read-only bez versionId).
-    const versionId = this.documentVersionId() ?? '—';
-    const date = new Date().toLocaleString('pl-PL');
-    const url = window.location.href;
-    const buildNumber = this.buildInfo.buildNumber();
-    const environment = this.buildInfo.environment();
 
     const subject = encodeURIComponent('[Qutas Editor] Zgłoszenie');
-
-    // Wyrównane etykiety dla czytelnej kolumny "key: value"
-    const rows: Array<[string, string]> = [
-      ['Data zgłoszenia',   date],
-      ['Master ID',         masterId],
-      ['Version ID',        versionId],
-      ['Wersja aplikacji',  buildNumber],
-      ['Środowisko',        environment],
-      ['URL',               url],
-    ];
-    const labelWidth = Math.max(...rows.map(([k]) => k.length));
-    const formatted = rows
-      .map(([k, v]) => `  ${k.padEnd(labelWidth)} : ${v}`)
-      .join('\n');
-
     const body = encodeURIComponent(
       `Dzień dobry,\n\n` +
       `proszę o opis problemu poniżej:\n\n` +
       `\n\n\n` +
-      `────────────────────────────────────────────\n` +
-      `  INFORMACJE DIAGNOSTYCZNE — proszę nie usuwać\n` +
-      `────────────────────────────────────────────\n` +
-      `${formatted}\n` +
-      `────────────────────────────────────────────\n`
+      this.buildDiagnosticsBlock()
     );
 
-    window.open(`mailto:?subject=${subject}&body=${body}`, '_self');
+    // Odbiorca z konfiguracji środowiska (pusty → klient poczty poprosi o adres).
+    const to = environment.supportEmail ?? '';
+    window.open(`mailto:${to}?subject=${subject}&body=${body}`, '_self');
+  }
+
+  /**
+   * Kopiuje blok informacji diagnostycznych do schowka — siatka bezpieczeństwa, gdy
+   * `mailto:` nie zadziała (brak skonfigurowanego klienta poczty, ucięcie długiej treści
+   * przez przeglądarkę). Użytkownik może wkleić dane w dowolny kanał zgłoszenia.
+   */
+  copyDiagnostics(): void {
+    this.closeAllMenus();
+    const text = this.formatDiagnostics(this.collectDiagnosticRows());
+    navigator.clipboard?.writeText(text)
+      .then(() => this.notification.success('Skopiowano informacje diagnostyczne do schowka'))
+      .catch(() => this.notification.error('Nie udało się skopiować informacji diagnostycznych'));
+  }
+
+  /**
+   * Zbiera pary „etykieta : wartość" z danymi diagnostycznymi zgłoszenia.
+   * Metody `buildInfo.*` czytane defensywnie (`?.()`) — część stubów testowych ich nie dostarcza.
+   */
+  private collectDiagnosticRows(): Array<[string, string]> {
+    const masterId = this.documentMasterId() ?? '—';
+    // VersionId aktualnie otwartej wersji edytowalnej (sygnał ustawiany z query param `versionId`).
+    // Fallback „—" TYLKO gdy faktycznie brak wersji (tryb podglądu read-only bez versionId).
+    const versionId = this.documentVersionId() ?? '—';
+
+    const rows: Array<[string, string]> = [
+      ['Data zgłoszenia',  new Date().toLocaleString('pl-PL')],
+      ['Master ID',        masterId],
+      ['Version ID',       versionId],
+      ['Wersja aplikacji', this.buildInfo.buildNumber?.() ?? '—'],
+      ['Data buildu',      this.buildInfo.buildDate?.() ?? '—'],
+      ['Źródło wersji',    this.buildInfo.isApiData?.() ? 'API (health-check)' : 'front (fallback)'],
+      ['Środowisko',       this.buildInfo.environment?.() ?? '—'],
+      ['Połączenie',       navigator.onLine ? 'online' : 'offline'],
+      ['URL',              window.location.href],
+      ['Przeglądarka',     navigator.userAgent],
+      ['Platforma',        (navigator as unknown as { platform?: string }).platform ?? '—'],
+      ['Język',            navigator.language],
+      ['Viewport',         `${window.innerWidth}×${window.innerHeight}`],
+      ['Ekran',            `${window.screen.width}×${window.screen.height}`],
+    ];
+
+    // Ostatni błąd HTTP — najcenniejsza informacja diagnostyczna, gdy istnieje.
+    const err = this.lastHttpError.lastError();
+    if (err) {
+      rows.push(['Ostatni błąd',  `HTTP ${err.status} ${err.method} ${err.url}`]);
+      rows.push(['— czas',        err.at]);
+      rows.push(['— szczegóły',   err.detail]);
+    }
+
+    return rows;
+  }
+
+  /** Formatuje pary diagnostyczne w wyrównaną kolumnę „etykieta : wartość". */
+  private formatDiagnostics(rows: Array<[string, string]>): string {
+    const labelWidth = Math.max(...rows.map(([k]) => k.length));
+    return rows.map(([k, v]) => `  ${k.padEnd(labelWidth)} : ${v}`).join('\n');
+  }
+
+  /** Otoczony ramką blok diagnostyczny wklejany do treści maila. */
+  private buildDiagnosticsBlock(): string {
+    const separator = '────────────────────────────────────────────';
+    return (
+      `${separator}\n` +
+      `  INFORMACJE DIAGNOSTYCZNE — proszę nie usuwać\n` +
+      `${separator}\n` +
+      `${this.formatDiagnostics(this.collectDiagnosticRows())}\n` +
+      `${separator}\n`
+    );
   }
 
   /**
@@ -2711,6 +2783,27 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   insertPageBreak(): void {
     this.editor?.insertPageBreak();
+    this.closeAllMenus();
+  }
+
+  /**
+   * Ustawia liczbę kolumn układu dokumentu (sekcja bazowa). 1 = jedna kolumna (ADR-0039).
+   */
+  setColumns(count: number): void {
+    this.editor?.setBaseColumns(count);
+    this.closeAllMenus();
+  }
+
+  /** Aktualna liczba kolumn sekcji bazowej — do podświetlenia wyboru w menu. */
+  currentColumnCount(): number {
+    return this.editor?.getBaseColumnCount() ?? 1;
+  }
+
+  /**
+   * Wstawia podział kolumny w pozycji kursora (dalsza treść → następna kolumna).
+   */
+  insertColumnBreak(): void {
+    this.editor?.insertColumnBreak();
     this.closeAllMenus();
   }
 

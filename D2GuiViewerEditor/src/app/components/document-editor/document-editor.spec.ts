@@ -6,6 +6,7 @@ import { DocumentEditorComponent } from './document-editor';
 import { DocumentService, OpenDocumentError } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { LastHttpErrorService } from '../../core/services/last-http-error.service';
 import { MsalService } from '@azure/msal-angular';
 
 const msalStub = { instance: { getActiveAccount: () => null, getAllAccounts: () => [] } };
@@ -451,6 +452,76 @@ describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () =>
     const body = captureMailBody();
 
     expect(body).toMatch(/Version ID\s*:\s*—/);
+  });
+
+  /** Przechwytuje pełny URL mailto przekazany do window.open. */
+  function captureMailUrl(): string {
+    let captured = '';
+    const origOpen = window.open;
+    (window as any).open = (url: string) => { captured = url; return null; };
+    try {
+      component.openReportEmail();
+    } finally {
+      (window as any).open = origOpen;
+    }
+    return captured;
+  }
+
+  it('openReportEmail() ustawia adresata wsparcia z konfiguracji', () => {
+    const url = captureMailUrl();
+    // environment.supportEmail (placeholder) trafia jako odbiorca mailto.
+    expect(url).toMatch(/^mailto:test@testowy\.pl\?/);
+  });
+
+  it('openReportEmail() dołącza rozszerzoną diagnostykę (przeglądarka/połączenie/viewport)', () => {
+    const body = captureMailBody();
+
+    expect(body).toContain('Przeglądarka');
+    expect(body).toContain('Połączenie');
+    expect(body).toContain('Viewport');
+    expect(body).toContain('Wersja aplikacji');
+  });
+
+  it('openReportEmail() dołącza ostatni błąd HTTP, gdy istnieje', () => {
+    TestBed.inject(LastHttpErrorService).record({
+      status: 500,
+      method: 'POST',
+      url: '/api/documents/save',
+      detail: 'Wystąpił nieoczekiwany błąd',
+      at: '14.07.2026, 12:00:00',
+    });
+
+    const body = captureMailBody();
+
+    expect(body).toContain('Ostatni błąd');
+    expect(body).toContain('HTTP 500 POST /api/documents/save');
+    expect(body).toContain('Wystąpił nieoczekiwany błąd');
+  });
+
+  it('openReportEmail() pomija sekcję ostatniego błędu, gdy sesja bez błędów', () => {
+    TestBed.inject(LastHttpErrorService).clear();
+
+    const body = captureMailBody();
+
+    expect(body).not.toContain('Ostatni błąd');
+  });
+
+  it('copyDiagnostics() kopiuje blok diagnostyczny do schowka', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const origClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+
+    try {
+      component.copyDiagnostics();
+      await Promise.resolve();
+
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const text = writeText.mock.calls[0][0] as string;
+      expect(text).toContain('Wersja aplikacji');
+      expect(text).toContain('Przeglądarka');
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { value: origClipboard, configurable: true });
+    }
   });
 });
 

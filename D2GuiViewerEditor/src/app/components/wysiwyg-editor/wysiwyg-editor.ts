@@ -28,7 +28,8 @@ import {
   PageSize,
   HeaderFooterContent,
   SectionHeaderFooter,
-  Footnote
+  Footnote,
+  Endnote
 } from '../../models/document.model';
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
 import {
@@ -61,6 +62,20 @@ const ANCHOR_BADGE_SVG =
  * `div.docx-section-break` (data-* z readera, ADR-0023). Dzięki temu dokumenty
  * mieszające orientacje/rozmiary stron renderują każdą stronę we właściwej geometrii.
  */
+/**
+ * Układ kolumn sekcji w geometrii strony (ADR-0039). spaceCm = odstęp między kolumnami (px→cm
+ * przez CSS_PX_PER_CM). widthsCm/spacesCm tylko dla kolumn nierównych (render przybliżony
+ * równymi kolumnami — dane round-tripują wiernie przez data-*).
+ */
+export interface ColumnLayoutGeo {
+  count: number;
+  equalWidth: boolean;
+  spaceCm: number;
+  separator: boolean;
+  widthsCm?: number[];
+  spacesCm?: number[];
+}
+
 export interface PageGeometry {
   widthCm: number;
   heightCm: number;
@@ -70,6 +85,34 @@ export interface PageGeometry {
   headerDistanceCm?: number;
   /** w:pgMar footer — odległość DOŁU stopki od dołu strony (cm). Brak → wyliczana z pasma. */
   footerDistanceCm?: number;
+  /** Układ kolumn sekcji. Brak/1 kolumna = jednokolumnowy (ADR-0039). */
+  columns?: ColumnLayoutGeo;
+}
+
+/** Twipy → cm (1440 twipów = 1 cal = 2.54 cm). Centralne przeliczenie dla data-col-*-tw. */
+const TWIPS_PER_CM = 1440 / 2.54;
+export function parseColumnDataAttributes(el: Element): ColumnLayoutGeo | undefined {
+  const count = parseInt(el.getAttribute('data-col-count') ?? '', 10);
+  if (!Number.isFinite(count) || count <= 1) return undefined;
+  const spaceTw = parseInt(el.getAttribute('data-col-space-tw') ?? '', 10);
+  const equal = el.getAttribute('data-col-equal') !== '0';
+  const geo: ColumnLayoutGeo = {
+    count,
+    equalWidth: equal,
+    spaceCm: Number.isFinite(spaceTw) ? spaceTw / TWIPS_PER_CM : 720 / TWIPS_PER_CM,
+    separator: el.getAttribute('data-col-sep') === '1',
+  };
+  if (!equal) {
+    const parseCsv = (name: string): number[] | undefined => {
+      const raw = el.getAttribute(name);
+      if (!raw) return undefined;
+      const vals = raw.split(',').map(s => parseInt(s, 10)).filter(n => Number.isFinite(n));
+      return vals.length > 0 ? vals.map(tw => tw / TWIPS_PER_CM) : undefined;
+    };
+    geo.widthsCm = parseCsv('data-col-widths-tw');
+    geo.spacesCm = parseCsv('data-col-spaces-tw');
+  }
+  return geo;
 }
 
 /**
@@ -173,8 +216,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       heightCm,
       orientation: landscape ? 'landscape' : 'portrait',
       margins: this.pageMargins(),
+      columns: this._baseColumns() ?? undefined,
     };
   });
+
+  /** Kolumny sekcji bazowej (0) z kontenera .document-content — do renderu (ADR-0039). */
+  private readonly _baseColumns = signal<ColumnLayoutGeo | null>(null);
 
   /** Geometria per strona (indeks = strona). Wypełniana przy split/repaginacji; brak → baza. */
   readonly pageGeometries = signal<PageGeometry[]>([]);
@@ -198,6 +245,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
   pageMarginPx(index: number, side: 'top' | 'bottom' | 'left' | 'right'): number {
     return this.geometryFor(index).margins[side] * CSS_PX_PER_CM;
+  }
+  /** Liczba kolumn treści strony (ADR-0039). 1 = układ jednokolumnowy (bez CSS columns). */
+  pageColumnCount(index: number): number {
+    const c = this.geometryFor(index).columns;
+    return c && c.count > 1 ? c.count : 1;
+  }
+  /** Odstęp między kolumnami w px (column-gap). */
+  pageColumnGapPx(index: number): number {
+    const c = this.geometryFor(index).columns;
+    return c ? Math.max(0, c.spaceCm) * CSS_PX_PER_CM : 0;
+  }
+  /** Separator kolumn (column-rule) — cienka linia jak w Wordzie, albo brak. */
+  pageColumnRule(index: number): string {
+    const c = this.geometryFor(index).columns;
+    return c && c.separator ? '1px solid #bbb' : 'none';
   }
   /**
    * Geometria pasma nagłówka/stopki jak w Wordzie: pasmo zaczyna się `headerDistance`
@@ -591,6 +653,149 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // przenumeruje pozostałe i wyemituje footnotesChange. Przypis bez odwołania w DOM też
     // zostanie przycięty (brak nieużywanych przypisów).
     this.syncFootnotesWithBody();
+    if (removedFromDom) this.contentChange.emit(this.getContent());
+  }
+
+  // ── Przypisy końcowe ──────────────────────────────────────────────────────
+  // Osobny model od dolnych (inna semantyka: koniec dokumentu). Odwołania w treści =
+  // <sup class="endnote-ref">; treść w panelu POZA contenteditable body, na końcu.
+
+  private readonly _endnotes = signal<Endnote[]>([]);
+  readonly endnoteList = computed(() => this._endnotes());
+
+  @Input() set endnotes(value: Endnote[] | undefined) {
+    this._endnotes.set(value ? value.map(e => ({ ...e })) : []);
+  }
+
+  @Output() endnotesChange = new EventEmitter<Endnote[]>();
+
+  private _endnoteHtmlCache = new Map<string, SafeHtml>();
+
+  endnoteSafeHtml(en: Endnote): SafeHtml {
+    const key = `${en.id}\x00${en.html}`;
+    let safe = this._endnoteHtmlCache.get(key);
+    if (!safe) {
+      safe = this._sanitizer.bypassSecurityTrustHtml(en.html || '<p></p>');
+      this._endnoteHtmlCache.set(key, safe);
+    }
+    return safe;
+  }
+
+  getEndnotes(): Endnote[] {
+    return this._endnotes().map(e => ({ ...e }));
+  }
+
+  commitEndnoteContent(id: string, event: Event): void {
+    if (this.readOnly) return;
+    const el = event.target as HTMLElement | null;
+    if (!el) return;
+    const html = el.innerHTML;
+    const current = this._endnotes();
+    const idx = current.findIndex(e => e.id === id);
+    if (idx < 0 || current[idx].html === html) return;
+
+    const updated = current.map(e => (e.id === id ? { ...e, html } : e));
+    this._endnotes.set(updated);
+    this.endnotesChange.emit(this.getEndnotes());
+  }
+
+  private _endnoteReferenceElements(): HTMLElement[] {
+    const refs: HTMLElement[] = [];
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      page.nativeElement
+        .querySelectorAll<HTMLElement>('sup.endnote-ref[data-endnote-id]')
+        .forEach(el => refs.push(el));
+    }
+    return refs;
+  }
+
+  /**
+   * Uzgadnia model przypisów końcowych z odwołaniami w treści (numeracja wg kolejności
+   * pierwszego wystąpienia, porządkowanie listy, usunięcie osieroconych treści). Analogicznie
+   * do <see cref="syncFootnotesWithBody"/>, ale na osobnym modelu/klasie odwołania.
+   */
+  syncEndnotesWithBody(): void {
+    const refEls = this._endnoteReferenceElements();
+
+    const order: string[] = [];
+    const numberById = new Map<string, number>();
+    for (const el of refEls) {
+      const id = el.getAttribute('data-endnote-id') ?? '';
+      if (!id) continue;
+      if (!numberById.has(id)) {
+        numberById.set(id, order.length + 1);
+        order.push(id);
+      }
+    }
+
+    for (const el of refEls) {
+      const id = el.getAttribute('data-endnote-id') ?? '';
+      const number = numberById.get(id);
+      if (!number) continue;
+      if (el.textContent !== String(number)) el.textContent = String(number);
+      el.setAttribute('aria-label', `Przypis końcowy ${number}`);
+    }
+
+    const byId = new Map(this._endnotes().map(e => [e.id, e]));
+    const reordered: Endnote[] = order.map(id => byId.get(id) ?? { id, html: '<p></p>' });
+
+    if (this._endnotesChanged(reordered)) {
+      this._endnotes.set(reordered);
+      this.endnotesChange.emit(this.getEndnotes());
+    }
+  }
+
+  private _endnotesChanged(next: Endnote[]): boolean {
+    const cur = this._endnotes();
+    if (cur.length !== next.length) return true;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i].id !== next[i].id || cur[i].html !== next[i].html) return true;
+    }
+    return false;
+  }
+
+  addEndnoteAtCursor(): string | null {
+    if (this.readOnly) return null;
+    const editor = this.getActiveEditor();
+    if (!editor) return null;
+
+    const id = `en-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const sup = document.createElement('sup');
+    sup.className = 'endnote-ref';
+    sup.setAttribute('data-endnote-id', id);
+    sup.setAttribute('aria-label', 'Przypis końcowy');
+    sup.textContent = '?';
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(sup);
+      range.setStartAfter(sup);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } else {
+      editor.appendChild(sup);
+    }
+
+    this._endnotes.set([...this._endnotes(), { id, html: '<p></p>' }]);
+    this.syncEndnotesWithBody();
+    this.contentChange.emit(this.getContent());
+    return id;
+  }
+
+  removeEndnote(id: string): void {
+    if (this.readOnly) return;
+
+    let removedFromDom = false;
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      page.nativeElement
+        .querySelectorAll<HTMLElement>(`sup.endnote-ref[data-endnote-id="${id}"]`)
+        .forEach(el => { el.remove(); removedFromDom = true; });
+    }
+
+    this.syncEndnotesWithBody();
     if (removedFromDom) this.contentChange.emit(this.getContent());
   }
 
@@ -3239,6 +3444,63 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Wstawia podział kolumny (div.docx-column-break) w pozycji kursora — dalsza treść przechodzi
+   * do następnej kolumny (writer odtwarza w:br type=column). Sensowne tylko w sekcji wielokolumnowej,
+   * ale wstawienie w jednokolumnowej jest nieszkodliwe (ADR-0039).
+   */
+  insertColumnBreak(): void {
+    this.insertHtml('<div class="docx-column-break"></div>');
+    this._schedulePaginate('columns-change');
+  }
+
+  /**
+   * Ustawia układ kolumn sekcji bazowej (całego dokumentu) — count=1 znosi kolumny.
+   * Kolumny sekcji bazowej żyją na kontenerze .document-content (data-col-*), więc modyfikujemy
+   * przechwycone atrybuty kontenera (round-trip do writera) oraz sygnał renderu (ADR-0039).
+   * Edycja per-sekcja (marker docx-section-break) — kolejny etap.
+   */
+  setBaseColumns(count: number, options?: { spaceCm?: number; separator?: boolean }): void {
+    const n = Math.max(1, Math.floor(count || 1));
+    const prev = this._baseColumns();
+    const spaceCm = options?.spaceCm ?? prev?.spaceCm ?? 720 / TWIPS_PER_CM;
+    const separator = options?.separator ?? prev?.separator ?? false;
+
+    this._baseColumns.set(n <= 1 ? null : { count: n, equalWidth: true, spaceCm, separator });
+    this._setContainerColumnAttrs(n, spaceCm, separator);
+
+    this._schedulePaginate('columns-change');
+    this.contentChange.emit(this.getContent());
+  }
+
+  /** Aktualny układ kolumn sekcji bazowej (do stanu UI panelu). */
+  getBaseColumnCount(): number {
+    return this._baseColumns()?.count ?? 1;
+  }
+
+  /**
+   * Zapisuje data-col-* na przechwyconych atrybutach kontenera .document-content, tworząc wpis
+   * kontenera, gdy dokument nie miał wrappera (dokument jednokolumnowy z importu). Bez tego zmiana
+   * kolumn nie trafiłaby do zapisu (writer czyta kolumny z kontenera).
+   */
+  private _setContainerColumnAttrs(count: number, spaceCm: number, separator: boolean): void {
+    let attrs = this._documentContainerAttrs ? [...this._documentContainerAttrs] : [];
+    attrs = attrs.filter(a => !a.name.startsWith('data-col-'));
+    const classIdx = attrs.findIndex(a => a.name === 'class');
+    if (classIdx < 0) {
+      attrs.unshift({ name: 'class', value: 'document-content' });
+    } else if (!/\bdocument-content\b/.test(attrs[classIdx].value)) {
+      attrs[classIdx] = { name: 'class', value: `${attrs[classIdx].value} document-content`.trim() };
+    }
+    if (count > 1) {
+      attrs.push({ name: 'data-col-count', value: String(count) });
+      attrs.push({ name: 'data-col-space-tw', value: String(Math.round(spaceCm * TWIPS_PER_CM)) });
+      attrs.push({ name: 'data-col-equal', value: '1' });
+      if (separator) attrs.push({ name: 'data-col-sep', value: '1' });
+    }
+    this._documentContainerAttrs = attrs;
+  }
+
+  /**
    * Wstawia obraz
    */
   insertImage(src: string, alt: string = ''): void {
@@ -4033,6 +4295,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Renumeruj przypisy i przytnij osierocone treści PRZED serializacją — edycja treści
       // (usunięcie/przeniesienie odwołania) musi uaktualnić numerację i model przypisów.
       this.syncFootnotesWithBody();
+      this.syncEndnotesWithBody();
       // Przelicz etykiety list (dodanie/usunięcie li zmienia numery dalszych elementów,
       // także w innych fragmentach tej samej listy — natywny <ol start> tego nie umie).
       this.refreshListLabels();
@@ -4077,6 +4340,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.documentDefaultParagraphSpacing.set(
       Number.isFinite(afterTw) && afterTw >= 0 ? `${afterTw / 20}pt` : null
     );
+    // Kolumny sekcji bazowej (0) z kontenera → render CSS; round-trip atrybutów zapewnia
+    // _documentContainerAttrs (poniżej) + _wrapWithDocumentContainer (ADR-0039).
+    this._baseColumns.set(parseColumnDataAttributes(container) ?? null);
 
     // Zapamiętaj atrybuty wrappera i ROZWIŃ go od razu: strony nigdy nie niosą kontenera
     // (paginacja i tak by go rozwinęła), a getContent() owija scaloną treść z powrotem —
@@ -4172,6 +4438,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       },
       headerDistanceCm: margin('data-header-distance-cm') ?? current.headerDistanceCm,
       footerDistanceCm: margin('data-footer-distance-cm') ?? current.footerDistanceCm,
+      // Kolumny NIE dziedziczą z poprzedniej sekcji — brak data-col-* na markerze = jednokolumnowa.
+      columns: parseColumnDataAttributes(el),
     };
   }
 
@@ -4857,7 +5125,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       if (
         (c.tagName === 'DIV' || c.tagName === 'SECTION' || c.tagName === 'ARTICLE') &&
         !c.classList.contains('page-break') &&
-        !c.classList.contains('docx-section-break')
+        !c.classList.contains('docx-section-break') &&
+        !c.classList.contains('docx-column-break')
       ) {
         return this._flattenTopBlocks(c, depth + 1);
       }
@@ -5497,9 +5766,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   /**
    * Rozwiązuje wariant nagłówka/stopki dla strony w semantyce DOCX:
-   * 1. Flagi (titlePg / evenAndOddHeaders) pochodzą z NAJBLIŻSZEGO wpisu sekcyjnego
-   *    ≤ sekcji strony (Word kopiuje ustawienia poprzedniej sekcji przy tworzeniu nowej),
-   *    a bez wpisów — z flag bazowych sekcji 0 danego pasma.
+   * 1. titlePg NIE dziedziczy się między sekcjami (sekcja bez własnego w:titlePg ma je
+   *    WYŁĄCZONE, a reader emituje wpis dla każdej sekcji ≥ 1 z aktywnym titlePg — także
+   *    bez własnych partów), więc flaga first pochodzi WYŁĄCZNIE z własnego wpisu sekcji
+   *    strony (sekcja 0 = flagi bazowe pasma). evenAndOddHeaders jest globalne
+   *    (settings.xml) — dziedziczy z najbliższego wpisu/bazy.
    * 2. Wariant: first na pierwszej stronie sekcji (wygrywa z even), even na stronach
    *    parzystych przy evenAndOddHeaders, inaczej default.
    * 3. Treść: najbliższy wpis, który DEFINIUJE wariant; null/'' (dla default) = dziedziczenie
@@ -5516,12 +5787,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       .filter(e => e.sectionIndex <= pageSection && this._bandContent(e, kind))
       .sort((a, b) => b.sectionIndex - a.sectionIndex);
 
-    const flagSource = candidates.length ? this._bandContent(candidates[0], kind)! : null;
-    const differentFirstPage = flagSource
-      ? flagSource.differentFirstPage === true
-      : (kind === 'header' ? this._headerDifferentFirstPage() : this._footerDifferentFirstPage());
-    const differentOddEven = flagSource
-      ? flagSource.differentOddEven === true
+    // Branie flagi first z POPRZEDNIEJ sekcji pokazywało nagłówek pierwszej strony także
+    // na pierwszej stronie sekcji dziedziczącej (str. 2 dokumentu z przerwą sekcji po
+    // stronie 1 — zgłoszenie „first widoczny na stronach 1 i 2").
+    const ownContent = candidates.length && candidates[0].sectionIndex === pageSection
+      ? this._bandContent(candidates[0], kind)!
+      : null;
+    const differentFirstPage = pageSection === 0
+      ? (kind === 'header' ? this._headerDifferentFirstPage() : this._footerDifferentFirstPage())
+      : ownContent?.differentFirstPage === true;
+
+    const nearestContent = candidates.length ? this._bandContent(candidates[0], kind)! : null;
+    const differentOddEven = nearestContent
+      ? nearestContent.differentOddEven === true
       : (kind === 'header' ? this._headerDifferentOddEven() : this._footerDifferentOddEven());
 
     const variant: 'default' | 'first' | 'even' =

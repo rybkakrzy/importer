@@ -127,7 +127,8 @@ public class UploadDocumentCommandValidatorTests
 
         // Assert
         result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.ErrorMessage == "Zawartość dokumentu nie może być pusta");
+        result.Errors.Should().Contain(e => e.ErrorMessage == "Zawartość dokumentu nie może być pusta"
+            && e.ErrorCode == "DOCUMENT_CONTENT_EMPTY");
     }
 
     [Test]

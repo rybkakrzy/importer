@@ -225,6 +225,34 @@
                 </button>
               }
               <div class="dropdown-separator"></div>
+              <div class="dropdown-section-label">Kolumny</div>
+              <button class="dropdown-item" [class.dropdown-item-checked]="currentColumnCount() === 1" (click)="setColumns(1)">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="currentColor" d="M4 4h16v16H4z" fill-opacity="0.15"/>
+                  <path fill="none" stroke="currentColor" stroke-width="1.5" d="M4.5 4.5h15v15h-15z"/>
+                </svg>
+                Jedna kolumna
+              </button>
+              <button class="dropdown-item" [class.dropdown-item-checked]="currentColumnCount() === 2" (click)="setColumns(2)">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="none" stroke="currentColor" stroke-width="1.5" d="M4.5 4.5h15v15h-15z M12 4.5v15"/>
+                </svg>
+                Dwie kolumny
+              </button>
+              <button class="dropdown-item" [class.dropdown-item-checked]="currentColumnCount() === 3" (click)="setColumns(3)">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="none" stroke="currentColor" stroke-width="1.5" d="M4.5 4.5h15v15h-15z M9.3 4.5v15 M14.7 4.5v15"/>
+                </svg>
+                Trzy kolumny
+              </button>
+              <button class="dropdown-item" (click)="insertColumnBreak()">
+                <svg viewBox="0 0 24 24" width="18" height="18">
+                  <path fill="none" stroke="currentColor" stroke-width="1.5" d="M4.5 4.5h15v15h-15z M12 4.5v15"/>
+                  <path fill="currentColor" d="M12 9l3 3-3 3z"/>
+                </svg>
+                Podział kolumny
+              </button>
+              <div class="dropdown-separator"></div>
               <button class="dropdown-item" (click)="editHeader(); closeAllMenus()">
                 <svg viewBox="0 0 24 24" width="18" height="18">
                   <path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V7h14v12z"/>
@@ -499,9 +527,13 @@
 
           @if (showHelpMenu()) {
             <div class="dropdown-menu" (click)="$event.stopPropagation()">
-              <button class="dropdown-item" (click)="openReportEmail()" title="Zgłoś problem">
+              <button class="dropdown-item" (click)="openReportEmail()" title="Zgłoś problem — otwiera wiadomość e-mail z danymi diagnostycznymi">
                 <span class="dropdown-item-spacer"></span>
-                Zgłoś
+                Zgłoś problem
+              </button>
+              <button class="dropdown-item" (click)="copyDiagnostics()" title="Kopiuje informacje diagnostyczne do schowka (gdy e-mail nie zadziała)">
+                <span class="dropdown-item-spacer"></span>
+                Kopiuj dane diagnostyczne
               </button>
             </div>
           }
@@ -785,6 +817,8 @@
               [sectionHeadersFooters]="sectionHeadersFooters() ?? undefined"
               [footnotes]="footnotes() ?? undefined"
               (footnotesChange)="footnotes.set($event)"
+              [endnotes]="endnotes() ?? undefined"
+              (endnotesChange)="endnotes.set($event)"
               (contentChange)="onContentChange($event)"
               (stateChange)="onStateChange($event)"
               (selectionChange)="onEditorSelectionChange()"
@@ -1833,7 +1867,8 @@
         </div>
 
         <div class="dialog-footer paragraph-dialog-footer">
-          <button class="btn btn-secondary" (click)="setParagraphAsDefault()">Ustaw jako domyślne</button>
+          <!-- TODO: przycisk „Ustaw jako domyślne" tymczasowo ukryty do czasu powrotu do tej funkcji -->
+          <!-- <button class="btn btn-secondary" (click)="setParagraphAsDefault()">Ustaw jako domyślne</button> -->
           <div class="dialog-footer-right">
             <button class="btn btn-primary" (click)="applyParagraphSettings()">OK</button>
             <button class="btn btn-secondary" (click)="closeParagraphDialog()">Anuluj</button>

@@ -14,6 +14,43 @@ Lekki rejestr decyzji architektonicznych i technicznych.
 ### Alternatives considered
 ```
 
+## ADR-0039: Przypisy końcowe (endnotes) jako typ ODDZIELNY od dolnych, model lustrzany do ADR-0032
+- Date: 2026-07-13
+- Status: Accepted
+
+### Context
+Reader (`DocxToHtmlConverter`) całkowicie pomijał `w:endnoteReference` (gałąź `default` w
+`ConvertRunChildToHtml`), a writer nie tworzył `word/endnotes.xml`. Dokument z przypisami
+końcowymi po imporcie tracił odwołania (niewidoczne), treść (niewidoczna) i całą część OOXML
+na eksporcie. Footnotes były już w pełni obsłużone (ADR-0032).
+
+### Decision
+Endnotes zaimplementowane jako **osobny typ** (nie wspólny abstrakt), lustrzany do modelu
+footnotes: `Endnote { Id, Html }`, `DocumentContent.Endnotes` + `SaveDocumentRequest.Endnotes`
+(backend + TS). Odwołania w treści = `<sup class="endnote-ref" data-endnote-id="en-N">`
+(osobna klasa i prefiks od `footnote-ref`/`fn-`). Tożsamość `en-<ooxmlId>` stabilna, oddzielona
+od numeru widocznego (osobna sekwencja od footnotes, kolejność pierwszych odwołań) i od `w:id`
+OOXML (deterministyczne 1..N na eksporcie; separatory techniczne -1/0 w osobnej przestrzeni id
+części endnotes). Reader `ExtractEndnotes` czyta `EndnotesPart` (po ConvertBodyToHtml, jak
+footnotes), pomija separator/continuationSeparator/continuationNotice; writer `AddEndnotes`
+tworzy `word/endnotes.xml` przez `AddNewPart<EndnotesPart>` (relacja + content type auto).
+Kolizja typu `Endnote` OOXML vs domena rozwiązana aliasami `DomainEndnote`/`WpEndnote` w obu
+konwerterach (jak footnotes). GUI: osobny panel `.endnotes-panel` „Przypisy końcowe" na końcu
+dokumentu (POZA contenteditable), osobny sygnał/input/output i `syncEndnotesWithBody`.
+
+### Consequences
+- Semantyka renderowania/eksportu footnotes i endnotes NIE jest mieszana (wymóg promptu).
+- ID nie round-tripują 1:1 (deterministyczne przemapowanie, jak footnotes).
+- Panel endnotes jest dla całego dokumentu (bez rozbicia na sekcje) — endnotes i tak trafiają
+  na koniec zakresu, więc to zgodne z ich semantyką; `w:endnotePr` (format numeracji/pozycja
+  sekcyjna endSect/docEnd) nie jest jeszcze round-tripowany (fallback: koniec dokumentu).
+- Brak per-page renderu footnotes pozostaje osobnym ograniczeniem (nie ruszany tu).
+
+### Alternatives considered
+- Wspólny abstrakcyjny model `Note { Type, Id, Html }`: odrzucony — mieszałby semantykę renderu
+  (dół strony vs koniec dokumentu) i osobne części OOXML; ADR-0032 już ustalił kształt per-typ.
+- Renderowanie endnotes jako footnotes: jawnie zakazane w prompcie (inna semantyka).
+
 ## ADR-0037: Semantyka wariantów nagłówka/stopki (titlePg / evenAndOddHeaders) — flagi per pasmo, null = dziedzicz, "" = jawnie puste, wariant per pierwsza strona sekcji
 - Date: 2026-07-13
 - Status: Accepted
@@ -53,11 +90,14 @@ w każdym eksporcie z titlePg). Dodatkowo wybór wariantu first opierał się na
 - Strona 1 (i pierwsza strona każdej sekcji) respektuje titlePg także dla pustych pasm;
   zapis→otwarcie nie gubi `w:titlePg`/referencji first; eksport z titlePg przechodzi
   walidator OOXML (wcześniej błąd sekwencji).
-- Świadome przybliżenia: titlePg sekcji BEZ własnych referencji (brak wpisu w modelu)
-  przybliżany flagą najbliższego wcześniejszego wpisu (titlePg w OOXML nie jest dziedziczone,
-  ale Word kopiuje je przy tworzeniu sekcji — rozjazd tylko gdy użytkownik ręcznie wyłączył
-  titlePg w sekcji dziedziczącej wszystkie party); parzystość even/odd liczona globalnie
-  po indeksie strony (bez `w:pgNumType/@start` i restartów numeracji).
+- **Amendment 2026-07-13:** przybliżenie „flaga titlePg z najbliższego wcześniejszego wpisu"
+  WYCOFANE — pokazywało nagłówek FIRST także na pierwszej stronie sekcji dziedziczącej
+  (strony 1 i 2 dokumentu z przerwą sekcji po stronie 1). titlePg w OOXML nie jest
+  dziedziczone, a reader emituje wpis (choćby flag-only) dla każdej sekcji ≥ 1 z aktywnym
+  titlePg, więc flaga first pochodzi WYŁĄCZNIE z własnego wpisu sekcji strony (sekcja 0 =
+  flagi bazowe); brak wpisu = titlePg wyłączone. `differentOddEven` nadal z najbliższego
+  wpisu/bazy (w:evenAndOddHeaders jest globalne). Pozostałe przybliżenie: parzystość
+  even/odd liczona globalnie po indeksie strony (bez `w:pgNumType/@start` i restartów).
 - Dokumenty z `w:evenAndOddHeaders` bez referencji even pokazują PUSTE strony parzyste
   (jak Word) — wcześniej pokazywały default (niezgodnie z Wordem).
 

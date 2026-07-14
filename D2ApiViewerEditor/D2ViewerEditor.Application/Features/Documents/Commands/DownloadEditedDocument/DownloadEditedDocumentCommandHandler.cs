@@ -71,13 +71,13 @@ public class DownloadEditedDocumentCommandHandler
             using var originalStream = new MemoryStream(original);
             docxBytes = _converter.ConvertPreservingPackage(
                 request.Html, originalStream, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize,
-                request.SectionHeadersFooters, request.Footnotes);
+                request.SectionHeadersFooters, request.Footnotes, request.Endnotes);
         }
         else
         {
             docxBytes = _converter.Convert(
                 request.Html, request.Metadata, request.Header, request.Footer, request.Margins, request.PageSize,
-                request.SectionHeadersFooters, request.Footnotes);
+                request.SectionHeadersFooters, request.Footnotes, request.Endnotes);
         }
 
         var fileName = string.IsNullOrWhiteSpace(request.OriginalFileName)

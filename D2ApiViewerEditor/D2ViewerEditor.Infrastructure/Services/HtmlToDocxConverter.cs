@@ -15,6 +15,8 @@ using Wp = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
 using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
 using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
+using DomainEndnote = D2ViewerEditor.Domain.Models.Endnote;
+using WpEndnote = DocumentFormat.OpenXml.Wordprocessing.Endnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -58,6 +60,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     // przypisy faktycznie mają odwołanie w treści (walidacja: brak osieroconych odwołań/treści).
     private readonly Dictionary<string, long> _footnoteOoxmlIdByHtmlId = new();
     private readonly HashSet<string> _referencedFootnoteHtmlIds = new();
+
+    // Przypisy końcowe — osobny słownik id/rejestr odwołań (endnotes.xml jest oddzielną częścią;
+    // numeracja OOXML endnotes jest niezależna od footnotes).
+    private readonly Dictionary<string, long> _endnoteOoxmlIdByHtmlId = new();
+    private readonly HashSet<string> _referencedEndnoteHtmlIds = new();
 
     // Domyślne ustawienia dokumentu (firmowa czcionka itp.). Wstrzykiwane przez DI;
     // dla benchmarków / testów konstruktor bezparametrowy używa wartości domyślnych.
@@ -105,6 +112,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         public double? HeaderDistanceCm { get; set; }
         public double? FooterDistanceCm { get; set; }
         public string? BreakType { get; set; }
+        /// <summary>Układ kolumn sekcji (w:cols). Null = jednokolumnowa (ADR-0039).</summary>
+        public ColumnLayout? Columns { get; set; }
     }
 
     /// <summary>
@@ -140,11 +149,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private string? _docDefaultSpacingAfterTw;
     private string? _docDefaultSpacingLine;
     private string? _docDefaultSpacingLineRule;
+    // Układ kolumn sekcji bazowej (0) z data-col-* kontenera .document-content (ADR-0039).
+    private ColumnLayout? _docDefaultColumns;
 
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null, IReadOnlyList<DomainFootnote>? footnotes = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null, IReadOnlyList<DomainFootnote>? footnotes = null, IReadOnlyList<DomainEndnote>? endnotes = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -170,6 +181,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _footnoteOoxmlIdByHtmlId.Clear();
             _referencedFootnoteHtmlIds.Clear();
             AssignFootnoteOoxmlIds(footnotes);
+            _endnoteOoxmlIdByHtmlId.Clear();
+            _referencedEndnoteHtmlIds.Clear();
+            AssignEndnoteOoxmlIds(endnotes);
             _hasSectionMarkers = false;
             _headerBandCm = header?.Height;
             _footerBandCm = footer?.Height;
@@ -177,6 +191,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _docDefaultFontSizePt = null;
             _docDefaultSpacingBeforeTw = _docDefaultSpacingAfterTw = null;
             _docDefaultSpacingLine = _docDefaultSpacingLineRule = null;
+            _docDefaultColumns = null;
 
             var body = new Body();
             _mainPart.Document.Body = body;
@@ -189,6 +204,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var htmlDoc = new HtmlDocument();
             htmlDoc.LoadHtml(html);
             CaptureDocumentDefaults(htmlDoc);
+            // Kolumny sekcji bazowej (0) z kontenera → geometria pierwszej sekcji. W dokumencie
+            // wielosekcyjnym pierwszy marker zamknie tę sekcję z jej kolumnami; sekcje ≥1 niosą
+            // własne kolumny w markerach (ADR-0039).
+            _currentSection.Columns = _docDefaultColumns;
 
             // Dodaj style dokumentu
             AddDocumentStyles(document);
@@ -213,6 +232,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Część przypisów (footnotes.xml + relacja + content type) — tylko gdy dokument ma przypisy.
             AddFootnotes(footnotes);
 
+            // Część przypisów końcowych (endnotes.xml + relacja + content type) — analogicznie.
+            AddEndnotes(endnotes);
+
             document.Save();
         }
 
@@ -223,9 +245,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         DocumentMetadata? metadata = null, HeaderFooterContent? header = null,
         HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null,
         IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null,
-        IReadOnlyList<DomainFootnote>? footnotes = null)
+        IReadOnlyList<DomainFootnote>? footnotes = null,
+        IReadOnlyList<DomainEndnote>? endnotes = null)
     {
-        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters, footnotes);
+        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters, footnotes, endnotes);
 
         if (originalPackage == null || !originalPackage.CanRead)
             return generated;
@@ -808,6 +831,54 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _docDefaultSpacingLine = line;
             _docDefaultSpacingLineRule = Attr("data-default-line-rule");
         }
+
+        _docDefaultColumns = ParseColumnDataAttributes(container);
+    }
+
+    /// <summary>
+    /// Odtwarza <see cref="ColumnLayout"/> z atrybutów data-col-* (kontener .document-content
+    /// albo marker div.docx-section-break). Zwraca null, gdy brak data-col-count &gt; 1
+    /// (układ jednokolumnowy — ADR-0039).
+    /// </summary>
+    private static ColumnLayout? ParseColumnDataAttributes(HtmlNode node)
+    {
+        var countRaw = node.GetAttributeValue("data-col-count", "");
+        if (!int.TryParse(countRaw, out var count) || count <= 1) return null;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        int SpaceTw() => int.TryParse(node.GetAttributeValue("data-col-space-tw", ""), out var s) ? s : 720;
+        var equal = node.GetAttributeValue("data-col-equal", "1") != "0";
+
+        var layout = new ColumnLayout
+        {
+            Count = count,
+            EqualWidth = equal,
+            SpaceTwips = SpaceTw(),
+            Separator = node.GetAttributeValue("data-col-sep", "0") == "1",
+        };
+
+        if (!equal)
+        {
+            var widths = node.GetAttributeValue("data-col-widths-tw", "");
+            var spaces = node.GetAttributeValue("data-col-spaces-tw", "");
+            if (!string.IsNullOrWhiteSpace(widths))
+            {
+                var w = widths.Split(',');
+                var sp = spaces.Split(',');
+                var cols = new List<SectionColumn>();
+                for (int i = 0; i < w.Length; i++)
+                {
+                    cols.Add(new SectionColumn
+                    {
+                        WidthTwips = int.TryParse(w[i], System.Globalization.NumberStyles.Integer, inv, out var wv) ? wv : 0,
+                        SpaceTwips = i < sp.Length && int.TryParse(sp[i], System.Globalization.NumberStyles.Integer, inv, out var sv) ? sv : 0,
+                    });
+                }
+                layout.Columns = cols;
+            }
+        }
+
+        return layout;
     }
 
     /// <summary>Domyślne odstępy akapitowe pakietu: z kontenera dokumentu albo fallback Worda.</summary>
@@ -1114,6 +1185,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 else if (IsSectionBreakNode(node))
                 {
                     elements.Add(CreateSectionBreakParagraph(node));
+                }
+                else if (node.HasClass("docx-column-break"))
+                {
+                    // Podział kolumny hoistowany przez przeglądarkę do bloku top-level (po edycji)
+                    // → akapit z runem Break type=column. Wewnątrz akapitu obsługuje CreateRunsFromNode.
+                    elements.Add(new Paragraph(new Run(new Break { Type = BreakValues.Column })));
                 }
                 else if (IsPageBreakNode(node))
                 {
@@ -3505,12 +3582,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     break;
                 }
 
+                // Podział kolumny: reader emituje <div class="docx-column-break"> z w:br type=column.
+                // Odtwarzamy go jako run z Break type=column (ADR-0039).
+                if (node.NodeType == HtmlNodeType.Element && node.HasClass("docx-column-break"))
+                {
+                    runs.Add(new Run(new Break { Type = BreakValues.Column }));
+                    break;
+                }
+
                 // Odwołanie do przypisu dolnego: <sup class="footnote-ref" data-footnote-id="fn-N">.
                 // Emituje w:footnoteReference z identyfikatorem OOXML przypisanym w AssignFootnoteOoxmlIds.
                 // Odwołanie do nieistniejącego przypisu jest POMIJANE (brak osieroconego w:footnoteReference).
                 if (node.Name.Equals("sup", StringComparison.OrdinalIgnoreCase) && node.HasClass("footnote-ref"))
                 {
                     var run = CreateFootnoteReferenceRun(node, inheritedProps);
+                    if (run != null) runs.Add(run);
+                    break;
+                }
+
+                // Odwołanie do przypisu końcowego: <sup class="endnote-ref" data-endnote-id="en-N">.
+                // Emituje w:endnoteReference; odwołanie do nieistniejącego przypisu jest POMIJANE.
+                if (node.Name.Equals("sup", StringComparison.OrdinalIgnoreCase) && node.HasClass("endnote-ref"))
+                {
+                    var run = CreateEndnoteReferenceRun(node, inheritedProps);
                     if (run != null) runs.Add(run);
                     break;
                 }
@@ -3740,6 +3834,131 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             ? new SeparatorMark()
             : new ContinuationSeparatorMark();
         return new WpFootnote(new Paragraph(new Run(mark))) { Id = id, Type = type };
+    }
+
+    // ── Przypisy końcowe (endnotes.xml) ──────────────────────────────────────────
+    // Rezerwacja id separatorów jest współdzielona semantycznie z footnotes (-1/0), ale
+    // endnotes.xml to osobna część z własną przestrzenią id, więc kolizji nie ma.
+    private const long EndnoteSeparatorId = -1;
+    private const long EndnoteContinuationSeparatorId = 0;
+
+    /// <summary>Deterministycznie przydziela id OOXML przypisom końcowym (htmlId → 1..N).</summary>
+    private void AssignEndnoteOoxmlIds(IReadOnlyList<DomainEndnote>? endnotes)
+    {
+        if (endnotes == null) return;
+        long next = 1;
+        foreach (var endnote in endnotes)
+        {
+            if (string.IsNullOrEmpty(endnote.Id) || _endnoteOoxmlIdByHtmlId.ContainsKey(endnote.Id))
+                continue;
+            _endnoteOoxmlIdByHtmlId[endnote.Id] = next++;
+        }
+    }
+
+    /// <summary>
+    /// Buduje run z <c>w:endnoteReference</c> dla <c>&lt;sup class="endnote-ref"&gt;</c>.
+    /// Zwraca null, gdy odwołanie wskazuje przypis spoza listy (bez osieroconego odwołania).
+    /// </summary>
+    private Run? CreateEndnoteReferenceRun(HtmlNode node, RunProperties? inheritedProps)
+    {
+        var htmlId = node.GetAttributeValue("data-endnote-id", "");
+        if (string.IsNullOrEmpty(htmlId) || !_endnoteOoxmlIdByHtmlId.TryGetValue(htmlId, out var ooxmlId))
+            return null;
+
+        _referencedEndnoteHtmlIds.Add(htmlId);
+
+        var props = (inheritedProps?.CloneNode(true) as RunProperties) ?? new RunProperties();
+        if (!props.Elements<VerticalTextAlignment>().Any())
+            props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript });
+
+        var run = new Run();
+        run.Append(props);
+        run.Append(new EndnoteReference { Id = ooxmlId });
+        return run;
+    }
+
+    /// <summary>
+    /// Tworzy część <c>word/endnotes.xml</c> (relacja + content type przez <see cref="MainDocumentPart.AddNewPart"/>)
+    /// z separatorami technicznymi i treścią przypisów końcowych. Nic nie tworzy dla dokumentów bez nich.
+    /// </summary>
+    private void AddEndnotes(IReadOnlyList<DomainEndnote>? endnotes)
+    {
+        if (_mainPart == null || endnotes == null || endnotes.Count == 0)
+            return;
+        if (_endnoteOoxmlIdByHtmlId.Count == 0)
+            return;
+
+        var endnotesPart = _mainPart.EndnotesPart ?? _mainPart.AddNewPart<EndnotesPart>();
+        var root = new Endnotes();
+        root.Append(CreateSeparatorEndnote(EndnoteSeparatorId, FootnoteEndnoteValues.Separator));
+        root.Append(CreateSeparatorEndnote(EndnoteContinuationSeparatorId, FootnoteEndnoteValues.ContinuationSeparator));
+
+        foreach (var endnote in endnotes)
+        {
+            if (!_endnoteOoxmlIdByHtmlId.TryGetValue(endnote.Id, out var ooxmlId))
+                continue;
+            root.Append(BuildEndnoteElement(endnote, ooxmlId, endnotesPart));
+        }
+
+        endnotesPart.Endnotes = root;
+        endnotesPart.Endnotes.Save();
+    }
+
+    /// <summary>
+    /// Odtwarza treść przypisu końcowego z HTML przez istniejące konwertery treści. Pierwszy akapit
+    /// dostaje run ze znacznikiem auto-numeru (<c>w:endnoteRef</c>). Relacje obrazów → część endnotes.
+    /// </summary>
+    private WpEndnote BuildEndnoteElement(DomainEndnote model, long ooxmlId, EndnotesPart endnotesPart)
+    {
+        var endnote = new WpEndnote { Id = ooxmlId };
+
+        var tempBody = new Body();
+        var htmlDoc = new HtmlDocument();
+        htmlDoc.LoadHtml(model.Html ?? string.Empty);
+
+        var prevContainer = _currentImageContainer;
+        _currentImageContainer = endnotesPart;
+        try
+        {
+            ConvertHtmlToBody(htmlDoc.DocumentNode, tempBody);
+        }
+        finally
+        {
+            _currentImageContainer = prevContainer;
+        }
+
+        var blocks = tempBody.ChildElements
+            .Where(e => e is Paragraph || e is Table)
+            .Select(e => e.CloneNode(true))
+            .ToList();
+
+        if (blocks.Count == 0)
+            blocks.Add(new Paragraph());
+
+        if (blocks[0] is Paragraph firstParagraph)
+        {
+            var markRun = new Run(new RunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }),
+                                  new EndnoteReferenceMark());
+            var pPr = firstParagraph.GetFirstChild<ParagraphProperties>();
+            if (pPr != null)
+                firstParagraph.InsertAfter(markRun, pPr);
+            else
+                firstParagraph.InsertAt(markRun, 0);
+        }
+
+        foreach (var block in blocks)
+            endnote.Append(block);
+
+        return endnote;
+    }
+
+    /// <summary>Techniczny przypis końcowy-separator (w:separator / w:continuationSeparator).</summary>
+    private static WpEndnote CreateSeparatorEndnote(long id, FootnoteEndnoteValues type)
+    {
+        OpenXmlElement mark = type == FootnoteEndnoteValues.Separator
+            ? new SeparatorMark()
+            : new ContinuationSeparatorMark();
+        return new WpEndnote(new Paragraph(new Run(mark))) { Id = id, Type = type };
     }
 
     /// <summary>
@@ -4053,14 +4272,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             };
 
             var halfPoints = ((int)OoxmlUnits.PointsToHalfPoints(ptSize)).ToString();
-            if (!props.Elements<FontSize>().Any())
-                props.Append(new FontSize { Val = halfPoints });
+            // Nested span with an explicit size overrides an inherited ancestor size (CSS
+            // cascade — nearest wins). props may already carry a FontSize cloned from the
+            // parent; replace it instead of skipping, otherwise the per-word size is dropped.
+            SetOrReplaceFontSize(props, halfPoints);
         }
         // font-size: smaller/larger
         else if (style.Contains("font-size:smaller") || style.Contains("font-size: smaller"))
         {
-            if (!props.Elements<FontSize>().Any())
-                props.Append(new FontSize { Val = "18" }); // ~9pt
+            SetOrReplaceFontSize(props, "18"); // ~9pt
         }
 
         // Font-family. The first family wins (the rest is the generic fallback list, e.g.
@@ -4074,15 +4294,37 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (fontFamilyMatch.Success)
         {
             var fontName = fontFamilyMatch.Groups[1].Value.Trim().Trim('"', '\'').Trim();
-            if (fontName.Length > 0 && !props.Elements<RunFonts>().Any())
-                props.Append(new RunFonts { Ascii = fontName, HighAnsi = fontName });
+            if (fontName.Length > 0)
+            {
+                // A nested span with an explicit font-family must OVERRIDE the font inherited
+                // from an ancestor span (CSS cascade — nearest wins). The editor nests per-word
+                // font spans inside the original run's font span, so props usually already
+                // carries a RunFonts cloned from the parent. Skipping here (the old behaviour)
+                // silently dropped the per-word font and collapsed the whole sentence to the
+                // ancestor font. Update the Latin faces in place, preserving any inherited
+                // EastAsia/ComplexScript/Hint and the schema-mandated element order.
+                var existingFonts = props.Elements<RunFonts>().FirstOrDefault();
+                if (existingFonts != null)
+                {
+                    existingFonts.Ascii = fontName;
+                    existingFonts.HighAnsi = fontName;
+                }
+                else
+                {
+                    props.Append(new RunFonts { Ascii = fontName, HighAnsi = fontName });
+                }
+            }
         }
 
-        // Color (obsługa hex, rgb, rgba)
+        // Color (obsługa hex, rgb, rgba). Nested span overrides inherited color (patrz font-family).
         var colorVal = ExtractColor(style, @"(?<!background-)color:\s*");
-        if (colorVal != null && !props.Elements<Color>().Any())
+        if (colorVal != null)
         {
-            props.Append(new Color { Val = colorVal });
+            var existingColor = props.Elements<Color>().FirstOrDefault();
+            if (existingColor != null)
+                existingColor.Val = colorVal;
+            else
+                props.Append(new Color { Val = colorVal });
         }
 
         // Background-color
@@ -4122,6 +4364,20 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             if (!props.Elements<SmallCaps>().Any())
                 props.Append(new SmallCaps());
         }
+    }
+
+    /// <summary>
+    /// Ustawia rozmiar czcionki na RunProperties, nadpisując wartość odziedziczoną po
+    /// przodku (kaskada CSS — wygrywa najbliższy). Bez nadpisywania zagnieżdżony span
+    /// z własnym rozmiarem gubił go, gdy props niósł już FontSize sklonowany z rodzica.
+    /// </summary>
+    private static void SetOrReplaceFontSize(RunProperties props, string halfPoints)
+    {
+        var existing = props.Elements<FontSize>().FirstOrDefault();
+        if (existing != null)
+            existing.Val = halfPoints;
+        else
+            props.Append(new FontSize { Val = halfPoints });
     }
 
     private Paragraph CreateParagraph(string text)
@@ -4242,7 +4498,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             Margins = margins ?? previous.Margins,
             HeaderDistanceCm = Attr("data-header-distance-cm"),
             FooterDistanceCm = Attr("data-footer-distance-cm"),
-            BreakType = node.GetAttributeValue("data-break-type", "nextPage")
+            BreakType = node.GetAttributeValue("data-break-type", "nextPage"),
+            // Kolumny NIE dziedziczą po poprzedniej sekcji — w OOXML brak w:cols = jednokolumnowa.
+            Columns = ParseColumnDataAttributes(node)
         };
     }
 
@@ -4323,7 +4581,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // z argumentów (dotychczasowe zachowanie, jedna sekcja).
         var geometry = _hasSectionMarkers
             ? _currentSection
-            : new SectionGeometry { PageSize = pageSize, Margins = margins };
+            : new SectionGeometry { PageSize = pageSize, Margins = margins, Columns = _docDefaultColumns };
 
         if (_hasSectionMarkers)
             AppendSectionBreakType(sectionProps, geometry.BreakType);
@@ -4384,6 +4642,40 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 Footer = footerDistance
             });
         }
+
+        AppendColumns(sectionProps, geometry.Columns);
+    }
+
+    /// <summary>
+    /// Dopisuje w:cols do sectPr (po pgSz/pgMar, przed titlePg/docGrid — kolejność CT_SectPr).
+    /// Emituje TYLKO gdy sekcja jest realnie wielokolumnowa (Count &gt; 1). Równe → num+space+
+    /// equalWidth; nierówne → equalWidth="0" + w:col per kolumna z w:w/w:space (ADR-0039).
+    /// </summary>
+    private static void AppendColumns(SectionProperties sectionProps, ColumnLayout? cols)
+    {
+        if (cols == null || cols.Count <= 1) return;
+        if (sectionProps.Elements<Columns>().Any()) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var columns = new Columns
+        {
+            ColumnCount = (short)cols.Count,
+            Space = cols.SpaceTwips.ToString(inv),
+            EqualWidth = cols.EqualWidth,
+        };
+        if (cols.Separator) columns.Separator = true;
+
+        if (!cols.EqualWidth && cols.Columns is { Count: > 0 } list)
+        {
+            foreach (var c in list)
+            {
+                var col = new Column { Width = c.WidthTwips.ToString(inv) };
+                if (c.SpaceTwips > 0) col.Space = c.SpaceTwips.ToString(inv);
+                columns.Append(col);
+            }
+        }
+
+        AppendBeforeTitlePage(sectionProps, columns);
     }
 
     /// <summary>

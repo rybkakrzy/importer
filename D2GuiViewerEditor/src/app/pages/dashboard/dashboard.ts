@@ -8,6 +8,7 @@ import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { DocumentNavigationService } from '../../core/services/document-navigation.service';
 import { ResourceAccessService } from '../../core/services/resource-access.service';
+import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../../core/errors/document-error.util';
 
 @Component({
   selector: 'd2-dashboard',
@@ -112,16 +113,12 @@ export class DashboardComponent {
       if (!file) return;
 
       const lowerName = file.name.toLowerCase();
+      const isDoc = lowerName.endsWith('.doc');
 
-      // Ta ścieżka (utwórz nowy z dysku) zapisuje plik bez normalizacji, więc binarny .doc /
-      // DOCX z hasłem nie zostaną tu przetworzone. Pliki .doc / zabezpieczone hasłem otwiera się
-      // w edytorze przez „Plik → Otwórz" (ścieżka /open z dekrypcją i detekcją .doc).
-      if (lowerName.endsWith('.doc')) {
-        this.errorMessage.set('Plik .doc otwórz w edytorze przez „Plik → Otwórz" (obsługuje .doc oraz DOCX zabezpieczone hasłem). Tutaj wczytasz pliki .docx i .pdf.');
-        return;
-      }
-      if (!lowerName.endsWith('.docx') && !lowerName.endsWith('.pdf')) {
-        this.errorMessage.set('Obsługiwane są pliki DOCX i PDF.');
+      // DOCX zabezpieczony hasłem nie zostanie tu przetworzony (upload bez normalizacji/dekrypcji) —
+      // taki plik otwiera się w edytorze przez „Plik → Otwórz" (ścieżka /open z dekrypcją).
+      if (!lowerName.endsWith('.docx') && !isDoc && !lowerName.endsWith('.pdf')) {
+        this.errorMessage.set('Obsługiwane są pliki DOCX, DOC i PDF.');
         return;
       }
 
@@ -138,9 +135,11 @@ export class DashboardComponent {
             next: (result) => {
               this.documentNavigation.navigateToDocument(result.masterId, 'application/pdf');
             },
-            error: () => {
+            error: (err) => {
               this.isLoading.set(false);
-              this.errorMessage.set('Błąd podczas wczytywania pliku PDF. Spróbuj ponownie.');
+              this.errorMessage.set(isEmptyDocumentError(err)
+                ? EMPTY_DOCUMENT_MESSAGE
+                : 'Błąd podczas wczytywania pliku PDF. Spróbuj ponownie.');
             },
           });
         } catch {
@@ -155,9 +154,14 @@ export class DashboardComponent {
 
       try {
         const base64 = await this.documentStorageService.fileToBase64(file);
+        // .doc dostaje wprost application/msword — bez tego editor (loadFromStorage) nie
+        // rozpozna wersji jako binarnego .doc i wybierze złe rozszerzenie przy pobieraniu.
+        const mimeType = isDoc
+          ? 'application/msword'
+          : (file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
         this.activeSubscription = this.documentStorageService.uploadDocument({
           name: file.name,
-          mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          mimeType,
           content: base64
         }).pipe(
           // Ręczne wczytanie z dysku = zamiar edycji → twórz wersję edytowalną (v2)
@@ -171,9 +175,11 @@ export class DashboardComponent {
           next: ({ masterId, versionId }) => {
             this.documentNavigation.navigateToEditableDocument(masterId, versionId);
           },
-          error: () => {
+          error: (err) => {
             this.isLoading.set(false);
-            this.errorMessage.set('Błąd podczas wczytywania dokumentu. Spróbuj ponownie.');
+            this.errorMessage.set(isEmptyDocumentError(err)
+              ? EMPTY_DOCUMENT_MESSAGE
+              : 'Błąd podczas wczytywania dokumentu. Spróbuj ponownie.');
           }
         });
       } catch {

@@ -66,4 +66,71 @@ public class FontFamilyWriteTests
 
         FirstRunAscii(docx).Should().Be("Arial");
     }
+
+    private static (string Font, string Text)[] RunFonts(byte[] docx)
+    {
+        using var ms = new MemoryStream(docx);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        return doc.MainDocumentPart!.Document.Body!
+            .Descendants<Run>()
+            .Where(r => r.Elements<Text>().Any())
+            .Select(r => (r.RunProperties?.RunFonts?.Ascii?.Value ?? "(inherit)", r.InnerText))
+            .ToArray();
+    }
+
+    [Test]
+    public void NestedSpanFont_OverridesInheritedAncestorFont()
+    {
+        // Exact DOM the editor produces when a single-run paragraph (reader wraps run text in a
+        // font span) has per-word fonts applied: extractContents+insertNode NESTS the new font
+        // spans inside the original run's font span. The child font must win (CSS cascade),
+        // otherwise the whole sentence collapses to the ancestor font (reported bug: "one word
+        // Arial, next few Tahoma, rest nothing → whole sentence ends up Arial").
+        var html =
+            "<p><span style=\"font-family:'Calibri',sans-serif\">" +
+            "<span style=\"font-family:Arial\">word1</span> " +
+            "<span style=\"font-family:Tahoma\">word2 word3 word4</span> word5 word6" +
+            "</span></p>";
+
+        var runs = RunFonts(_writer.Convert(html));
+
+        runs.Should().ContainSingle(r => r.Text == "word1").Which.Font.Should().Be("Arial");
+        runs.Should().ContainSingle(r => r.Text == "word2 word3 word4").Which.Font.Should().Be("Tahoma");
+        // Words with no explicit font inherit the ancestor span font (as in the editor).
+        runs.Where(r => r.Text.Contains("word5")).Should().OnlyContain(r => r.Font == "Calibri");
+    }
+
+    [Test]
+    public void NestedSpanFontSize_OverridesInheritedAncestorSize()
+    {
+        var html =
+            "<p><span style=\"font-size:11pt\">" +
+            "<span style=\"font-size:20pt\">big</span> small" +
+            "</span></p>";
+
+        using var ms = new MemoryStream(_writer.Convert(html));
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var runs = doc.MainDocumentPart!.Document.Body!.Descendants<Run>()
+            .Where(r => r.Elements<Text>().Any()).ToList();
+
+        runs.Single(r => r.InnerText == "big").RunProperties!.FontSize!.Val!.Value.Should().Be("40");
+        runs.Single(r => r.InnerText.Contains("small")).RunProperties!.FontSize!.Val!.Value.Should().Be("22");
+    }
+
+    [Test]
+    public void NestedSpanColor_OverridesInheritedAncestorColor()
+    {
+        var html =
+            "<p><span style=\"color:#000000\">" +
+            "<span style=\"color:#FF0000\">red</span> black" +
+            "</span></p>";
+
+        using var ms = new MemoryStream(_writer.Convert(html));
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var runs = doc.MainDocumentPart!.Document.Body!.Descendants<Run>()
+            .Where(r => r.Elements<Text>().Any()).ToList();
+
+        runs.Single(r => r.InnerText == "red").RunProperties!.Color!.Val!.Value.Should().Be("FF0000");
+        runs.Single(r => r.InnerText.Contains("black")).RunProperties!.Color!.Val!.Value.Should().Be("000000");
+    }
 }

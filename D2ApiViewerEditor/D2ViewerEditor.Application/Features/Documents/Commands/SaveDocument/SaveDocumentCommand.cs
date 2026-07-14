@@ -17,6 +17,7 @@ public record SaveDocumentCommand(
     PageSize? PageSize = null,
     List<SectionHeaderFooter>? SectionHeadersFooters = null,
     List<Footnote>? Footnotes = null,
+    List<Endnote>? Endnotes = null,
     // Gdy podane i dokument to DOCX z wersją bazową — konwersja idzie przez
     // ConvertPreservingPackage (zachowuje styles.xml/theme/fontTable/numbering oryginału),
     // więc definicje stylów tabel/motywu przeżywają zapis. Brak → pełna regeneracja (jak dotąd).

@@ -191,6 +191,16 @@
   color: #666;
 }
 
+/* Nagłówek sekcji w menu dropdown (np. „Kolumny"). Nieklikalny, mała etykieta. */
+.dropdown-section-label {
+  padding: 4px 12px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #999;
+}
+
 /* Zaznaczona opcja wyboru w menu (np. aktualne wyrównanie) — jak „ptaszek" w Wordzie. */
 .dropdown-item-checked {
   background: #d0e8ff;

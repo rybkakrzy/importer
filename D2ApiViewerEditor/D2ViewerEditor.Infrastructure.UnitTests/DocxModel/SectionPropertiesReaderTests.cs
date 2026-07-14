@@ -68,6 +68,63 @@ public class SectionPropertiesReaderTests
     }
 
     [Test]
+    public void ReadPageSettings_NoColumns_ColumnsNull()
+    {
+        var sectPr = new SectionProperties(new PageSize { Width = 11906, Height = 16838 });
+
+        var page = SectionPropertiesReader.ReadPageSettings(sectPr);
+
+        page.Columns.Should().BeNull("brak w:cols = układ jednokolumnowy");
+    }
+
+    [Test]
+    public void ReadPageSettings_SingleColumnWithSpace_ParsesCountOne()
+    {
+        // qutable.docx ma <w:cols w:space="708"/> — jedna kolumna.
+        var sectPr = new SectionProperties(new Columns { Space = "708" });
+
+        var page = SectionPropertiesReader.ReadPageSettings(sectPr);
+
+        page.Columns.Should().NotBeNull();
+        page.Columns!.Count.Should().Be(1);
+        page.Columns.SpaceTwips.Should().Be(708);
+        page.Columns.EqualWidth.Should().BeTrue();
+    }
+
+    [Test]
+    public void ReadPageSettings_TwoEqualColumns_ParsesNumSpaceSeparator()
+    {
+        var sectPr = new SectionProperties(
+            new Columns { ColumnCount = 2, Space = "720", Separator = true });
+
+        var page = SectionPropertiesReader.ReadPageSettings(sectPr);
+
+        page.Columns.Should().NotBeNull();
+        page.Columns!.Count.Should().Be(2);
+        page.Columns.SpaceTwips.Should().Be(720);
+        page.Columns.Separator.Should().BeTrue();
+        page.Columns.EqualWidth.Should().BeTrue();
+        page.Columns.Columns.Should().BeNull("kolumny równe — bez indywidualnych w:col");
+    }
+
+    [Test]
+    public void ReadPageSettings_UnequalColumns_ParsesIndividualWidthsAndSpaces()
+    {
+        var cols = new Columns { ColumnCount = 2, EqualWidth = false };
+        cols.Append(new Column { Width = "3000", Space = "500" });
+        cols.Append(new Column { Width = "6000" });
+        var sectPr = new SectionProperties(cols);
+
+        var page = SectionPropertiesReader.ReadPageSettings(sectPr);
+
+        page.Columns!.EqualWidth.Should().BeFalse();
+        page.Columns.Columns.Should().HaveCount(2);
+        page.Columns.Columns![0].WidthTwips.Should().Be(3000);
+        page.Columns.Columns[0].SpaceTwips.Should().Be(500);
+        page.Columns.Columns[1].WidthTwips.Should().Be(6000);
+    }
+
+    [Test]
     public void ReadPageSettings_PreservesNegativeTopMargin()
     {
         // Mirror/overlapping headers can author a negative top margin; the model keeps the

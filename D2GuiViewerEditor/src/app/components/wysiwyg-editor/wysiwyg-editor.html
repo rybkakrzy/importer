@@ -51,6 +51,9 @@
               [style.font-family]="documentDefaultFontFamily()"
               [style.line-height]="documentDefaultLineHeight()"
               [style.--doc-par-margin]="documentDefaultParagraphSpacing()"
+              [style.column-count]="pageColumnCount($index)"
+              [style.column-gap.px]="pageColumnGapPx($index)"
+              [style.column-rule]="pageColumnRule($index)"
               [innerHTML]="getPageContentSafe($index)"
               (focusin)="setActivePage($index, $event)"
               (beforeinput)="onEditorBeforeInput($event)"
@@ -73,6 +76,9 @@
               [style.font-family]="documentDefaultFontFamily()"
               [style.line-height]="documentDefaultLineHeight()"
               [style.--doc-par-margin]="documentDefaultParagraphSpacing()"
+              [style.column-count]="pageColumnCount($index)"
+              [style.column-gap.px]="pageColumnGapPx($index)"
+              [style.column-rule]="pageColumnRule($index)"
               [innerHTML]="getPageContentSafe($index)"
               (focusin)="setActivePage($index, $event)"
               (beforeinput)="onEditorBeforeInput($event)"
@@ -153,6 +159,37 @@
                     [attr.data-testid]="'footnote-delete-' + fn.id"
                     title="Usuń przypis"
                     (click)="removeFootnote(fn.id)">×</button>
+          }
+        </div>
+      }
+    </div>
+  }
+
+  <!-- Panel przypisów końcowych: treść endnotes na końcu dokumentu (semantyka DOCX:
+       koniec zakresu, nie dół strony). Odwołania (<sup class="endnote-ref">) żyją w treści;
+       tu jedno źródło treści, edytowalne poza contenteditable body. -->
+  @if (endnoteList().length > 0) {
+    <div class="endnotes-panel" role="region" aria-label="Przypisy końcowe" data-testid="endnotes-panel">
+      <div class="footnotes-panel-title">Przypisy końcowe</div>
+      @for (en of endnoteList(); track en.id) {
+        <div class="footnote-item"
+             [attr.data-endnote-id]="en.id"
+             [attr.data-testid]="'endnote-item-' + en.id">
+          <span class="footnote-item-number" aria-hidden="true">{{ $index + 1 }}</span>
+          <div class="footnote-item-content"
+               [attr.contenteditable]="readOnly ? 'false' : 'true'"
+               spellcheck="true"
+               [attr.aria-label]="'Treść przypisu końcowego ' + ($index + 1)"
+               [attr.data-testid]="'endnote-content-' + en.id"
+               [innerHTML]="endnoteSafeHtml(en)"
+               (blur)="commitEndnoteContent(en.id, $event)"></div>
+          @if (!readOnly) {
+            <button type="button"
+                    class="footnote-item-delete"
+                    [attr.aria-label]="'Usuń przypis końcowy ' + ($index + 1)"
+                    [attr.data-testid]="'endnote-delete-' + en.id"
+                    title="Usuń przypis końcowy"
+                    (click)="removeEndnote(en.id)">×</button>
           }
         </div>
       }

@@ -1,3 +1,5 @@
+using D2ViewerEditor.Domain.Models;
+
 namespace D2ViewerEditor.Infrastructure.DocxModel;
 
 public enum PageOrientation
@@ -30,4 +32,11 @@ public sealed class PageSettings
     public int? RightMarginTwips { get; init; }
     public int? HeaderDistanceTwips { get; init; }
     public int? FooterDistanceTwips { get; init; }
+
+    /// <summary>
+    /// Column layout of the section (w:cols), raw as authored. Null when the section declares
+    /// no w:cols at all — callers keep single-column semantics. A ColumnLayout with Count == 1
+    /// is also single-column; only Count &gt; 1 is a real multi-column section (ADR-0039).
+    /// </summary>
+    public ColumnLayout? Columns { get; init; }
 }

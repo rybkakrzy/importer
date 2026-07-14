@@ -23,6 +23,31 @@ public class PageSize
 }
 
 /// <summary>
+/// Układ kolumn sekcji (odwzorowuje w:cols z w:sectPr). Domyślnie jedna kolumna.
+/// Szerokości/odstępy w twipach — jednostka DOCX; warstwy prezentacji przeliczają przez
+/// centralny konwerter jednostek. <see cref="Columns"/> wypełnione tylko dla kolumn
+/// nierównych (w:equalWidth="0" z jawnymi w:col); dla równych wystarczą Count + SpaceTwips.
+/// </summary>
+public class ColumnLayout
+{
+    public int Count { get; set; } = 1;
+    public bool EqualWidth { get; set; } = true;
+    /// <summary>Domyślny odstęp między kolumnami (w:space na w:cols), w twipach.</summary>
+    public int SpaceTwips { get; set; } = 720;
+    /// <summary>Linia separatora między kolumnami (w:sep).</summary>
+    public bool Separator { get; set; }
+    /// <summary>Indywidualne kolumny — tylko dla kolumn nierównych (EqualWidth=false).</summary>
+    public List<SectionColumn>? Columns { get; set; }
+}
+
+/// <summary>Pojedyncza kolumna nierównego układu: szerokość i odstęp po niej (twipy).</summary>
+public class SectionColumn
+{
+    public int WidthTwips { get; set; }
+    public int SpaceTwips { get; set; }
+}
+
+/// <summary>
 /// Nagłówek lub stopka dokumentu
 /// </summary>
 public class HeaderFooterContent
@@ -68,6 +93,22 @@ public class Footnote
 }
 
 /// <summary>
+/// Przypis końcowy dokumentu. Semantyka tożsamości/numeru jest identyczna jak w
+/// <see cref="Footnote"/> (stabilne <see cref="Id"/> "en-N" oddzielone od numeru widocznego
+/// i od w:id OOXML), ale typ jest ODDZIELNY, bo endnotes mają inną semantykę renderowania
+/// (koniec dokumentu, nie dół strony) i inną część OOXML (word/endnotes.xml). Odwołania w
+/// treści niosą tylko <c>data-endnote-id</c>.
+/// </summary>
+public class Endnote
+{
+    /// <summary>Stabilna wewnętrzna tożsamość przypisu końcowego (np. "en-1"). Nie mylić z numerem wyświetlanym.</summary>
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>Treść przypisu końcowego jako HTML (ten sam model treści co dokument).</summary>
+    public string Html { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// Reprezentuje dokument z konwersji DOCX do HTML
 /// </summary>
 public class DocumentContent
@@ -80,6 +121,8 @@ public class DocumentContent
     public HeaderFooterContent? Footer { get; set; }
     public PageMargins? Margins { get; set; }
     public PageSize? PageSize { get; set; }
+    /// <summary>Układ kolumn sekcji bazowej (0). Null/1 kolumna = układ jednokolumnowy (ADR-0039).</summary>
+    public ColumnLayout? Columns { get; set; }
     /// <summary>Własne nagłówki/stopki sekcji ≥ 1 (dokumenty wielosekcyjne, R-10/ADR-0023).</summary>
     public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
     /// <summary>
@@ -87,6 +130,12 @@ public class DocumentContent
     /// bez przypisów (nie tworzą wtedy nadmiarowej części footnotes.xml na eksporcie).
     /// </summary>
     public List<Footnote>? Footnotes { get; set; }
+
+    /// <summary>
+    /// Przypisy końcowe w kolejności pierwszych odwołań w treści. Puste/null dla dokumentów
+    /// bez przypisów końcowych (nie tworzą wtedy nadmiarowej części endnotes.xml na eksporcie).
+    /// </summary>
+    public List<Endnote>? Endnotes { get; set; }
 
     /// <summary>
     /// True, gdy dokument źródłowy deklaruje ochronę przed edycją w settings.xml:
@@ -191,6 +240,8 @@ public class SaveDocumentRequest
     public List<SectionHeaderFooter>? SectionHeadersFooters { get; set; }
     /// <summary>Przypisy dolne (jedno źródło prawdy dla treści; odwołania w Html niosą tylko id).</summary>
     public List<Footnote>? Footnotes { get; set; }
+    /// <summary>Przypisy końcowe (jedno źródło prawdy dla treści; odwołania w Html niosą tylko id).</summary>
+    public List<Endnote>? Endnotes { get; set; }
     /// <summary>Opcjonalne: gdy podane, zapis idzie przez pass-through oryginalnego pakietu
     /// (zachowuje styles.xml/theme/fontTable/numbering). Brak → pełna regeneracja jak dotąd.</summary>
     public Guid? MasterId { get; set; }

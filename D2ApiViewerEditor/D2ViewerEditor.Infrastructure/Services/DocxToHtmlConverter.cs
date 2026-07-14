@@ -13,6 +13,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
 using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
+using DomainEndnote = D2ViewerEditor.Domain.Models.Endnote;
+using WpEndnote = DocumentFormat.OpenXml.Wordprocessing.Endnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
@@ -42,6 +44,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? _defaultSpacingAfterTw;
     private string? _defaultSpacingLine;
     private string? _defaultSpacingLineRule; // "auto" | "exact" | "atLeast"
+    // Układ kolumn sekcji bazowej (0), ustalany w ConvertBodyToHtml (ADR-0039).
+    private ColumnLayout? _baseSectionColumns;
     // CSS bazowy zbudowany z powyższych — baza dla akapitów w KOMÓRKACH TABEL (styl tabeli
     // może go nadpisać własnym w:pPr); akapity body dziedziczą interlinię z kontenera.
     private string _defaultParagraphSpacingCss = "";
@@ -181,6 +185,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _pendingTextBoxes.Clear();
         _footnoteDisplayNumbers.Clear();
         _footnoteRefOrder.Clear();
+        _endnoteDisplayNumbers.Clear();
+        _endnoteRefOrder.Clear();
 
         using var document = WordprocessingDocument.Open(docxStream, false);
 
@@ -210,6 +216,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Przypisy MUSZĄ być czytane po ConvertBodyToHtml (Html) — kolejność pierwszych odwołań
         // (numeracja prezentacyjna) jest ustalana podczas renderowania treści.
         content.Footnotes = ExtractFootnotes(document);
+        content.Endnotes = ExtractEndnotes(document);
+
+        // Kolumny sekcji bazowej — ustalone przez ConvertBodyToHtml (Html), tam też trafiają
+        // na kontener .document-content. Null/1 kolumna = układ jednokolumnowy (ADR-0039).
+        content.Columns = _baseSectionColumns;
 
         // Ochrona przed edycją (settings.xml) — front otwiera taki dokument tylko do odczytu.
         content.IsReadOnlyProtected = document.MainDocumentPart != null
@@ -306,8 +317,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 sb.Append(string.Format(inv, " data-footer-distance-cm=\"{0:0.##}\"", OoxmlUnits.TwipsToCm(fd)));
         }
 
+        AppendColumnDataAttributes(sb, page.Columns);
+
         sb.Append("></div>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Serializuje układ kolumn sekcji do atrybutów data-col-* (kompaktowo, twipy). Wspólne dla
+    /// markera sekcji i kontenera .document-content sekcji bazowej. Emituje TYLKO gdy sekcja jest
+    /// realnie wielokolumnowa (Count &gt; 1) — układ jednokolumnowy nie brudzi HTML (ADR-0039).
+    /// </summary>
+    private static void AppendColumnDataAttributes(StringBuilder sb, ColumnLayout? cols)
+    {
+        if (cols == null || cols.Count <= 1) return;
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        sb.Append(string.Format(inv, " data-col-count=\"{0}\"", cols.Count));
+        sb.Append(string.Format(inv, " data-col-space-tw=\"{0}\"", cols.SpaceTwips));
+        sb.Append(" data-col-equal=\"").Append(cols.EqualWidth ? "1" : "0").Append('"');
+        if (cols.Separator) sb.Append(" data-col-sep=\"1\"");
+
+        if (!cols.EqualWidth && cols.Columns is { Count: > 0 } list)
+        {
+            sb.Append(" data-col-widths-tw=\"")
+              .Append(string.Join(",", list.Select(c => c.WidthTwips.ToString(inv)))).Append('"');
+            sb.Append(" data-col-spaces-tw=\"")
+              .Append(string.Join(",", list.Select(c => c.SpaceTwips.ToString(inv)))).Append('"');
+        }
     }
 
     /// <summary>
@@ -1042,6 +1079,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (_defaultSpacingLine != null)
             containerAttrs.Append($" data-default-line=\"{_defaultSpacingLine}\"" +
                 $" data-default-line-rule=\"{_defaultSpacingLineRule}\"");
+
+        // Układ kolumn sekcji bazowej (0) — na kontenerze .document-content (ADR-0039).
+        // Writer odtwarza z niego w:cols body-level sectPr; dodatkowo idzie w DocumentContent.Columns.
+        _baseSectionColumns = SectionPropertiesReader.ReadPageSettings(GetFirstSectionProperties(document)).Columns;
+        AppendColumnDataAttributes(containerAttrs, _baseSectionColumns);
         var containerLineHeight = ExtractCssProperty(_defaultParagraphSpacingCss, "line-height");
         var bodyContainerCss = containerLineHeight != null
             ? containerCss + $"line-height:{containerLineHeight};"
@@ -3236,7 +3278,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             case Text text:
                 return EscapeHtml(MapSymbolicTextRun(text));
             case Break br:
-                return br.Type?.Value == BreakValues.Page ? "<div class=\"page-break\"></div>" : "<br/>";
+                if (br.Type?.Value == BreakValues.Page) return "<div class=\"page-break\"></div>";
+                // Podział kolumny (w:br w:type="column") — atomowy marker, render CSS break-before:column (ADR-0039).
+                if (br.Type?.Value == BreakValues.Column) return "<div class=\"docx-column-break\"></div>";
+                return "<br/>";
             case TabChar _:
                 return "<span style=\"display:inline-block;min-width:2em;\">\t</span>";
             case Drawing drawing:
@@ -3250,6 +3295,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             case FootnoteReferenceMark _:
                 // Znacznik auto-numeru w TREŚCI przypisu — numer renderujemy jako tekst przy
                 // odwołaniu, więc sam znacznik nie emituje nic (bez pustego widma w treści).
+                return string.Empty;
+            case EndnoteReference endnoteRef:
+                return RenderEndnoteReference(endnoteRef);
+            case EndnoteReferenceMark _:
+                // Znacznik auto-numeru w TREŚCI przypisu końcowego — jak footnoteRef, nic nie emituje.
                 return string.Empty;
             case NoBreakHyphen _:
                 return "&#8209;";
@@ -3682,6 +3732,108 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var html = new StringBuilder();
         foreach (var block in footnote.Elements())
+        {
+            switch (block)
+            {
+                case Paragraph paragraph:
+                    html.Append(ConvertParagraphToHtml(paragraph, document, sourcePart));
+                    break;
+                case Table table:
+                    html.Append(ConvertTableToHtml(table, document, sourcePart));
+                    break;
+            }
+        }
+        return html.ToString();
+    }
+
+    // Przypisy końcowe — analogicznie do dolnych, ale ODDZIELNY stan i część (endnotes.xml).
+    // Nie mieszamy numeracji: endnotes mają własną sekwencję numerów widocznych.
+    private readonly Dictionary<long, int> _endnoteDisplayNumbers = new();
+    private readonly List<long> _endnoteRefOrder = new();
+
+    /// <summary>Stabilny wewnętrzny identyfikator przypisu końcowego z numeru OOXML.</summary>
+    private static string EndnoteHtmlId(long ooxmlId) => $"en-{ooxmlId}";
+
+    /// <summary>
+    /// Renderuje odwołanie do przypisu końcowego jako <c>&lt;sup class="endnote-ref"&gt;</c> z
+    /// numerem widocznym (kolejność pierwszych odwołań, osobna od footnotes) i stabilnym
+    /// <c>data-endnote-id</c>. Powtórzone odwołania współdzielą numer i identyfikator.
+    /// </summary>
+    private string RenderEndnoteReference(EndnoteReference endnoteRef)
+    {
+        if (endnoteRef.Id?.Value is not long ooxmlId)
+            return string.Empty;
+
+        if (!_endnoteDisplayNumbers.TryGetValue(ooxmlId, out var number))
+        {
+            number = _endnoteRefOrder.Count + 1;
+            _endnoteDisplayNumbers[ooxmlId] = number;
+            _endnoteRefOrder.Add(ooxmlId);
+        }
+
+        var htmlId = EndnoteHtmlId(ooxmlId);
+        return $"<sup class=\"endnote-ref\" data-endnote-id=\"{htmlId}\" " +
+               $"aria-label=\"Przypis końcowy {number}\">{number}</sup>";
+    }
+
+    /// <summary>
+    /// Buduje listę przypisów końcowych w kolejności pierwszych odwołań w treści. Pomija techniczne
+    /// separatory, a treść konwertuje istniejącym konwerterem akapitów/tabel. Zwraca null, gdy
+    /// dokument nie ma żadnych odwołań końcowych (brak nadmiarowego endnotes.xml na eksporcie).
+    /// </summary>
+    private List<DomainEndnote>? ExtractEndnotes(WordprocessingDocument document)
+    {
+        if (_endnoteRefOrder.Count == 0)
+            return null;
+
+        var endnotesPart = document.MainDocumentPart?.EndnotesPart;
+        var contentById = new Dictionary<long, string>();
+        if (endnotesPart?.Endnotes != null)
+        {
+            foreach (var endnote in endnotesPart.Endnotes.Elements<WpEndnote>())
+            {
+                var type = endnote.Type?.Value;
+                if (type == FootnoteEndnoteValues.Separator ||
+                    type == FootnoteEndnoteValues.ContinuationSeparator ||
+                    type == FootnoteEndnoteValues.ContinuationNotice)
+                    continue;
+
+                if (endnote.Id?.Value is not long id)
+                    continue;
+
+                try
+                {
+                    contentById[id] = ConvertEndnoteContent(endnote, document, endnotesPart);
+                }
+                catch (Exception ex)
+                {
+                    // Jeden wadliwy przypis końcowy nie może przerwać importu całego dokumentu.
+                    _log.LogWarning(ex, "Nie udało się skonwertować treści przypisu końcowego o id {EndnoteId}.", id);
+                    contentById[id] = string.Empty;
+                }
+            }
+        }
+
+        var result = new List<DomainEndnote>(_endnoteRefOrder.Count);
+        foreach (var ooxmlId in _endnoteRefOrder)
+        {
+            if (!contentById.TryGetValue(ooxmlId, out var html))
+            {
+                _log.LogWarning("Odwołanie do przypisu końcowego {EndnoteId} nie ma treści w endnotes.xml.", ooxmlId);
+                html = string.Empty;
+            }
+            result.Add(new DomainEndnote { Id = EndnoteHtmlId(ooxmlId), Html = html });
+        }
+
+        return result;
+    }
+
+    /// <summary>Konwertuje blokową treść przypisu końcowego (akapity/tabele) do HTML. Znacznik
+    /// auto-numeru (w:endnoteRef) jest pomijany w <see cref="ConvertRunChildToHtml"/>.</summary>
+    private string ConvertEndnoteContent(WpEndnote endnote, WordprocessingDocument document, OpenXmlPart sourcePart)
+    {
+        var html = new StringBuilder();
+        foreach (var block in endnote.Elements())
         {
             switch (block)
             {

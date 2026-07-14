@@ -158,6 +158,10 @@
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
+  // Kolumny (ADR-0039): gdy column-count > 1 (binding), wypełniaj kolumnę do pełna od góry,
+  // potem następną — jak Word (nie balansuj). Dla 1 kolumny bez efektu. Wymaga stałej wysokości
+  // strony (.page height + flex), którą już mamy (ADR-0038).
+  column-fill: auto;
 }
 
 .page-overflow-content {
@@ -272,14 +276,15 @@
    wysiwyg-editor z data-default-after-tw kontenera), fallback = dotychczasowe 10px. */
 .editor-content p {
   margin: 0 0 var(--doc-par-margin, 10px) 0;
-  /* Interlinia jak w MS Word: nadmiar odstępu ma iść PONIŻEJ linii tekstu, a nie być
-     rozkładany symetrycznie (CSS half-leading centruje glif w linii). `trim-start` przycina
-     wiodące U GÓRY pierwszej linii akapitu (edge `text` = do wysokości wznoszenia fontu, więc
-     polskie znaki diakrytyczne Ą/Ó/Ź NIE są obcinane), przez co tekst przylega do góry, a
-     odstęp interlinii leci w dół — jak w Wordzie. Wspierane od Chrome 133; w starszych
-     przeglądarkach to no-op (zachowanie bez zmian). */
-  text-box-trim: trim-start;
-  text-box-edge: text alphabetic;
+  /* NIE dodawać tu `text-box-trim: trim-start`. Ta reguła przesuwa TUSZ pierwszej linii
+     akapitu w górę o połowę interlinii (half-leading), poza box akapitu. Dla PIERWSZEGO
+     akapitu strony (np. duży „Title" tuż pod nagłówkiem) tusz trafiał POWYŻEJ górnej
+     krawędzi `.editor-content` i był przycinany przez jego `overflow:hidden` (paginacja,
+     ADR-0038) — górna część znaków znikała (objaw: „nagłówek nachodzi na tytuł").
+     Dla dużego tytułu W ŚRODKU strony ta sama reguła nasuwała pierwszą linię na akapit
+     powyżej (nakładanie). Efekt rósł z rozmiarem fontu (~37px przy 40pt), więc dotykał
+     tylko dużych tytułów; zwykły tekst 11pt maskował go tłem. Standardowe rozkładanie
+     interlinii (bez trim) renderuje tytuł zgodnie z Wordem (~2px różnicy) i nie przycina. */
 }
 
 .editor-content > p:last-child {
@@ -668,6 +673,27 @@ body.image-moving * {
    HTML→DOCX, który odtwarza z niego w:sectPr (wiele sekcji, mieszane orientacje). */
 .editor-content .docx-section-break {
   display: none;
+}
+
+/* Podział kolumny DOCX (div.docx-column-break z w:br type=column). W kontenerze CSS columns
+   `break-before: column` przenosi ten węzeł i dalszą treść do następnej kolumny. Sam węzeł jest
+   pustym, zerowej wysokości znacznikiem — nie dodaje widocznej przerwy w treści (ADR-0039). */
+.editor-content .docx-column-break {
+  break-before: column;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  line-height: 0;
+}
+
+.editor-content.show-formatting-marks .docx-column-break {
+  height: auto;
+  border-top: 1px dashed #4472c4;
+}
+.editor-content.show-formatting-marks .docx-column-break::after {
+  content: 'Podział kolumny';
+  font-size: 9px;
+  color: #4472c4;
 }
 
 /* Pole tekstowe Worda (div.docx-textbox). Obramowanie EDYCYJNE = outline (poza box-modelem,
@@ -1093,8 +1119,18 @@ body.image-moving * {
   padding: 0 1px;
 }
 
+/* Odwołanie do przypisu końcowego — jak footnote-ref, ale osobny kolor (odróżnienie typu). */
+.editor-content sup.endnote-ref {
+  color: #9b1fa8;
+  cursor: pointer;
+  font-weight: 600;
+  user-select: none;
+  padding: 0 1px;
+}
+
 /* Panel treści przypisów — jedno źródło prawdy, edytowalne poza contenteditable body. */
-.footnotes-panel {
+.footnotes-panel,
+.endnotes-panel {
   max-width: 816px;
   margin: 12px auto 32px;
   padding: 12px 16px;
@@ -1104,6 +1140,11 @@ body.image-moving * {
   border-radius: 2px;
   font-size: 10pt;
   color: #222;
+}
+
+/* Odróżnienie panelu przypisów końcowych od dolnych (kolor akcentu = kolor odwołania). */
+.endnotes-panel {
+  border-top-color: #9b1fa8;
 }
 
 .footnotes-panel-title {

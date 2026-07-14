@@ -147,4 +147,61 @@ describe('WysiwygEditorComponent — titlePg / first-page variant selection', ()
       expect(headerFor(2)).toBe('S2-FIRST');
     });
   });
+
+  /**
+   * w:titlePg NIE dziedziczy się między sekcjami — sekcja bez własnego titlePg ma je
+   * wyłączone. Zgłoszenie: dokument z przerwą sekcji po stronie 1 (sekcja 2 bez własnych
+   * referencji i bez titlePg) pokazywał nagłówek FIRST na stronach 1 ORAZ 2, a właściwy
+   * default dopiero od strony 3 — flaga bazy wyciekała na pierwszą stronę sekcji 1.
+   */
+  describe('titlePg is not inherited between sections', () => {
+    beforeEach(() => {
+      component.headerContent = hf({ html: 'BASE-DEF', differentFirstPage: true, firstPageHtml: 'BASE-FIRST' });
+      // Strona 0 = sekcja 0; strony 1-2 = sekcja 1 (przerwa sekcji po stronie 1 dokumentu).
+      (component as any).pageSectionIndexes.set([0, 1, 1]);
+    });
+
+    it('shows the DEFAULT header on the first page of an inheriting section without titlePg', () => {
+      component.sectionHeadersFooters = []; // sekcja 1 bez wpisu = bez własnego titlePg
+
+      expect(headerFor(0)).toBe('BASE-FIRST'); // strona 1 dokumentu
+      expect(headerFor(1)).toBe('BASE-DEF');   // strona 2 — TU wyciekał BASE-FIRST
+      expect(headerFor(2)).toBe('BASE-DEF');   // strona 3
+    });
+
+    it('a flag-only entry (own titlePg, no own parts) DOES apply the inherited first header', () => {
+      // Tak reader raportuje sekcję z w:titlePg dziedziczącą wszystkie party (ADR-0037).
+      component.sectionHeadersFooters = [{
+        sectionIndex: 1,
+        header: { html: '', height: 1.27, differentFirstPage: true },
+        footer: { html: '', height: 1.27, differentFirstPage: true }
+      }];
+
+      expect(headerFor(1)).toBe('BASE-FIRST'); // pierwsza strona sekcji 1 z titlePg
+      expect(headerFor(2)).toBe('BASE-DEF');
+    });
+
+    it('an entry with titlePg explicitly OFF uses its default on the section first page', () => {
+      component.sectionHeadersFooters = [{
+        sectionIndex: 1,
+        header: { html: 'S2-DEF', height: 1.27, differentFirstPage: false }
+      }];
+
+      expect(headerFor(1)).toBe('S2-DEF');
+      expect(headerFor(2)).toBe('S2-DEF');
+    });
+
+    it('document-wide even/odd headers still apply to sections without an own entry', () => {
+      component.headerContent = hf({
+        html: 'ODD-DEF', differentFirstPage: false, differentOddEven: true, evenHtml: 'EVEN-H'
+      });
+      component.sectionHeadersFooters = [];
+      (component as any).pageSectionIndexes.set([0, 1, 1, 1]);
+
+      expect(headerFor(0)).toBe('ODD-DEF');
+      expect(headerFor(1)).toBe('EVEN-H'); // strona 2 (parzysta) w sekcji bez wpisu
+      expect(headerFor(2)).toBe('ODD-DEF');
+      expect(headerFor(3)).toBe('EVEN-H');
+    });
+  });
 });
