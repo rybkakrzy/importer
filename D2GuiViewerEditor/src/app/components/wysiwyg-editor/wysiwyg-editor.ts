@@ -3402,7 +3402,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     const fragment = this.buildPlainTextFragment(text);
     const lastNode = fragment.lastChild;
-    range.insertNode(fragment);
+    // Insert at BLOCK level, escaping any inline formatting wrappers (b/i/u/font/
+    // span[style]) around the caret. Otherwise a bare text node inherits the run it
+    // sits in — e.g. right after copying colored text, when the source selection is
+    // still the paste target, "bez formatowania" would re-emit the source color/bold.
+    this.insertFragmentOutsideInlineFormatting(range, fragment);
 
     const sel = window.getSelection();
     if (sel && lastNode) {
@@ -3433,6 +3437,62 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       fragment.appendChild(document.createTextNode(line));
     });
     return fragment;
+  }
+
+  /**
+   * Inserts `fragment` at the caret but lifted OUT of any inline character-formatting
+   * wrappers (b/strong, i/em, u, s, sub, sup, font, span[style], mark, a, …) so the
+   * pasted plain text inherits ONLY the destination paragraph's formatting — never the
+   * bold/colored run it happened to land in. This is what makes "Wklej bez formatowania"
+   * actually drop character formatting even when the caret sits inside (or replaced) a
+   * formatted run, which is the common case right after copying colored text.
+   *
+   * Each inline ancestor between the caret and its block container is split at the caret
+   * (left part stays, right part moves into a clone after it) and empty halves are pruned,
+   * leaving the caret directly inside the block. If we cannot resolve a block container we
+   * fall back to a plain insert at the caret.
+   */
+  private insertFragmentOutsideInlineFormatting(range: Range, fragment: DocumentFragment): void {
+    const editor = this.getActiveEditor();
+    const BLOCK_TAGS = ['P', 'DIV', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE'];
+    const isBlock = (node: Node | null): boolean =>
+      !!node && (node === editor ||
+        (node.nodeType === Node.ELEMENT_NODE && BLOCK_TAGS.includes((node as Element).tagName)));
+
+    let container: Node = range.startContainer;
+    let offset = range.startOffset;
+
+    // Work in terms of a child index so splitting elements is a simple node move: if the
+    // caret is inside a text node, split it so its right half becomes a sibling boundary.
+    if (container.nodeType === Node.TEXT_NODE) {
+      const text = container as Text;
+      const right = text.splitText(offset);
+      container = text.parentNode!;
+      offset = Array.prototype.indexOf.call(container.childNodes, right);
+    }
+
+    // Climb out of every inline wrapper up to the block container (guarded against loops).
+    let guard = 0;
+    while (container !== editor && !isBlock(container) && container.parentNode && guard++ < 100) {
+      const host = container as Element;
+      const parent = host.parentNode!;
+      const rightClone = host.cloneNode(false) as Element;
+      while (host.childNodes.length > offset) {
+        rightClone.appendChild(host.childNodes[offset]);
+      }
+      parent.insertBefore(rightClone, host.nextSibling);
+
+      let idx = Array.prototype.indexOf.call(parent.childNodes, rightClone);
+      if (!rightClone.firstChild) rightClone.remove();
+      if (!host.firstChild) { host.remove(); idx--; }
+      container = parent;
+      offset = idx;
+    }
+
+    const insertAt = document.createRange();
+    insertAt.setStart(container, Math.max(0, offset));
+    insertAt.collapse(true);
+    insertAt.insertNode(fragment);
   }
 
   /**

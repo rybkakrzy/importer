@@ -92,6 +92,55 @@ describe('WysiwygEditorComponent — pastePlainTextAt (Wklej bez formatowania)',
     expect(target.querySelector('b, strong, span[style], font')).toBeNull();
   });
 
+  it('escapes an inline formatting run at the caret (drops inherited color/bold)', () => {
+    // Reproduces the reported bug: after copying colored text the source selection is
+    // still the paste target, so the caret sits inside the colored/bold run. The pasted
+    // plain text must NOT inherit that run's formatting.
+    editor.innerHTML =
+      '<p id="target">a<b style="color:red"><span style="color:red">RUN</span></b>b</p>';
+    const runText = editor.querySelector('span')!.firstChild!; // "RUN"
+    const bookmark = document.createRange();
+    bookmark.setStart(runText, 1); // between R|UN, deep inside <b><span style=color>
+    bookmark.collapse(true);
+
+    component.pastePlainTextAt(bookmark, 'plain');
+
+    // The inserted text node must not have any b/span[style]/font ancestor.
+    const inserted = [...editor.querySelectorAll('#target')][0]!;
+    const walker = document.createTreeWalker(inserted, NodeFilter.SHOW_TEXT);
+    let plainNode: Node | null = null;
+    while (walker.nextNode()) {
+      if (walker.currentNode.textContent === 'plain') { plainNode = walker.currentNode; break; }
+    }
+    expect(plainNode).toBeTruthy();
+    let ancestor = plainNode!.parentElement;
+    while (ancestor && ancestor.id !== 'target') {
+      expect(['B', 'STRONG', 'FONT'].includes(ancestor.tagName)).toBe(false);
+      expect(ancestor.getAttribute('style')).toBeNull();
+      ancestor = ancestor.parentElement;
+    }
+    // Original run text survives, split around the insertion.
+    expect(editor.textContent).toBe('aRplainUNb');
+  });
+
+  it('escapes the run even when the plain paste REPLACES the whole colored run', () => {
+    // Select the colored run and paste-plain over it: the emptied wrapper must not
+    // swallow the new text.
+    editor.innerHTML = '<p id="target"><span style="color:red">RED</span></p>';
+    const runText = editor.querySelector('span')!.firstChild!;
+    const bookmark = document.createRange();
+    bookmark.setStart(runText, 0);
+    bookmark.setEnd(runText, 3); // whole "RED"
+
+    component.pastePlainTextAt(bookmark, 'plain');
+
+    expect(editor.textContent).toBe('plain');
+    // No styled span should wrap the pasted text.
+    const target = editor.querySelector('#target')!;
+    const styledSpan = target.querySelector('span[style]');
+    expect(styledSpan?.textContent ?? '').not.toContain('plain');
+  });
+
   it('replaces a non-empty selection', () => {
     editor.innerHTML = '<p id="target">keepXXXkeep</p>';
     const target = editor.querySelector('#target')!;

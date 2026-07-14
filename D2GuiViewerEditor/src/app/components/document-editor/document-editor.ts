@@ -66,6 +66,14 @@ import { syncTableColgroup } from '../../core/utils/table-grid.util';
 import { isValidReturnUrl } from '../../core/utils/return-url.util';
 
 /**
+ * Jeden komunikat dla dokumentu oznaczonego jako tylko do odczytu w pliku źródłowym
+ * (Word „Ogranicz edycję" / hasło zapisu / „Oznacz jako ostateczny"). Wyświetlany zamiast
+ * komunikatu sukcesu — nie sugerujemy, że dokument otwarto w standardowym trybie edycji.
+ */
+const READ_ONLY_PROTECTED_MESSAGE =
+  'Ten dokument jest oznaczony jako tylko do odczytu i nie może być edytowany w DOC2 Editor.';
+
+/**
  * Główny komponent edytora dokumentów Word Online
  */
 @Component({
@@ -1058,7 +1066,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.documentService.openDocument(file, password).subscribe({
       next: (content) => {
         this._applyLoadedContent(content, fileName);
-        if (announce) this.showSuccess(`Otwarto dokument: ${fileName}`);
+        // Jeden autorytatywny komunikat wyniku otwarcia — read-only wyklucza „sukces".
+        // Dokument chroniony NIGDY nie jest prezentowany jako otwarty w trybie edycji.
+        if (content.isReadOnlyProtected === true) {
+          this.showError(READ_ONLY_PROTECTED_MESSAGE);
+        } else if (announce) {
+          this.showSuccess(`Otwarto dokument: ${fileName}`);
+        }
         this.isLoading.set(false);
       },
       error: (err) => {
@@ -1090,13 +1104,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   /** Ustawia treść/metadane/nagłówki/stopki/marginesy/podpisy z DocumentContent w edytorze. */
   private _applyLoadedContent(content: DocumentContent, fileName: string): void {
-    // Ochrona przed edycją z pliku źródłowego (Word „Ogranicz edycję" / hasło zapisu) —
-    // blokuje edycję niezależnie od trybu (versionId) i informuje użytkownika.
-    const editProtected = content.isReadOnlyProtected === true;
-    this.documentEditProtected.set(editProtected);
-    if (editProtected) {
-      this.showError('Dokument jest chroniony przed edycją w pliku źródłowym — otwarto w trybie tylko do odczytu.');
-    }
+    // Ochrona przed edycją z pliku źródłowego (Word „Ogranicz edycję" / hasło zapisu /
+    // „Oznacz jako ostateczny") — blokuje edycję niezależnie od trybu (versionId). Samo
+    // USTAWIENIE stanu; komunikat emituje _convertAndLoad jako jeden wynik otwarcia, żeby
+    // nie nakładał się na toast sukcesu (badge w nagłówku prezentuje stan trwale).
+    this.documentEditProtected.set(content.isReadOnlyProtected === true);
     this.documentContent.set(content.html);
     this.documentMetadata.set(content.metadata);
     this.documentStyles.set(content.styles || []);
@@ -1820,6 +1832,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Pokazuje komunikat sukcesu
    */
   private showSuccess(message: string): void {
+    // Sukces i błąd są wzajemnie wykluczające się — nigdy nie pokazujemy obu banerów naraz
+    // (chroniony dokument nie może jednocześnie „otworzyć się poprawnie" i być read-only).
+    this.errorMessage.set(null);
     this.successMessage.set(message);
     setTimeout(() => this.successMessage.set(null), 3000);
   }
@@ -1828,6 +1843,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Pokazuje komunikat błędu
    */
   private showError(message: string): void {
+    this.successMessage.set(null);
     this.errorMessage.set(message);
     setTimeout(() => this.errorMessage.set(null), 5000);
   }

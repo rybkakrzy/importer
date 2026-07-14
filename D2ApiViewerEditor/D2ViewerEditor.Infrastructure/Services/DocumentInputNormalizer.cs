@@ -1,14 +1,14 @@
 using D2ViewerEditor.Domain.Interfaces;
-using NPOI.POIFS.FileSystem;
+using OpenMcdf;
 
 namespace D2ViewerEditor.Infrastructure.Services;
 
 /// <summary>
 /// Doprowadza wejściowy plik do zwykłego DOCX (ZIP/OOXML) przed parsowaniem:
 /// - ZIP (PK) → już DOCX (obejmuje też .doc będący w istocie mislabeled DOCX),
-/// - CFB (compound file) z EncryptionInfo → DOCX zaszyfrowany hasłem → dekrypcja (NPOI),
+/// - CFB (compound file) z EncryptionInfo → DOCX zaszyfrowany hasłem → dekrypcja (własny OoxmlAgileDecryptor),
 /// - CFB z WordDocument → binarny .doc → brak wbudowanego konwertera (kontrolowany status).
-/// Czysto zarządzane (NPOI POIFS/Crypt) — bez LibreOffice/System.Drawing (Linux/GCP-safe).
+/// Czysto zarządzane (OpenMcdf odczytuje kontener CFB) — bez LibreOffice/System.Drawing (Linux/GCP-safe).
 /// </summary>
 public sealed class DocumentInputNormalizer : IDocumentInputNormalizer
 {
@@ -29,74 +29,77 @@ public sealed class DocumentInputNormalizer : IDocumentInputNormalizer
         if (!StartsWith(bytes, CfbMagic))
             return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
 
-        POIFSFileSystem fs;
+        RootStorage root;
         try
         {
-            fs = new POIFSFileSystem(new MemoryStream(bytes, writable: false));
+            root = RootStorage.Open(new MemoryStream(bytes, writable: false), StorageModeFlags.LeaveOpen);
         }
         catch
         {
             return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
         }
 
-        // 2a. Zaszyfrowany OOXML (DOCX z hasłem) — strumienie EncryptionInfo + EncryptedPackage.
-        // NPOI czyta kontener CFB, ale NIE dekryptuje Agile (brak implementacji) → robimy to sami
-        // (OoxmlAgileDecryptor). NPOI tu tylko wydobywa surowe strumienie.
-        if (fs.Root.HasEntry("EncryptionInfo") && fs.Root.HasEntry("EncryptedPackage"))
+        using (root)
         {
-            if (string.IsNullOrEmpty(password))
-                return DocumentInputResult.Failure(DocumentInputStatus.PasswordRequired);
+            // 2a. Zaszyfrowany OOXML (DOCX z hasłem) — strumienie EncryptionInfo + EncryptedPackage.
+            // OpenMcdf czyta kontener CFB, ale NIE dekryptuje Agile → robimy to sami (OoxmlAgileDecryptor);
+            // tu tylko wydobywamy surowe strumienie.
+            if (root.ContainsEntry("EncryptionInfo") && root.ContainsEntry("EncryptedPackage"))
+            {
+                if (string.IsNullOrEmpty(password))
+                    return DocumentInputResult.Failure(DocumentInputStatus.PasswordRequired);
 
-            byte[] encryptionInfo, encryptedPackage;
-            try
-            {
-                encryptionInfo = ReadCfbStream(fs, "EncryptionInfo");
-                encryptedPackage = ReadCfbStream(fs, "EncryptedPackage");
-            }
-            catch
-            {
-                return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
+                byte[] encryptionInfo, encryptedPackage;
+                try
+                {
+                    encryptionInfo = ReadCfbStream(root, "EncryptionInfo");
+                    encryptedPackage = ReadCfbStream(root, "EncryptedPackage");
+                }
+                catch
+                {
+                    return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
+                }
+
+                var result = OoxmlAgileDecryptor.TryDecrypt(encryptionInfo, encryptedPackage, password, out var docx);
+                return result switch
+                {
+                    OoxmlAgileDecryptor.DecryptResult.Ok => DocumentInputResult.Success(docx!),
+                    OoxmlAgileDecryptor.DecryptResult.WrongPassword => DocumentInputResult.Failure(DocumentInputStatus.WrongPassword),
+                    // Standard/CryptoAPI (Office 2007) nieobsługiwane — sygnalizujemy jak nierozpoznane.
+                    OoxmlAgileDecryptor.DecryptResult.Unsupported => DocumentInputResult.Failure(DocumentInputStatus.Invalid),
+                    _ => DocumentInputResult.Failure(DocumentInputStatus.Invalid)
+                };
             }
 
-            var result = OoxmlAgileDecryptor.TryDecrypt(encryptionInfo, encryptedPackage, password, out var docx);
-            return result switch
+            // 2b. Binarny .doc (starszy Word) — strumień WordDocument. Czysto zarządzana konwersja .doc→.docx
+            // przez parsowanie FIB + piece table (LegacyDocBinaryConverter) — odzyskuje tekst i podział
+            // akapitów (bez bogatego formatowania). Gdy struktura jest niespójna/nieobsługiwana, spadamy do
+            // kontrolowanego odrzucenia z instrukcją konwersji (bez udawania pełnej obsługi, bez śmieci).
+            if (root.ContainsEntry("WordDocument"))
             {
-                OoxmlAgileDecryptor.DecryptResult.Ok => DocumentInputResult.Success(docx!),
-                OoxmlAgileDecryptor.DecryptResult.WrongPassword => DocumentInputResult.Failure(DocumentInputStatus.WrongPassword),
-                // Standard/CryptoAPI (Office 2007) nieobsługiwane — sygnalizujemy jak nierozpoznane.
-                OoxmlAgileDecryptor.DecryptResult.Unsupported => DocumentInputResult.Failure(DocumentInputStatus.Invalid),
-                _ => DocumentInputResult.Failure(DocumentInputStatus.Invalid)
-            };
+                try
+                {
+                    var wordDocument = ReadCfbStream(root, "WordDocument");
+                    var table0 = root.ContainsEntry("0Table") ? ReadCfbStream(root, "0Table") : null;
+                    var table1 = root.ContainsEntry("1Table") ? ReadCfbStream(root, "1Table") : null;
+                    var docx = LegacyDocBinaryConverter.TryConvert(wordDocument, table0, table1);
+                    if (docx != null)
+                        return DocumentInputResult.Success(docx);
+                }
+                catch
+                {
+                    // Dowolny błąd parsowania → kontrolowane odrzucenie poniżej (nigdy nie wywracamy importu).
+                }
+                return DocumentInputResult.Failure(DocumentInputStatus.UnsupportedLegacyDoc);
+            }
+
+            return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
         }
-
-        // 2b. Binarny .doc (starszy Word) — strumień WordDocument. Czysto zarządzana konwersja .doc→.docx
-        // przez parsowanie FIB + piece table (LegacyDocBinaryConverter) — odzyskuje tekst i podział
-        // akapitów (bez bogatego formatowania). Gdy struktura jest niespójna/nieobsługiwana, spadamy do
-        // kontrolowanego odrzucenia z instrukcją konwersji (bez udawania pełnej obsługi, bez śmieci).
-        if (fs.Root.HasEntry("WordDocument"))
-        {
-            try
-            {
-                var wordDocument = ReadCfbStream(fs, "WordDocument");
-                var table0 = fs.Root.HasEntry("0Table") ? ReadCfbStream(fs, "0Table") : null;
-                var table1 = fs.Root.HasEntry("1Table") ? ReadCfbStream(fs, "1Table") : null;
-                var docx = LegacyDocBinaryConverter.TryConvert(wordDocument, table0, table1);
-                if (docx != null)
-                    return DocumentInputResult.Success(docx);
-            }
-            catch
-            {
-                // Dowolny błąd parsowania → kontrolowane odrzucenie poniżej (nigdy nie wywracamy importu).
-            }
-            return DocumentInputResult.Failure(DocumentInputStatus.UnsupportedLegacyDoc);
-        }
-
-        return DocumentInputResult.Failure(DocumentInputStatus.Invalid);
     }
 
-    private static byte[] ReadCfbStream(POIFSFileSystem fs, string name)
+    private static byte[] ReadCfbStream(Storage storage, string name)
     {
-        using var input = fs.CreateDocumentInputStream(name);
+        using CfbStream input = storage.OpenStream(name);
         using var ms = new MemoryStream();
         input.CopyTo(ms);
         return ms.ToArray();

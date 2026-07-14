@@ -866,6 +866,7 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
   let abortCalls: number;
   let continueCalls: number;
   let originalWindowClose: typeof window.close;
+  let openResult: any;
 
   const deliveredOk = { deliveryId: 'd-1', status: 'Sent', documentStatus: 'Sent', delivered: true, error: null };
   const deliveryFailed = { deliveryId: 'd-1', status: 'RetryScheduled', documentStatus: 'DeliveryFailed', delivered: false, error: 'boom' };
@@ -875,6 +876,7 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
     abortCalls = 0;
     continueCalls = 0;
     finishResult = { next: deliveredOk };
+    openResult = of({ html: '<p>ok</p>', metadata: {}, images: [], styles: [] });
 
     const storageMock = {
       finishAndSend: () => {
@@ -893,6 +895,7 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
         { provide: DocumentService, useValue: {
             getTemplates: () => of([]),
             saveDocument: () => of(new Blob(['<p></p>'], { type: 'text/html' })),
+            openDocument: () => openResult,
         } },
         { provide: DocumentStorageService, useValue: storageMock },
         { provide: Router, useValue: { navigate: () => {} } },
@@ -1032,7 +1035,8 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
   });
 
   // Dokument z ochroną przed edycją w pliku źródłowym (settings.xml: w:documentProtection /
-  // w:writeProtection) — konwersja zwraca isReadOnlyProtected=true i edytor MUSI zablokować edycję.
+  // w:writeProtection / „Oznacz jako ostateczny") — konwersja zwraca isReadOnlyProtected=true
+  // i edytor MUSI zablokować edycję, pokazując DOKŁADNIE jeden, niesprzeczny komunikat.
   describe('dokument chroniony przed edycją (isReadOnlyProtected)', () => {
     const content = (isReadOnlyProtected: boolean) => ({
       html: '<p>Plik tylko do odczytu</p>',
@@ -1042,14 +1046,50 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
       isReadOnlyProtected
     });
 
-    it('otwiera dokument w trybie tylko do odczytu i informuje użytkownika', () => {
-      const showError = vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+    it('_applyLoadedContent ustawia stan blokady, ale sam nie emituje komunikatu', () => {
+      const showError = vi.spyOn(component as any, 'showError');
+      const showSuccess = vi.spyOn(component as any, 'showSuccess');
 
       (component as any)._applyLoadedContent(content(true), 'chroniony.docx');
 
       expect(component.documentEditProtected()).toBe(true);
       expect(component.editingDisabled()).toBe(true);
-      expect(showError).toHaveBeenCalledWith(expect.stringContaining('chroniony przed edycją'));
+      // Komunikat wyniku otwarcia należy do _convertAndLoad — stan nie toastuje sam.
+      expect(showError).not.toHaveBeenCalled();
+      expect(showSuccess).not.toHaveBeenCalled();
+    });
+
+    // Problem 2 ze zgłoszenia: dokument chroniony NIE może pokazać jednocześnie sukcesu i read-only.
+    it('otwarcie chronionego dokumentu pokazuje JEDEN komunikat read-only, bez sukcesu', () => {
+      openResult = of(content(true));
+
+      (component as any)._convertAndLoad(new File(['x'], 'chroniony.docx'), 'chroniony.docx', undefined, true);
+
+      expect(component.documentEditProtected()).toBe(true);
+      expect(component.errorMessage()).toContain('tylko do odczytu');
+      expect(component.successMessage()).toBeNull();
+    });
+
+    it('otwarcie zwykłego dokumentu pokazuje sukces bez komunikatu read-only', () => {
+      openResult = of(content(false));
+
+      (component as any)._convertAndLoad(new File(['x'], 'zwykly.docx'), 'zwykly.docx', undefined, true);
+
+      expect(component.documentEditProtected()).toBe(false);
+      expect(component.successMessage()).toContain('Otwarto dokument');
+      expect(component.errorMessage()).toBeNull();
+    });
+
+    // Banery sukcesu i błędu są wzajemnie wykluczające się (nie nakładają się).
+    it('showError zdejmuje wcześniejszy komunikat sukcesu (i odwrotnie)', () => {
+      (component as any).showSuccess('Otwarto dokument: x');
+      (component as any).showError('Tylko do odczytu');
+      expect(component.successMessage()).toBeNull();
+      expect(component.errorMessage()).toBe('Tylko do odczytu');
+
+      (component as any).showSuccess('Zapisano');
+      expect(component.errorMessage()).toBeNull();
+      expect(component.successMessage()).toBe('Zapisano');
     });
 
     it('zapis chronionego dokumentu jest zablokowany (persistDocument nie jest wołany)', () => {
@@ -1063,8 +1103,6 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
     });
 
     it('kolejny, niechroniony dokument zdejmuje blokadę', () => {
-      vi.spyOn(component as any, 'showError').mockImplementation(() => {});
-
       (component as any)._applyLoadedContent(content(true), 'chroniony.docx');
       (component as any)._applyLoadedContent(content(false), 'zwykly.docx');
 

@@ -222,9 +222,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // na kontener .document-content. Null/1 kolumna = układ jednokolumnowy (ADR-0039).
         content.Columns = _baseSectionColumns;
 
-        // Ochrona przed edycją (settings.xml) — front otwiera taki dokument tylko do odczytu.
-        content.IsReadOnlyProtected = document.MainDocumentPart != null
-            && HasEnforcedEditProtection(document.MainDocumentPart);
+        // Ochrona przed edycją — front otwiera taki dokument tylko do odczytu. Dwa źródła:
+        // wymuszona ochrona w settings.xml oraz „Oznacz jako ostateczny" w docProps/custom.xml.
+        content.IsReadOnlyProtected =
+            (document.MainDocumentPart != null && HasEnforcedEditProtection(document.MainDocumentPart))
+            || IsMarkedAsFinal(document);
 
         return content;
     }
@@ -879,6 +881,30 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             && (writeProtection.Recommended?.Value == true
                 || !string.IsNullOrEmpty(writeProtection.Hash?.Value)
                 || !string.IsNullOrEmpty(writeProtection.HashValue?.Value));
+    }
+
+    /// <summary>
+    /// „Oznacz jako ostateczny" (Word: Plik → Informacje → Chroń dokument → Oznacz jako
+    /// ostateczny) zapisuje właściwość niestandardową <c>_MarkAsFinal=true</c> w
+    /// docProps/custom.xml. Word otwiera taki plik tylko do odczytu („Oznaczono jako
+    /// ostateczny"), więc traktujemy go jak chroniony przed edycją — inaczej niż ochrona
+    /// z settings.xml, ta flaga NIE jest w MainDocumentPart, lecz na poziomie pakietu.
+    /// </summary>
+    private static bool IsMarkedAsFinal(WordprocessingDocument document)
+    {
+        var properties = document.CustomFilePropertiesPart?.Properties;
+        if (properties == null) return false;
+
+        foreach (var property in properties.Elements<DocumentFormat.OpenXml.CustomProperties.CustomDocumentProperty>())
+        {
+            if (property.Name?.Value == "_MarkAsFinal")
+            {
+                var value = property.VTBool?.Text;
+                return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) || value == "1";
+            }
+        }
+
+        return false;
     }
 
     private string ConvertHeaderPartToHtml(HeaderPart part, WordprocessingDocument document)

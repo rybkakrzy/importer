@@ -1,5 +1,7 @@
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.CustomProperties;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.VariantTypes;
 using DocumentFormat.OpenXml.Wordprocessing;
 using D2ViewerEditor.Infrastructure.Services;
 using FluentAssertions;
@@ -45,6 +47,49 @@ public class DocumentProtectionImportTests
         }
         ms.Position = 0;
         return ms;
+    }
+
+    private static MemoryStream DocxWithMarkAsFinal(bool value)
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("Plik oznaczony jako ostateczny")))));
+            mainPart.Document.Save();
+
+            var customPart = doc.AddCustomFilePropertiesPart();
+            customPart.Properties = new Properties(
+                new CustomDocumentProperty(new VTBool(value ? "true" : "false"))
+                {
+                    FormatId = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}",
+                    PropertyId = 2,
+                    Name = "_MarkAsFinal"
+                });
+            customPart.Properties.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
+    [Test]
+    public void MarkAsFinal_SetsIsReadOnlyProtected()
+    {
+        // Word: Plik → Informacje → Chroń dokument → „Oznacz jako ostateczny" (_MarkAsFinal=true
+        // w docProps/custom.xml). Word otwiera taki plik tylko do odczytu — my również.
+        using var ms = DocxWithMarkAsFinal(true);
+
+        _reader.Convert(ms).IsReadOnlyProtected.Should().BeTrue();
+    }
+
+    [Test]
+    public void MarkAsFinalFalse_IsNotReadOnly()
+    {
+        // _MarkAsFinal=false (użytkownik cofnął oznaczenie) → dokument edytowalny.
+        using var ms = DocxWithMarkAsFinal(false);
+
+        _reader.Convert(ms).IsReadOnlyProtected.Should().BeFalse();
     }
 
     [Test]

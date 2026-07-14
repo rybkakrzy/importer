@@ -5,7 +5,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using FluentAssertions;
-using NPOI.POIFS.FileSystem;
+using OpenMcdf;
 using NUnit.Framework;
 
 namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
@@ -101,7 +101,7 @@ public class DocumentInputNormalizerTests
     }
 
     // Spec-zgodny enkryptor Agile (MS-OFFCRYPTO) — odwrotność produkcyjnego OoxmlAgileDecryptor.
-    // NPOI 2.8.0 nie ma własnej implementacji Agile, więc fixturę szyfrujemy tu sami. Te same stałe
+    // Sami wytwarzamy zaszyfrowaną fixturę (kontener CFB składamy OpenMcdf). Te same stałe
     // blockKey i algorytm (SHA512 + AES-256-CBC) co dekryptor → round-trip dowodzi inwersji, a zgodność
     // ze spec sprawia, że realne pliki Office też się odszyfrują.
     private static readonly byte[] BVerInput = { 0xfe, 0xa7, 0xd2, 0x76, 0x3b, 0x4b, 0x9e, 0x79 };
@@ -159,20 +159,22 @@ public class DocumentInputNormalizerTests
         infoMs.Write(new byte[] { 0x04, 0x00, 0x04, 0x00, 0x40, 0x00, 0x00, 0x00 }); // major 4, minor 4, flags 0x40
         infoMs.Write(xmlBytes);
 
-        var fs = new POIFSFileSystem();
-        fs.CreateDocument(new MemoryStream(infoMs.ToArray()), "EncryptionInfo");
-        fs.CreateDocument(new MemoryStream(pkg.ToArray()), "EncryptedPackage");
-        using var outMs = new MemoryStream();
-        fs.WriteFileSystem(outMs);
-        return outMs.ToArray();
+        return BuildCfb(("EncryptionInfo", infoMs.ToArray()), ("EncryptedPackage", pkg.ToArray()));
     }
 
-    private static byte[] BuildCfb(string entryName, byte[] data)
+    private static byte[] BuildCfb(string entryName, byte[] data) => BuildCfb((entryName, data));
+
+    private static byte[] BuildCfb(params (string Name, byte[] Data)[] entries)
     {
-        var fs = new POIFSFileSystem();
-        fs.CreateDocument(new MemoryStream(data), entryName);
         using var ms = new MemoryStream();
-        fs.WriteFileSystem(ms);
+        using (var root = RootStorage.Create(ms, OpenMcdf.Version.V3, StorageModeFlags.LeaveOpen))
+        {
+            foreach (var (name, data) in entries)
+            {
+                using CfbStream stream = root.CreateStream(name);
+                stream.Write(data, 0, data.Length);
+            }
+        }
         return ms.ToArray();
     }
 }

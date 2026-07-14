@@ -7,8 +7,8 @@ namespace D2ViewerEditor.Infrastructure.Services;
 /// <summary>
 /// Dekrypcja pakietu OOXML zabezpieczonego hasłem — schemat „Agile Encryption" (MS-OFFCRYPTO §2.3.4.10+),
 /// domyślny w Office 2010+. Czysto zarządzane (System.Security.Cryptography), bez zależności natywnych.
-/// NPOI 2.8.0 dostarcza tylko interfejs dekryptora, ale NIE implementacji Agile (brak builderów) — stąd
-/// własna implementacja. Standard/CryptoAPI (Office 2007) nie jest tu obsługiwany (zwraca Unsupported).
+/// Własna implementacja — OpenMcdf odczytuje jedynie kontener CFB, nie dekryptuje Agile.
+/// Standard/CryptoAPI (Office 2007) nie jest tu obsługiwany (zwraca Unsupported).
 /// </summary>
 public static class OoxmlAgileDecryptor
 {
