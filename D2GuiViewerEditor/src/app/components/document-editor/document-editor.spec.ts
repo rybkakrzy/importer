@@ -1342,3 +1342,160 @@ describe('DocumentEditorComponent — dialog hasła wyzwalany przy konwersji', (
     expect(component.passwordDialogError()).toBeTruthy();
   });
 });
+
+/**
+ * Globalne skróty edycji (Ctrl+Z/Y/X/C/V) — działają z fokusem POZA kartką (toolbar, tło),
+ * a NIE przechwytują natywnej edycji w polach formularzy ani w contenteditable (strony
+ * dokumentu / nagłówek / stopka — tam obsługa należy do wysiwyg-editora lub przeglądarki).
+ */
+describe('DocumentEditorComponent — globalne skróty edycji (Ctrl+Z/Y/X/C/V)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  /** Zdarzenie keydown z Ctrl; target domyślnie poza edytorem (body). */
+  function ctrlKey(key: string, opts: { target?: EventTarget; shift?: boolean; alt?: boolean } = {}): KeyboardEvent {
+    let prevented = false;
+    const ev = {
+      key,
+      ctrlKey: true,
+      metaKey: false,
+      altKey: !!opts.alt,
+      shiftKey: !!opts.shift,
+      target: opts.target ?? document.body,
+      preventDefault: () => { prevented = true; },
+      get defaultPrevented() { return prevented; },
+    } as unknown as KeyboardEvent;
+    component.onGlobalKeydown(ev);
+    return ev;
+  }
+
+  function editableDiv(): HTMLElement {
+    const div = document.createElement('div');
+    div.contentEditable = 'true';
+    document.body.appendChild(div);
+    return div;
+  }
+
+  it('Ctrl+Z z fokusem poza kartką → cofnij (custom undo, nie natywny)', () => {
+    const undo = vi.spyOn(component, 'undo').mockImplementation(() => {});
+    const ev = ctrlKey('z');
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('Ctrl+Shift+Z → ponów', () => {
+    const redo = vi.spyOn(component, 'redo').mockImplementation(() => {});
+    ctrlKey('Z', { shift: true });
+    expect(redo).toHaveBeenCalledTimes(1);
+  });
+
+  it('Ctrl+Y → ponów', () => {
+    const redo = vi.spyOn(component, 'redo').mockImplementation(() => {});
+    ctrlKey('y');
+    expect(redo).toHaveBeenCalledTimes(1);
+  });
+
+  it('Ctrl+X → wytnij, Ctrl+C → kopiuj, Ctrl+V → wklej', () => {
+    const cut = vi.spyOn(component, 'cut').mockImplementation(() => {});
+    const copy = vi.spyOn(component, 'copy').mockImplementation(() => {});
+    const paste = vi.spyOn(component, 'paste').mockImplementation(() => {});
+
+    ctrlKey('x');
+    ctrlKey('c');
+    ctrlKey('v');
+
+    expect(cut).toHaveBeenCalledTimes(1);
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(paste).toHaveBeenCalledTimes(1);
+  });
+
+  it('wewnątrz contenteditable NIE przechwytuje (obsługa należy do edytora/przeglądarki)', () => {
+    const undo = vi.spyOn(component, 'undo').mockImplementation(() => {});
+    const paste = vi.spyOn(component, 'paste').mockImplementation(() => {});
+    const target = editableDiv();
+
+    try {
+      const evZ = ctrlKey('z', { target });
+      const evV = ctrlKey('v', { target });
+      expect(undo).not.toHaveBeenCalled();
+      expect(paste).not.toHaveBeenCalled();
+      expect(evZ.defaultPrevented).toBe(false);
+      expect(evV.defaultPrevented).toBe(false);
+    } finally {
+      target.remove();
+    }
+  });
+
+  it('w polu formularza (INPUT) NIE przechwytuje — natywne undo/wklejanie działa', () => {
+    const undo = vi.spyOn(component, 'undo').mockImplementation(() => {});
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    try {
+      const ev = ctrlKey('z', { target: input });
+      expect(undo).not.toHaveBeenCalled();
+      expect(ev.defaultPrevented).toBe(false);
+    } finally {
+      input.remove();
+    }
+  });
+
+  it('AltGr (Ctrl+Alt) nie wyzwala skrótów — polskie znaki ż/ź/ć są bezpieczne', () => {
+    const undo = vi.spyOn(component, 'undo').mockImplementation(() => {});
+    const cut = vi.spyOn(component, 'cut').mockImplementation(() => {});
+
+    ctrlKey('z', { alt: true });
+    ctrlKey('x', { alt: true });
+
+    expect(undo).not.toHaveBeenCalled();
+    expect(cut).not.toHaveBeenCalled();
+  });
+
+  it('w trybie read-only Ctrl+Z/X/V są nieaktywne, ale Ctrl+C (kopiuj) działa', () => {
+    component.readOnly.set(true);
+    const undo = vi.spyOn(component, 'undo').mockImplementation(() => {});
+    const cut = vi.spyOn(component, 'cut').mockImplementation(() => {});
+    const paste = vi.spyOn(component, 'paste').mockImplementation(() => {});
+    const copy = vi.spyOn(component, 'copy').mockImplementation(() => {});
+
+    ctrlKey('z');
+    ctrlKey('x');
+    ctrlKey('v');
+    ctrlKey('c');
+
+    expect(undo).not.toHaveBeenCalled();
+    expect(cut).not.toHaveBeenCalled();
+    expect(paste).not.toHaveBeenCalled();
+    expect(copy).toHaveBeenCalledTimes(1);
+  });
+
+  it('Ctrl+F nadal otwiera wyszukiwanie (bez regresji), także z fokusem w input', () => {
+    const open = vi.spyOn(component, 'openFindReplace').mockImplementation(() => {});
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+
+    try {
+      const ev = ctrlKey('f', { target: input });
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(ev.defaultPrevented).toBe(true);
+    } finally {
+      input.remove();
+    }
+  });
+});

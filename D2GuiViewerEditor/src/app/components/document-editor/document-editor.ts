@@ -2440,26 +2440,76 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Globalny skrót wyszukiwania: Ctrl/Cmd+F → Znajdź (oba tryby, w read-only bez zamiany),
-   * Ctrl/Cmd+H → Znajdź i zamień (tylko gdy edycja dozwolona).
+   * Globalne skróty klawiszowe edycji: Ctrl/Cmd+F → Znajdź (oba tryby, w read-only bez
+   * zamiany), Ctrl/Cmd+H → Znajdź i zamień, Ctrl/Cmd+A → zaznacz treść dokumentu oraz
+   * Ctrl/Cmd+Z/Y/X/C/V → cofnij/ponów/wytnij/kopiuj/wklej. Skróty edycyjne działają tylko
+   * poza polami formularzy i contenteditable: wewnątrz stron edytora Ctrl+Z/Y obsługuje
+   * keydown wysiwyg-editora, a X/C/V natywny mechanizm przeglądarki (zdarzenia cut/copy/
+   * paste, w tym handlePaste); tu domykamy przypadek fokusu poza kartką (toolbar, tło).
    */
   @HostListener('document:keydown', ['$event'])
   onGlobalKeydown(e: KeyboardEvent): void {
-    if (!(e.ctrlKey || e.metaKey)) return;
+    // e.altKey odfiltrowuje AltGr (Ctrl+Alt na Windows) — polskie znaki ż/ź/ć nie mogą
+    // wyzwalać skrótów.
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
     const key = e.key.toLowerCase();
     if (key === 'f') {
       e.preventDefault();
       this.openFindReplace();
-    } else if (key === 'h' && !this.editingDisabled()) {
+      return;
+    }
+    if (key === 'h' && !this.editingDisabled()) {
       e.preventDefault();
       this.openFindReplace();
-    } else if (key === 'a') {
+      return;
+    }
+    if (key === 'a') {
       // Ctrl+A → zaznacz tylko treść dokumentu (nie całe body z menu/paskami).
       // Pomijamy pola formularzy, by nie psuć natywnego zaznaczania w inputach.
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
       this.selectAll();
+      return;
+    }
+
+    // Pozostałe skróty nie mogą przechwytywać natywnej edycji w polach formularzy ani
+    // w contenteditable (strony dokumentu, edytory nagłówka/stopki).
+    const target = e.target as HTMLElement | null;
+    const tag = target?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+      return;
+    }
+
+    switch (key) {
+      case 'z':
+        if (this.editingDisabled()) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          this.redo();
+        } else {
+          this.undo();
+        }
+        break;
+      case 'y':
+        if (this.editingDisabled()) return;
+        e.preventDefault();
+        this.redo();
+        break;
+      case 'x':
+        if (this.editingDisabled()) return;
+        e.preventDefault();
+        this.cut();
+        break;
+      case 'c':
+        e.preventDefault();
+        this.copy();
+        break;
+      case 'v':
+        if (this.editingDisabled()) return;
+        e.preventDefault();
+        this.paste();
+        break;
     }
   }
 
