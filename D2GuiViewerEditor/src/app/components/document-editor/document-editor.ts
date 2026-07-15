@@ -64,6 +64,11 @@ import {
 import { resolveTableContext } from '../../core/utils/table-context.util';
 import { syncTableColgroup } from '../../core/utils/table-grid.util';
 import { isValidReturnUrl } from '../../core/utils/return-url.util';
+import {
+  applyWordLineSpacing,
+  applyExactLineSpacing,
+  readWordLineMultiple,
+} from '../../core/utils/word-line-spacing.util';
 
 /**
  * Jeden komunikat dla dokumentu oznaczonego jako tylko do odczytu w pliku źródłowym
@@ -2474,10 +2479,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
 
     // Pozostałe skróty nie mogą przechwytywać natywnej edycji w polach formularzy ani
-    // w contenteditable (strony dokumentu, edytory nagłówka/stopki).
+    // w contenteditable (strony dokumentu, edytory nagłówka/stopki). Obok
+    // isContentEditable sprawdzamy atrybut przez closest — jsdom (testy) nie
+    // implementuje isContentEditable.
     const target = e.target as HTMLElement | null;
     const tag = target?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+    const inContentEditable = !!target && (target.isContentEditable
+      || !!target.closest?.('[contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'));
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || inContentEditable) {
       return;
     }
 
@@ -2708,7 +2717,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Ustawia interlinię
+   * Ustawia interlinię (mnożnik Worda). Wartość renderowa jest kalibrowana metrykami
+   * fontu + marker --w-line-tw dla round-tripu (PG-09) — ta sama semantyka co reader,
+   * dzięki czemu wygląd nie zmienia się po zapisie i ponownym otwarciu.
    */
   private setLineSpacing(value: number): void {
     const selection = window.getSelection();
@@ -2723,7 +2734,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         block = block.parentNode!;
       }
       if (block) {
-        (block as HTMLElement).style.lineHeight = value.toString();
+        applyWordLineSpacing(block as HTMLElement, value);
+        // Zmiana interlinii zmienia układ i musi trafić do zapisu (persist + repaginacja).
+        this.notifyEditorChange();
       }
     }
     this.closeAllMenus();
@@ -3866,18 +3879,29 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.paragraphData.spaceBefore = pxToPt(parseFloat(style.marginTop) || 0);
       this.paragraphData.spaceAfter = pxToPt(parseFloat(style.marginBottom) || 0);
 
-      // Interlinia
-      const lineHeight = style.lineHeight;
-      if (lineHeight === 'normal') {
-        this.paragraphData.lineSpacingType = 'single';
-        this.paragraphData.lineSpacingValue = 1;
+      // Interlinia — mnożnik Worda z markera --w-line-tw (własnego lub odziedziczonego
+      // z domyślnych dokumentu), nie ze skalibrowanej wartości renderowej (PG-09);
+      // inline w pt = atLeast/exactly (rozróżnienie markerem --w-line-rule).
+      const inlineLineHeight = el.style.lineHeight;
+      if (inlineLineHeight.endsWith('pt')) {
+        this.paragraphData.lineSpacingType =
+          el.style.getPropertyValue('--w-line-rule').trim() === 'atLeast' ? 'atLeast' : 'exactly';
+        this.paragraphData.lineSpacingValue = parseFloat(inlineLineHeight) || 12;
       } else {
-        const lhValue = parseFloat(lineHeight);
-        const fontSize = parseFloat(style.fontSize);
-        const ratio = Math.round(lhValue / fontSize * 100) / 100;
-        this.paragraphData.lineSpacingType = 'multiple';
-        this.paragraphData.lineSpacingValue = ratio;
+        const multiple = readWordLineMultiple(el);
+        if (multiple === null || multiple === 1) {
+          this.paragraphData.lineSpacingType = 'single';
+          this.paragraphData.lineSpacingValue = 1;
+        } else {
+          this.paragraphData.lineSpacingType = 'multiple';
+          this.paragraphData.lineSpacingValue = multiple;
+        }
       }
+
+      // Podział strony przed — z inline stylu bloku (reader emituje `page-break-before:always`
+      // dla w:pageBreakBefore; checkbox odzwierciedla stan jak dialog Worda).
+      this.paragraphData.pageBreakBefore =
+        /always|page/i.test(el.style.pageBreakBefore || el.style.breakBefore || '');
     }
   }
 
@@ -3926,34 +3950,43 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       el.style.marginTop = ptToPx(this.paragraphData.spaceBefore) + 'px';
       el.style.marginBottom = ptToPx(this.paragraphData.spaceAfter) + 'px';
 
-      // Interlinia
+      // Interlinia — mnożniki w semantyce Worda (kalibracja + marker, PG-09);
+      // atLeast dostaje marker reguły, bez którego writer zapisywał exact
+      // (a exact przycina w Wordzie tekst wyższy niż linia).
       switch (this.paragraphData.lineSpacingType) {
         case 'single':
-          el.style.lineHeight = '1';
+          applyWordLineSpacing(el, 1);
           break;
         case '1.5':
-          el.style.lineHeight = '1.5';
+          applyWordLineSpacing(el, 1.5);
           break;
         case 'double':
-          el.style.lineHeight = '2';
+          applyWordLineSpacing(el, 2);
           break;
         case 'multiple':
-          el.style.lineHeight = this.paragraphData.lineSpacingValue.toString();
+          applyWordLineSpacing(el, this.paragraphData.lineSpacingValue);
           break;
         case 'atLeast':
-          el.style.lineHeight = this.paragraphData.lineSpacingValue + 'pt';
+          applyExactLineSpacing(el, this.paragraphData.lineSpacingValue, true);
           break;
         case 'exactly':
-          el.style.lineHeight = this.paragraphData.lineSpacingValue + 'pt';
+          applyExactLineSpacing(el, this.paragraphData.lineSpacingValue, false);
           break;
       }
 
-      // Podziały strony
+      // Podział strony przed — właściwość Worda (w:pageBreakBefore): paginacja łamie stronę
+      // przed blokiem, writer odtwarza właściwość w pPr (nie ręczny w:br). Jawne `auto`
+      // ustawiamy tylko przy ODZNACZANIU aktywnego podziału — writer mapuje je na
+      // w:pageBreakBefore val=false, co nadpisuje ewentualny podział ze STYLU Worda.
       if (this.paragraphData.pageBreakBefore) {
         el.style.pageBreakBefore = 'always';
-      } else {
+      } else if (/always|page/i.test(el.style.pageBreakBefore || el.style.breakBefore || '')) {
         el.style.pageBreakBefore = 'auto';
       }
+
+      // Zmiany stylu akapitu (interlinia/odstępy/podział strony) zmieniają układ i muszą
+      // trafić do zapisu — dispatch `input` jak operacje tabelowe (persist + repaginacja).
+      this.notifyEditorChange();
     }
 
     this.closeParagraphDialog();

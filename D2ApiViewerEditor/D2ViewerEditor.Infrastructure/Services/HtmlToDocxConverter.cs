@@ -4005,6 +4005,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         if (string.IsNullOrEmpty(style)) return;
 
+        // „Podział strony przed" jako WŁAŚCIWOŚĆ akapitu (w:pageBreakBefore) — jak checkbox
+        // w dialogu Worda i style nagłówków. To celowo INNA reprezentacja niż ręczny podział
+        // (marker div.page-break → w:br type=page): właściwość round-tripuje bez dodatkowego
+        // pustego akapitu i w Wordzie pozostaje zaznaczonym checkboxem, nie twardym breakiem.
+        if (Regex.IsMatch(style, @"(page-break-before|break-before)\s*:\s*(always|page)", RegexOptions.IgnoreCase))
+            props.Append(new PageBreakBefore());
+        else if (Regex.IsMatch(style, @"(page-break-before|break-before)\s*:\s*auto", RegexOptions.IgnoreCase))
+            // Jawne wyłączenie (reader: direct w:pageBreakBefore val=false; dialog: odznaczenie
+            // aktywnego podziału) — val=false nadpisuje pageBreakBefore z definicji STYLU.
+            props.Append(new PageBreakBefore { Val = false });
+
         // Text-align
         var alignMatch = Regex.Match(style, @"text-align:\s*(left|center|right|justify)");
         if (alignMatch.Success)
@@ -4097,8 +4108,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             }
             else
             {
-                // Mnożnik
-                spacing.Line = ((int)Math.Round(val * 240)).ToString();
+                // Mnożnik. Reader emituje wartość SKALIBROWANĄ metrykami fontu (PG-09)
+                // + marker --w-line-tw z oryginalnym w:line w 240-tych — round-trip
+                // bierze marker, nie wartość renderową (inaczej każdy zapis rozciągałby
+                // interlinię o współczynnik kalibracji). Bez markera (np. starsza treść)
+                // wartość traktujemy jak mnożnik Worda — dotychczasowe zachowanie.
+                var lineTwMarker = Regex.Match(style, @"--w-line-tw\s*:\s*(\d+)");
+                spacing.Line = lineTwMarker.Success
+                    ? lineTwMarker.Groups[1].Value
+                    : ((int)Math.Round(val * 240)).ToString();
                 spacing.LineRule = LineSpacingRuleValues.Auto;
             }
             hasSpacing = true;

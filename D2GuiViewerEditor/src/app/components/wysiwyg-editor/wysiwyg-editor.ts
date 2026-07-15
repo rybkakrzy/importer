@@ -975,6 +975,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   documentDefaultLineHeight = signal<string | null>(null);
   /** Domyślny odstęp PO akapicie (data-default-after-tw kontenera) — CSS var --doc-par-margin. */
   documentDefaultParagraphSpacing = signal<string | null>(null);
+  /** Domyślna interlinia auto w 240-tych (data-default-line kontenera) — marker --w-line-tw
+   *  na .editor-content; dziedziczy na akapity, więc dialog akapitu czyta mnożnik Worda,
+   *  a nie skalibrowaną wartość renderową (PG-09). */
+  documentDefaultLineTw = signal<string | null>(null);
 
   /**
    * Atrybuty wrappera .document-content przechwycone przy setContent. Paginacja rozwija
@@ -4567,6 +4571,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.documentDefaultParagraphSpacing.set(
       Number.isFinite(afterTw) && afterTw >= 0 ? `${afterTw / 20}pt` : null
     );
+    // Marker mnożnika Worda tylko dla reguły auto — exact/atLeast idzie w pt przez
+    // line-height kontenera i nie jest mnożnikiem.
+    const lineTw = parseInt(container.getAttribute('data-default-line') ?? '', 10);
+    const lineRule = container.getAttribute('data-default-line-rule');
+    this.documentDefaultLineTw.set(
+      Number.isFinite(lineTw) && lineTw > 0 && (!lineRule || lineRule === 'auto')
+        ? String(lineTw)
+        : null
+    );
     // Kolumny sekcji bazowej (0) z kontenera → render CSS; round-trip atrybutów zapewnia
     // _documentContainerAttrs (poniżej) + _wrapWithDocumentContainer (ADR-0039).
     this._baseColumns.set(parseColumnDataAttributes(container) ?? null);
@@ -4970,6 +4983,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           bi++;
           continue;
         }
+        if (this._hasPageBreakBeforeStyle(block)) {
+          // Właściwość „podział strony przed" (w:pageBreakBefore — checkbox dialogu akapitu,
+          // style nagłówków; reader emituje `page-break-before:always` w stylu inline bloku).
+          // W odróżnieniu od markera div.page-break blok NIE jest znacznikiem — sam zaczyna
+          // nową stronę i jedzie na nią razem ze swoim stylem (zapis odtwarza w:pageBreakBefore
+          // w pPr). Jak w Wordzie: akapit i tak otwierający stronę nie tworzy pustej kartki.
+          if (pages[pages.length - 1].length > 0 || currentHeight > 0) {
+            openPage();
+          }
+          pushMeasured(block, measureBlock(block));
+          bi++;
+          continue;
+        }
         if (this._isColumnBreakBlock(block)) {
           // Podział kolumny (w:br type=column, render: break-before:column na markerze):
           // dalsza treść zaczyna się od góry NASTĘPNEJ kolumny, więc paginator konsumuje
@@ -5017,6 +5043,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           runEnd < allBlocks.length &&
           !this._isSectionBreakMarker(allBlocks[runEnd]) &&
           !this._isPageBreakBlock(allBlocks[runEnd]) &&
+          !this._hasPageBreakBeforeStyle(allBlocks[runEnd]) &&
           !this._isColumnBreakBlock(allBlocks[runEnd]) &&
           allBlocks[runEnd].tagName !== 'TABLE'
         ) {
@@ -5262,6 +5289,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   /** Sekwencja id dla fragmentów jednej logicznie podzielonej tabeli (R-17). */
   private _splitTableSeq = 0;
+
+  /**
+   * Czy blok żąda rozpoczęcia nowej strony WŁAŚCIWOŚCIĄ `page-break-before` (w:pageBreakBefore
+   * z Worda / checkbox dialogu akapitu) — w odróżnieniu od markera `.page-break` blok sam
+   * idzie na nową stronę. `break-before:column` (podział kolumny) celowo nie pasuje.
+   */
+  private _hasPageBreakBeforeStyle(el: HTMLElement): boolean {
+    // Z atrybutu style (nie przez CSSOM): działa identycznie w przeglądarce i jsdom,
+    // niezależnie od tego, czy silnik implementuje akcesory legacy `page-break-before`.
+    const style = el.getAttribute?.('style') ?? '';
+    return /(?:page-)?break-before\s*:\s*(always|page)\b/i.test(style);
+  }
 
   /** Czy blok to manualny page break (div.page-break albo akapit zawierający tylko page-break). */
   private _isPageBreakBlock(el: HTMLElement): boolean {

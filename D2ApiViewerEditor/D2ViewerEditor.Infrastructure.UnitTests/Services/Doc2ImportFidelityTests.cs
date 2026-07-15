@@ -331,7 +331,8 @@ public class Doc2ImportFidelityTests
 
         html.Should().Contain("margin-top:12pt;");     // 240 tw = 12 pt (odstęp PRZED)
         html.Should().Contain("margin-bottom:6pt;");   // 120 tw = 6 pt (odstęp PO)
-        html.Should().Contain("line-height:1.5;");     // 360/240 = 1.5 (auto — interlinia)
+        html.Should().Contain("line-height:1.8;");     // 360/240 × 1.2 (kalibracja PG-09, font nieznany)
+        html.Should().Contain("--w-line-tw:360;");     // marker round-trip oryginału
         html.Should().Contain("<br/>");                // ręczne złamanie wiersza
     }
 

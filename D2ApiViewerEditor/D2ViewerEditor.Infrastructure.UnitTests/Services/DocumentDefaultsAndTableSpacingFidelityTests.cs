@@ -146,7 +146,9 @@ public class DocumentDefaultsAndTableSpacingFidelityTests
         container.Should().Contain("data-default-line=\"278\"");
         container.Should().Contain("data-default-line-rule=\"auto\"");
         container.Should().Contain("font-size:12pt;");
-        container.Should().Contain("line-height:1.158;"); // 278/240
+        // 278/240 × 1.221 (kalibracja single Calibri, PG-09) — surowe 278/240=1.158
+        // renderowało tekst ~18% ciaśniej niż Word.
+        container.Should().Contain("line-height:1.414;");
     }
 
     [Test]
@@ -160,7 +162,9 @@ public class DocumentDefaultsAndTableSpacingFidelityTests
             html, "<td[^>]*><p style=\"([^\"]*)\"");
         cellParagraph.Success.Should().BeTrue();
         cellParagraph.Groups[1].Value.Should().Contain("margin-bottom:0pt;");
-        cellParagraph.Groups[1].Value.Should().Contain("line-height:1;");
+        // Pojedyncza interlinia stylu tabeli (240) po kalibracji Calibri + marker round-trip.
+        cellParagraph.Groups[1].Value.Should().Contain("line-height:1.221;");
+        cellParagraph.Groups[1].Value.Should().Contain("--w-line-tw:240;");
 
         // Akapit BODY nie dostaje inline spacingu (interlinia dziedziczy z kontenera).
         var bodyParagraph = System.Text.RegularExpressions.Regex.Match(

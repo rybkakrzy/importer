@@ -30,12 +30,9 @@ public class PageBreakRoundTripTests
             .Descendants<Break>().Count(b => b.Type?.Value == BreakValues.Page);
     }
 
-    [Test]
-    public void ParagraphWithPageBreakBefore_EmitsPageBreakMarker_OnImport()
+    private static MemoryStream DocxWithPageBreakBeforeParagraphs()
     {
-        // Word „podział strony przed" (w:pageBreakBefore) — wcześniej ignorowane na imporcie,
-        // przez co wielostronicowe dokumenty zwijały się do jednej strony (Issue „3 strony → 1").
-        using var ms = new MemoryStream();
+        var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var main = doc.AddMainDocumentPart();
@@ -49,16 +46,52 @@ public class PageBreakRoundTripTests
                     new Run(new Text("Strona 3")))));
             main.Document.Save();
         }
-
-        var html = new DocxToHtmlConverter().Convert(new MemoryStream(ms.ToArray())).Html;
-
-        // Dwa markery → trzy strony po paginacji we froncie.
-        System.Text.RegularExpressions.Regex.Matches(html, "class=\"page-break\"").Count.Should().Be(2);
+        ms.Position = 0;
+        return ms;
     }
 
     [Test]
-    public void ParagraphWithPageBreakBeforeFalse_DoesNotEmitMarker()
+    public void ParagraphWithPageBreakBefore_EmitsCssProperty_NotMarker()
     {
+        // Word „podział strony przed" (w:pageBreakBefore) to WŁAŚCIWOŚĆ akapitu — reader
+        // emituje `page-break-before:always` w stylu inline akapitu (paginacja GUI łamie
+        // stronę przed blokiem), a NIE marker div.page-break (ten reprezentuje ręczny w:br).
+        using var ms = DocxWithPageBreakBeforeParagraphs();
+
+        var html = new DocxToHtmlConverter().Convert(ms).Html;
+
+        html.Should().NotContain("class=\"page-break\"");
+        System.Text.RegularExpressions.Regex
+            .Matches(html, "page-break-before:always").Count.Should().Be(2);
+    }
+
+    [Test]
+    public void PageBreakBeforeProperty_RoundTripsAsProperty_NotManualBreak()
+    {
+        // Pełny cykl: właściwość wraca jako w:pageBreakBefore w pPr TEGO SAMEGO akapitu —
+        // bez zamiany na twardy w:br i bez dodatkowego pustego akapitu (checkbox w Wordzie
+        // pozostaje zaznaczony po zapisie z edytora).
+        using var ms = DocxWithPageBreakBeforeParagraphs();
+        var html = new DocxToHtmlConverter().Convert(ms).Html;
+
+        var bytes = _writer.Convert(html);
+
+        using var result = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var body = result.MainDocumentPart!.Document.Body!;
+        var paragraphs = body.Elements<Paragraph>().ToList();
+        paragraphs.Should().HaveCount(3, "właściwość nie może dokładać akapitów z w:br");
+        CountPageBreaks(bytes).Should().Be(0, "właściwość ≠ ręczny podział");
+        paragraphs
+            .Count(p => p.ParagraphProperties?.GetFirstChild<PageBreakBefore>() is { } pbb
+                        && (pbb.Val == null || pbb.Val.Value))
+            .Should().Be(2);
+    }
+
+    [Test]
+    public void ParagraphWithPageBreakBeforeFalse_EmitsExplicitAuto_AndRoundTripsAsFalse()
+    {
+        // Jawne w:pageBreakBefore val=false (wyłączenie podziału ze STYLU) → CSS `auto`,
+        // a writer odtwarza val=false — bez tego styl Worda przywróciłby podział.
         using var ms = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
@@ -72,7 +105,44 @@ public class PageBreakRoundTripTests
 
         var html = new DocxToHtmlConverter().Convert(new MemoryStream(ms.ToArray())).Html;
 
-        html.Should().NotContain("page-break");
+        html.Should().NotContain("class=\"page-break\"");
+        html.Should().Contain("page-break-before:auto");
+
+        using var result = WordprocessingDocument.Open(new MemoryStream(_writer.Convert(html)), false);
+        var pbb = result.MainDocumentPart!.Document.Body!
+            .Descendants<PageBreakBefore>().Single();
+        pbb.Val!.Value.Should().BeFalse();
+    }
+
+    [Test]
+    public void PageBreakBeforeFromParagraphStyle_EmitsCssProperty()
+    {
+        // Styl akapitowy z pageBreakBefore (typowe „Nagłówek 1" rozdziałów) — właściwość
+        // z definicji stylu trafia do CSS akapitu przez łańcuch stylów.
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(
+                new Style(
+                    new StyleParagraphProperties(new PageBreakBefore()))
+                {
+                    Type = StyleValues.Paragraph,
+                    StyleId = "Rozdzial",
+                    StyleName = new StyleName { Val = "Rozdzial" }
+                });
+            main.Document = new Document(new Body(
+                new Paragraph(
+                    new ParagraphProperties(new ParagraphStyleId { Val = "Rozdzial" }),
+                    new Run(new Text("Nowy rozdział")))));
+            main.Document.Save();
+        }
+
+        var html = new DocxToHtmlConverter().Convert(new MemoryStream(ms.ToArray())).Html;
+
+        html.Should().Contain("page-break-before:always");
+        html.Should().NotContain("class=\"page-break\"");
     }
 
     [Test]

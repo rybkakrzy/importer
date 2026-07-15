@@ -1595,7 +1595,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             else
             {
-                css.Append(string.Format(inv, "line-height:{0:0.###};", lineTw / 240.0));
+                // Auto = mnożnik pojedynczego odstępu — kalibracja metrykami fontu (PG-09).
+                css.Append(WordLineSpacing.AutoCss(lineTw, _defaultFontFamily));
             }
         }
         return css.ToString();
@@ -2146,6 +2147,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? $" data-tab-stops=\"{SerializeTabStops(effectiveTabStops)}\""
             : string.Empty;
 
+        // Word „podział strony przed" (w:pageBreakBefore) — WŁAŚCIWOŚĆ akapitu, nie ręczny
+        // break: emitujemy `page-break-before:always` w CSS akapitu (działa też na <li>).
+        // Writer odtwarza z tego w:pageBreakBefore w pPr (bez dodatkowego pustego akapitu,
+        // checkbox w Wordzie pozostaje zaznaczony), a paginacja GUI łamie stronę przed
+        // blokiem. Ręczny podział (w:br type=page) nadal idzie markerem div.page-break.
+        // Jawne w:pageBreakBefore val=false w direct pPr nadpisuje `always` ze stylu
+        // (DeduplicateCss: ostatnia wartość wygrywa).
+        if (HasPageBreakBefore(paraProps))
+            cssBuilder.Append("page-break-before:always;");
+        else if (paraProps?.GetFirstChild<PageBreakBefore>() != null)
+            cssBuilder.Append("page-break-before:auto;");
+
         // Dedup finalnego CSS: styl + direct pPr potrafiły zostawić duplikaty tej samej
         // właściwości (przeglądarka bierze ostatnią, ale regexy writera brały PIERWSZĄ —
         // nadpisanie stylu przez direct pPr ginęło na eksporcie).
@@ -2156,14 +2169,6 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var dataStyleAttr = !string.IsNullOrEmpty(styleId) && docClass != null
             ? $" data-style-id=\"{System.Net.WebUtility.HtmlEncode(styleId)}\""
             : string.Empty;
-
-        // Word „podział strony przed" (w:pageBreakBefore w pPr) — bardzo częsty sposób wymuszania
-        // nowej strony (checkbox w dialogu akapitu, style nagłówków). Reader wcześniej go IGNOROWAŁ,
-        // więc wielostronicowe dokumenty zwijały się do jednej strony (Issue: „3 strony → 1").
-        // Emitujemy marker page-break PRZED akapitem (ten sam mechanizm co manualny break; writer
-        // mapuje marker → w:br type=page). Pomijamy listy (marker między <li> = niepoprawny HTML).
-        if (!isListItem && HasPageBreakBefore(paraProps))
-            html.Append("<div class=\"page-break\"></div>");
 
         // Punkt wstawienia dla pól tekstowych hoistowanych PRZED akapit (patrz HoistTextBox):
         // wszystko dopisane przez dzieci trafia ZA ten indeks, a bufor _pendingTextBoxes
@@ -3172,11 +3177,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 }
                 else
                 {
-                    // Auto (domyślne gdy brak w:lineRule) — wartość jest w 240-tych częściach linii.
-                    css.Append(string.Format(inv, "line-height:{0:0.###};", lineVal / 240.0));
+                    // Auto (domyślne gdy brak w:lineRule) — mnożnik pojedynczego odstępu
+                    // w 240-tych; emisja skalibrowana metrykami fontu + marker (PG-09).
+                    css.Append(WordLineSpacing.AutoCss(lineVal, _defaultFontFamily));
                 }
             }
         }
+
+        // w:pageBreakBefore w definicji STYLU (typowe dla nagłówków rozdziałów) — ta sama
+        // właściwość CSS co dla direct pPr; direct val=false nadpisuje przez dedupe.
+        var stylePageBreak = props.Descendants<PageBreakBefore>().FirstOrDefault();
+        if (stylePageBreak != null && (stylePageBreak.Val == null || stylePageBreak.Val.Value))
+            css.Append("page-break-before:always;");
 
         // w:contextualSpacing — gdy true, Word znosi odstępy między sąsiednimi paragrafami tego samego stylu.
         // Eksportujemy jako data-attribute, aby HtmlToDocxConverter mógł to przywrócić.
@@ -5506,7 +5518,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             else
             {
-                css.Append(string.Format(inv, "line-height:{0:0.###};", lineVal / 240.0));
+                // Auto — kalibracja jak w ConvertParagraphPropertiesToCss (PG-09).
+                css.Append(WordLineSpacing.AutoCss(lineVal, _defaultFontFamily));
             }
         }
         return css.ToString();

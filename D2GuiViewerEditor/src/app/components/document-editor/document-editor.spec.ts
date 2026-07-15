@@ -1387,7 +1387,9 @@ describe('DocumentEditorComponent — globalne skróty edycji (Ctrl+Z/Y/X/C/V)',
 
   function editableDiv(): HTMLElement {
     const div = document.createElement('div');
-    div.contentEditable = 'true';
+    // setAttribute zamiast settera contentEditable — jsdom nie implementuje settera
+    // (nie ustawia atrybutu), a komponent rozpoznaje edytowalność po atrybucie.
+    div.setAttribute('contenteditable', 'true');
     document.body.appendChild(div);
     return div;
   }
