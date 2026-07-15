@@ -5992,6 +5992,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * w miejscu kliknięcia. W przeciwnym wypadku trafi na koniec zawartości.
    */
   startEditingHeader(event?: MouseEvent): void {
+    // Dokument chroniony: nagłówek nie wchodzi w tryb edycji (bug 13677237 — klik
+    // otwierał panel „Nagłówek i stopka" i pozwalał modyfikować chroniony dokument).
+    if (this.readOnly) return;
     // Jeśli już edytujemy nagłówek, nie restartuj kursora (pozwól natywnemu klikowi go ustawić)
     if (this.editingSection() === 'header') return;
     const clickX = event?.clientX;
@@ -6018,6 +6021,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Rozpoczyna edycję stopki
    */
   startEditingFooter(event?: MouseEvent): void {
+    // Dokument chroniony: stopka nie wchodzi w tryb edycji (bug 13677237).
+    if (this.readOnly) return;
     if (this.editingSection() === 'footer') return;
     const clickX = event?.clientX;
     const clickY = event?.clientY;

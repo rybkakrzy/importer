@@ -839,6 +839,19 @@ body.image-moving * {
   border-top-color: #c0c0c0;
 }
 
+/* Tryb tylko do odczytu (bug 13677237): pasma nagłówka/stopki nie są klikalne,
+   więc hover nie może sugerować edycji — bez podświetlenia, ramki i kursora. */
+.wysiwyg-editor-wrapper.read-only .page-header,
+.wysiwyg-editor-wrapper.read-only .page-footer {
+  cursor: default;
+}
+
+.wysiwyg-editor-wrapper.read-only .page-header:hover,
+.wysiwyg-editor-wrapper.read-only .page-footer:hover {
+  background-color: transparent;
+  border-color: transparent;
+}
+
 /* Stan edycji */
 .page-header.editing,
 .page-footer.editing {
