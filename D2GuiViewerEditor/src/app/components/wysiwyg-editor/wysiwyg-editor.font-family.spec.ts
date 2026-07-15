@@ -5,7 +5,7 @@ import { WysiwygEditorComponent } from './wysiwyg-editor';
 /**
  * Font-family for the CURRENT caret and for a selection.
  *
- * Reported bug: after picking a non-default font ("ING Me" is the corporate default), newly
+ * Reported bug: after picking a non-default font ("Qutas Me" is the corporate default), newly
  * typed text kept the default. The document flow is: pick a font at a collapsed caret →
  * `setFontFamily` drops a zero-width-space (ZWS) span carrying the chosen `font-family` and
  * puts the caret inside it, so the next typed characters inherit the font. These tests assert

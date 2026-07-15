@@ -11,7 +11,7 @@ import { EditorState } from '../../models/document.model';
 const msalStub = { instance: { getActiveAccount: () => null, getAllAccounts: () => [] } };
 
 /**
- * Regresja zgłoszenia: główny selektor czcionki pokazywał „ING Me", a mini-toolbar
+ * Regresja zgłoszenia: główny selektor czcionki pokazywał „Qutas Me", a mini-toolbar
  * kontekstowy — „Calibri", mimo że oba czytają ten sam `currentStyle.fontFamily`.
  * Przyczyna: mini-toolbar renderuje font natywnym `<select>`, który nie potrafi
  * pokazać wartości bez pasującej `<option>` (font firmowy/dokumentu spoza listy
@@ -57,15 +57,15 @@ describe('DocumentEditorComponent — mini-toolbar font = źródło prawdy', () 
     component.editorState.set(state);
   }
 
-  it('pokazuje firmowy font dokumentu („ING Me") zamiast fałszywego Calibri', () => {
-    setSelectionFont('ING Me', 12);
+  it('pokazuje firmowy font dokumentu („Qutas Me") zamiast fałszywego Calibri', () => {
+    setSelectionFont('Qutas Me', 12);
 
-    expect(component.miniToolbarFontFamily()).toBe('ING Me');
+    expect(component.miniToolbarFontFamily()).toBe('Qutas Me');
     // Bez tego font byłby niedostępny jako <option> i select spadłby do Calibri.
-    expect(component.miniToolbarFontOptions()).toContain('ING Me');
+    expect(component.miniToolbarFontOptions()).toContain('Qutas Me');
     // Nadal jest dokładnie jedna pasująca opcja (brak duplikatu, poprawny [selected]).
     expect(
-      component.miniToolbarFontOptions().filter((f) => f === 'ING Me').length,
+      component.miniToolbarFontOptions().filter((f) => f === 'Qutas Me').length,
     ).toBe(1);
   });
 

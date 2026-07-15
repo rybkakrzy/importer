@@ -2136,8 +2136,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Fallback flex row only when there are tab characters but no resolvable stop positions
         // (e.g. a center/right alignment tab with no w:tabs geometry). Tab characters are preserved
-        // either way (round-trip stays intact).
-        var useFlexTabs = !usePositionedTabs && ParagraphHasAlignmentTab(paraProps);
+        // either way (round-trip stays intact). A paragraph that merely DECLARES center/right
+        // stops (w:tabs in pPr/style) without any tab char must render normally — flex on such
+        // paragraphs re-laid-out header/footer lines after every save (bug 13261178).
+        var useFlexTabs = !usePositionedTabs
+            && paragraph.Descendants<TabChar>().Any()
+            && ParagraphHasAlignmentTab(paraProps);
         if (useFlexTabs)
             cssBuilder.Append("display:flex;align-items:baseline;width:100%;");
         if (usePositionedTabs)

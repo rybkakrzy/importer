@@ -30,7 +30,7 @@ describe('word-line-spacing.util — kalibracja interlinii Worda (PG-09)', () =>
     });
 
     it('nieznany/firmowy krój i brak fontu → fallback 1.2', () => {
-      expect(wordSingleFactor('ING Me')).toBe(DEFAULT_SINGLE_FACTOR);
+      expect(wordSingleFactor('Qutas Me')).toBe(DEFAULT_SINGLE_FACTOR);
       expect(wordSingleFactor(null)).toBe(DEFAULT_SINGLE_FACTOR);
       expect(wordSingleFactor('')).toBe(DEFAULT_SINGLE_FACTOR);
     });

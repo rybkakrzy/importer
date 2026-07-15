@@ -691,10 +691,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // styl sekcji ("Header"/"Footer"), tak jak robi to Word natywnie.
         // Dzięki temu czcionka i odstępy są zgodne z konwencją Worda
         // i tekst nie pojawia się jako "Normal".
+        // WYJĄTEK (bug 13261178): akapit z WŁASNYMI w:tabs (odtworzonymi z data-tab-stops =
+        // kompletny efektywny zestaw) nie może dostać stylu, którego definicja niesie stopy —
+        // stopy stylu SUMUJĄ się z bezpośrednimi (ECMA-376). Nasza definicja Header/Footer
+        // jest już bez stopów, ale ConvertPreservingPackage podmienia styles.xml na ORYGINALNY,
+        // gdzie wordowy Header/Footer ma 4536:center/9072:right — tabulator pasma przeskakiwał
+        // wtedy na dodany stop przy każdym zapisie.
         if (_currentSectionStyleId != null)
         {
             foreach (var p in parent.Elements<Paragraph>())
             {
+                if (p.ParagraphProperties?.GetFirstChild<Tabs>() != null) continue;
                 ApplyDefaultSectionStyle(p, _currentSectionStyleId);
             }
         }
@@ -1023,9 +1030,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         styles.Append(listParagraph);
 
         // Styl Nagłówka (Header) — wbudowany styl Worda, używany dla treści
-        // nagłówka strony. Bez niego Word renderuje paragraf nagłówka jako
-        // Normal (bez tab-stopów do prawej/centerowania, bez odstępów),
-        // co powoduje wizualne rozbieżności względem edytora.
+        // nagłówka strony (odstępy zgodne z konwencją Worda).
+        // UWAGA: styl NIE deklaruje tab-stopów (Word ma tu 4536:center/9072:right).
+        // Tab-stopy stylu SUMUJĄ się z bezpośrednimi w:tabs akapitu (ECMA-376),
+        // a kompletny efektywny zestaw każdego akapitu i tak wraca per akapit
+        // z data-tab-stops — stopy w stylu DODAWAŁY pozycje, których dokument
+        // źródłowy nie miał, i po pierwszym zapisie tabulator stopki/nagłówka
+        // przeskakiwał na 4536:center zamiast własnego stopu (bug 13261178).
         var headerStyle = new Style
         {
             Type = StyleValues.Paragraph,
@@ -1037,10 +1048,6 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         headerStyle.Append(new UIPriority { Val = 99 });
         headerStyle.Append(new UnhideWhenUsed());
         headerStyle.Append(new StyleParagraphProperties(
-            new Tabs(
-                new TabStop { Val = TabStopValues.Center, Position = 4536 },
-                new TabStop { Val = TabStopValues.Right, Position = 9072 }
-            ),
             new SpacingBetweenLines { After = "0", Line = "240", LineRule = LineSpacingRuleValues.Auto }
         ));
         styles.Append(headerStyle);
@@ -1057,7 +1064,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         headerCharStyle.Append(new UIPriority { Val = 99 });
         styles.Append(headerCharStyle);
 
-        // Styl Stopki (Footer)
+        // Styl Stopki (Footer) — bez tab-stopów, patrz komentarz przy stylu Header.
         var footerStyle = new Style
         {
             Type = StyleValues.Paragraph,
@@ -1069,10 +1076,6 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         footerStyle.Append(new UIPriority { Val = 99 });
         footerStyle.Append(new UnhideWhenUsed());
         footerStyle.Append(new StyleParagraphProperties(
-            new Tabs(
-                new TabStop { Val = TabStopValues.Center, Position = 4536 },
-                new TabStop { Val = TabStopValues.Right, Position = 9072 }
-            ),
             new SpacingBetweenLines { After = "0", Line = "240", LineRule = LineSpacingRuleValues.Auto }
         ));
         styles.Append(footerStyle);

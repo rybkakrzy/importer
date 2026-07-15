@@ -302,7 +302,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Options for the mini-toolbar font `<select>`. A native `<select>` cannot
    * display a value that has no matching `<option>`, so it silently falls back
    * to the first option (Calibri) whenever the selection uses a font outside the
-   * shared list — e.g. a corporate/document font like "ING Me". The main toolbar
+   * shared list — e.g. a corporate/document font like "Qutas Me". The main toolbar
    * avoids this by using an `<input list=…>`; here we keep the `<select>` but make
    * the current font always selectable, so the control reflects the real
    * selection instead of misreporting Calibri.
