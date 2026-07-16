@@ -163,7 +163,8 @@
         </div>
 
         @if (!editingDisabled()) {
-        <!-- WSTAW -->
+        <!-- WSTAW — ukryte na życzenie; kod zachowany, NIE usunięty. Ustaw @if na true, aby przywrócić. -->
+        @if (false) {
         <div class="menu-item-wrapper">
           <button class="menu-item" (click)="toggleInsertMenu(); $event.stopPropagation()">Wstaw</button>
           
@@ -268,8 +269,10 @@
             </div>
           }
         </div>
+        }
 
-        <!-- FORMATUJ -->
+        <!-- FORMATUJ — ukryte na życzenie; kod zachowany, NIE usunięty. Ustaw @if na true, aby przywrócić. -->
+        @if (false) {
         <div class="menu-item-wrapper">
           <button class="menu-item" (click)="toggleFormatMenu(); $event.stopPropagation()">Formatuj</button>
           
@@ -444,8 +447,10 @@
             </div>
           }
         </div>
+        }
 
-        <!-- NARZĘDZIA -->
+        <!-- NARZĘDZIA — ukryte na życzenie; kod zachowany, NIE usunięty. Ustaw @if na true, aby przywrócić. -->
+        @if (false) {
         <div class="menu-item-wrapper">
           <button class="menu-item" (click)="toggleToolsMenu(); $event.stopPropagation()">Narzędzia</button>
           
@@ -489,6 +494,7 @@
             </div>
           }
         </div>
+        }
         }
 
         <!-- WIDOK -->
@@ -605,6 +611,8 @@
     (insertImage)="onInsertImage()"
     (insertTable)="onInsertTable($event)"
     (openTableDialog)="openInsertTableDialog()"
+    (insertFootnote)="onInsertFootnote()"
+    (insertEndnote)="onInsertEndnote()"
     (insertBarcode)="openBarcodeDialog()"
     (styleChange)="onStyleChange($event)"
     (copyFormat)="onCopyFormat()"
@@ -636,6 +644,8 @@
               [orientation]="pageSettings().orientation"
               [zoomLevel]="zoomLevel()"
               [blockIndent]="currentBlockIndent()"
+              [columnSegments]="currentColumnRuler()?.segments ?? null"
+              [activeColumnIndex]="currentColumnRuler()?.activeIndex ?? 0"
               (marginsChange)="onRulerMarginsChange($event)"
               (blockIndentChange)="onRulerBlockIndentChange($event)"
               (dragGuideChange)="onRulerDragGuide($event)"

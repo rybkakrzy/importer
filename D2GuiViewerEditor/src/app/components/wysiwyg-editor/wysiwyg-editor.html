@@ -8,6 +8,7 @@
              [class.landscape]="isLandscapePage($index)"
              [style.width.px]="pageWidthPx($index)"
              [style.height.px]="pageHeightPx($index)"
+             [style.--w-line-single]="documentDefaultLineSingle()"
              [attr.data-page-number]="$index + 1">
 
           <!-- Nagłówek strony: zaczyna się headerDistance od krawędzi (w:pgMar header),
@@ -142,11 +143,11 @@
                   <span class="footnote-item-number"
                         aria-hidden="true"
                         title="Przejdź do odwołania w treści"
-                        (click)="scrollToNoteReference('endnote', entry.en.id)">{{ entry.number }}</span>
+                        (click)="scrollToNoteReference('endnote', entry.en.id)">{{ entry.label }}</span>
                   <div class="footnote-item-content"
                        [attr.contenteditable]="readOnly ? 'false' : 'true'"
                        spellcheck="true"
-                       [attr.aria-label]="'Treść przypisu końcowego ' + entry.number"
+                       [attr.aria-label]="'Treść przypisu końcowego ' + entry.label"
                        [attr.data-testid]="'endnote-content-' + entry.en.id"
                        [innerHTML]="endnoteSafeHtml(entry.en)"
                        (blur)="commitEndnoteContent(entry.en.id, $event)"></div>

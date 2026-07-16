@@ -1134,15 +1134,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             else
             {
-                html.Append(ConvertElementToHtml(element, document));
+                // Paragraf z pPr/sectPr KOŃCZY sekcję. PUSTY akapit niosący wyłącznie sectPr
+                // jest w Wordzie samym ZNAKIEM przerwy sekcji — nie renderuje się jako linia
+                // treści, więc nie emitujemy dla niego <p>&nbsp;</p> (dawało widoczny pusty
+                // „enter" przed sekcją kolumnową, a writer i tak odtwarza własny w:p/pPr/sectPr
+                // z markera — akapit DUPLIKOWAŁ się przy każdym zapisie).
+                var endedSection = (element as Paragraph)?.ParagraphProperties
+                    ?.GetFirstChild<SectionProperties>();
+                var isBareSectionMark = endedSection != null
+                    && element is Paragraph sectMarkPara
+                    && !ParagraphHasVisibleContent(sectMarkPara);
+                if (!isBareSectionMark)
+                {
+                    html.Append(ConvertElementToHtml(element, document));
+                }
 
-                // Paragraf z pPr/sectPr KOŃCZY sekcję. Emitujemy niewidoczny marker sekcji
-                // z geometrią NASTĘPNEJ sekcji (rozmiar/orientacja/marginesy) + zwykły
-                // page-break, gdy przerwa zaczyna nową stronę. Marker niesie dane w data-*
-                // i wraca w autosave — HtmlToDocxConverter odtwarza z niego w:sectPr, więc
-                // dokument wielosekcyjny nie jest już spłaszczany do jednej sekcji (R-10).
-                if (element is Paragraph sectionEnd &&
-                    sectionEnd.ParagraphProperties?.GetFirstChild<SectionProperties>() is { } endedSection)
+                // Emitujemy niewidoczny marker sekcji z geometrią NASTĘPNEJ sekcji
+                // (rozmiar/orientacja/marginesy) + zwykły page-break, gdy przerwa zaczyna
+                // nową stronę. Marker niesie dane w data-* i wraca w autosave —
+                // HtmlToDocxConverter odtwarza z niego w:sectPr, więc dokument
+                // wielosekcyjny nie jest już spłaszczany do jednej sekcji (R-10).
+                if (endedSection != null)
                 {
                     html.Append(BuildSectionBreakMarkerHtml(endedSection, orderedSections));
                 }
@@ -1152,6 +1164,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         html.Append("</div>");
         return html.ToString();
+    }
+
+    /// <summary>
+    /// Czy akapit ma WIDOCZNĄ treść (tekst, grafika, tabulator/break, symbol, przypisy).
+    /// Akapit „goły" z samym pPr (typowo: znak przerwy sekcji) nie renderuje w Wordzie
+    /// osobnej linii treści.
+    /// </summary>
+    private static bool ParagraphHasVisibleContent(Paragraph paragraph)
+    {
+        if (!string.IsNullOrEmpty(paragraph.InnerText)) return true;
+        return paragraph.Descendants().Any(d =>
+            d is Drawing or Picture or EmbeddedObject or Break or TabChar or SymbolChar
+            or FootnoteReference or EndnoteReference);
     }
 
     /// <summary>
@@ -1310,7 +1335,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? levelIndentPx - parentIndentPx
             : (levelIndentPx > 0 ? levelIndentPx : 36);
 
-        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};";
+        // Wysunięcie Worda (w:ind hanging): tekst punktu stoi na lewym wcięciu (padding-left
+        // kontenera), a znacznik wisi `hanging` na LEWO od niego; zawinięte linie wracają do
+        // wcięcia tekstu — jak w Wordzie. CSS var konsumuje SCSS edytora (text-indent pierwszej
+        // linii li z markerem in-flow + pozycja etykiet ::before); writer ją ignoruje
+        // (round-trip niesie data-ind-*-tw).
+        var hangingPx = int.TryParse(firstInfo.IndHangingTw, out var indHangTw) && indHangTw > 0
+            ? (int?)TwipsToPx(indHangTw)
+            : null;
+        var hangingCss = hangingPx is { } hp ? $"--ind-hanging:{hp}px;" : string.Empty;
+        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};{hangingCss}";
 
         // `start` = FAKTYCZNY numer pierwszego elementu wg liczników Worda (kontynuacja po przerwaniu
         // akapitem / współdzielony abstrakt), nie sama definicja w:start. Konsumpcja w pętli niżej.
@@ -1406,19 +1440,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 
                 html.Append($"<li style=\"{cssStyle}\">");
                 
-                // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker
+                // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker.
+                // Ze znanym wysunięciem (w:ind hanging) marker ma DOKŁADNIE jego szerokość:
+                // pierwsza linia li startuje o hanging w lewo (SCSS text-indent z --ind-hanging),
+                // marker wypełnia wysunięcie, tekst wraca na wcięcie — 1:1 układ Worda.
+                var markerBoxCss = hangingPx is { } markerHang
+                    ? $"display:inline-block;min-width:{markerHang}px;margin-right:0;"
+                    : "display:inline-block;min-width:1.2em;margin-right:0.4em;";
                 if (firstInfo.BulletImageDataUri != null)
                 {
-                    html.Append($"<span class=\"list-marker\" style=\"display:inline-block;min-width:1.2em;margin-right:0.4em;\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
+                    html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
                 }
                 else if (firstInfo.BulletChar != null)
                 {
-                    var fontCss = !string.IsNullOrEmpty(firstInfo.BulletFont) && 
+                    var fontCss = !string.IsNullOrEmpty(firstInfo.BulletFont) &&
                         !firstInfo.BulletFont.ToLowerInvariant().Contains("wingdings") &&
                         !firstInfo.BulletFont.ToLowerInvariant().Contains("symbol")
                             ? $"font-family:'{firstInfo.BulletFont}';"
                             : "";
-                    html.Append($"<span class=\"list-marker\" style=\"display:inline-block;min-width:1.2em;margin-right:0.4em;{fontCss}\">{System.Net.WebUtility.HtmlEncode(firstInfo.BulletChar)}</span>");
+                    html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}{fontCss}\">{System.Net.WebUtility.HtmlEncode(firstInfo.BulletChar)}</span>");
                 }
                 
                 foreach (var child in p.Elements())
@@ -4700,11 +4740,75 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs}{legacyAttr}{originalAttr} />";
     }
 
+    private const string OfficeVmlNamespace = "urn:schemas-microsoft-com:office:office";
+
+    /// <summary>Atrybut z przestrzeni office VML (o:hr, o:hralign, …); brak → pusty string.</summary>
+    private static string GetOfficeVmlAttribute(OpenXmlElement el, string localName)
+    {
+        try { return el.GetAttribute(localName, OfficeVmlNamespace).Value ?? string.Empty; }
+        catch { return string.Empty; }
+    }
+
+    /// <summary>
+    /// Pozioma linia VML → blokowy span.docx-hr. Standard Worda (o:hrstd): pełna szerokość,
+    /// wysokość ~0 pt (render min. 1 px), wypełnienie fillcolor (typowo #a0a0a0);
+    /// o:hrpct = szerokość w %, o:hralign wyrównuje węższą linię.
+    /// </summary>
+    private string ConvertVmlHorizontalRuleToHtml(DocumentFormat.OpenXml.Vml.Rectangle rect)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var align = GetOfficeVmlAttribute(rect, "hralign");
+        var pctRaw = GetOfficeVmlAttribute(rect, "hrpct");
+        var noshade = GetOfficeVmlAttribute(rect, "hrnoshade");
+        var std = GetOfficeVmlAttribute(rect, "hrstd");
+        var fill = rect.FillColor?.Value;
+
+        var styleAttr = string.Empty;
+        try { styleAttr = rect.GetAttribute("style", string.Empty).Value ?? string.Empty; } catch { }
+        var hm = Regex.Match(styleAttr, @"height:\s*([\d.]+)pt");
+        var heightPt = hm.Success ? double.Parse(hm.Groups[1].Value, inv) : 0;
+        var heightPx = Math.Max(1, (int)Math.Round(heightPt * 96.0 / 72.0));
+
+        var css = new StringBuilder("display:block;border:none;");
+        if (double.TryParse(pctRaw, System.Globalization.NumberStyles.Any, inv, out var pct)
+            && pct > 0 && pct < 100)
+        {
+            css.Append(string.Format(inv, "width:{0:0.##}%;", pct));
+            css.Append(align switch
+            {
+                "left" => "margin-left:0;margin-right:auto;",
+                "right" => "margin-left:auto;margin-right:0;",
+                _ => "margin-left:auto;margin-right:auto;",
+            });
+        }
+        css.Append(string.Format(inv, "height:{0}px;background:{1};",
+            heightPx, string.IsNullOrEmpty(fill) ? "#a0a0a0" : fill));
+
+        var attrs = new StringBuilder(" data-docx-hr=\"1\"");
+        if (!string.IsNullOrEmpty(align)) attrs.Append($" data-hr-align=\"{System.Net.WebUtility.HtmlEncode(align)}\"");
+        if (!string.IsNullOrEmpty(pctRaw)) attrs.Append($" data-hr-pct=\"{System.Net.WebUtility.HtmlEncode(pctRaw)}\"");
+        if (!string.IsNullOrEmpty(noshade)) attrs.Append($" data-hr-noshade=\"{System.Net.WebUtility.HtmlEncode(noshade)}\"");
+        if (!string.IsNullOrEmpty(std)) attrs.Append($" data-hr-std=\"{System.Net.WebUtility.HtmlEncode(std)}\"");
+        if (!string.IsNullOrEmpty(fill)) attrs.Append($" data-hr-fill=\"{System.Net.WebUtility.HtmlEncode(fill)}\"");
+        if (heightPt > 0) attrs.Append(string.Format(inv, " data-hr-height-pt=\"{0:0.##}\"", heightPt));
+
+        return $"<span class=\"docx-hr\"{attrs} style=\"{css}\"></span>";
+    }
+
     /// <summary>
     /// Konwertuje Picture (stary format VML) na HTML z odczytem wymiarów
     /// </summary>
     private string ConvertPictureToHtml(Picture picture, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
+        // Pozioma linia Worda („Wstaw → linia pozioma"): w:pict → v:rect z o:hr="t", bez obrazu.
+        // Render: BLOKOWY span.docx-hr (nie <hr> — hr wewnątrz <p> jest niedozwolony, parser
+        // przeglądarki rozbiłby akapit i DOM rozjeżdżałby się z pageContents edytora); data-hr-*
+        // niosą atrybuty VML do bezstratnego odtworzenia w writerze. Bez tej gałęzi linia
+        // znikała z podglądu i z pliku po zapisie.
+        var hrRect = picture.Descendants<DocumentFormat.OpenXml.Vml.Rectangle>()
+            .FirstOrDefault(r => GetOfficeVmlAttribute(r, "hr") is "t" or "true");
+        if (hrRect != null) return ConvertVmlHorizontalRuleToHtml(hrRect);
+
         var imageData = picture.Descendants<DocumentFormat.OpenXml.Vml.ImageData>().FirstOrDefault();
         if (imageData?.RelationshipId?.Value == null)
         {
@@ -4925,12 +5029,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // kontynuacji vMerge też zajmują kolumny, mimo że nie emitują <td>).
             var rowCells = FlattenRowCells(row).ToList();
 
+            // w:gridBefore/w:gridAfter — wiersz „wcięty" w siatce: puste sloty kolumn przed
+            // pierwszą / za ostatnią komórką (bez komórek). Bez ich honorowania pierwsza
+            // komórka wiersza jest przez `table-layout:fixed`+colgroup przypinana do kolumny 1
+            // (np. tabela stopki Qutalo: tytuł o szerokości kolumny 2 lądował w kolumnie 28px
+            // i łamał się słowo-po-słowie, pompując pasmo stopki i paginację). Render: pusty
+            // dystansowy <td data-grid-spacer> — writer odtwarza z niego gridBefore/gridAfter.
+            var gridBefore = trPr?.GetFirstChild<GridBefore>()?.Val?.Value ?? 0;
+            var gridAfter = trPr?.GetFirstChild<GridAfter>()?.Val?.Value ?? 0;
+
             // Short row: the sum of the row's gridSpans is smaller than the table grid. Word merges
             // the remainder into the last cell (a row that declares one cell for a fully-merged row
             // has gridSpan=1, not N). Without this, `table-layout:fixed`+colgroup pins that cell to
             // a single narrow column and the rest of the row renders as empty phantom columns —
             // exactly the "merged content squeezed into the first column" defect.
-            var rowGridTotal = rowCells.Sum(GetGridSpan);
+            var rowGridTotal = rowCells.Sum(GetGridSpan) + gridBefore + gridAfter;
             var deficit = renderCtx.GridColumnCount - rowGridTotal;
 
             // Legacy horizontal merge (w:hMerge): the restart cell owns the merged region and the
@@ -4940,6 +5053,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var renderPlan = BuildRowRenderPlan(rowCells);
 
             var gridCursor = 0;
+            if (gridBefore > 0)
+            {
+                html.Append(BuildGridSpacerCellHtml("before", gridBefore));
+                gridCursor += gridBefore;
+            }
             for (var ci = 0; ci < renderPlan.Count; ci++)
             {
                 var extraColspan = renderPlan[ci].HMergeExtraSpan
@@ -4947,6 +5065,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 AppendTableCellHtml(html, table, rows, rowIndex, renderPlan[ci].Cell, renderCtx,
                     ref gridCursor, extraColspan, document, sourcePart);
             }
+            if (gridAfter > 0)
+                html.Append(BuildGridSpacerCellHtml("after", gridAfter));
 
             html.Append("</tr>");
         }
@@ -4958,7 +5078,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Liczba kolumn siatki tabeli: z w:tblGrid, a gdy brak — maksimum sumy gridSpan po wierszach.
+    /// Pusty dystansowy &lt;td&gt; za sloty siatki w:gridBefore/w:gridAfter (bez komórki
+    /// w OOXML — stąd bez obramowań i paddingu). data-grid-spacer niesie stronę wcięcia,
+    /// żeby writer odtworzył gridBefore/gridAfter w trPr zamiast tworzyć realną komórkę.
+    /// </summary>
+    private static string BuildGridSpacerCellHtml(string side, int span)
+    {
+        var colspan = span > 1 ? $" colspan=\"{span}\"" : string.Empty;
+        return $"<td{colspan} data-grid-spacer=\"{side}\" style=\"border:none;padding:0;\"></td>";
+    }
+
+    /// <summary>
+    /// Liczba kolumn siatki tabeli: z w:tblGrid, a gdy brak — maksimum sumy gridSpan po wierszach
+    /// (z uwzględnieniem slotów w:gridBefore/w:gridAfter wiersza).
     /// </summary>
     private static int CountGridColumns(Table table, List<TableRow> rows)
     {
@@ -4969,7 +5101,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var max = 0;
         foreach (var row in rows)
         {
-            var count = row.Elements<TableCell>().Sum(GetGridSpan);
+            var trPr = row.TableRowProperties;
+            var count = row.Elements<TableCell>().Sum(GetGridSpan)
+                + (trPr?.GetFirstChild<GridBefore>()?.Val?.Value ?? 0)
+                + (trPr?.GetFirstChild<GridAfter>()?.Val?.Value ?? 0);
             max = Math.Max(max, count);
         }
         return max;

@@ -129,16 +129,19 @@ describe('WysiwygEditorComponent — undo/redo przywraca pozycję kursora', () =
     expect(caretTextOffset(editor.querySelector('p')!)).toBe(3); // koniec "One"
   });
 
-  it('redo również przywraca pozycję kursora', async () => {
+  it('redo ustawia karetkę PO ponownie wstawionym tekście', async () => {
     editor.innerHTML = '<p>Hello Worl</p>';
     (component as any).undoStack = ['<p>Hello Worl</p>'];
-    (component as any).redoStack = ['<p>Hello World</p>'];
+    // New redo-entry shape: the caret stored with the snapshot is the position AFTER that
+    // edit's inserted text (end of "Hello World" = offset 11), which is where redo must land —
+    // not the pre-redo caret (offset 10) which sits before the re-inserted "d".
+    (component as any).redoStack = [{ html: '<p>Hello World</p>', caret: { block: 0, offset: 11 } }];
     caretIn(editor.querySelector('p')!.firstChild!, 10);
 
     component.redo();
     simulateRerender('<p>Hello World</p>');
     await flushTimeout();
 
-    expect(caretTextOffset(editor.querySelector('p')!)).toBe(10);
+    expect(caretTextOffset(editor.querySelector('p')!)).toBe(11);
   });
 });

@@ -165,6 +165,73 @@ public class MultiSectionFidelityTests
     }
 
     [Test]
+    public void Read_BareSectionMarkParagraph_DoesNotEmitEmptyContentLine()
+    {
+        // Pusty akapit niosący wyłącznie pPr/sectPr to w Wordzie ZNAK przerwy sekcji —
+        // nie renderuje osobnej pustej linii. Emisja <p>&nbsp;</p> dawała widoczny „enter"
+        // przed sekcją (np. kolumnową), a writer duplikował akapit przy każdym zapisie.
+        using var stream = BuildTwoSectionDocx(secondSectionType: SectionMarkValues.Continuous);
+
+        var content = _reader.Convert(stream);
+
+        content.Html.Should().Contain("docx-section-break");
+        content.Html.Should().NotContain("&nbsp;</p><div class=\"docx-section-break\"",
+            "goły akapit sectPr nie może emitować pustej linii treści przed markerem");
+        content.Html.Should().NotContain(">&nbsp;</p>", "fixture nie ma innych pustych akapitów");
+    }
+
+    [Test]
+    public void Read_SectionEndParagraphWithText_KeepsContentBeforeMarker()
+    {
+        // Akapit kończący sekcję MOŻE nieść treść — wtedy treść zostaje, marker za nią.
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+            var sect1 = new SectionProperties(
+                new PageSize { Width = A4W, Height = A4H },
+                new PageMargin { Top = 1417, Bottom = 1417, Left = 1417, Right = 1417, Header = 708, Footer = 708 });
+            body.Append(new Paragraph(
+                new ParagraphProperties(sect1),
+                new Run(new Text("Ostatni akapit sekcji 1"))));
+            body.Append(new Paragraph(new Run(new Text("Sekcja 2"))));
+            body.Append(new SectionProperties(
+                new SectionType { Val = SectionMarkValues.Continuous },
+                new PageSize { Width = A4W, Height = A4H },
+                new PageMargin { Top = 720, Bottom = 720, Left = 720, Right = 720, Header = 360, Footer = 360 }));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var content = _reader.Convert(ms);
+
+        content.Html.Should().Contain("Ostatni akapit sekcji 1");
+        content.Html.Should().Contain("docx-section-break");
+        content.Html.IndexOf("docx-section-break", StringComparison.Ordinal)
+            .Should().BeGreaterThan(content.Html.IndexOf("Ostatni akapit sekcji 1", StringComparison.Ordinal));
+    }
+
+    [Test]
+    public void RoundTrip_BareSectionMarkParagraph_DoesNotDuplicateParagraphs()
+    {
+        // Reader nie emituje pustej linii, writer odtwarza w:p/pPr/sectPr z markera —
+        // liczba akapitów body musi się zgadzać z oryginałem (3: treść, znak sekcji, treść).
+        using var stream = BuildTwoSectionDocx(secondSectionType: SectionMarkValues.Continuous);
+        var content = _reader.Convert(stream);
+
+        var docxBytes = _writer.Convert(content.Html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(docxBytes), false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        var paragraphs = body.Elements<Paragraph>().ToList();
+        paragraphs.Should().HaveCount(3);
+        paragraphs.Count(p => p.ParagraphProperties?.GetFirstChild<SectionProperties>() != null)
+            .Should().Be(1, "dokładnie jeden akapit-znak przerwy sekcji");
+    }
+
+    [Test]
     public void Read_SingleSection_EmitsNoSectionBreakMarker()
     {
         var ms = new MemoryStream();

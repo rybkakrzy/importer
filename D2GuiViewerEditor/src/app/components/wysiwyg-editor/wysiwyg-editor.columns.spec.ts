@@ -205,6 +205,99 @@ describe('WysiwygEditorComponent — kolumny (ADR-0039)', () => {
     expect(pages[1]).toContain('>C</p>');
   });
 
+  // ---------- strona przejściowa: ciągła zmiana sekcji 1→2 kolumny w środku strony ----------
+
+  const SECT_2COL =
+    '<div class="docx-section-break" data-break-type="continuous" data-col-count="2" ' +
+    'data-col-space-tw="708" data-col-equal="1"></div>';
+
+  it('marker continuous 1→2 kolumny w środku strony tworzy pasmo docx-col-band o wysokości reszty strony', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>'); // baza 1-kolumnowa
+    pageWith(
+      '<p data-h="400">A</p>' + SECT_2COL +
+      '<p data-h="400">B</p><p data-h="400">C</p><p data-h="400">D</p>'
+    );
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    // Pasmo: reszta strony = ~933−400 = ~533; pojemność pasma = 2×533−line ≈ 1050 →
+    // B (400) i C (800) w paśmie, D (1200) na stronie 2 (w pełni 2-kolumnowej).
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('docx-col-band');
+    expect(pages[0]).toMatch(/docx-col-band[^>]*style="column-count:2;/);
+    expect(pages[0]).toMatch(/height:533\.\d+px/);
+    expect(pages[0].indexOf('docx-col-band')).toBeGreaterThan(pages[0].indexOf('>A</p>'));
+    expect(pages[0]).toContain('>B</p>');
+    expect(pages[0]).toContain('>C</p>');
+    expect(pages[1]).toContain('>D</p>');
+    expect(pages[1]).not.toContain('docx-col-band');
+
+    // Strona przejściowa NIE jest kontenerem multicol na poziomie strony; strona 2 tak.
+    expect(component.pageColumnCount(0)).toBeNull();
+    expect(component.pageColumnCount(1)).toBe(2);
+  });
+
+  it('marker continuous 2→1 kolumny w środku strony otwiera świeżą stronę (brak pasma wstecznego)', () => {
+    setTwoColumnBase();
+    pageWith(
+      '<p data-h="600">A</p>' +
+      '<div class="docx-section-break" data-break-type="continuous"></div>' +
+      '<p data-h="600">B</p>'
+    );
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('>A</p>');
+    expect(pages[0]).not.toContain('>B</p>');
+    expect(pages[1]).toContain('docx-section-break');
+    expect(pages[1]).toContain('>B</p>');
+    expect(component.pageColumnCount(0)).toBe(2);
+    expect(component.pageColumnCount(1)).toBeNull();
+  });
+
+  it('resztka strony mniejsza niż 2 linie → sekcja kolumnowa od świeżej strony (bez mikropasma)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    pageWith('<p data-h="920">A</p>' + SECT_2COL + '<p data-h="600">B</p>');
+    stubBlockHeights();
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).not.toContain('docx-col-band');
+    expect(pages[1]).toContain('>B</p>');
+    expect(component.pageColumnCount(1)).toBe(2);
+  });
+
+  it('_flattenTopBlocks rozwija docx-col-band do bloków (spójne indeksy karetki/paginacji)', () => {
+    const host = document.createElement('div');
+    host.innerHTML =
+      '<p>A</p><div class="docx-col-band" style="column-count:2;height:500px;"><p>B</p><p>C</p></div>';
+    const blocks = (component as any)._flattenTopBlocks(host) as HTMLElement[];
+    expect(blocks.length).toBe(3);
+    expect(blocks.map(b => b.textContent)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('getContent() rozwija pasmo do bloków — docx-col-band nie trafia do zapisu', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    pageWith(
+      '<p>A</p>' + SECT_2COL +
+      '<div class="docx-col-band" style="column-count:2;height:500px;"><p>B</p><p>C</p></div>'
+    );
+
+    const content = component.getContent();
+    expect(content).not.toContain('docx-col-band');
+    expect(content).toContain('>A</p>');
+    expect(content).toContain('>B</p>');
+    expect(content).toContain('>C</p>');
+    expect(content).toContain('docx-section-break'); // marker (nośnik kolumn) zostaje
+  });
+
   // ---------- round-trip atrybutów kontenera ----------
 
   it('kolumny bazowe round-tripują przez _captureDocumentDefaults + _wrapWithDocumentContainer', () => {

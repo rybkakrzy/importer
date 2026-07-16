@@ -13,6 +13,16 @@ import { PageMargins } from '../../models/document.model';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 
 /**
+ * Segment tekstu (kolumna) na poziomej linijce — pozycja i szerokość w cm
+ * od LEWEJ krawędzi kartki. Dla układu wielokolumnowego sekcji linijka
+ * dostaje po jednym segmencie na kolumnę.
+ */
+export interface RulerColumnSegment {
+  startCm: number;
+  widthCm: number;
+}
+
+/**
  * Komponent linijki (ruler) w stylu MS Word.
  * Wyświetla JEDNĄ linijkę (poziomą LUB pionową) z przesuwanymi uchwytami marginesów.
  *
@@ -58,6 +68,17 @@ export class RulerComponent implements OnChanges {
    * zamiast modyfikować marginesy strony — tak jak w MS Word.
    */
   @Input() blockIndent: { start: number; end: number } | null = null;
+
+  /**
+   * Kolumny sekcji, w której stoi kursor (tylko mode='horizontal'). Gdy ≥2 segmenty,
+   * linijka — jak MS Word — pokazuje biały obszar per kolumna (szare strefy na marginesy
+   * i odstępy między kolumnami), a uchwyty wcięć działają względem AKTYWNEJ kolumny.
+   * Null / 1 segment = zwykły układ jednokolumnowy.
+   */
+  @Input() columnSegments: RulerColumnSegment[] | null = null;
+
+  /** Indeks kolumny, w której stoi kursor (0-based). Używane tylko z `columnSegments`. */
+  @Input() activeColumnIndex = 0;
 
   /** Emituje nowe marginesy po zakończeniu przeciągania */
   @Output() marginsChange = new EventEmitter<PageMargins>();
@@ -111,20 +132,73 @@ export class RulerComponent implements OnChanges {
     return Array.from({ length: Math.floor(this.axisCm) + 1 }, (_, i) => i);
   }
 
+  /**
+   * Aktywny segment kolumny (cm od lewej krawędzi kartki) albo null, gdy kursor
+   * nie stoi w układzie wielokolumnowym. W trybie kolumnowym zastępuje marginesy
+   * strony jako punkt odniesienia uchwytów wcięć.
+   */
+  get activeSegment(): { start: number; width: number } | null {
+    if (this.mode !== 'horizontal' || !this.columnSegments || this.columnSegments.length < 2) {
+      return null;
+    }
+    const i = Math.max(0, Math.min(this.columnSegments.length - 1, this.activeColumnIndex));
+    const s = this.columnSegments[i];
+    return { start: s.startCm, width: s.widthCm };
+  }
+
+  /** Lewa krawędź obszaru tekstu (cm od lewej krawędzi kartki) — margines strony lub start aktywnej kolumny. */
+  private get segStartCm(): number {
+    const seg = this.activeSegment;
+    if (seg) return seg.start;
+    return this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top;
+  }
+
+  /** Odległość prawej krawędzi obszaru tekstu od PRAWEJ krawędzi kartki (cm). */
+  private get segEndCm(): number {
+    const seg = this.activeSegment;
+    if (seg) return this.axisCm - (seg.start + seg.width);
+    return this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom;
+  }
+
   /** Margines "bliższy" (lewy / górny) w px - scaled.
-   *  W trybie poziomym z `blockIndent` uwzględnia wcięcie paragrafu. */
+   *  W trybie poziomym z `blockIndent` uwzględnia wcięcie paragrafu (względem aktywnej kolumny). */
   get startMarginPx(): number {
-    const baseCm = this.mode === 'horizontal' ? this.activeMargins.left : this.activeMargins.top;
     const indentCm = this.mode === 'horizontal' && this.activeBlockIndent ? this.activeBlockIndent.start : 0;
-    return (baseCm + indentCm) * this.CM_TO_PX * this.scale;
+    return (this.segStartCm + indentCm) * this.CM_TO_PX * this.scale;
   }
 
   /** Margines "dalszy" (prawy / dolny) w px - scaled.
-   *  W trybie poziomym z `blockIndent` uwzględnia wcięcie paragrafu. */
+   *  W trybie poziomym z `blockIndent` uwzględnia wcięcie paragrafu (względem aktywnej kolumny). */
   get endMarginPx(): number {
-    const baseCm = this.mode === 'horizontal' ? this.activeMargins.right : this.activeMargins.bottom;
     const indentCm = this.mode === 'horizontal' && this.activeBlockIndent ? this.activeBlockIndent.end : 0;
-    return (baseCm + indentCm) * this.CM_TO_PX * this.scale;
+    return (this.segEndCm + indentCm) * this.CM_TO_PX * this.scale;
+  }
+
+  /**
+   * Szare strefy poziomej linijki (px, scaled). W trybie kolumnowym: wszystko poza
+   * segmentami kolumn (marginesy strony + odstępy między kolumnami) — geometria sekcji,
+   * bez wcięcia bloku. W trybie zwykłym: dwie strefy zgodne z pozycjami uchwytów.
+   */
+  get hGrayZones(): { left: number; width: number }[] {
+    const segs = this.columnSegments;
+    if (this.mode === 'horizontal' && segs && segs.length >= 2) {
+      const zones: { left: number; width: number }[] = [];
+      const px = (cm: number) => cm * this.CM_TO_PX * this.scale;
+      let cursor = 0;
+      for (const s of segs) {
+        const left = px(s.startCm);
+        if (left > cursor + 0.5) zones.push({ left: cursor, width: left - cursor });
+        cursor = px(s.startCm + s.widthCm);
+      }
+      if (cursor < this.axisPxScaled - 0.5) {
+        zones.push({ left: cursor, width: this.axisPxScaled - cursor });
+      }
+      return zones;
+    }
+    return [
+      { left: 0, width: this.startMarginPx },
+      { left: this.axisPxScaled - this.endMarginPx, width: this.endMarginPx }
+    ];
   }
 
   // ────── Drag state ──────
@@ -166,8 +240,10 @@ export class RulerComponent implements OnChanges {
   onStartHandleDown(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    // W trybie wcięcia paragrafu pozycja uchwytu = pageMargin + blockIndent
-    const baseCm = this.mode === 'horizontal' ? this.margins.left : this.margins.top;
+    // W trybie wcięcia paragrafu pozycja uchwytu = start obszaru tekstu (margines
+    // strony lub start aktywnej kolumny) + blockIndent
+    const seg = this.activeSegment;
+    const baseCm = seg ? seg.start : (this.mode === 'horizontal' ? this.margins.left : this.margins.top);
     const indentCm = this.isParagraphIndentMode ? (this.blockIndent?.start ?? 0) : 0;
     this._begin('start', this.mode === 'horizontal' ? e.clientX : e.clientY, baseCm + indentCm);
   }
@@ -175,7 +251,10 @@ export class RulerComponent implements OnChanges {
   onEndHandleDown(e: MouseEvent): void {
     e.preventDefault();
     e.stopPropagation();
-    const baseCm = this.mode === 'horizontal' ? this.margins.right : this.margins.bottom;
+    const seg = this.activeSegment;
+    const baseCm = seg
+      ? this.axisCm - (seg.start + seg.width)
+      : (this.mode === 'horizontal' ? this.margins.right : this.margins.bottom);
     const indentCm = this.isParagraphIndentMode ? (this.blockIndent?.end ?? 0) : 0;
     this._begin('end', this.mode === 'horizontal' ? e.clientX : e.clientY, baseCm + indentCm);
   }
@@ -194,28 +273,37 @@ export class RulerComponent implements OnChanges {
       ? this._dragStartMarginCm + deltaCm
       : this._dragStartMarginCm - deltaCm;
 
+    // Punkt odniesienia uchwytów: margines strony albo krawędź aktywnej kolumny
+    const seg = this.activeSegment;
+    const baseStartCm = seg ? seg.start : (this.mode === 'horizontal' ? this.margins.left : this.margins.top);
+    const baseEndCm = seg
+      ? this.axisCm - (seg.start + seg.width)
+      : (this.mode === 'horizontal' ? this.margins.right : this.margins.bottom);
+
     // Pozycja uchwytu vs przeciwległa (żeby zachować ≥1 cm treści)
     const oppositePosition = this._dragging === 'start'
-      ? (this.mode === 'horizontal'
-          ? this.margins.right + (this.isParagraphIndentMode ? (this.blockIndent?.end ?? 0) : 0)
-          : this.margins.bottom)
-      : (this.mode === 'horizontal'
-          ? this.margins.left + (this.isParagraphIndentMode ? (this.blockIndent?.start ?? 0) : 0)
-          : this.margins.top);
+      ? baseEndCm + (this.mode === 'horizontal' && this.isParagraphIndentMode ? (this.blockIndent?.end ?? 0) : 0)
+      : baseStartCm + (this.mode === 'horizontal' && this.isParagraphIndentMode ? (this.blockIndent?.start ?? 0) : 0);
+
+    // Kolumny są wąskie — treść między uchwytami może zejść poniżej 1 cm, ale nie do zera.
+    const minContentCm = seg ? Math.min(1, Math.max(0.2, seg.width - 0.2)) : 1;
 
     if (this.isParagraphIndentMode) {
       // Wcięcie może być ujemne (paragraf wychodzi poza margines strony), ale nie poza
-      // krawędź kartki ani zbliży się do przeciwległego uchwytu na <1cm.
-      newCm = Math.max(0.1, Math.min(this.axisCm - oppositePosition - 1, newCm));
+      // krawędź kartki ani zbliży się do przeciwległego uchwytu na <minContentCm.
+      // W trybie kolumnowym uchwyt nie wychodzi poza swoją kolumnę (wcięcie ≥ 0).
+      const minCm = seg ? (this._dragging === 'start' ? baseStartCm : baseEndCm) : 0.1;
+      newCm = Math.max(minCm, Math.min(this.axisCm - oppositePosition - minContentCm, newCm));
     } else {
-      newCm = Math.max(0.3, Math.min(this.axisCm - oppositePosition - 1, newCm));
+      newCm = Math.max(0.3, Math.min(this.axisCm - oppositePosition - minContentCm, newCm));
     }
     newCm = Math.round(newCm * 100) / 100;
 
     if (this.isParagraphIndentMode) {
-      // newCm = nowa pozycja krawędzi od strony strony → wcięcie = newCm - pageMargin
-      const pageMarginCm = this._dragging === 'start' ? this.margins.left : this.margins.right;
-      const indentCm = Math.max(-pageMarginCm + 0.1, Math.round((newCm - pageMarginCm) * 100) / 100);
+      // newCm = nowa pozycja krawędzi od krawędzi kartki → wcięcie = newCm - baza
+      const pageMarginCm = this._dragging === 'start' ? baseStartCm : baseEndCm;
+      const minIndentCm = seg ? 0 : -pageMarginCm + 0.1;
+      const indentCm = Math.max(minIndentCm, Math.round((newCm - pageMarginCm) * 100) / 100);
       const base = this.activeBlockIndent ?? { start: 0, end: 0 };
       this._tempBlockIndent = this._dragging === 'start'
         ? { ...base, start: indentCm }

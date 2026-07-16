@@ -2308,11 +2308,38 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     }
                 }
 
-                // Właściwości wiersza (kolejność schematu trPr: cantSplit → trHeight → tblHeader).
+                // Właściwości wiersza (kolejność schematu trPr: gridBefore → gridAfter →
+                // wBefore → wAfter → cantSplit → trHeight → tblHeader).
                 // Wysokość: preferuj dokładne twips + regułę z data-* (round-trip bez strat
                 // px→twips i bez gubienia hRule=exact); fallback: height/min-height px → atLeast.
                 var rowStyle = rowNode.GetAttributeValue("style", "");
                 var rowProps = new TableRowProperties();
+
+                // Dystansowe <td data-grid-spacer> (reader: sloty siatki w:gridBefore/w:gridAfter)
+                // wracają jako właściwości wiersza, NIE jako realne komórki — inaczej każdy zapis
+                // zamieniałby wcięcie wiersza w siatce na pustą komórkę (zmiana struktury tabeli).
+                var rowCellNodes = rowNode.SelectNodes("./td|./th");
+                var gridBeforeSpan = GridSpacerSpan(rowCellNodes?.FirstOrDefault(), "before");
+                var gridAfterSpan = GridSpacerSpan(rowCellNodes?.LastOrDefault(), "after");
+                if (gridBeforeSpan > 0)
+                    rowProps.Append(new GridBefore { Val = gridBeforeSpan });
+                if (gridAfterSpan > 0)
+                    rowProps.Append(new GridAfter { Val = gridAfterSpan });
+                // wBefore/wAfter tylko gdy wszystkie objęte kolumny niosą dokładne twips z tblGrid.
+                if (gridBeforeSpan > 0 && gridBeforeSpan <= colWidthsTwips.Count
+                    && colWidthsTwips.Take(gridBeforeSpan).All(c => c.Exact && c.Tw > 0))
+                    rowProps.Append(new WidthBeforeTableRow
+                    {
+                        Width = colWidthsTwips.Take(gridBeforeSpan).Sum(c => c.Tw).ToString(),
+                        Type = TableWidthUnitValues.Dxa
+                    });
+                if (gridAfterSpan > 0 && gridAfterSpan <= colWidthsTwips.Count
+                    && colWidthsTwips.TakeLast(gridAfterSpan).All(c => c.Exact && c.Tw > 0))
+                    rowProps.Append(new WidthAfterTableRow
+                    {
+                        Width = colWidthsTwips.TakeLast(gridAfterSpan).Sum(c => c.Tw).ToString(),
+                        Type = TableWidthUnitValues.Dxa
+                    });
 
                 if (rowNode.GetAttributeValue("data-cant-split", "") == "1")
                     rowProps.Append(new CantSplit());
@@ -2344,11 +2371,19 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 if (rowProps.HasChildren)
                     row.Append(rowProps);
 
-                var cells = rowNode.SelectNodes("./td|./th");
+                var cells = rowCellNodes;
                 if (cells != null)
                 {
                     foreach (var cellNode in cells)
                     {
+                        // Spacer siatki (gridBefore/gridAfter) nie jest komórką — konsumuje
+                        // wyłącznie sloty siatki (kursor), właściwości poszły do trPr wyżej.
+                        if (cellNode.GetAttributeValue("data-grid-spacer", "") != "")
+                        {
+                            gridCursor += Math.Max(1, cellNode.GetAttributeValue("colspan", 1));
+                            continue;
+                        }
+
                         AppendPendingContinuations();
 
                         var cell = new TableCell();
@@ -2512,6 +2547,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             props.Append(new GridSpan { Val = colSpan });
         props.Append(new VerticalMerge());
         return new TableCell(props, new Paragraph());
+    }
+
+    /// <summary>
+    /// Liczba slotów siatki dystansowego &lt;td data-grid-spacer="before|after"&gt; (reader:
+    /// w:gridBefore/w:gridAfter). 0, gdy węzeł nie jest spacerem wskazanej strony.
+    /// </summary>
+    private static int GridSpacerSpan(HtmlNode? cellNode, string side)
+    {
+        if (cellNode == null || cellNode.GetAttributeValue("data-grid-spacer", "") != side)
+            return 0;
+        return Math.Max(1, cellNode.GetAttributeValue("colspan", 1));
     }
 
     /// <summary>
@@ -3451,6 +3497,36 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Tworzy paragraf stylizowany na linię horyzontalną
     /// </summary>
+    /// <summary>
+    /// Odtwarza poziomą linię Worda z markera readera (span.docx-hr + data-hr-*):
+    /// w:r → w:pict → v:rect z o:hr="t" (+ hralign/hrpct/hrnoshade/hrstd, fillcolor,
+    /// wysokość w pt) — struktura 1:1 z „Wstaw → linia pozioma" Worda.
+    /// </summary>
+    private static Run CreateVmlHorizontalRuleRun(HtmlNode node)
+    {
+        const string ovml = "urn:schemas-microsoft-com:office:office";
+        var heightPt = node.GetAttributeValue("data-hr-height-pt", "");
+        var rect = new V.Rectangle
+        {
+            Style = string.IsNullOrEmpty(heightPt) ? "width:0;height:0" : $"width:0;height:{heightPt}pt",
+            Stroked = false,
+        };
+        var fill = node.GetAttributeValue("data-hr-fill", "");
+        if (!string.IsNullOrEmpty(fill)) rect.FillColor = fill;
+        rect.AddNamespaceDeclaration("o", ovml);
+        void SetOfficeAttr(string name, string value)
+        {
+            if (!string.IsNullOrEmpty(value))
+                rect.SetAttribute(new OpenXmlAttribute("o", name, ovml, value));
+        }
+        SetOfficeAttr("hralign", node.GetAttributeValue("data-hr-align", ""));
+        SetOfficeAttr("hrpct", node.GetAttributeValue("data-hr-pct", ""));
+        SetOfficeAttr("hrnoshade", node.GetAttributeValue("data-hr-noshade", ""));
+        SetOfficeAttr("hrstd", node.GetAttributeValue("data-hr-std", ""));
+        SetOfficeAttr("hr", "t");
+        return new Run(new Picture(rect));
+    }
+
     private Paragraph CreateHorizontalRule()
     {
         var para = new Paragraph();
@@ -3590,6 +3666,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 if (node.NodeType == HtmlNodeType.Element && node.HasClass("docx-column-break"))
                 {
                     runs.Add(new Run(new Break { Type = BreakValues.Column }));
+                    break;
+                }
+
+                // Pozioma linia Worda (reader: span.docx-hr z w:pict/v:rect o:hr="t") —
+                // odtwarzamy oryginalny VML z data-hr-*, żeby linia nie znikała po zapisie.
+                if (node.GetAttributeValue("data-docx-hr", "") != "")
+                {
+                    runs.Add(CreateVmlHorizontalRuleRun(node));
                     break;
                 }
 

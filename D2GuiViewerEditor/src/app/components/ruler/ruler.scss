@@ -40,7 +40,7 @@ $v-width:  20px;   /* szerokość pionowej linijki */
   overflow: visible;
 }
 
-/* Szare strefy marginesów */
+/* Szare strefy marginesów (i odstępów między kolumnami) — left/width inline z hGrayZones */
 .h-margin {
   position: absolute;
   top: 0;
@@ -48,8 +48,6 @@ $v-width:  20px;   /* szerokość pionowej linijki */
   background: $ruler-margin-bg;
   z-index: 0;
 }
-.h-margin-start { left: 0; }
-.h-margin-end   { right: 0; }
 
 /* ─── Ticki ─── */
 .h-tick {

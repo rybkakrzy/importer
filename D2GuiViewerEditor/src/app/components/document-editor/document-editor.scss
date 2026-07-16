@@ -964,6 +964,76 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   align-items: center;
   padding: 20px;
   position: relative;
+
+  /* Klasyczny pasek przewijania strony ze strzałkami krokowymi góra/dół (jak w MS Word / na
+     screenie zgłoszenia). Domyślny scrollbar Chromium jest cienki i bez przycisków; jawne
+     ::-webkit-scrollbar + -button przełącza go w tryb klasyczny z funkcjonalnymi strzałkami.
+     Reguła scoped do kontenera strony (nie zmienia globalnego 12px paska z styles.scss).
+     Uwaga: przyciski scrollbara stylowalne tylko w Chromium — Firefox pokaże swój pasek bez strzałek. */
+  &::-webkit-scrollbar {
+    width: 17px;
+    height: 17px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: #f0f0f0;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border: 3px solid #f0f0f0;
+    border-radius: 0;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+  }
+
+  &::-webkit-scrollbar-corner {
+    background: #f0f0f0;
+  }
+
+  /* Jeden przycisk na każdym końcu (klasyczny Windows), z narysowaną strzałką. */
+  &::-webkit-scrollbar-button {
+    background-color: #f0f0f0;
+    background-repeat: no-repeat;
+    background-position: center;
+    height: 17px;
+    width: 17px;
+  }
+
+  &::-webkit-scrollbar-button:hover {
+    background-color: #e0e0e0;
+  }
+
+  &::-webkit-scrollbar-button:active {
+    background-color: #d0d0d0;
+  }
+
+  /* Domyślnie Chromium renderuje po dwa przyciski na końcu — chowamy nadmiarowe,
+     zostawiając tylko górną strzałkę u góry i dolną u dołu. */
+  &::-webkit-scrollbar-button:vertical:start:increment,
+  &::-webkit-scrollbar-button:vertical:end:decrement,
+  &::-webkit-scrollbar-button:horizontal:start:increment,
+  &::-webkit-scrollbar-button:horizontal:end:decrement {
+    display: none;
+  }
+
+  &::-webkit-scrollbar-button:vertical:decrement {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Cpath d='M5 3l3 4H2z' fill='%23505050'/%3E%3C/svg%3E");
+  }
+
+  &::-webkit-scrollbar-button:vertical:increment {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Cpath d='M5 7L2 3h6z' fill='%23505050'/%3E%3C/svg%3E");
+  }
+
+  &::-webkit-scrollbar-button:horizontal:decrement {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Cpath d='M3 5L7 2v6z' fill='%23505050'/%3E%3C/svg%3E");
+  }
+
+  &::-webkit-scrollbar-button:horizontal:increment {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Cpath d='M7 5L3 2v6z' fill='%23505050'/%3E%3C/svg%3E");
+  }
 }
 
 .editor-wrapper {

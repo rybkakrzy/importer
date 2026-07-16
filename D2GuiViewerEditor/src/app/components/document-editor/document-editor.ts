@@ -20,7 +20,7 @@ import { environment } from '../../../environments/environment';
 import { WysiwygEditorComponent } from '../wysiwyg-editor/wysiwyg-editor';
 import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
-import { RulerComponent } from '../ruler/ruler';
+import { RulerComponent, RulerColumnSegment } from '../ruler/ruler';
 import { DocumentService, OpenDocumentError } from '../../services/document.service';
 import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../../core/errors/document-error.util';
 import { 
@@ -446,6 +446,15 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * uchwytu modyfikuje TYLKO ten blok, jak w MS Word, a nie marginesy całego dokumentu.
    */
   currentBlockIndent = signal<{ start: number; end: number }>({ start: 0, end: 0 });
+
+  /**
+   * Geometria kolumn sekcji, w której stoi kursor — dla poziomej linijki (jak w MS Word:
+   * linijka pokazuje obszar per kolumna, a uchwyty wcięć działają w kolumnie z kursorem).
+   * Wyliczana z DOM przy każdej zmianie zaznaczenia: kontenerem multicol jest
+   * `.editor-content` (kolumny całej strony) lub `.docx-col-band` (pasmo continuous
+   * w środku strony). Null = układ jednokolumnowy.
+   */
+  currentColumnRuler = signal<{ segments: RulerColumnSegment[]; activeIndex: number } | null>(null);
 
   /**
    * Stan linii prowadzącej linijki (jak w MS Word). Renderowana nad kartką podczas
@@ -1494,6 +1503,16 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.editor.insertTable(config);
       this.applyTableAutoFit(this.tableDialogData.autoFitBehavior, this.tableDialogData.fixedWidth);
     }
+  }
+
+  /** Wstawia przypis dolny w pozycji kursora (odwołanie + wpis w modelu przypisów). */
+  onInsertFootnote(): void {
+    this.editor?.addFootnoteAtCursor();
+  }
+
+  /** Wstawia przypis końcowy w pozycji kursora. */
+  onInsertEndnote(): void {
+    this.editor?.addEndnoteAtCursor();
   }
 
   /**
@@ -3796,6 +3815,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const blocks = this.getSelectedBlocks();
     if (blocks.length === 0) {
       this.currentBlockIndent.set({ start: 0, end: 0 });
+      this.setColumnRuler(null);
       return;
     }
     const block = blocks[0];
@@ -3808,6 +3828,92 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     if (prev.start !== start || prev.end !== end) {
       this.currentBlockIndent.set({ start, end });
     }
+    this.updateColumnRulerContext(block);
+  }
+
+  /**
+   * Wylicza dla poziomej linijki geometrię kolumn sekcji, w której stoi kursor.
+   * Szerokości i pozycje bierzemy z computed style (px layoutu — transform zoomu ich
+   * nie zmienia); recty służą tylko do wyznaczenia offsetu pasma i aktywnej kolumny,
+   * dlatego dzielimy je przez faktyczną skalę (rect.width / offsetWidth).
+   */
+  private updateColumnRulerContext(block: HTMLElement): void {
+    const band = block.closest<HTMLElement>('.docx-col-band');
+    const editorContent = block.closest<HTMLElement>('.editor-content');
+    const container = band ?? editorContent;
+    if (!container || !editorContent) {
+      this.setColumnRuler(null);
+      return;
+    }
+    const cs = window.getComputedStyle(container);
+    const count = parseInt(cs.columnCount, 10);
+    if (!count || count <= 1) {
+      this.setColumnRuler(null);
+      return;
+    }
+
+    const gapPx = parseFloat(cs.columnGap) || 0;
+    const padLeftPx = parseFloat(cs.paddingLeft) || 0;
+    const padRightPx = parseFloat(cs.paddingRight) || 0;
+    const contentWidthPx = container.clientWidth - padLeftPx - padRightPx;
+    const colWidthPx = Math.max(1, (contentWidthPx - gapPx * (count - 1)) / count);
+
+    const pageRect = editorContent.getBoundingClientRect();
+    const scale = editorContent.offsetWidth > 0 ? pageRect.width / editorContent.offsetWidth : 1;
+    const containerRect = container.getBoundingClientRect();
+    // Lewa krawędź obszaru kolumn względem lewej krawędzi kartki (px layoutu):
+    // .editor-content zaczyna się na krawędzi kartki (padding = margines strony)
+    const contentLeftViewportPx = containerRect.left + padLeftPx * scale;
+    const baseStartPx = (contentLeftViewportPx - pageRect.left) / scale;
+
+    const cmPerPx = 1 / DocumentEditorComponent.CM_TO_PX;
+    const round2 = (v: number) => Math.round(v * 100) / 100;
+    const segments: RulerColumnSegment[] = Array.from({ length: count }, (_, i) => ({
+      startCm: round2((baseStartPx + i * (colWidthPx + gapPx)) * cmPerPx),
+      widthCm: round2(colWidthPx * cmPerPx)
+    }));
+
+    // Aktywna kolumna z pozycji X punktu skupienia zaznaczenia (fallback: rect bloku)
+    const focusX = this.getSelectionFocusX() ?? block.getBoundingClientRect().left;
+    const relPx = (focusX - contentLeftViewportPx) / scale;
+    const activeIndex = Math.max(0, Math.min(count - 1, Math.floor(relPx / (colWidthPx + gapPx))));
+
+    this.setColumnRuler({ segments, activeIndex });
+  }
+
+  /** Pozycja X (viewport px) punktu skupienia zaznaczenia; null gdy nie da się wyznaczyć. */
+  private getSelectionFocusX(): number | null {
+    const sel = window.getSelection();
+    if (!sel || !sel.focusNode) return null;
+    try {
+      const r = document.createRange();
+      r.setStart(sel.focusNode, sel.focusOffset);
+      r.collapse(true);
+      const rect = r.getClientRects()[0];
+      if (rect) return rect.left;
+      // Pusty akapit / pozycja bez rectów — rect najbliższego elementu
+      const el = sel.focusNode.nodeType === Node.ELEMENT_NODE
+        ? sel.focusNode as HTMLElement
+        : sel.focusNode.parentElement;
+      return el ? el.getBoundingClientRect().left : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Ustawia sygnał geometrii kolumn tylko przy faktycznej zmianie (selectionchange strzela często). */
+  private setColumnRuler(next: { segments: RulerColumnSegment[]; activeIndex: number } | null): void {
+    const prev = this.currentColumnRuler();
+    if (prev === null && next === null) return;
+    if (
+      prev && next &&
+      prev.activeIndex === next.activeIndex &&
+      prev.segments.length === next.segments.length &&
+      prev.segments.every((s, i) => s.startCm === next.segments[i].startCm && s.widthCm === next.segments[i].widthCm)
+    ) {
+      return;
+    }
+    this.currentColumnRuler.set(next);
   }
 
   // =====================

@@ -180,6 +180,23 @@
   overflow: hidden;
 }
 
+/* Rozkład interlinii jak w Wordzie: Word dokleja dodatkowy odstęp (leading ponad pojedynczy
+   odstęp fontu) POD linią — tekst siedzi u góry swojego slotu. CSS rozkłada pół nad / pół pod,
+   więc np. „Wielokrotność 3" renderowała tekst WYŚRODKOWANY w ~3-liniowym slocie (i za mały
+   odstęp do następnego akapitu). Przesuwamy TUSZ o pół leadingu w górę relative/top:
+   - layout boxów NIETKNIĘTY (paginacja, wysokości stron i odstępy między boxami bez zmian),
+   - tusz nigdy nie wychodzi ponad box (unshifted tusz leży pół leadingu POD górą boxu),
+     więc brak regresu przycinania z ADR/title-clip (text-box-trim wycofany),
+   - `--w-line-single` = pojedynczy odstęp fontu dokumentu w em ([style] na .page z tabeli
+     PG-09); token w em rozwiązuje się względem font-size AKAPITU,
+   - measurer paginacji jest poza .page → pomiary bloków bez przesunięć,
+   - wykluczone akapity z elementami pływającymi ([data-pos-mode] — abspos względem .page
+     nie może dostać spozycjonowanego przodka) — zachowują dotychczasowy rendering. */
+.page :is(p, h1, h2, h3, h4, h5, h6, li):not(:has([data-pos-mode])) {
+  position: relative;
+  top: calc((1lh - var(--w-line-single, 1.221em)) / -2);
+}
+
 .editor-content:empty::before {
   content: attr(placeholder);
   color: #999;
@@ -334,6 +351,22 @@ img[data-legacy-graphic='blank'] {
   margin: 2px 0;
 }
 
+/* Wysunięcie Worda (w:ind hanging) dla punktorów in-flow (span.list-marker): reader emituje
+   `--ind-hanging` na kontenerze listy (px z definicji poziomu). Pierwsza linia li startuje
+   o hanging W LEWO od wcięcia tekstu, marker (min-width = hanging, inline z readera) wypełnia
+   wysunięcie, tekst pierwszej linii ORAZ linie zawijane stoją na wcięciu — jak w Wordzie
+   (dotąd punktor stał na wcięciu tekstu, a zawinięte linie równały się z punktorem). */
+.editor-content :is(ul, ol) > li:has(> .list-marker) {
+  text-indent: calc(-1 * var(--ind-hanging, 0px));
+}
+
+/* Marker jest inline-block — ujemny text-indent li nie może przesuwać jego WNĘTRZA
+   (glif zostaje przy lewej krawędzi wysunięcia), a zagnieżdżona lista wraca do zera. */
+.editor-content li .list-marker,
+.editor-content li :is(ul, ol) {
+  text-indent: 0;
+}
+
 /* Etykiety list DOCX liczone silnikiem (data-list-label z list-label.util) — natywne
    markery przeglądarki nie umieją szablonów wielopoziomowych ("2.4.1."), sufiksów
    lvlText ("1)"), numeracji legal ani kontynuacji fragmentów po edycji. Pseudo-element
@@ -353,6 +386,14 @@ img[data-legacy-graphic='blank'] {
   top: 0;
   padding-right: 0.4em;
   white-space: nowrap;
+}
+
+/* Ze znanym wysunięciem (w:ind hanging, var z readera) etykieta stoi jak w Wordzie:
+   LEWA krawędź na (wcięcie tekstu − hanging), a nie prawą krawędzią przy tekście
+   (lvlJc=left — domyślne wyrównanie znacznika Worda). */
+.editor-content :is(ul, ol)[style*='--ind-hanging'] > li[data-list-label]::before {
+  right: auto;
+  left: calc(-1 * var(--ind-hanging));
 }
 
 .editor-content li[data-list-label][data-list-suffix='nothing']::before {
@@ -673,6 +714,16 @@ body.image-moving * {
    HTML→DOCX, który odtwarza z niego w:sectPr (wiele sekcji, mieszane orientacje). */
 .editor-content .docx-section-break {
   display: none;
+}
+
+/* Pasmo kolumnowe strony PRZEJŚCIOWEJ (ciągła zmiana sekcji 1→N kolumn w środku strony):
+   zagnieżdżony kontener multicol tworzony przez paginację (column-count/gap/height inline).
+   Jak .editor-content: wypełniaj kolumny od góry (bez balansowania), przytnij nadmiar —
+   wysokość jest jawna, więc fragmentacja działa (ADR-0039). */
+.editor-content .docx-col-band {
+  column-fill: auto;
+  overflow: hidden;
+  min-width: 0;
 }
 
 /* Podział kolumny DOCX (div.docx-column-break z w:br type=column). W kontenerze CSS columns

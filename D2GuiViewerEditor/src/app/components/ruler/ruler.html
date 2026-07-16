@@ -3,10 +3,10 @@
      ═══════════════════════════════════════════════ -->
 @if (mode === 'horizontal') {
   <div class="h-ruler" [style.width.px]="axisPxScaled">
-    <!-- Szara strefa LEWEGO marginesu -->
-    <div class="h-margin h-margin-start" [style.width.px]="startMarginPx"></div>
-    <!-- Szara strefa PRAWEGO marginesu -->
-    <div class="h-margin h-margin-end" [style.width.px]="endMarginPx"></div>
+    <!-- Szare strefy: marginesy strony, a w układzie wielokolumnowym także odstępy między kolumnami -->
+    @for (zone of hGrayZones; track $index) {
+      <div class="h-margin" [style.left.px]="zone.left" [style.width.px]="zone.width"></div>
+    }
 
     <!-- Tickmarki -->
     @for (cm of ticks; track cm) {

@@ -1,6 +1,6 @@
 ﻿{
   "auth": {
-    "enabled": true,
+    "enabled": false,
     "clientId": "fac950da-4c4esdasdd",
     "authority": "https://login.microsoftonline.com/asdasdsd/v2.0",
     "redirectUri": "http://localhost:4200/",

@@ -40,8 +40,19 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     component.endnotes = endnotes.map(e => ({ ...e }));
     fixture.detectChanges();
     flushPagination();
+    // Note numbering (Roman for endnotes) is applied by sync, which runs asynchronously on a
+    // real document load; trigger it explicitly so the rendered markers are deterministic.
+    component.syncEndnotesWithBody();
+    fixture.detectChanges();
     return fixture.nativeElement as HTMLElement;
   }
+
+  it('numeruje przypisy końcowe małymi cyframi rzymskimi (jak MS Word)', () => {
+    const toRoman = (component as unknown as { _toLowerRoman(n: number): string })._toLowerRoman.bind(component);
+    expect([1, 2, 3, 4, 5, 9, 10, 14, 40, 90, 100].map(toRoman)).toEqual(
+      ['i', 'ii', 'iii', 'iv', 'v', 'ix', 'x', 'xiv', 'xl', 'xc', 'c']
+    );
+  });
 
   it('renderuje odwołania jako <sup class="endnote-ref"> z numerem, id i aria-label', () => {
     const host = load();
@@ -49,10 +60,12 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     const refs = Array.from(host.querySelectorAll('sup.endnote-ref')) as HTMLElement[];
     expect(refs.length).toBe(2);
     expect(refs[0].getAttribute('data-endnote-id')).toBe('en-1');
-    expect(refs[0].textContent).toBe('1');
-    expect(refs[0].getAttribute('aria-label')).toBe('Przypis końcowy 1');
+    // Endnotes use lowercase Roman numerals (i, ii, iii…) like MS Word, to distinguish
+    // them from footnotes (Arabic).
+    expect(refs[0].textContent).toBe('i');
+    expect(refs[0].getAttribute('aria-label')).toBe('Przypis końcowy i');
     expect(refs[1].getAttribute('data-endnote-id')).toBe('en-2');
-    expect(refs[1].getAttribute('aria-label')).toBe('Przypis końcowy 2');
+    expect(refs[1].getAttribute('aria-label')).toBe('Przypis końcowy ii');
   });
 
   it('renderuje region przypisów WEWNĄTRZ ostatniej strony (nie pod dokumentem), z separatorem', () => {
@@ -101,10 +114,10 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     expect(host.querySelector('.footnote-item[data-endnote-id="en-1"]')).toBeNull();
 
     const remainingRef = host.querySelector('sup.endnote-ref[data-endnote-id="en-2"]') as HTMLElement;
-    expect(remainingRef.textContent).toBe('1');
-    expect(remainingRef.getAttribute('aria-label')).toBe('Przypis końcowy 1');
+    expect(remainingRef.textContent).toBe('i');
+    expect(remainingRef.getAttribute('aria-label')).toBe('Przypis końcowy i');
     const remainingItem = host.querySelector('.footnote-item[data-endnote-id="en-2"] .footnote-item-number');
-    expect(remainingItem?.textContent).toBe('1');
+    expect(remainingItem?.textContent).toBe('i');
 
     const model = emitted as unknown as Endnote[];
     expect(model.map(e => e.id)).toEqual(['en-2']);
@@ -206,7 +219,7 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
 
     const items = Array.from(host.querySelectorAll('.endnotes-region .footnote-item')) as HTMLElement[];
     expect(items.map(i => i.getAttribute('data-endnote-id'))).toEqual(['en-1', 'en-2', 'en-3']);
-    expect(items.map(i => i.querySelector('.footnote-item-number')?.textContent)).toEqual(['1', '2', '3']);
+    expect(items.map(i => i.querySelector('.footnote-item-number')?.textContent)).toEqual(['i', 'ii', 'iii']);
 
     const regions = Array.from(host.querySelectorAll('.endnotes-region'));
     expect(regions.length).toBeGreaterThan(1);

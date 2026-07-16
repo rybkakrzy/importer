@@ -181,6 +181,8 @@ export class EditorToolbarComponent {
   @Output() insertImage = new EventEmitter<void>();
   @Output() insertTable = new EventEmitter<string>();
   @Output() openTableDialog = new EventEmitter<void>();
+  @Output() insertFootnote = new EventEmitter<void>();
+  @Output() insertEndnote = new EventEmitter<void>();
   @Output() insertBarcode = new EventEmitter<void>();
   @Output() styleChange = new EventEmitter<DocumentStyle>();
   @Output() copyFormat = new EventEmitter<void>();
@@ -677,6 +679,14 @@ export class EditorToolbarComponent {
    */
   onInsertImage(): void {
     this.insertImage.emit();
+  }
+
+  onInsertFootnote(): void {
+    this.insertFootnote.emit();
+  }
+
+  onInsertEndnote(): void {
+    this.insertEndnote.emit();
   }
 
   /**
