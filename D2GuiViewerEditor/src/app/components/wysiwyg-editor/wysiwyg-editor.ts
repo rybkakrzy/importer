@@ -111,6 +111,21 @@ export interface EndnotePageRegion {
   continuation: boolean;
 }
 
+/**
+ * Region przypisów DOLNYCH na konkretnej stronie (jak w MS Word: na dole strony, na której
+ * jest odwołanie, tuż nad stopką; rezerwuje miejsce w body — treść spływa niżej). Liczony w
+ * `_repaginateNow` tym samym measurerem co bloki treści; `bottomPx` = offset od dołu `.page`
+ * (pasmo stopki + dystans stopki), region rośnie w GÓRĘ. `ids` = przypisy, których odwołania
+ * wylądowały na tej stronie; nadmiar przelewa się na kolejną stronę (`continuation`).
+ */
+export interface FootnotePageRegion {
+  pageIndex: number;
+  bottomPx: number;
+  ids: string[];
+  /** Kontynuacja z poprzedniej strony — separator na całą szerokość (jak w Wordzie). */
+  continuation: boolean;
+}
+
 /** Twipy → cm (1440 twipów = 1 cal = 2.54 cm). Centralne przeliczenie dla data-col-*-tw. */
 const TWIPS_PER_CM = 1440 / 2.54;
 export function parseColumnDataAttributes(el: Element): ColumnLayoutGeo | undefined {
@@ -572,9 +587,37 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private readonly _footnotes = signal<Footnote[]>([]);
   readonly footnoteList = computed(() => this._footnotes());
 
+  /** Rozkład regionów przypisów dolnych na strony — liczony w `_repaginateNow`. */
+  private readonly _footnoteLayout = signal<FootnotePageRegion[]>([]);
+
+  /** Region przypisów dolnych danej strony (null = strona bez przypisów). */
+  footnoteRegionFor(pageIndex: number): FootnotePageRegion | null {
+    const region = this._footnoteLayout().find(r => r.pageIndex === pageIndex);
+    if (!region) return null;
+    // Układ może być chwilowo przestarzały względem modelu (repaginacja jest
+    // debounce'owana) — pokazuj tylko wpisy nadal obecne w modelu.
+    return this.footnoteEntriesFor(region).length > 0 ? region : null;
+  }
+
+  /** Wpisy regionu z numeracją GLOBALNĄ (pozycja w modelu, ciągła przez strony). */
+  footnoteEntriesFor(region: FootnotePageRegion): { fn: Footnote; number: number; label: string }[] {
+    const list = this.footnoteList();
+    const indexById = new Map(list.map((f, i) => [f.id, i]));
+    const entries: { fn: Footnote; number: number; label: string }[] = [];
+    for (const id of region.ids) {
+      const idx = indexById.get(id);
+      if (idx === undefined) continue;
+      // label = dziesiętny (1, 2, 3…) — jak odwołanie w treści przypisu dolnego.
+      entries.push({ fn: list[idx], number: idx + 1, label: String(idx + 1) });
+    }
+    return entries;
+  }
+
   @Input() set footnotes(value: Footnote[] | undefined) {
     // Kopia obronna — nie mutujemy tablicy wejściowej rodzica.
     this._footnotes.set(value ? value.map(f => ({ ...f })) : []);
+    // Region przypisów jest częścią układu strony — przelicz rozkład.
+    this._schedulePaginate('footnotes-input');
   }
 
   @Output() footnotesChange = new EventEmitter<Footnote[]>();
@@ -610,6 +653,24 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const updated = current.map(f => (f.id === id ? { ...f, html } : f));
     this._footnotes.set(updated);
     this.footnotesChange.emit(this.getFootnotes());
+    // Zmiana treści zmienia wysokość wpisu — region może przelać się inaczej / zmienić rezerwę.
+    this._schedulePaginate('footnote-edit');
+  }
+
+  /** Id przypisów dolnych, do których odwołuje się dany blok (kolejność DOM). */
+  private _footnoteIdsIn(block: HTMLElement): string[] {
+    const ids: string[] = [];
+    // Blok MOŻE sam być odwołaniem (goły <sup> wstawiony bez akapitu — np. addFootnoteAtCursor
+    // bez żywej selekcji) — querySelectorAll nie dopasowuje samego elementu, więc sprawdzamy go osobno.
+    if (block.matches?.('sup.footnote-ref[data-footnote-id]')) {
+      const id = block.getAttribute('data-footnote-id');
+      if (id) ids.push(id);
+    }
+    block.querySelectorAll<HTMLElement>('sup.footnote-ref[data-footnote-id]').forEach(el => {
+      const id = el.getAttribute('data-footnote-id');
+      if (id) ids.push(id);
+    });
+    return ids;
   }
 
   /** Wszystkie odwołania w treści stron, w kolejności dokumentu (DOM). */
@@ -659,6 +720,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this._footnotesChanged(reordered)) {
       this._footnotes.set(reordered);
       this.footnotesChange.emit(this.getFootnotes());
+      this._schedulePaginate('footnotes-sync');
     }
   }
 
@@ -5142,15 +5204,82 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       let columnHeight = availableFor(curGeo, 0);
       let availableHeight = capacityFor(curGeo, 0);
 
+      // ── Przypisy dolne: pomiar wysokości wpisów + separatora (rezerwacja miejsca w body,
+      // jak w MS Word). Wpisy mierzymy klasą `.footnote-item.footnote-entry` (style 10pt/padding
+      // NA KLASIE wpisu — measurer mierzy bez kontenera regionu, style muszą być identyczne).
+      const footnotesForLayout = this._footnotes();
+      const fnItemHById = new Map<string, number>();
+      let fnSepH = 0;
+      if (footnotesForLayout.length > 0) {
+        const fnSepProbe = document.createElement('div');
+        fnSepProbe.className = 'footnotes-separator';
+        const fnItemProbes = footnotesForLayout.map((fn, i) => {
+          const item = document.createElement('div');
+          item.className = 'footnote-item footnote-entry';
+          const num = document.createElement('span');
+          num.className = 'footnote-item-number';
+          num.textContent = String(i + 1);
+          const content = document.createElement('div');
+          content.className = 'footnote-item-content';
+          content.innerHTML = fn.html || '<p></p>';
+          item.append(num, content);
+          return item;
+        });
+        const measuredFn = measureRun([fnSepProbe, ...fnItemProbes]);
+        fnSepH = measuredFn[0] ?? 0;
+        footnotesForLayout.forEach((fn, i) => fnItemHById.set(fn.id, measuredFn[i + 1] ?? 0));
+      }
+
+      // Stan przypisów BIEŻĄCEJ strony (resetowany w openPage) + rozkład per strona dla regionów.
+      const pageFnIds: string[][] = [[]];
+      let fnIdsOnPage = new Set<string>();
+      let fnReservePx = 0;
+
       const openPage = () => {
         pages.push([]);
         pageGeos.push(curGeo);
         pageSections.push(curSection);
         pageBands.push(null);
+        pageFnIds.push([]);
         currentHeight = 0;
         columnBase = 0;
         columnHeight = availableFor(curGeo, pages.length - 1);
         availableHeight = capacityFor(curGeo, pages.length - 1);
+        fnIdsOnPage = new Set<string>();
+        fnReservePx = 0;
+      };
+
+      // Rezerwa, jaką wprowadziłoby dołożenie tych przypisów do BIEŻĄCEJ strony:
+      // separator (gdy strona nie miała jeszcze przypisu) + suma wysokości NOWYCH wpisów.
+      const fnProspectiveReserve = (ids: string[]): number => {
+        if (ids.length === 0) return 0;
+        let extra = 0;
+        const seen = new Set(fnIdsOnPage);
+        for (const id of ids) {
+          if (!seen.has(id) && fnItemHById.has(id)) {
+            extra += fnItemHById.get(id)!;
+            seen.add(id);
+          }
+        }
+        const sep = fnIdsOnPage.size === 0 && extra > 0 ? fnSepH : 0;
+        return extra + sep;
+      };
+
+      // Pojemność body pomniejszona o rezerwę przypisów (extra = rezerwa dokładanego bloku).
+      // Multi-kolumny (przybliżenie v1): region pełnej szerokości pod kolumnami → każda kolumna
+      // traci `reserve`, więc pojemność n kolumn maleje o n·reserve.
+      const fnEffAvail = (extra: number): number =>
+        availableHeight - columnCountFor(curGeo) * (fnReservePx + extra);
+
+      // Zatwierdza przypisy fragmentu na BIEŻĄCĄ stronę: aktualizuje rezerwę i listę regionu.
+      const commitFootnotes = (frag: HTMLElement): void => {
+        for (const id of this._footnoteIdsIn(frag)) {
+          if (fnIdsOnPage.has(id) || !fnItemHById.has(id)) continue;
+          if (fnIdsOnPage.size === 0) fnReservePx += fnSepH;
+          fnReservePx += fnItemHById.get(id)!;
+          fnIdsOnPage.add(id);
+          pageFnIds[pages.length - 1].push(id);
+        }
       };
 
       const pushMeasured = (block: HTMLElement, h: number) => {
@@ -5161,20 +5290,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         // w całości na kolejną stronę; blok większy niż PUSTA strona zostaje przycięty.
         let blk = block;
         let bh = h;
-        while (currentHeight + bh > availableHeight) {
+        // Rezerwa przypisów tego bloku (odwołania w treści) skraca pojemność body — treść
+        // spływa niżej, żeby zrobić miejsce na przypis na dole strony (jak w MS Word). Liczona
+        // z CAŁEGO bloku (górne oszacowanie dla fragmentu na stronie = bezpiecznie, bez nachodzenia).
+        let blkExtra = fnProspectiveReserve(this._footnoteIdsIn(blk));
+        while (currentHeight + bh > fnEffAvail(blkExtra)) {
           const pageHasContent = pages[pages.length - 1].length > 0;
           const parts = this._splitBlockAtBudget(
-            blk, availableHeight - currentHeight, measurer, lineHeightPx);
+            blk, fnEffAvail(blkExtra) - currentHeight, measurer, lineHeightPx);
           if (!parts) {
             if (!pageHasContent) break;
             openPage();
+            blkExtra = fnProspectiveReserve(this._footnoteIdsIn(blk));
             continue;
           }
+          // parts[0] zostaje na stronie → jego przypisy rezerwują się TU; parts[1] płynie dalej
+          // i zabiera swoje przypisy na kolejną stronę (przypisanie per fragment).
+          commitFootnotes(parts[0]);
           pages[pages.length - 1].push(parts[0]);
           openPage();
           blk = parts[1];
           bh = measureBlock(blk);
+          blkExtra = fnProspectiveReserve(this._footnoteIdsIn(blk));
         }
+        commitFootnotes(blk);
         pages[pages.length - 1].push(blk);
         currentHeight += bh;
       };
@@ -5293,6 +5432,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
               }
             }
             pages[pages.length - 1].push(split[i]);
+            commitFootnotes(split[i]);
             currentHeight += measureBlock(split[i]);
           }
           bi++;
@@ -5404,6 +5544,36 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         if (curRegion.ids.length) endnoteRegions.push(curRegion);
       }
 
+      // Przypisy z modelu, których odwołania nie zostały przypisane do żadnej strony (np. goły
+      // <sup> poza akapitem, albo chwilowa niespójność modelu z DOM) NIE mogą zniknąć — dokładamy
+      // je na ostatnią stronę treści (jak fallback regionu, zanim sync przytnie osierocone).
+      if (footnotesForLayout.length > 0) {
+        const assigned = new Set<string>(pageFnIds.flat());
+        const lastContentPage = pages.length - 1;
+        for (const fn of footnotesForLayout) {
+          if (!assigned.has(fn.id)) pageFnIds[lastContentPage].push(fn.id);
+        }
+      }
+
+      // ── Przypisy dolne: region na dole KAŻDEJ strony, na której wylądowały odwołania.
+      // Kotwica dolna = pasmo stopki + dystans stopki (region rośnie w GÓRĘ, tuż nad stopką);
+      // pojemność body została już zmniejszona o rezerwę w pętli, więc treść nie nachodzi.
+      const footnoteRegions: FootnotePageRegion[] = [];
+      for (let pi = 0; pi < pageFnIds.length; pi++) {
+        const ids = pageFnIds[pi];
+        if (ids.length === 0) continue;
+        const geo = pageGeos[pi] ?? curGeo;
+        const footerBand = Math.max(this._bandCmFor(geo, 'footer') * CSS_PX_PER_CM,
+          pi === 0 ? measuredBands.footerFirst : measuredBands.footerRest);
+        const footerDist = this._distanceCmFor(geo, 'footer') * CSS_PX_PER_CM;
+        footnoteRegions.push({
+          pageIndex: pi,
+          bottomPx: footerBand + footerDist,
+          ids,
+          continuation: false,
+        });
+      }
+
       measurer.remove();
 
       const newPageContents = pages.map((blocks, pi) => {
@@ -5434,6 +5604,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       for (let i = 0; i < endnoteExtraPages; i++) newPageContents.push('');
 
       this._endnoteLayout.set(endnoteRegions);
+      this._footnoteLayout.set(footnoteRegions);
       this.pageGeometries.set(pageGeos);
       this.pageBodyHeights.set(pageGeos.map((g, i) => availableFor(g, i)));
       this.pageSectionIndexes.set(pageSections);

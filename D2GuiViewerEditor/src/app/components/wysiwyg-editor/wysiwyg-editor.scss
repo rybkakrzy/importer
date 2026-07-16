@@ -1171,18 +1171,34 @@ body.image-moving * {
   padding: 0 1px;
 }
 
-/* Panel treści przypisów — jedno źródło prawdy, edytowalne poza contenteditable body. */
-.footnotes-panel {
-  max-width: 816px;
-  margin: 12px auto 32px;
-  padding: 12px 16px;
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-top: 2px solid #0563c1;
-  border-radius: 2px;
-  font-size: 10pt;
-  /* Czarna treść listy przypisów — jak tekst przypisów w MS Word. */
+/* Region przypisów dolnych — na DOLE strony (jak w MS Word), tuż nad stopką. Kotwica od dołu
+   (bottom z repaginacji = pasmo stopki + dystans stopki), rośnie w górę; w świetle marginesów
+   (left/right z bindingu). Rysowany NAD .editor-content (pusta część body), stąd z-index. */
+.footnotes-region {
+  position: absolute;
+  z-index: 3;
   color: #000;
+}
+
+/* Separator jak w Wordzie: krótka pozioma linia nad przypisami; na stronie kontynuacji —
+   na całą szerokość kolumny tekstu. */
+.footnotes-separator {
+  width: 33%;
+  height: 0;
+  border-top: 1px solid #000;
+  margin: 0 0 6px;
+}
+
+.footnotes-separator-continuation {
+  width: 100%;
+}
+
+/* Wpis przypisu dolnego: bez linii-rozdzielaczy i z ciasnym paddingiem — jak w Wordzie.
+   Klasa na WPISIE (nie selektor potomka .footnotes-region), bo klony wpisów są mierzone
+   w measurerze paginacji bez kontenera regionu — style muszą być identyczne w obu miejscach. */
+.footnote-item.footnote-entry {
+  border-top: none;
+  padding: 1px 0;
 }
 
 /* ============================================================= */
@@ -1219,15 +1235,6 @@ body.image-moving * {
   padding: 1px 0;
 }
 
-
-.footnotes-panel-title {
-  font-weight: 600;
-  font-size: 9pt;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #5f6368;
-  margin-bottom: 8px;
-}
 
 .footnote-item {
   display: flex;

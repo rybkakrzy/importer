@@ -158,6 +158,42 @@
             </div>
           }
 
+          <!-- Przypisy dolne (jak w MS Word): region na DOLE strony, na której jest odwołanie
+               (kotwica od dołu, tuż nad stopką; rezerwacja miejsca w paginacji skróciła body,
+               więc region nie nachodzi na treść). Elementy żyją POZA contenteditable body —
+               nie wchodzą do zapisu treści. -->
+          @if (footnoteRegionFor($index); as fnRegion) {
+            <div class="footnotes-region"
+                 role="region"
+                 aria-label="Przypisy dolne"
+                 data-testid="footnotes-region"
+                 [style.bottom.px]="fnRegion.bottomPx"
+                 [style.left.px]="pageMarginPx($index, 'left')"
+                 [style.right.px]="pageMarginPx($index, 'right')">
+              <div class="footnotes-separator"
+                   [class.footnotes-separator-continuation]="fnRegion.continuation"></div>
+              @for (entry of footnoteEntriesFor(fnRegion); track entry.fn.id) {
+                <div class="footnote-item footnote-entry"
+                     [attr.data-footnote-id]="entry.fn.id"
+                     [attr.data-testid]="'footnote-item-' + entry.fn.id">
+                  <span class="footnote-item-number"
+                        aria-hidden="true"
+                        title="Przejdź do odwołania w treści"
+                        (click)="scrollToNoteReference('footnote', entry.fn.id)">{{ entry.label }}</span>
+                  <div class="footnote-item-content"
+                       [attr.contenteditable]="readOnly ? 'false' : 'true'"
+                       spellcheck="true"
+                       [attr.aria-label]="'Treść przypisu ' + entry.label"
+                       [attr.data-testid]="'footnote-content-' + entry.fn.id"
+                       [innerHTML]="footnoteSafeHtml(entry.fn)"
+                       (blur)="commitFootnoteContent(entry.fn.id, $event)"></div>
+                  <!-- Bez przycisku usuwania (jak w Wordzie): przypis znika po skasowaniu
+                       odwołania w treści — syncFootnotesWithBody przycina osierocone wpisy. -->
+                </div>
+              }
+            </div>
+          }
+
           <!-- Prowadnice marginesów (przerywane linie jak w MS Word / Docs) -->
           @if (showMarginGuides) {
             <div class="margin-guides">
@@ -176,33 +212,5 @@
       </div>
     }
   </div>
-
-  <!-- Panel przypisów dolnych: treść przypisów w kolejności pierwszych odwołań w dokumencie.
-       Odwołania (<sup class="footnote-ref">) żyją w treści strony; tu jest JEDNO źródło treści,
-       edytowalne osobno (poza contenteditable body). Numer = kolejność (renumeracja po edycji). -->
-  @if (footnoteList().length > 0) {
-    <div class="footnotes-panel" role="region" aria-label="Przypisy dolne" data-testid="footnotes-panel">
-      <div class="footnotes-panel-title">Przypisy</div>
-      @for (fn of footnoteList(); track fn.id) {
-        <div class="footnote-item"
-             [attr.data-footnote-id]="fn.id"
-             [attr.data-testid]="'footnote-item-' + fn.id">
-          <span class="footnote-item-number"
-                aria-hidden="true"
-                title="Przejdź do odwołania w treści"
-                (click)="scrollToNoteReference('footnote', fn.id)">{{ $index + 1 }}</span>
-          <div class="footnote-item-content"
-               [attr.contenteditable]="readOnly ? 'false' : 'true'"
-               spellcheck="true"
-               [attr.aria-label]="'Treść przypisu ' + ($index + 1)"
-               [attr.data-testid]="'footnote-content-' + fn.id"
-               [innerHTML]="footnoteSafeHtml(fn)"
-               (blur)="commitFootnoteContent(fn.id, $event)"></div>
-          <!-- Bez przycisku usuwania (jak w Wordzie): przypis znika po skasowaniu
-               odwołania w treści — syncFootnotesWithBody przycina osierocone wpisy. -->
-        </div>
-      }
-    </div>
-  }
 
 </div>

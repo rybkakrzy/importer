@@ -142,7 +142,7 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     expect(host.querySelector('sup.endnote-ref')).toBeNull();
   });
 
-  it('footnotes i endnotes współistnieją bez kolizji (panel dolnych + region końcowych)', () => {
+  it('footnotes i endnotes współistnieją bez kolizji (region dolnych + region końcowych)', () => {
     const body =
       '<div class="document-content"><p>Tekst' +
       '<sup class="footnote-ref" data-footnote-id="fn-1" aria-label="Przypis 1">1</sup>' +
@@ -154,9 +154,9 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     flushPagination();
     const host = fixture.nativeElement as HTMLElement;
 
-    expect(host.querySelector('.footnotes-panel')).not.toBeNull();
+    expect(host.querySelector('.footnotes-region')).not.toBeNull();
     expect(host.querySelector('.endnotes-region')).not.toBeNull();
-    expect(host.querySelector('.footnotes-panel [data-testid="footnote-content-fn-1"]')?.textContent).toContain('Dolny.');
+    expect(host.querySelector('.footnotes-region [data-testid="footnote-content-fn-1"]')?.textContent).toContain('Dolny.');
     expect(host.querySelector('.endnotes-region [data-testid="endnote-content-en-1"]')?.textContent).toContain('Końcowy.');
   });
 
