@@ -506,6 +506,30 @@ describe('DocumentEditorComponent — menu „Pomoc" i akcja „Zgłoś"', () =>
     expect(body).not.toContain('Ostatni błąd');
   });
 
+  it('otwarcie dokumentu loguje RAZ do konsoli te same dane diagnostyczne co „Zgłoś problem"', () => {
+    component.documentMasterId.set('master-777');
+    component.documentVersionId.set('version-888');
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    try {
+      // Wspólny punkt otwarcia (z dysku i z bazy) po zastosowaniu treści dokumentu.
+      (component as unknown as { logOpenDiagnostics: () => void }).logOpenDiagnostics();
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const msg = infoSpy.mock.calls[0][0] as string;
+      expect(msg).toContain('[open]');
+      // Te same pola co blok „Zgłoś problem": id-ki, wersja aplikacji, przeglądarka.
+      expect(msg).toContain('Master ID');
+      expect(msg).toContain('master-777');
+      expect(msg).toContain('Version ID');
+      expect(msg).toContain('version-888');
+      expect(msg).toContain('Wersja aplikacji');
+      expect(msg).toContain('Przeglądarka');
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
   it('copyDiagnostics() kopiuje blok diagnostyczny do schowka', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     const origClipboard = navigator.clipboard;

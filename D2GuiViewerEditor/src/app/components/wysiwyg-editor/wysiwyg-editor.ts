@@ -1,10 +1,11 @@
-import { 
-  Component, 
-  ElementRef, 
-  EventEmitter, 
-  Input, 
-  Output, 
-  ViewChild, 
+import {
+  ChangeDetectorRef,
+  Component,
+  ElementRef,
+  EventEmitter,
+  Input,
+  Output,
+  ViewChild,
   AfterViewInit,
   OnDestroy,
   inject,
@@ -50,7 +51,10 @@ import { wordSingleFactor } from '../../core/utils/word-line-spacing.util';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
 import {
   EMU_PER_PX,
+  HfBandGeometry,
+  bandToContract,
   computeAnchorBadgePosition,
+  contractToBand,
   findAnchorParagraph,
   isFloatingElement,
   isPointerOnEdge,
@@ -533,6 +537,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   private _sanitizer = inject(DomSanitizer);
   private _hostRef = inject(ElementRef<HTMLElement>);
+  private _cdr = inject(ChangeDetectorRef);
   /** Cache trusted-HTML per strona — KLUCZOWE dla wydajności i contenteditable.
    *  Bez tego każde change detection tworzy nowy obiekt SafeHtml, Angular widzi
    *  „zmianę" i rebinduje innerHTML co kasuje kursor + uniemożliwia pisanie. */
@@ -555,7 +560,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private _safeFooterCache = new Map<number, { html: string; safe: SafeHtml }>();
 
   getHeaderContentSafe(pageIndex: number): SafeHtml {
-    const html = this.getHeaderContent(pageIndex) ?? '';
+    // Transformacja PRZED cache (klucz = HTML po transformacji): zmiana geometrii strony
+    // (marginesy/dystanse) zmienia wynik i naturalnie unieważnia wpis.
+    const html = this._positionBandAnchors(this.getHeaderContent(pageIndex) ?? '', pageIndex, 'header');
     const cached = this._safeHeaderCache.get(pageIndex);
     if (cached && cached.html === html) return cached.safe;
     const safe = this._sanitizer.bypassSecurityTrustHtml(html);
@@ -564,12 +571,84 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   getFooterContentSafe(pageIndex: number): SafeHtml {
-    const html = this.getFooterContent(pageIndex) ?? '';
+    const html = this._positionBandAnchors(this.getFooterContent(pageIndex) ?? '', pageIndex, 'footer');
     const cached = this._safeFooterCache.get(pageIndex);
     if (cached && cached.html === html) return cached.safe;
     const safe = this._sanitizer.bypassSecurityTrustHtml(html);
     this._safeFooterCache.set(pageIndex, { html, safe });
     return safe;
+  }
+
+  /**
+   * Geometria pasma nagłówka/stopki dla przeliczeń kotwic (kontrakt ↔ pasmo).
+   * bandTopPx stopki = góra kontenera pasma od góry strony liczona z min-height pasma
+   * (przybliżenie: stopka z treścią wyższą niż pasmo przesunie realny kontener).
+   */
+  private _bandGeoFor(pageIndex: number, band: 'header' | 'footer'): HfBandGeometry {
+    const bandTopPx = band === 'header'
+      ? this.headerOffsetPx(pageIndex)
+      : this.pageHeightPx(pageIndex) - this.footerOffsetPx(pageIndex) - this.footerBandPx(pageIndex);
+    return {
+      band,
+      marginLeftPx: this.pageMarginPx(pageIndex, 'left'),
+      marginTopPx: this.pageMarginPx(pageIndex, 'top'),
+      bandTopPx,
+    };
+  }
+
+  /**
+   * Geometria pasma dla elementu żyjącego w EDYTOWANYM nagłówku/stopce (null = element w body).
+   * Strona edytowanego pasma = editingHfPageIndex() (edycja pasma zawsze przypięta do strony).
+   */
+  private _bandGeoForElement(el: HTMLElement): HfBandGeometry | null {
+    if (el.closest('.header-editor-content')) return this._bandGeoFor(this.editingHfPageIndex(), 'header');
+    if (el.closest('.footer-editor-content')) return this._bandGeoFor(this.editingHfPageIndex(), 'footer');
+    return null;
+  }
+
+  /**
+   * Tryb WYŚWIETLANIA pasma ([innerHTML] bez wrapowania JS): pozycjonuje obrazy kotwiczone
+   * (data-pos-mode front/behind) inline stylem na <img> — absolut w układzie pasma przeliczony
+   * z kontraktu (contractToBand), jak w MS Word (obiekt może wystawać poza pasmo). Transformacja
+   * jednokierunkowa: model źródłowy pasma pozostaje nietknięty (nic nie wraca do zapisu).
+   */
+  private _positionBandAnchors(html: string, pageIndex: number, band: 'header' | 'footer'): string {
+    if (!html) return html;
+    const mayHaveAnchors = html.includes('data-pos-mode')
+      || html.includes('docx-shape') || html.includes('docx-textbox');
+    if (!mayHaveAnchors) return html;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html;
+    const anchored = tpl.content.querySelectorAll<HTMLElement>(
+      'img[data-pos-mode="front"], img[data-pos-mode="behind"]');
+    // Kotwiczone kształty wektorowe i pola tekstowe (div.docx-shape / div.docx-textbox) niosą
+    // z readera inline absolut we współrzędnych KONTRAKTU (X od lewej krawędzi strony, Y od góry
+    // obszaru treści) — w paśmie wymaga tego samego przeliczenia originu co obrazy; kształty
+    // statyczne (inline-block, bez kotwicy) przechodzą nietknięte.
+    const floated = Array.from(
+      tpl.content.querySelectorAll<HTMLElement>('.docx-shape, .docx-textbox'),
+    ).filter(el => el.style.position === 'absolute');
+    if (anchored.length === 0 && floated.length === 0) return html;
+
+    const geo = this._bandGeoFor(pageIndex, band);
+    anchored.forEach(img => {
+      const xPx = Math.round(Number(img.getAttribute('data-x-emu') ?? 0) / EMU_PER_PX);
+      const yPx = Math.round(Number(img.getAttribute('data-y-emu') ?? 0) / EMU_PER_PX);
+      const { leftPx, topPx } = contractToBand(xPx, yPx, geo);
+      img.style.position = 'absolute';
+      img.style.left = `${Math.round(leftPx)}px`;
+      img.style.top = `${Math.round(topPx)}px`;
+      img.style.margin = '0';
+      img.style.zIndex = img.dataset['posMode'] === 'behind' ? '-1' : '10';
+    });
+    floated.forEach(el => {
+      const xPx = parseFloat(el.style.left) || 0;
+      const yPx = parseFloat(el.style.top) || 0;
+      const { leftPx, topPx } = contractToBand(xPx, yPx, geo);
+      el.style.left = `${Math.round(leftPx)}px`;
+      el.style.top = `${Math.round(topPx)}px`;
+    });
+    return tpl.innerHTML;
   }
 
   /** Inwalidacja cache nagłówka/stopki — wołać po każdej edycji */
@@ -586,6 +665,43 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   private readonly _footnotes = signal<Footnote[]>([]);
   readonly footnoteList = computed(() => this._footnotes());
+
+  // Format numeracji przypisów z dokumentu (w:numFmt) — tylko WYŚWIETLANIE etykiet. undefined =
+  // dokument nie ustala → domyślna Worda (dolne = cyfry, końcowe = małe rzymskie). Nie round-tripuje
+  // przez zapis (żyje w zachowanym settings.xml pakietu).
+  private readonly _footnoteNumberFormat = signal<string | undefined>(undefined);
+  private readonly _endnoteNumberFormat = signal<string | undefined>(undefined);
+
+  @Input() set footnoteNumberFormat(value: string | undefined) {
+    this._footnoteNumberFormat.set(value || undefined);
+  }
+  @Input() set endnoteNumberFormat(value: string | undefined) {
+    this._endnoteNumberFormat.set(value || undefined);
+  }
+
+  /**
+   * Formatuje numer przypisu wg formatu z dokumentu (w:numFmt). Fallback (brak/nieznany format) =
+   * domyślna Worda: dolne = cyfry (1,2,3), końcowe = małe rzymskie (i,ii,iii).
+   */
+  private _formatNoteLabel(n: number, fmt: string | undefined, isEndnote: boolean): string {
+    switch (fmt) {
+      case 'decimal': return String(n);
+      case 'lowerRoman': return this._toLowerRoman(n);
+      case 'upperRoman': return this._toLowerRoman(n).toUpperCase();
+      case 'lowerLetter': return this._toWordLetters(n);
+      case 'upperLetter': return this._toWordLetters(n).toUpperCase();
+      default: return isEndnote ? this._toLowerRoman(n) : String(n);
+    }
+  }
+
+  /** Litery jak w Wordzie: a, b, …, z, aa, bb, cc (POWTÓRZONA litera, nie bijektywne aa/ab). */
+  private _toWordLetters(n: number): string {
+    if (!Number.isFinite(n) || n <= 0) return String(n);
+    const k = Math.floor(n);
+    const letter = String.fromCharCode(97 + (k - 1) % 26);
+    const count = Math.floor((k - 1) / 26) + 1;
+    return letter.repeat(count);
+  }
 
   /** Rozkład regionów przypisów dolnych na strony — liczony w `_repaginateNow`. */
   private readonly _footnoteLayout = signal<FootnotePageRegion[]>([]);
@@ -608,7 +724,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const idx = indexById.get(id);
       if (idx === undefined) continue;
       // label = dziesiętny (1, 2, 3…) — jak odwołanie w treści przypisu dolnego.
-      entries.push({ fn: list[idx], number: idx + 1, label: String(idx + 1) });
+      entries.push({ fn: list[idx], number: idx + 1, label: this._formatNoteLabel(idx + 1, this._footnoteNumberFormat(), false) });
     }
     return entries;
   }
@@ -709,8 +825,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const id = el.getAttribute('data-footnote-id') ?? '';
       const number = numberById.get(id);
       if (!number) continue;
-      if (el.textContent !== String(number)) el.textContent = String(number);
-      el.setAttribute('aria-label', `Przypis ${number}`);
+      // Etykieta wg formatu z dokumentu (w:numFmt); domyślnie cyfry dla przypisów dolnych.
+      const label = this._formatNoteLabel(number, this._footnoteNumberFormat(), false);
+      if (el.textContent !== label) el.textContent = label;
+      el.setAttribute('aria-label', `Przypis ${label}`);
     }
 
     // Uporządkuj listę treści wg kolejności odwołań; treści bez odwołania są usuwane.
@@ -820,7 +938,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const idx = indexById.get(id);
       if (idx === undefined) continue;
       // label = lowercase Roman (i, ii, iii…) to match the in-text endnote reference marker.
-      entries.push({ en: list[idx], number: idx + 1, label: this._toLowerRoman(idx + 1) });
+      entries.push({ en: list[idx], number: idx + 1, label: this._formatNoteLabel(idx + 1, this._endnoteNumberFormat(), true) });
     }
     return entries;
   }
@@ -898,9 +1016,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const id = el.getAttribute('data-endnote-id') ?? '';
       const number = numberById.get(id);
       if (!number) continue;
-      // Endnotes are labelled with lowercase Roman numerals (i, ii, iii…) as MS Word does,
-      // to visually distinguish them from footnotes (Arabic 1, 2, 3…).
-      const label = this._toLowerRoman(number);
+      // Etykieta wg formatu z dokumentu (w:numFmt); domyślnie małe rzymskie (i, ii, iii…) jak MS Word,
+      // co odróżnia przypisy końcowe od dolnych (cyfry) gdy dokument nie ustala własnego formatu.
+      const label = this._formatNoteLabel(number, this._endnoteNumberFormat(), true);
       if (el.textContent !== label) el.textContent = label;
       el.setAttribute('aria-label', `Przypis końcowy ${label}`);
     }
@@ -1549,8 +1667,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           const img = wrapper.querySelector('img') as HTMLImageElement | null;
           if (img) {
             const EMU_PER_PX = 9525;
-            img.setAttribute('data-x-emu', String(xPx * EMU_PER_PX));
-            img.setAttribute('data-y-emu', String(yPx * EMU_PER_PX));
+            // Drag w edytowanym paśmie nagłówka/stopki: left/top są w układzie PASMA —
+            // data-emu (kontrakt: X od lewej strony, Y od góry obszaru treści) wymaga
+            // przeliczenia, inaczej zapis DOCX przesuwa obraz o origin pasma.
+            const bandGeo = this._bandGeoForElement(wrapper);
+            const c = bandGeo ? bandToContract(xPx, yPx, bandGeo) : { xPx, yPx };
+            img.setAttribute('data-x-emu', String(Math.round(c.xPx) * EMU_PER_PX));
+            img.setAttribute('data-y-emu', String(Math.round(c.yPx) * EMU_PER_PX));
           }
           wrapper.classList.remove('image-dragging');
           this.onContentChange();
@@ -2270,7 +2393,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const rect = wrapper.getBoundingClientRect();
       const xPx = Math.max(0, Math.round(rect.left - (pageRect?.left ?? 0)));
       const yPx = Math.max(0, Math.round(rect.top - (pageRect?.top ?? 0)));
-      this.applyFloatingPosition(wrapper, img, mode as 'front' | 'behind', xPx, yPx);
+      // W edytowanym paśmie współrzędne rect są w układzie PASMA — kontrakt (data-emu)
+      // wymaga przeliczenia, inaczej zapis DOCX przesunie obraz o origin pasma.
+      const bandGeo = this._bandGeoForElement(img);
+      const contract = bandGeo ? bandToContract(xPx, yPx, bandGeo) : undefined;
+      this.applyFloatingPosition(wrapper, img, mode as 'front' | 'behind', xPx, yPx,
+        contract ? { xPx: Math.round(contract.xPx), yPx: Math.round(contract.yPx) } : undefined);
     }
     this.onContentChange();
     this.emitImageSelectionState();
@@ -2341,17 +2469,25 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.setSelectedImageCrop({ left: 0, right: 0, top: 0, bottom: 0 });
   }
 
+  /**
+   * `xPx/yPx` = pozycja STYLU (left/top w układzie kontenera absolutu). `contract` — pozycja w
+   * układzie KONTRAKTU (data-x/y-emu: X od lewej krawędzi strony, Y od góry obszaru treści);
+   * w body oba układy są tożsame (brak param), w pasmach nagłówka/stopki różnią się o origin
+   * pasma i MUSZĄ być podane osobno — inaczej zapis DOCX przesunie obraz.
+   */
   private applyFloatingPosition(
     wrapper: HTMLElement, img: HTMLImageElement,
     mode: 'front' | 'behind', xPx: number, yPx: number,
+    contract?: { xPx: number; yPx: number },
   ): void {
     wrapper.dataset['posMode'] = mode;
     img.dataset['posMode'] = mode;
     wrapper.dataset['xPx'] = String(xPx);
     wrapper.dataset['yPx'] = String(yPx);
     const EMU_PER_PX = 9525;
-    img.setAttribute('data-x-emu', String(xPx * EMU_PER_PX));
-    img.setAttribute('data-y-emu', String(yPx * EMU_PER_PX));
+    const c = contract ?? { xPx, yPx };
+    img.setAttribute('data-x-emu', String(c.xPx * EMU_PER_PX));
+    img.setAttribute('data-y-emu', String(c.yPx * EMU_PER_PX));
     wrapper.style.position = 'absolute';
     wrapper.style.left = `${xPx}px`;
     wrapper.style.top = `${yPx}px`;
@@ -5031,6 +5167,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     Promise.all([fontsReady, this._pendingImagesSettled()])
       .then(() => {
         if (this._isDestroyed || gen !== this._resourceRepaginateGen) return;
+        // Doładowane fonty/obrazy zmieniają metryki bez zmiany HTML — pomiary sprzed
+        // załadowania są nieaktualne.
+        this._tableMeasureCache.clear();
+        this._blockRunMeasureCache.clear();
         this._flushPaginateNow();
       })
       .catch(() => {
@@ -5119,8 +5259,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         }
         mergedInput.push(b);
       }
+      // Fragmenty TABEL (data-split-table-id) i CIĘTYCH WIERSZY (data-split-row-id) także
+      // scalamy przed układaniem — paginacja startuje od logicznych tabel/wierszy i wyznacza
+      // punkty cięcia od nowa (edycja w komórce przepływa między fragmentami; fragmentacja
+      // nie utrwala się). Id zostają (keepIds) — świeże cięcie ich reuse'uje, więc HTML stron
+      // jest stabilny między przebiegami (bez rebindu [innerHTML] = bez utraty kursora).
+      const premerged: HTMLElement[] = [];
+      for (const b of mergedInput) {
+        const prev = premerged[premerged.length - 1];
+        if (
+          b.tagName === 'TABLE' && prev && prev.tagName === 'TABLE' &&
+          b.getAttribute('data-split-table-id') &&
+          b.getAttribute('data-split-table-id') === prev.getAttribute('data-split-table-id')
+        ) {
+          const targetBody = prev.querySelector('tbody') ?? prev;
+          b.querySelectorAll('tr').forEach(tr => targetBody.appendChild(tr));
+          continue;
+        }
+        premerged.push(b);
+      }
+      for (const b of premerged) {
+        if (b.tagName === 'TABLE') this._mergeSplitRowsIn(b as HTMLTableElement, true);
+      }
       allBlocks.length = 0;
-      allBlocks.push(...mergedInput);
+      allBlocks.push(...premerged);
       if (allBlocks.length === 0) {
         allBlocks.push(document.createElement('p'));
       }
@@ -5419,7 +5581,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
             block as HTMLTableElement,
             Math.max(80, columnHeight - usedInColumn),
             columnHeight,
-            measurer
+            measurer,
+            lineHeightPx
           );
           for (let i = 0; i < split.length; i++) {
             if (i > 0) {
@@ -5620,17 +5783,23 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         && newPageContents.every((v, i) => v === livePageContents[i]);
       if (!domAlreadyCorrect) {
         this.pageContents.set(newPageContents);
-        setTimeout(() => {
-          // KRYTYCZNE: Angular NIE nadpisuje `[innerHTML]`, gdy obliczona treść strony jest
-          // wartościowo taka sama jak ostatnio zbindowana (SafeHtml cache, patrz `_safeHtmlCache`).
-          // Ale strona, w którą użytkownik właśnie pisze, ma w DOM ŻYWE edycje (dodane akapity),
-          // których sygnał nie zna — więc jej DOM rozjeżdża się z paginacją: strona rośnie w pion
-          // (przepełnienie nie schodzi na kolejną), a nadmiar jest DODATKOWO duplikowany na dalsze
-          // strony (i trafia do zapisu przez getContent). Dlatego po repaginacji WYMUSZAMY zgodność
-          // DOM edytorów z obliczonym rozkładem, zanim przywrócimy kursor.
-          this._syncPageEditorDom(newPageContents);
-          this._restoreGlobalCaret(caret);
-        }, 0);
+        // KRYTYCZNE: rebind [innerHTML], sync DOM i przywrócenie karetki MUSZĄ zajść w jednym
+        // tasku. Wcześniej sync+restore szły przez setTimeout(0): między renderem [innerHTML]
+        // (selekcja skasowana — kursor „mrugał" na początku dokumentu) a odtworzeniem karetki
+        // istniało okno (~30 ms, rosnące z dokumentem), w którym obsłużony keystroke wstawiał
+        // tekst do żywego DOM, po czym _syncPageEditorDom nadpisywał go treścią policzoną BEZ
+        // tego znaku — litery ginęły przy pisaniu („Ala" → „Aa"). detectChanges() renderuje
+        // nowy rozkład synchronicznie, więc żaden event wejścia nie może się wcisnąć.
+        this._cdr.detectChanges();
+        // Angular NIE nadpisuje `[innerHTML]`, gdy obliczona treść strony jest wartościowo
+        // taka sama jak ostatnio zbindowana (SafeHtml cache, patrz `_safeHtmlCache`). Ale
+        // strona, w którą użytkownik właśnie pisze, ma w DOM ŻYWE edycje (dodane akapity),
+        // których sygnał nie zna — więc jej DOM rozjeżdża się z paginacją: strona rośnie w pion
+        // (przepełnienie nie schodzi na kolejną), a nadmiar jest DODATKOWO duplikowany na dalsze
+        // strony (i trafia do zapisu przez getContent). Dlatego po repaginacji WYMUSZAMY zgodność
+        // DOM edytorów z obliczonym rozkładem, zanim przywrócimy kursor.
+        this._syncPageEditorDom(newPageContents);
+        this._restoreGlobalCaret(caret);
       }
       this.calculatePages();
       // Repaginacja przenosi bloki między stronami — znacznik kotwicy musi pojechać
@@ -5668,6 +5837,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * layout-flush na przebieg (wydajność jak dotychczasowy pomiar wsadowy).
    */
   private _measureBlockRunHeights(measurer: HTMLElement, blocks: HTMLElement[]): number[] {
+    // Cache CAŁEGO przebiegu (nie per blok — wysokości liczone deltami niosą realny kolaps
+    // marginesów między sąsiadami, więc wynik zależy od całej sekwencji). Przy pisaniu
+    // zmienia się jeden przebieg (ten z edytowanym akapitem) — pozostałe trafiają w cache
+    // zamiast klonować się i wymuszać layout-flush przy każdej repaginacji (≤600 ms).
+    // Klucz = inline style measurera (szerokość kolumny/fonty) + HTML sekwencji;
+    // inwalidacja jak _tableMeasureCache (setContent + doładowanie zasobów).
+    let key = measurer.style.cssText + '|';
+    for (const b of blocks) key += b.outerHTML;
+    const cached = this._blockRunMeasureCache.get(key);
+    if (cached !== undefined) return cached;
     measurer.innerHTML = '';
     for (const b of blocks) measurer.appendChild(b.cloneNode(true));
     const sentinel = document.createElement('div');
@@ -5682,6 +5861,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       if (i === 0) h += Math.max(0, tops[0] - base);
       out.push(Math.max(0, h));
     }
+    if (this._blockRunMeasureCache.size >= 500) this._blockRunMeasureCache.clear();
+    this._blockRunMeasureCache.set(key, out);
     return out;
   }
 
@@ -5704,7 +5885,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     lineHeightPx: number
   ): [HTMLElement, HTMLElement] | null {
     if (budgetPx < lineHeightPx) return null;
-    if (block.querySelector('.docx-tab-seg, .docx-textbox, [data-pos-mode]')) return null;
+    // .docx-tab-leader = linia flex z wypełniaczem tabulatora (wpis spisu treści) —
+    // jednoliniowa, cięcie w środku rozerwałoby układ segmentów flex.
+    if (block.querySelector('.docx-tab-seg, .docx-tab-leader, .docx-textbox, [data-pos-mode]')) return null;
     // Listy dzielą się MIĘDZY punktami (jak Word; tabele mają własną ścieżkę po wierszach) —
     // bez tego lista dłuższa niż reszta strony jechała W CAŁOŚCI dalej, zostawiając pustkę.
     if (block.tagName === 'UL' || block.tagName === 'OL') {
@@ -5855,38 +6038,263 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return null;
   }
 
-  /** Dzieli tabelę między wierszami; zwraca array <table> dla kolejnych stron. */
+  /**
+   * Czy zawartość wiersza może być dzielona między strony (Word: „Zezwalaj na dzielenie
+   * wierszy między strony"). Nie dzielimy: jawny zakaz `w:cantSplit`, wiersz nagłówkowy,
+   * sztywna wysokość (`hRule=exact` — Word przycina treść, nie łamie) oraz CAŁE tabele
+   * z rowspan>1 (koordynacja vMerge przez granicę cięcia poza zakresem — wiersz atomowy).
+   */
+  private _rowCanSplit(table: HTMLTableElement, row: HTMLTableRowElement): boolean {
+    if (row.getAttribute('data-cant-split') === '1') return false;
+    if (row.getAttribute('data-tbl-header') === '1') return false;
+    if (row.getAttribute('data-row-hrule') === 'exact') return false;
+    for (const cell of Array.from(table.querySelectorAll('td, th'))) {
+      if ((cell as HTMLTableCellElement).rowSpan > 1) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Realny layout wiersza w kontekście tabeli (klon: shell + colgroup + sam wiersz, w measurerze
+   * o szerokości kolumny strony): per komórka szerokość TREŚCI (do measurera cięcia bloków)
+   * oraz top/bottom każdego bloku względem GÓRY wiersza (bordery/padding wliczone naturalnie).
+   * Inline height wiersza jest zdejmowany na czas pomiaru — interesuje nas treść, nie minimum.
+   * Wydzielone jako metoda instancji, żeby testy jsdom mogły wstrzyknąć deterministyczny layout.
+   */
+  private _measureRowLayout(
+    table: HTMLTableElement,
+    row: HTMLTableRowElement,
+    measurer: HTMLElement
+  ): { contentWidthPx: number; blockTops: number[]; blockBottoms: number[] }[] {
+    const t = table.cloneNode(false) as HTMLTableElement;
+    const colgroup = table.querySelector('colgroup');
+    if (colgroup) t.appendChild(colgroup.cloneNode(true));
+    const tbody = document.createElement('tbody');
+    const rowClone = row.cloneNode(true) as HTMLTableRowElement;
+    rowClone.style.height = '';
+    tbody.appendChild(rowClone);
+    t.appendChild(tbody);
+    measurer.innerHTML = '';
+    measurer.appendChild(t);
+    const rowTop = rowClone.getBoundingClientRect().top;
+    const out = Array.from(rowClone.cells).map(cell => {
+      const cs = getComputedStyle(cell);
+      const contentWidthPx = Math.max(
+        2, cell.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0));
+      const blocks = Array.from(cell.children) as HTMLElement[];
+      return {
+        contentWidthPx,
+        blockTops: blocks.map(b => b.getBoundingClientRect().top - rowTop),
+        blockBottoms: blocks.map(b => b.getBoundingClientRect().bottom - rowTop),
+      };
+    });
+    measurer.innerHTML = '';
+    return out;
+  }
+
+  /**
+   * Cache pomiarów wysokości podzbiorów wierszy tabel. `_splitTableForPagination` mierzy
+   * podzbiory NARASTAJĄCO (O(wierszy²) klonów + layout-flush per tabela) przy KAŻDEJ
+   * repaginacji, a podczas pisania tabele się nie zmieniają — profil CDP na ~34-stronicowym
+   * dokumencie: ~70% czasu repaginacji szło w te ponowne pomiary (repaginacja odpala się
+   * co ≤600 ms przy pisaniu = wyczuwalne cięcie pod klawiszami). Klucz niesie pełny kontekst
+   * wyniku: inline style measurera (szerokość kolumny/fonty — pokrywa zoom i zmianę sekcji),
+   * shell tabeli i HTML wierszy. Czyszczony przy nowym dokumencie (`setContent`) i po
+   * doładowaniu zasobów (`_repaginateAfterResources` — fonty/obrazy zmieniają metryki bez
+   * zmiany HTML); twardy limit rozmiaru chroni przed rozrostem przy długiej edycji tabel.
+   */
+  private _tableMeasureCache = new Map<string, number>();
+
+  /** Cache wsadowego pomiaru wysokości bloków — patrz `_measureBlockRunHeights`.
+   *  UWAGA: zwracane tablice są współdzielone (czytane, nigdy nie mutowane przez callerów). */
+  private _blockRunMeasureCache = new Map<string, number[]>();
+
+  /**
+   * Wysokość podzbioru wierszy tabeli w measurerze (klon: shell + wiersze). Wydzielone jako
+   * metoda instancji, żeby testy jsdom (bez layoutu) mogły wstrzyknąć deterministyczne wysokości.
+   */
+  private _measureTableRowsHeight(
+    table: HTMLTableElement,
+    subset: HTMLTableRowElement[],
+    measurer: HTMLElement
+  ): number {
+    const t = table.cloneNode(false) as HTMLTableElement;
+    let key = measurer.style.cssText + '|' + t.outerHTML;
+    for (const r of subset) key += r.outerHTML;
+    const cached = this._tableMeasureCache.get(key);
+    if (cached !== undefined) return cached;
+    const tbody = document.createElement('tbody');
+    subset.forEach(r => tbody.appendChild(r.cloneNode(true)));
+    t.appendChild(tbody);
+    measurer.innerHTML = '';
+    measurer.appendChild(t);
+    const h = t.getBoundingClientRect().height;
+    if (this._tableMeasureCache.size >= 2000) this._tableMeasureCache.clear();
+    this._tableMeasureCache.set(key, h);
+    return h;
+  }
+
+  /** Sekwencja id fragmentów jednego logicznie podzielonego WIERSZA. */
+  private _splitRowSeq = 0;
+
+  /**
+   * Dzieli WIERSZ tabeli na [head, tail] tak, by head zmieścił się w `budgetPx` (linia cięcia
+   * = budgetPx od góry wiersza, wspólna dla wszystkich komórek — jak pozioma granica strony
+   * w Wordzie). Per komórka: bloki nad linią → head, blok przecinający → `_splitBlockAtBudget`
+   * na measurerze o szerokości TEJ komórki (akapity na granicy linii, listy między punktami),
+   * niedzielne (zagnieżdżona tabela, abspos) → w całości do tail. Fragmenty są CZYSTO
+   * prezentacyjne: `data-split-row-id` (+ `data-split-row="cont"` na tail) scala z powrotem
+   * `_mergeSplitRowsIn` (zapis i pre-merge repaginacji). Inline `height` NIE przechodzi na
+   * fragmenty (wymusiłby pełne minimum na każdym); `data-row-height-tw`/`data-row-hrule`
+   * zostają tylko na head — po scaleniu wiersz odzyskuje jedną wysokość (kontrakt writera).
+   * Null = nie da się sensownie ciąć (za mały budżet, nic nie zostaje po którejś stronie,
+   * goły tekst bezpośrednio w komórce).
+   */
+  private _splitRowAtBudget(
+    table: HTMLTableElement,
+    row: HTMLTableRowElement,
+    budgetPx: number,
+    measurer: HTMLElement,
+    lineHeightPx: number
+  ): [HTMLTableRowElement, HTMLTableRowElement] | null {
+    if (budgetPx < 2 * lineHeightPx) return null;
+    const cells = Array.from(row.cells);
+    if (cells.length === 0) return null;
+    // Goły tekst bezpośrednio w <td> (bez bloku) nie ma jak być przydzielony do fragmentu.
+    for (const cell of cells) {
+      for (const n of Array.from(cell.childNodes)) {
+        if (n.nodeType === Node.TEXT_NODE && (n.textContent ?? '').trim()) return null;
+      }
+    }
+
+    const layout = this._measureRowLayout(table, row, measurer);
+    if (layout.length !== cells.length) return null;
+
+    const EPS = 0.5;
+    const cs = getComputedStyle(measurer);
+    const headCells: HTMLElement[][] = [];
+    const tailCells: HTMLElement[][] = [];
+    let anyHeadContent = false;
+    let anyTailContent = false;
+
+    for (let i = 0; i < cells.length; i++) {
+      const blocks = Array.from(cells[i].children) as HTMLElement[];
+      const info = layout[i];
+      const head: HTMLElement[] = [];
+      const tail: HTMLElement[] = [];
+      for (let j = 0; j < blocks.length; j++) {
+        const top = info.blockTops[j] ?? 0;
+        const bottom = info.blockBottoms[j] ?? 0;
+        const blk = blocks[j].cloneNode(true) as HTMLElement;
+        if (bottom <= budgetPx + EPS) {
+          head.push(blk);
+        } else if (top >= budgetPx - EPS) {
+          tail.push(blk);
+        } else {
+          const cellMeasurer = this._createBlockMeasurer(cs, info.contentWidthPx);
+          document.body.appendChild(cellMeasurer);
+          let parts: [HTMLElement, HTMLElement] | null;
+          try {
+            parts = this._splitBlockAtBudget(blk, budgetPx - top, cellMeasurer, lineHeightPx);
+          } finally {
+            cellMeasurer.remove();
+          }
+          if (parts) {
+            head.push(parts[0]);
+            tail.push(parts[1]);
+          } else {
+            tail.push(blk);
+          }
+        }
+      }
+      headCells.push(head);
+      tailCells.push(tail);
+      if (head.length) anyHeadContent = true;
+      if (tail.length) anyTailContent = true;
+    }
+
+    // Cięcie ma sens tylko, gdy COŚ zostaje na stronie i COŚ płynie dalej.
+    if (!anyHeadContent || !anyTailContent) return null;
+
+    const splitRowId = row.getAttribute('data-split-row-id') ?? `sr-${++this._splitRowSeq}`;
+    const buildFragment = (cellBlocks: HTMLElement[][], isHead: boolean): HTMLTableRowElement => {
+      const tr = row.cloneNode(false) as HTMLTableRowElement;
+      tr.style.height = '';
+      if (!tr.getAttribute('style')) tr.removeAttribute('style');
+      if (!isHead) {
+        tr.removeAttribute('data-row-height-tw');
+        tr.removeAttribute('data-row-hrule');
+        tr.setAttribute('data-split-row', 'cont');
+      }
+      tr.setAttribute('data-split-row-id', splitRowId);
+      for (let i = 0; i < cells.length; i++) {
+        const td = cells[i].cloneNode(false) as HTMLTableCellElement;
+        td.style.height = '';
+        cellBlocks[i].forEach(b => td.appendChild(b));
+        tr.appendChild(td);
+      }
+      return tr;
+    };
+    return [buildFragment(headCells, true), buildFragment(tailCells, false)];
+  }
+
+  /**
+   * Dzieli tabelę między wierszami; wiersz, który sam nie mieści się w dostępnej wysokości,
+   * jest dodatkowo cięty WEWNĄTRZ (`_splitRowAtBudget` — jak Word „Zezwalaj na dzielenie
+   * wierszy między strony": część treści zostaje w resztce bieżącej strony, reszta płynie
+   * dalej i może być cięta wielokrotnie). Zwraca array <table> dla kolejnych stron.
+   */
   private _splitTableForPagination(
     table: HTMLTableElement,
     firstAvail: number,
     fullAvail: number,
-    measurer: HTMLElement
+    measurer: HTMLElement,
+    lineHeightPx = 16
   ): HTMLTableElement[] {
     const rows = Array.from(table.querySelectorAll('tr')) as HTMLTableRowElement[];
     if (rows.length === 0) return [table];
 
-    const measureRows = (subset: HTMLTableRowElement[]): number => {
-      const t = table.cloneNode(false) as HTMLTableElement;
-      const tbody = document.createElement('tbody');
-      subset.forEach(r => tbody.appendChild(r.cloneNode(true)));
-      t.appendChild(tbody);
-      measurer.innerHTML = '';
-      measurer.appendChild(t);
-      return t.getBoundingClientRect().height;
-    };
+    const measureRows = (subset: HTMLTableRowElement[]): number =>
+      this._measureTableRowsHeight(table, subset, measurer);
 
     const chunks: HTMLTableRowElement[][] = [];
     let bucket: HTMLTableRowElement[] = [];
     let avail = firstAvail;
-    for (const row of rows) {
-      const tentative = [...bucket, row];
-      const h = measureRows(tentative);
-      if (h > avail && bucket.length > 0) {
-        chunks.push(bucket);
+    for (let ri = 0; ri < rows.length; ri++) {
+      let row = rows[ri];
+      // Wielokrotne cięcie tego samego wiersza (tail może przekraczać kolejne pełne strony);
+      // twardy limit iteracji — obrona przed patologią pomiarów (np. measure stale 0/NaN).
+      for (let guard = 0; guard < 100; guard++) {
+        const tentative = [...bucket, row];
+        const h = measureRows(tentative);
+        if (h <= avail) {
+          bucket = tentative;
+          break;
+        }
+        // Wiersz nie mieści się: spróbuj rozciąć jego zawartość na granicy strony —
+        // W RESZTCE bieżącej strony (jak Word), z budżetem pomniejszonym o wiersze bucketa.
+        const bucketH = bucket.length > 0 ? measureRows(bucket) : 0;
+        const parts = this._rowCanSplit(table, row)
+          ? this._splitRowAtBudget(table, row, avail - bucketH, measurer, lineHeightPx)
+          : null;
+        if (parts) {
+          chunks.push([...bucket, parts[0]]);
+          bucket = [];
+          avail = fullAvail;
+          row = parts[1];
+          continue;
+        }
+        if (bucket.length > 0) {
+          // Nie da się ciąć w resztce — wiersz od świeżej strony (i ponowna próba cięcia tam).
+          chunks.push(bucket);
+          bucket = [];
+          avail = fullAvail;
+          continue;
+        }
+        // Świeża strona i cięcie niemożliwe (cantSplit/exact/rowspan/za mało treści) —
+        // połóż w całości (guard anty-pętla; nadmiar przycięty jak dotąd dla niedzielnych).
         bucket = [row];
-        avail = fullAvail;
-      } else {
-        bucket = tentative;
+        break;
       }
     }
     if (bucket.length > 0) chunks.push(bucket);
@@ -5894,7 +6302,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Tag every fragment of THIS split with a shared logical id so serialization can merge them
     // back into one table (R-17). The colgroup (column widths) is cloned into each fragment so a
     // fragment renders with correct columns and the merged result keeps them.
-    const splitId = chunks.length > 1 ? `st-${++this._splitTableSeq}` : null;
+    // Id jest STABILNE między repaginacjami (reuse z pre-merge'owanej tabeli) — świeże id przy
+    // każdym przebiegu zmieniałoby HTML stron i wymuszało rebind [innerHTML] (utrata kursora).
+    const existingId = table.getAttribute('data-split-table-id');
+    const splitId = chunks.length > 1 ? (existingId ?? `st-${++this._splitTableSeq}`) : existingId;
     const colgroup = table.querySelector('colgroup');
 
     return chunks.map(subset => {
@@ -5942,7 +6353,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Niezależne sąsiednie tabele (bez wspólnego id) NIE są scalane (R-17 / reguła 11).
    */
   private _mergeSplitTables(html: string): string {
-    if (!html.includes('data-split-table-id')) return html;
+    if (!html.includes('data-split-table-id') && !html.includes('data-split-row-id')) return html;
 
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
@@ -5964,6 +6375,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       }
       first.removeAttribute('data-split-table-id');
     });
+
+    // Wiersze cięte WEWNĄTRZ (dzielenie wiersza między strony) — po sklejeniu tabel fragmenty
+    // tego samego <tr> są sąsiadami; scal je z powrotem w jeden logiczny wiersz. Defensywnie
+    // po WSZYSTKICH tabelach (fragment wiersza zawsze implikuje fragment tabeli, ale edycje
+    // mogą przetasować strukturę).
+    tmp.querySelectorAll('table').forEach(t => this._mergeSplitRowsIn(t as HTMLTableElement));
 
     return tmp.innerHTML;
   }
@@ -6373,10 +6790,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     const parts = refs.map(r => this._serializeSingleEditor(r.nativeElement));
     const merged = parts.filter(p => p && p.trim().length > 0).join('');
-    // Scal fragmenty akapitów podzielonych na granicy strony (ADR-0046) i fragmenty tej
-    // samej logicznej tabeli rozdzielonej przez paginację (R-17), po czym przywróć
+    // Scal fragmenty tej samej logicznej tabeli (R-17) — wraz z fragmentami CIĘTYCH WIERSZY —
+    // a dopiero POTEM fragmenty akapitów (ADR-0046): komórkowe `data-split-para="cont"` stają
+    // się rodzeństwem swojej pierwszej połówki dopiero po scaleniu wierszy; odwrotna kolejność
+    // zdejmowałaby im marker jako „osieroconym" i utrwalała fragmentację w DOCX. Na końcu
     // wrapper .document-content (domyślne wartości dokumentu do writera).
-    return this._wrapWithDocumentContainer(this._mergeSplitTables(this._mergeSplitParagraphs(merged)));
+    return this._wrapWithDocumentContainer(this._mergeSplitParagraphs(this._mergeSplitTables(merged)));
   }
 
   /**
@@ -6390,7 +6809,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (!html.includes('data-split-para')) return html;
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
-    tmp.querySelectorAll('[data-split-para="cont"]').forEach(cont => {
+    this._mergeSplitParasWithin(tmp);
+    return tmp.innerHTML;
+  }
+
+  /** Wnętrze scalania split-para na żywym elemencie — używane też przy scalaniu wierszy tabel. */
+  private _mergeSplitParasWithin(root: ParentNode): void {
+    root.querySelectorAll('[data-split-para="cont"]').forEach(cont => {
       const el = cont as HTMLElement;
       const prev = el.previousElementSibling;
       if (prev && prev.tagName === el.tagName) {
@@ -6402,7 +6827,43 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         if (!el.getAttribute('style')) el.removeAttribute('style');
       }
     });
-    return tmp.innerHTML;
+  }
+
+  /**
+   * Scala fragmenty CIĘTEGO WIERSZA (data-split-row-id, tail z data-split-row="cont") z powrotem
+   * w jeden logiczny <tr>: per-kolumna przenosi dzieci komórek tail do komórek head, skleja
+   * komórkowe fragmenty akapitów (stały się rodzeństwem) i zdejmuje markery. Wysokość wiersza
+   * wraca z `data-row-height-tw` na head (fragmenty celowo nie niosą inline height).
+   * Osierocony tail (head usunięty w edycji) zostaje zwykłym wierszem.
+   * `keepIds=true` (pre-merge repaginacji) zostawia `data-split-row-id` na scalonym wierszu —
+   * świeże cięcie reuse'uje id, więc HTML stron jest stabilny między przebiegami (bez rebindu).
+   */
+  private _mergeSplitRowsIn(table: HTMLTableElement, keepIds = false): void {
+    const rows = Array.from(table.querySelectorAll('tr')) as HTMLTableRowElement[];
+    for (const tr of rows) {
+      if (tr.getAttribute('data-split-row') !== 'cont') continue;
+      const id = tr.getAttribute('data-split-row-id');
+      const prev = tr.previousElementSibling as HTMLTableRowElement | null;
+      if (prev && prev.tagName === 'TR' && id && prev.getAttribute('data-split-row-id') === id) {
+        const n = Math.min(prev.cells.length, tr.cells.length);
+        for (let i = 0; i < n; i++) {
+          const target = prev.cells[i];
+          const source = tr.cells[i];
+          while (source.firstChild) target.appendChild(source.firstChild);
+          this._mergeSplitParasWithin(target);
+        }
+        tr.remove();
+      } else {
+        tr.removeAttribute('data-split-row');
+        tr.removeAttribute('data-split-row-id');
+      }
+    }
+    if (!keepIds) {
+      table.querySelectorAll('tr[data-split-row-id]').forEach(tr => {
+        tr.removeAttribute('data-split-row-id');
+        tr.removeAttribute('data-split-row');
+      });
+    }
   }
 
   /** Serializuje pojedynczy edytor strony do HTML (z odwijaniem image-wrapperów).
@@ -6438,7 +6899,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // przy każdym renderze; w zapisie byłyby szumem i groziłyby dryfem po edycjach.
     stripListLabelAttributes(clone);
 
-    clone.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
+    this._unwrapImageWrappers(clone);
+
+    return clone.innerHTML;
+  }
+
+  /**
+   * Zdejmuje edycyjne wrappery obrazów (span.editor-image-wrapper: contenteditable/draggable/
+   * uchwyty resize/inline left-top) — do modelu/zapisu idzie goły <img> z data-* (pozycja
+   * kotwicy żyje w data-x/y-emu na <img>, inline left/top wrappera są edycyjne i porzucane).
+   * Wspólne dla serializacji body (_serializeSingleEditor) i commitu pasma nagłówka/stopki.
+   */
+  private _unwrapImageWrappers(root: HTMLElement): void {
+    root.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;
       wrapper.classList.remove('selected');
       wrapper.removeAttribute('contenteditable');
@@ -6458,17 +6931,23 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           imgEl.style.height = 'auto';
         }
         imgEl.removeAttribute('draggable');
+        // Pozycję niesie kontrakt data-x/y-emu; edycyjny styl absolutu wrappera nie może
+        // zostać na <img> (display mode pozycjonuje od nowa z kontraktu).
+        imgEl.style.removeProperty('position');
+        imgEl.style.removeProperty('left');
+        imgEl.style.removeProperty('top');
+        imgEl.style.removeProperty('z-index');
         wrapper.replaceWith(imgEl);
       }
     });
-
-    return clone.innerHTML;
   }
 
   /**
    * Ustawia zawartość HTML — rozbija na strony po znacznikach <div class="page-break">.
    */
   setContent(html: string): void {
+    this._tableMeasureCache.clear();
+    this._blockRunMeasureCache.clear();
     const unwrapped = this._captureDocumentDefaults(html);
     const pages = this._splitHtmlIntoPages(unwrapped ?? html ?? '<p></p>');
     this.pageContents.set(pages);
@@ -6535,7 +7014,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       if (posMode === 'front' || posMode === 'behind') {
         const xPx = Math.round((Number(img.getAttribute('data-x-emu') ?? 0)) / 9525);
         const yPx = Math.round((Number(img.getAttribute('data-y-emu') ?? 0)) / 9525);
-        this.applyFloatingPosition(wrapper, img, posMode, xPx, yPx);
+        // W edytowanym paśmie nagłówka/stopki origin absolutu ≠ origin kontraktu — styl
+        // dostaje pozycję przeliczoną do układu pasma, data-emu zostają w kontrakcie.
+        const bandGeo = this._bandGeoForElement(img);
+        if (bandGeo) {
+          const { leftPx, topPx } = contractToBand(xPx, yPx, bandGeo);
+          this.applyFloatingPosition(wrapper, img, posMode,
+            Math.round(leftPx), Math.round(topPx), { xPx, yPx });
+        } else {
+          this.applyFloatingPosition(wrapper, img, posMode, xPx, yPx);
+        }
       } else if (posMode === 'square') {
         wrapper.dataset['posMode'] = 'square';
         wrapper.style.float = 'left';
@@ -6853,6 +7341,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    *  go definiuje — także dziedziczony, jak edycja połączonego nagłówka w Wordzie — albo
    *  odpowiedni sygnał bazowy sekcji 0). */
   private _applyEditedHfHtml(content: string, kind: 'header' | 'footer'): void {
+    // Do modelu (i zapisu) idzie CZYSTY HTML — bez edycyjnych wrapperów obrazów
+    // (contenteditable/draggable/uchwyty/inline absolut w układzie pasma), jak w body
+    // (_serializeSingleEditor). Pozycja kotwicy przeżywa w data-x/y-emu na <img>.
+    content = this._cleanBandHtml(content);
     const pageIndex = this.editingHfPageIndex();
     const { variant, ownerEntry } = this._resolveHfVariant(pageIndex, kind);
     if (ownerEntry) {
@@ -6866,6 +7358,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     } else {
       (kind === 'header' ? this._headerHtml : this._footerHtml).set(content);
     }
+  }
+
+  /** Czysty HTML pasma z surowego innerHTML edycji (unwrap wrapperów obrazów). */
+  private _cleanBandHtml(html: string): string {
+    if (!html || !html.includes('editor-image-wrapper')) return html;
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    this._unwrapImageWrappers(tmp);
+    return tmp.innerHTML;
   }
 
   onHeaderInput(event: Event): void {

@@ -1,4 +1,4 @@
-/* Edytor WYSIWYG z paginacją */
+﻿/* Edytor WYSIWYG z paginacją */
 .wysiwyg-editor-wrapper {
   height: 100%;
   width: 100%;
@@ -191,8 +191,13 @@
      PG-09); token w em rozwiązuje się względem font-size AKAPITU,
    - measurer paginacji jest poza .page → pomiary bloków bez przesunięć,
    - wykluczone akapity z elementami pływającymi ([data-pos-mode] — abspos względem .page
-     nie może dostać spozycjonowanego przodka) — zachowują dotychczasowy rendering. */
-.page :is(p, h1, h2, h3, h4, h5, h6, li):not(:has([data-pos-mode])) {
+     nie może dostać spozycjonowanego przodka) — zachowują dotychczasowy rendering,
+   - wykluczone akapity z tłem/obramowaniem: relative/top przesuwa CAŁY malowany box,
+     więc cieniowanie wyjeżdżało ponad slot akapitu i nachodziło na poprzedni blok
+     (repro QA: „To jest test interlinii 3" z cieniowaniem przy w:line=720). W Wordzie
+     tło pokrywa pełny slot linii, a tekst siedzi u jego góry — bez przesunięcia tekst
+     jest wyśrodkowany w slocie (kompromis: pół leadingu różnicy, zero artefaktów). */
+.page :is(p, h1, h2, h3, h4, h5, h6, li):not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']) {
   position: relative;
   top: calc((1lh - var(--w-line-single, 1.221em)) / -2);
 }
@@ -219,46 +224,54 @@
   vertical-align: baseline;
 }
 
-/* Style dla elementów dokumentu */
+/* Style dla elementów dokumentu. Odstęp „po" nagłówku = padding-bottom (ADR-0053, jak
+   dla akapitów): inline padding-bottom ze stylu Worda nadpisuje wartość klasy zamiast
+   sumować się z klasowym margin-bottom. */
 .editor-content h1 {
   font-size: 24pt;
   font-weight: 700;
-  margin: 20px 0 10px 0;
+  margin: 20px 0 0 0;
+  padding-bottom: 10px;
   color: #1a1a1a;
 }
 
 .editor-content h2 {
   font-size: 18pt;
   font-weight: 700;
-  margin: 18px 0 9px 0;
+  margin: 18px 0 0 0;
+  padding-bottom: 9px;
   color: #1a1a1a;
 }
 
 .editor-content h3 {
   font-size: 14pt;
   font-weight: 700;
-  margin: 16px 0 8px 0;
+  margin: 16px 0 0 0;
+  padding-bottom: 8px;
   color: #1a1a1a;
 }
 
 .editor-content h4 {
   font-size: 12pt;
   font-weight: 700;
-  margin: 14px 0 7px 0;
+  margin: 14px 0 0 0;
+  padding-bottom: 7px;
   color: #1a1a1a;
 }
 
 .editor-content h5 {
   font-size: 11pt;
   font-weight: 700;
-  margin: 12px 0 6px 0;
+  margin: 12px 0 0 0;
+  padding-bottom: 6px;
   color: #1a1a1a;
 }
 
 .editor-content h6 {
   font-size: 10pt;
   font-weight: 700;
-  margin: 10px 0 5px 0;
+  margin: 10px 0 0 0;
+  padding-bottom: 5px;
   color: #1a1a1a;
 }
 
@@ -290,9 +303,13 @@
 }
 
 /* Domyślny odstęp PO akapicie: z docDefaults dokumentu (--doc-par-margin ustawiane przez
-   wysiwyg-editor z data-default-after-tw kontenera), fallback = dotychczasowe 10px. */
+   wysiwyg-editor z data-default-after-tw kontenera), fallback = dotychczasowe 10px.
+   PADDING, nie margin (ADR-0053): Word SUMUJE odstęp „po" akapitu z odstępem „przed"
+   następnego, a marginesy CSS rodzeństwa kolapsują do max — między akapitami znikał
+   mniejszy z odstępów. Padding nie kolapsuje; reader emituje w:after tak samo. */
 .editor-content p {
-  margin: 0 0 var(--doc-par-margin, 10px) 0;
+  margin: 0;
+  padding-bottom: var(--doc-par-margin, 10px);
   /* NIE dodawać tu `text-box-trim: trim-start`. Ta reguła przesuwa TUSZ pierwszej linii
      akapitu w górę o połowę interlinii (half-leading), poza box akapitu. Dla PIERWSZEGO
      akapitu strony (np. duży „Title" tuż pod nagłówkiem) tusz trafiał POWYŻEJ górnej
@@ -306,6 +323,7 @@
 
 .editor-content > p:last-child {
   margin-bottom: 0;
+  padding-bottom: 0;
 }
 
 /* Legacy grafiki wektorowe (EMF/WMF) bez rasteryzacji renderują się jako PRZEZROCZYSTY
@@ -333,6 +351,7 @@ img[data-legacy-graphic='blank'] {
 .editor-content table td > p,
 .editor-content table th > p {
   margin: 0;
+  padding-bottom: 0;
 }
 
 .editor-content ul,
@@ -500,6 +519,39 @@ body.table-resizing * {
 .docx-tab-seg .editor-image-wrapper,
 .docx-tab-seg img {
   max-width: none !important;
+}
+
+// Wypełniacz tabulatora (w:leader — kropki spisu treści, podkreślenia formularzy).
+// Span niesie inline flex:1/position:relative/overflow:hidden (reader); tu malujemy
+// znaki wypełniacza pseudo-elementem: realne glify w foncie akapitu (jak w Wordzie),
+// przycięte do szerokości luki, dosunięte do prawej (do numeru strony). Literalny \t
+// w środku spanu jest niewidoczny (kolapsuje do spacji pod pseudo-elementem) i służy
+// wyłącznie round-tripowi w:tab. pointer-events:none — klik trafia w span (karetka).
+span.docx-tab-leader::after {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-align: right;
+  pointer-events: none;
+  content: '';
+}
+
+span.docx-tab-leader[data-leader='dot']::after {
+  content: '................................................................................................................................................................................................................................................................................................................';
+}
+
+span.docx-tab-leader[data-leader='middleDot']::after {
+  content: '················································································································································································································································································································';
+}
+
+span.docx-tab-leader[data-leader='hyphen']::after {
+  content: '------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------';
+}
+
+span.docx-tab-leader[data-leader='underscore']::after,
+span.docx-tab-leader[data-leader='heavy']::after {
+  content: '________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________';
 }
 
 // Word-like floating modes — wrapper is absolute-positioned inside .page

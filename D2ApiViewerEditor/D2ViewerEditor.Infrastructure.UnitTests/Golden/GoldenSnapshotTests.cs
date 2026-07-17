@@ -1,4 +1,4 @@
-using D2ViewerEditor.Infrastructure.Services;
+﻿using D2ViewerEditor.Infrastructure.Services;
 using FluentAssertions;
 using NUnit.Framework;
 
@@ -57,7 +57,8 @@ public class GoldenSnapshotTests
         var content = _converter.Convert(GoldenDocuments.ParagraphSpacingAndIndent());
 
         content.Html.Should().Contain("margin-top:12pt");     // 240 twips → 12 pt
-        content.Html.Should().Contain("margin-bottom:6pt");   // 120 twips → 6 pt
+        // w:after = padding-bottom (ADR-0053: odstępy sumują się jak w Wordzie, nie kolapsują)
+        content.Html.Should().Contain("padding-bottom:6pt");  // 120 twips → 6 pt
         content.Html.Should().Contain("margin-left:48px");    // 720 twips → 48 px
         content.Html.Should().Contain("text-indent:32px");    // 480 twips → 32 px
         HtmlSnapshot.Verify(content.Html, "paragraph-spacing-indent");

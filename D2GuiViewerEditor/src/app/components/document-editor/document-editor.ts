@@ -1,4 +1,4 @@
-import {
+﻿import {
   Component,
   ViewChild,
   ElementRef,
@@ -623,6 +623,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   footnotes = signal<Footnote[] | null>(null);
   /** Przypisy końcowe z importu (osobny model; round-trip przez zapis). */
   endnotes = signal<Endnote[] | null>(null);
+  /** Format numeracji przypisów z dokumentu (w:numFmt) — tylko wyświetlanie; null = domyślna Worda. */
+  footnoteNumberFormat = signal<string | null>(null);
+  endnoteNumberFormat = signal<string | null>(null);
   marginPresets = MARGIN_PRESETS;
 
   // Dialog nagłówka i stopki
@@ -856,6 +859,18 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     });
   }
 
+  /**
+   * Loguje RAZ, przy otwarciu dokumentu, ten sam zestaw danych diagnostycznych co akcja „Zgłoś
+   * problem" (id-ki dokumentu, wersja/build, przeglądarka, viewport, ostatni błąd HTTP itd.). Dzięki
+   * temu w logach aplikacji (konsola przeglądarki — wsparcie zgrywa je z devtools / raportu
+   * użytkownika) jest ślad kontekstu sesji edycji, bez zalewania logów przy każdym autozapisie.
+   * Reużywa `collectDiagnosticRows()` — jedno źródło prawdy dla danych zgłoszenia.
+   */
+  private logOpenDiagnostics(): void {
+    const block = this.formatDiagnostics(this.collectDiagnosticRows());
+    console.info(`[open] ${new Date().toISOString()} — otwarto dokument\n${block}`);
+  }
+
   private static readonly DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   private static readonly DOC_MIME = 'application/msword';
   private static readonly PDF_MIME = 'application/pdf';
@@ -1080,6 +1095,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.documentService.openDocument(file, password).subscribe({
       next: (content) => {
         this._applyLoadedContent(content, fileName);
+        // Jeden snapshot diagnostyczny na otwarcie dokumentu (te same dane co „Zgłoś problem":
+        // id-ki, wersja/build, przeglądarka…) — kontekst sesji w logach, bez zalewania ich przy
+        // każdym autozapisie. WSPÓLNE dla otwierania z dysku i wczytywania wersji z bazy.
+        this.logOpenDiagnostics();
         // Jeden autorytatywny komunikat wyniku otwarcia — read-only wyklucza „sukces".
         // Dokument chroniony NIGDY nie jest prezentowany jako otwarty w trybie edycji.
         if (content.isReadOnlyProtected === true) {
@@ -1161,6 +1180,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     // Przypisy dolne — treść przekazywana do edytora i z powrotem w zapisie (jedno źródło prawdy).
     this.footnotes.set(content.footnotes ?? null);
     this.endnotes.set(content.endnotes ?? null);
+    // Format numeracji przypisów z dokumentu (w:numFmt) — do wyświetlania etykiet w edytorze.
+    this.footnoteNumberFormat.set(content.footnoteNumberFormat ?? null);
+    this.endnoteNumberFormat.set(content.endnoteNumberFormat ?? null);
     if (this.editor) {
       this.editor.setContent(content.html);
     }
@@ -2779,20 +2801,21 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Dodaj odstęp po akapicie
    */
   addSpaceAfter(): void {
-    this.setBlockSpacing('marginBottom', '12pt');
+    this.setBlockSpacing('paddingBottom', '12pt');
   }
 
   /**
    * Usuń odstęp po akapicie
    */
   removeSpaceAfter(): void {
-    this.setBlockSpacing('marginBottom', '0');
+    this.setBlockSpacing('paddingBottom', '0');
   }
 
   /**
-   * Ustawia odstęp bloku
+   * Ustawia odstęp bloku. Odstęp PO akapicie = padding-bottom (ADR-0053: sumuje się
+   * z margin-top następnego jak w Wordzie; marginesy CSS kolapsują do max).
    */
-  private setBlockSpacing(property: 'marginTop' | 'marginBottom', value: string): void {
+  private setBlockSpacing(property: 'marginTop' | 'paddingBottom', value: string): void {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
@@ -2805,6 +2828,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       }
       if (block) {
         (block as HTMLElement).style[property] = value;
+        // Odstęp „po" mógł dotąd siedzieć w margin-bottom (treść sprzed ADR-0053,
+        // akapity z tłem) — czyścimy, żeby się nie dublował z padding-bottom.
+        if (property === 'paddingBottom') {
+          (block as HTMLElement).style.marginBottom = '';
+        }
       }
     }
     this.closeAllMenus();
@@ -3980,10 +4008,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.paragraphData.specialIndent = 'none';
       }
 
-      // Odstępy (px -> pt, 1pt ≈ 1.333px)
+      // Odstępy (px -> pt, 1pt ≈ 1.333px). Odstęp „po" = padding-bottom (ADR-0053:
+      // sumuje się z margin-top następnego jak w Wordzie); margin-bottom doliczamy
+      // dla akapitów z tłem/obramowaniem i treści sprzed zmiany (jedno z dwóch = 0).
       const pxToPt = (px: number) => Math.round(px / 1.333);
       this.paragraphData.spaceBefore = pxToPt(parseFloat(style.marginTop) || 0);
-      this.paragraphData.spaceAfter = pxToPt(parseFloat(style.marginBottom) || 0);
+      this.paragraphData.spaceAfter = pxToPt(
+        (parseFloat(style.marginBottom) || 0) + (parseFloat(style.paddingBottom) || 0));
 
       // Interlinia — mnożnik Worda z markera --w-line-tw (własnego lub odziedziczonego
       // z domyślnych dokumentu), nie ze skalibrowanej wartości renderowej (PG-09);
@@ -4051,10 +4082,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         el.style.textIndent = '0';
       }
 
-      // Odstępy
+      // Odstępy — „po" idzie w padding-bottom (ADR-0053), ewentualny stary
+      // margin-bottom czyścimy, żeby wartości się nie sumowały podwójnie.
       const ptToPx = (pt: number) => pt * 1.333;
       el.style.marginTop = ptToPx(this.paragraphData.spaceBefore) + 'px';
-      el.style.marginBottom = ptToPx(this.paragraphData.spaceAfter) + 'px';
+      el.style.paddingBottom = ptToPx(this.paragraphData.spaceAfter) + 'px';
+      el.style.marginBottom = '';
 
       // Interlinia — mnożniki w semantyce Worda (kalibracja + marker, PG-09);
       // atLeast dostaje marker reguły, bez którego writer zapisywał exact

@@ -234,4 +234,16 @@ describe('WysiwygEditorComponent — przypisy końcowe', () => {
     const editors = Array.from(host.querySelectorAll('.editor-content')) as HTMLElement[];
     expect(editors[editors.length - 1].textContent?.trim()).toBe('');
   });
+
+  it('numeracja końcowych wg formatu z dokumentu (w:numFmt): decimal → cyfry zamiast rzymskich', () => {
+    component.endnoteNumberFormat = 'decimal';
+    const host = load();
+
+    const refs = Array.from(host.querySelectorAll('sup.endnote-ref')) as HTMLElement[];
+    expect(refs.map(r => r.textContent)).toEqual(['1', '2']);
+    expect(refs[0].getAttribute('aria-label')).toBe('Przypis końcowy 1');
+
+    const items = Array.from(host.querySelectorAll('.endnotes-region .footnote-item')) as HTMLElement[];
+    expect(items.map(i => i.querySelector('.footnote-item-number')?.textContent)).toEqual(['1', '2']);
+  });
 });

@@ -1,5 +1,8 @@
 import {
+  HfBandGeometry,
+  bandToContract,
   computeAnchorBadgePosition,
+  contractToBand,
   findAnchorParagraph,
   isFloatingElement,
   isPointerOnEdge,
@@ -147,6 +150,45 @@ describe('floating-anchor.util — model kotwicy elementów pływających', () =
 
     it('poza polem → false', () => {
       expect(isPointerOnEdge(50, 50, box)).toBe(false);
+    });
+  });
+
+  describe('contractToBand / bandToContract — kotwice w pasmach nagłówka/stopki', () => {
+    // A4, marginesy 2.5cm (~94px), dystans nagłówka 1.25cm (~47px), pasmo 1.25cm (~47px).
+    const headerGeo: HfBandGeometry = {
+      band: 'header', marginLeftPx: 94, marginTopPx: 94, bandTopPx: 47,
+    };
+    // Stopka: strona 1122px, dystans 47px, pasmo 47px → góra pasma = 1122−47−47 = 1028.
+    const footerGeo: HfBandGeometry = {
+      band: 'footer', marginLeftPx: 94, marginTopPx: 94, bandTopPx: 1028,
+    };
+
+    it('header: kontrakt (od strony/obszaru treści) → układ pasma', () => {
+      // Logo przy lewej krawędzi strony (x=20), u góry strony (y_page=30 → kontrakt y=30−94=−64).
+      const { leftPx, topPx } = contractToBand(20, -64, headerGeo);
+      expect(leftPx).toBe(20 - 94);     // ujemne — wystaje w lewy margines przed pasmo
+      expect(topPx).toBe(-64 + 94 - 47); // = −17 → wystaje nad kontener pasma (jak w Wordzie)
+    });
+
+    it('footer: kontrakt → układ pasma (kotwica przy dole strony)', () => {
+      // y_page = 1050 → kontrakt y = 1050−94 = 956.
+      const { leftPx, topPx } = contractToBand(94, 956, footerGeo);
+      expect(leftPx).toBe(0);
+      expect(topPx).toBe(956 + 94 - 1028); // = 22 px od góry pasma stopki
+    });
+
+    it('bandToContract jest dokładną odwrotnością (round-trip bez dryfu)', () => {
+      for (const geo of [headerGeo, footerGeo]) {
+        const { leftPx, topPx } = contractToBand(123, 456, geo);
+        const { xPx, yPx } = bandToContract(leftPx, topPx, geo);
+        expect(xPx).toBe(123);
+        expect(yPx).toBe(456);
+      }
+    });
+
+    it('nie clampuje wartości ujemnych — obiekt może wystawać poza pasmo', () => {
+      const { topPx } = contractToBand(0, -94, headerGeo);
+      expect(topPx).toBeLessThan(0);
     });
   });
 });

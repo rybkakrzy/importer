@@ -138,6 +138,20 @@ public class DocumentContent
     public List<Endnote>? Endnotes { get; set; }
 
     /// <summary>
+    /// Format numeracji przypisów DOLNYCH z <c>w:footnotePr/w:numFmt</c> (settings.xml, document-wide):
+    /// token <c>decimal</c>/<c>lowerRoman</c>/<c>upperRoman</c>/<c>lowerLetter</c>/<c>upperLetter</c>.
+    /// <c>null</c> = dokument nie ustala formatu → GUI używa domyślnej Worda (dolne = cyfry). Nie
+    /// round-tripuje przez zapis (żyje w zachowanym settings.xml pakietu — tylko odczyt/wyświetlanie).
+    /// </summary>
+    public string? FootnoteNumberFormat { get; set; }
+
+    /// <summary>
+    /// Format numeracji przypisów KOŃCOWYCH z <c>w:endnotePr/w:numFmt</c> (settings.xml, document-wide).
+    /// Token jak w <see cref="FootnoteNumberFormat"/>; <c>null</c> = domyślna Worda (końcowe = małe rzymskie).
+    /// </summary>
+    public string? EndnoteNumberFormat { get; set; }
+
+    /// <summary>
     /// True, gdy dokument źródłowy deklaruje ochronę przed edycją w settings.xml:
     /// wymuszone w:documentProtection (Ogranicz edycję, tryb inny niż "none") lub
     /// w:writeProtection (hasło zapisu / zalecenie tylko-do-odczytu). Edytor musi wtedy

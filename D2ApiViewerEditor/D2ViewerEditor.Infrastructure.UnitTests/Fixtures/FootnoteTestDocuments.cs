@@ -108,6 +108,38 @@ internal static class FootnoteTestDocuments
         });
     }
 
+    /// <summary>
+    /// One footnote plus a document-wide numbering format in settings.xml
+    /// (<c>w:footnotePr/w:numFmt</c>) — used to assert the reader surfaces the format token.
+    /// </summary>
+    internal static byte[] FootnoteWithNumberFormat(NumberFormatValues numFmt)
+    {
+        using var ms = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+            body.Append(new Paragraph(TextRun("Zdanie"), FootnoteReferenceRun(1), TextRun(".")));
+
+            var footnotesPart = main.AddNewPart<FootnotesPart>();
+            var footnotesRoot = new Footnotes();
+            AppendTechnicalSeparators(footnotesRoot);
+            footnotesRoot.Append(UserFootnote(1, new Paragraph(AutoNumberMarkRun(), TextRun("Przypis."))));
+            footnotesPart.Footnotes = footnotesRoot;
+            footnotesPart.Footnotes.Save();
+
+            var settingsPart = main.AddNewPart<DocumentSettingsPart>();
+            settingsPart.Settings = new Settings(
+                new FootnoteDocumentWideProperties(new NumberingFormat { Val = numFmt }));
+            settingsPart.Settings.Save();
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     // ----- low-level helpers -----
 
     private static byte[] Build(Action<Footnotes> buildFootnotes, Action<Body> buildBody)

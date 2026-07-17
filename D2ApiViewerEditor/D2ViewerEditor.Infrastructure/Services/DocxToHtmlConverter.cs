@@ -44,6 +44,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? _defaultSpacingAfterTw;
     private string? _defaultSpacingLine;
     private string? _defaultSpacingLineRule; // "auto" | "exact" | "atLeast"
+    // Id domyślnego stylu akapitowego (w:default="1") — porównanie stylów sąsiadów
+    // przy w:contextualSpacing (ADR-0053).
+    private string? _defaultParagraphStyleId;
     // Układ kolumn sekcji bazowej (0), ustalany w ConvertBodyToHtml (ADR-0039).
     private ColumnLayout? _baseSectionColumns;
     // CSS bazowy zbudowany z powyższych — baza dla akapitów w KOMÓRKACH TABEL (styl tabeli
@@ -175,6 +178,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _defaultFontSizePt = null;
         _defaultSpacingBeforeTw = _defaultSpacingAfterTw = null;
         _defaultSpacingLine = _defaultSpacingLineRule = null;
+        _defaultParagraphStyleId = null;
         _defaultParagraphSpacingCss = "";
         _tableParagraphDefaultCss = null;
         _themeMajorLatin = _themeMinorLatin = null;
@@ -183,6 +187,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _pageWidthTwips = _pageHeightTwips = null;
         _marginLeftTwips = _marginTopTwips = _marginRightTwips = _marginBottomTwips = 0;
         _pendingTextBoxes.Clear();
+        _openFieldFrames.Clear();
         _footnoteDisplayNumbers.Clear();
         _footnoteRefOrder.Clear();
         _endnoteDisplayNumbers.Clear();
@@ -217,6 +222,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // (numeracja prezentacyjna) jest ustalana podczas renderowania treści.
         content.Footnotes = ExtractFootnotes(document);
         content.Endnotes = ExtractEndnotes(document);
+
+        // Format numeracji przypisów (w:numFmt w footnotePr/endnotePr, settings.xml document-wide) —
+        // GUI używa go zamiast domyślnego (dolne=cyfry, końcowe=rzymskie). null = brak → domyślna Worda.
+        var settingsPart = document.MainDocumentPart?.DocumentSettingsPart;
+        content.FootnoteNumberFormat = ReadNoteNumberFormat(settingsPart, endnote: false);
+        content.EndnoteNumberFormat = ReadNoteNumberFormat(settingsPart, endnote: true);
 
         // Kolumny sekcji bazowej — ustalone przez ConvertBodyToHtml (Html), tam też trafiają
         // na kontener .document-content. Null/1 kolumna = układ jednokolumnowy (ADR-0039).
@@ -1543,6 +1554,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var defaultStyle = _rawStyles.Values.FirstOrDefault(s =>
             s.Type?.Value == StyleValues.Paragraph && s.Default?.Value == true);
 
+        // Id domyślnego stylu akapitowego — akapit bez jawnego pStyle MA ten styl
+        // (porównanie sąsiadów przy w:contextualSpacing, ADR-0053).
+        _defaultParagraphStyleId = defaultStyle?.StyleId?.Value;
+
         // Odstępy z domyślnego stylu akapitowego (typowy Word trzyma je w Normal, nie w
         // docDefaults) nadpisują per właściwość wartości z pPrDefault.
         var styleSpacing = defaultStyle?.StyleParagraphProperties?.GetFirstChild<SpacingBetweenLines>();
@@ -1624,7 +1639,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (_defaultSpacingBeforeTw != null && int.TryParse(_defaultSpacingBeforeTw, out var beforeTw))
             css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeTw)));
         if (_defaultSpacingAfterTw != null && int.TryParse(_defaultSpacingAfterTw, out var afterTw))
-            css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterTw)));
+            css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterTw)));
         if (_defaultSpacingLine != null && int.TryParse(_defaultSpacingLine, out var lineTw))
         {
             if (_defaultSpacingLineRule == "exact" || _defaultSpacingLineRule == "atLeast")
@@ -1707,6 +1722,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         return string.Concat(order.Select(p => $"{p}:{props[p]};"));
     }
+
+    /// <summary>
+    /// Ustawia właściwość w inline CSS na zadaną wartość: nadpisuje istniejące wystąpienie,
+    /// a gdy właściwości nie ma — dopisuje ją na końcu (ADR-0053, zerowanie odstępów
+    /// contextualSpacing musi wygrać także z klasowym domyślnym odstępem dokumentu).
+    /// </summary>
+    private static string SetCssProperty(string css, string property, string value)
+    {
+        var pattern = $@"(?<![\w-]){Regex.Escape(property)}\s*:\s*[^;]+;";
+        return Regex.IsMatch(css, pattern)
+            ? Regex.Replace(css, pattern, $"{property}:{value};")
+            : $"{css}{property}:{value};";
+    }
+
+    /// <summary>
+    /// Efektywny styl akapitowy: jawny pStyle albo domyślny styl akapitowy dokumentu
+    /// (akapit bez pStyle jest w Wordzie akapitem stylu domyślnego).
+    /// </summary>
+    private string? EffectiveParagraphStyleId(Paragraph paragraph) =>
+        paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? _defaultParagraphStyleId;
 
     /// <summary>Wartość pojedynczej właściwości z inline CSS (ostatnie wystąpienie) lub null.</summary>
     private static string? ExtractCssProperty(string css, string property)
@@ -2159,6 +2194,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // jak w Wordzie. Flex (przybliżenie 50%/100%) zostaje dla body i braku pozycji.
         var effectiveTabStops = GetEffectiveTabStops(paraProps);
         var hasComplexField = paragraph.Descendants<FieldChar>().Any();
+        var hasTabChar = paragraph.Descendants<TabChar>().Any();
+
+        // Linia z WYPEŁNIACZEM tabulatora (w:leader — kropki spisu treści, podkreślenia
+        // formularzy): flex, tab → span.docx-tab-leader (flex:1, znaki wypełniacza maluje
+        // CSS GUI), ostatni segment (numer strony) dopychany do prawej jak w Wordzie.
+        // Dopuszcza pola złożone (wpisy TOC zawierają PAGEREF) — maszyna pól działa
+        // wewnątrz BuildLeaderTabContent. Pozycjonowanie absolutne nie umie namalować
+        // wypełniacza (nie zna szerokości tekstu przed stopem), stąd osobna ścieżka.
+        var useLeaderTabs = hasTabChar
+            && effectiveTabStops.Any(s => s.Leader != null)
+            && !isInTableCell;
+
         // Positional tab rendering honours the REAL tab-stop positions (left aligns the following
         // segment's start, right aligns its end, center centres it — the semantic difference Word
         // draws). Applied to body paragraphs as well as header/footer: a flex row only spreads
@@ -2169,8 +2216,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // and paints over the neighbouring column (and the cell's text-align stops applying).
         // Word resolves tabs in cells against the cell's own text column, so fall back to the
         // inline/flex rendering there; data-tab-stops still round-trips the stops unchanged.
-        var usePositionedTabs = effectiveTabStops.Count > 0
-            && paragraph.Descendants<TabChar>().Any()
+        var usePositionedTabs = !useLeaderTabs
+            && effectiveTabStops.Count > 0
+            && hasTabChar
             && !hasComplexField
             && !isInTableCell;
 
@@ -2179,11 +2227,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // either way (round-trip stays intact). A paragraph that merely DECLARES center/right
         // stops (w:tabs in pPr/style) without any tab char must render normally — flex on such
         // paragraphs re-laid-out header/footer lines after every save (bug 13261178).
-        var useFlexTabs = !usePositionedTabs
-            && paragraph.Descendants<TabChar>().Any()
+        var useFlexTabs = !useLeaderTabs && !usePositionedTabs
+            && hasTabChar
             && ParagraphHasAlignmentTab(paraProps);
         if (useFlexTabs)
             cssBuilder.Append("display:flex;align-items:baseline;width:100%;");
+        if (useLeaderTabs)
+            cssBuilder.Append("display:flex;align-items:baseline;");
         if (usePositionedTabs)
             cssBuilder.Append("position:relative;");
 
@@ -2207,10 +2257,52 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // właściwości (przeglądarka bierze ostatnią, ale regexy writera brały PIERWSZĄ —
         // nadpisanie stylu przez direct pPr ginęło na eksporcie).
         var cssStyle = DeduplicateCss(cssBuilder.ToString());
+
+        // ADR-0053: akapit z tłem/obramowaniem — w:after wraca na margin-bottom, bo
+        // padding-bottom malowałby odstęp tłem / wciągał go do wnętrza ramki (w Wordzie
+        // odstęp after jest POZA cieniowaniem i ramką). Świadoma degradacja: między takim
+        // akapitem a następnym marginesy kolapsują do max (rzadki przypadek).
+        if (!string.IsNullOrEmpty(borderCss)
+            || cssStyle.Contains("background-color", StringComparison.OrdinalIgnoreCase))
+        {
+            cssStyle = Regex.Replace(cssStyle, @"(?<![\w-])padding-bottom\s*:", "margin-bottom:");
+            // Domyślny odstęp dokumentu (--doc-par-margin na klasie .editor-content p) też
+            // jest paddingiem — przenieś go do margin-bottom, inaczej akapit z tłem dostałby
+            // go DODATKOWO (i zamalowany tłem).
+            if (!Regex.IsMatch(cssStyle, @"(?<![\w-])margin-bottom\s*:")
+                && _defaultSpacingAfterTw != null && int.TryParse(_defaultSpacingAfterTw, out var defAfterTw))
+            {
+                cssStyle += string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(defAfterTw));
+            }
+            cssStyle = SetCssProperty(cssStyle, "padding-bottom", "0");
+        }
+
+        // w:contextualSpacing (ADR-0053): Word ZNOSI before/after tego akapitu, gdy sąsiad
+        // (bezpośredni brat) ma ten sam styl akapitowy — bez tego listy i bloki stylowe
+        // renderowały pełne odstępy między swoimi pozycjami. Jawne zero wygrywa też
+        // z domyślnym odstępem dokumentu (--doc-par-margin) na klasie .editor-content p.
+        if (cssStyle.Contains("--w-contextual-spacing"))
+        {
+            var myStyleId = EffectiveParagraphStyleId(paragraph);
+            if (paragraph.PreviousSibling() is Paragraph prevPara
+                && EffectiveParagraphStyleId(prevPara) == myStyleId)
+            {
+                cssStyle = SetCssProperty(cssStyle, "margin-top", "0");
+            }
+            if (paragraph.NextSibling() is Paragraph nextPara
+                && EffectiveParagraphStyleId(nextPara) == myStyleId)
+            {
+                cssStyle = SetCssProperty(cssStyle, "margin-bottom", "0");
+                cssStyle = SetCssProperty(cssStyle, "padding-bottom", "0");
+            }
+        }
         var classAttr = docClass != null ? $" class=\"{docClass}\"" : string.Empty;
-        // data-style-id pozwala eksporterowi HTML→DOCX odtworzyć oryginalny styleId (np. Title, Subtitle),
-        // nawet jeśli wizualny tag to <p>.
-        var dataStyleAttr = !string.IsNullOrEmpty(styleId) && docClass != null
+        // data-style-id pozwala eksporterowi HTML→DOCX odtworzyć oryginalny styleId (np. Title,
+        // Subtitle), nawet jeśli wizualny tag to <p>. Style spisu treści (TOC1..9/TOCHeading,
+        // polskie „Spistreści…") też round-tripują — bez pStyle wpisy TOC traciły po zapisie
+        // tożsamość stylu i Word formatował zaktualizowany spis od zera.
+        var dataStyleAttr = !string.IsNullOrEmpty(styleId) && (docClass != null || IsTocParagraphStyleId(styleId))
             ? $" data-style-id=\"{System.Net.WebUtility.HtmlEncode(styleId)}\""
             : string.Empty;
 
@@ -2233,8 +2325,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var prevFlexTabs = _flexTabs;
         _flexTabs = useFlexTabs;
 
+        // Linia z wypełniaczem tabulatora (spis treści) ma pierwszeństwo — obsługuje też
+        // pola złożone (PAGEREF wpisów TOC) wewnątrz własnej segmentacji.
+        if (useLeaderTabs)
+        {
+            html.Append(BuildLeaderTabContent(paragraph, effectiveTabStops, document, sourcePart));
+        }
         // Obsługa złożonych pól (FieldChar Begin/Separate/End)
-        if (hasComplexField)
+        else if (hasComplexField)
         {
             html.Append(ConvertComplexFieldParagraphContent(paragraph, document, sourcePart));
         }
@@ -2252,13 +2350,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                         html.Append(ConvertRunToHtml(run, document, sourcePart));
                         break;
                     case Hyperlink hyperlink:
-                        html.Append(ConvertHyperlinkToHtml(hyperlink, document));
+                        html.Append(ConvertHyperlinkToHtml(hyperlink, document, sourcePart));
                         break;
                     case SimpleField simpleField:
                         html.Append(ConvertSimpleFieldToHtml(simpleField));
                         break;
                     case SdtRun sdtRun:
                         html.Append(ConvertSdtRunToHtml(sdtRun, document, sourcePart));
+                        break;
+                    case BookmarkStart bookmark:
+                        html.Append(RenderBookmarkStart(bookmark));
                         break;
                 }
             }
@@ -2450,7 +2551,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     FlushChunk();
                     break;
                 case Hyperlink hyperlink:
-                    segments[^1].Append(ConvertHyperlinkToHtml(hyperlink, document));
+                    segments[^1].Append(ConvertHyperlinkToHtml(hyperlink, document, sourcePart));
                     break;
                 case SimpleField simpleField:
                     segments[^1].Append(ConvertSimpleFieldToHtml(simpleField));
@@ -2490,6 +2591,175 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// Rendering akapitu z tab-stopem z WYPEŁNIACZEM (w:leader — kropki spisu treści,
+    /// podkreślenia formularzy): linia flex, treść dzielona na segmenty na tabulatorach,
+    /// tab z leaderem → span.docx-tab-leader (flex:1; znaki wypełniacza maluje CSS GUI),
+    /// więc numer strony kończy się przy prawym marginesie jak w Wordzie. Pozycjonowanie
+    /// absolutne (docx-tab-seg) nie umie namalować wypełniacza — nie zna szerokości tekstu
+    /// przed stopem — stąd osobna ścieżka. Obsługuje pola złożone (PAGEREF/TOC — wspólna
+    /// maszyna stanu + markery round-tripu) oraz hyperlinki: tab WEWNĄTRZ w:hyperlink
+    /// (typowy wpis TOC) rozcina &lt;a&gt; na segmenty (dwa &lt;a&gt; o tej samej kotwicy).
+    /// Mapowanie tabów do stopów OD KOŃCA (ostatni tab → ostatni stop): wpis „tytuł⇥5"
+    /// przy stopach [mały left, right dot] musi dostać stop prawy z kropkami, nie lewy.
+    /// </summary>
+    private string BuildLeaderTabContent(Paragraph paragraph, List<TabStopInfo> stops,
+        WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        var segments = new List<StringBuilder> { new() };
+        var state = new ComplexFieldState();
+        string? openAnchor = null; // otwarty tag <a …> — do ponownego otwarcia po cięciu segmentu
+
+        void AppendRun(Run run)
+        {
+            // Runy maszyny pól (fldChar/instrText) i pomijanie obsłużonej wartości —
+            // wspólna logika z ConvertComplexFieldParagraphContent (markery round-tripu tamże).
+            if (run.GetFirstChild<FieldChar>() != null
+                || (state.InField && run.GetFirstChild<FieldCode>() != null)
+                || (state.InField && state.Separated && state.ValueHandled))
+            {
+                AppendComplexFieldRun(run, segments[^1], state, document, sourcePart);
+                return;
+            }
+
+            var flags = GetRunSemanticFlags(run.RunProperties);
+            var (prefix, suffix) = BuildRunWrapper(run.RunProperties,
+                flags.Bold, flags.Italic, flags.Underline, flags.Strike, flags.Sup, flags.Sub);
+            var chunk = new StringBuilder();
+            void FlushChunk()
+            {
+                if (chunk.Length > 0)
+                {
+                    segments[^1].Append(prefix).Append(chunk).Append(suffix);
+                    chunk.Clear();
+                }
+            }
+            foreach (var rc in run.Elements())
+            {
+                if (rc is TabChar)
+                {
+                    FlushChunk();
+                    if (openAnchor != null) segments[^1].Append("</a>");
+                    segments.Add(new StringBuilder());
+                    if (openAnchor != null) segments[^1].Append(openAnchor);
+                }
+                else
+                {
+                    chunk.Append(ConvertRunChildToHtml(rc, document, sourcePart));
+                }
+            }
+            FlushChunk();
+        }
+
+        void AppendElements(IEnumerable<OpenXmlElement> elements)
+        {
+            foreach (var child in elements)
+            {
+                switch (child)
+                {
+                    case Run run:
+                        AppendRun(run);
+                        break;
+                    case Hyperlink hyperlink:
+                        var openTag = BuildAnchorOpenTag(hyperlink, document);
+                        segments[^1].Append(openTag);
+                        openAnchor = openTag;
+                        AppendElements(hyperlink.Elements());
+                        segments[^1].Append("</a>");
+                        openAnchor = null;
+                        break;
+                    case SimpleField simpleField:
+                        segments[^1].Append(ConvertSimpleFieldToHtml(simpleField));
+                        break;
+                    case SdtRun sdtRun:
+                        AppendComplexFieldSdtRun(sdtRun, segments[^1], state, document, sourcePart);
+                        break;
+                    case BookmarkStart bookmark:
+                        segments[^1].Append(RenderBookmarkStart(bookmark));
+                        break;
+                }
+            }
+        }
+
+        AppendElements(paragraph.Elements());
+
+        // Segment 0 = elastyczny element flex; min-width:0 pozwala zawijać długi tytuł
+        // wewnątrz segmentu zamiast wypychać numer strony poza stronę. Strut &#8203;
+        // dla akapitu zaczynającego się tabem (linia musi mieć wysokość).
+        // Klasa docx-tab-text: writer schodzi przez te wrappery PRZEZROCZYŚCIE
+        // (hyperlink/markery pól muszą wrócić na poziom treści akapitu).
+        var html = new StringBuilder();
+        html.Append("<span class=\"docx-tab-text\" style=\"min-width:0;\">")
+            .Append(segments[0].Length > 0 ? segments[0].ToString() : "&#8203;")
+            .Append("</span>");
+
+        var tabCount = segments.Count - 1;
+        for (int k = 1; k < segments.Count; k++)
+        {
+            // Ostatni tab → ostatni stop; wcześniejsze taby dostają wcześniejsze stopy,
+            // nadmiarowe (więcej tabów niż stopów) → stały odstęp jak inline'owy TabChar.
+            var stopIndex = stops.Count - tabCount + (k - 1);
+            var stop = stopIndex >= 0 && stopIndex < stops.Count ? stops[stopIndex] : null;
+            if (stop?.Leader != null)
+            {
+                html.Append($"<span class=\"docx-tab-leader\" data-leader=\"{stop.Leader}\" " +
+                            "style=\"flex:1 1 0;min-width:8px;position:relative;overflow:hidden;\">\t</span>");
+            }
+            else
+            {
+                html.Append("<span style=\"display:inline-block;min-width:2em;white-space:pre;\">\t</span>");
+            }
+            html.Append("<span class=\"docx-tab-text\" style=\"white-space:pre;\">")
+                .Append(segments[k])
+                .Append("</span>");
+        }
+
+        return html.ToString();
+    }
+
+    /// <summary>
+    /// Tag otwierający &lt;a&gt; dla w:hyperlink. Relacja zewnętrzna (r:id) → pełny URL,
+    /// nowa karta, klasyczny niebieski (parytet z dotychczasowym renderem). Kotwica
+    /// WEWNĘTRZNA (w:anchor — cel-zakładka, np. wpis spisu treści) → href="#nazwa"
+    /// BEZ wymuszania koloru: wpisy TOC w Wordzie wyglądają jak zwykły tekst, stylizację
+    /// niesie formatowanie runów; data-anchor round-tripuje cel w writerze.
+    /// </summary>
+    private string BuildAnchorOpenTag(Hyperlink hyperlink, WordprocessingDocument document)
+    {
+        var relationshipId = hyperlink.Id?.Value;
+        if (relationshipId != null)
+        {
+            var url = document.MainDocumentPart?.HyperlinkRelationships
+                .FirstOrDefault(r => r.Id == relationshipId)?.Uri?.ToString();
+            if (!string.IsNullOrEmpty(url))
+                return $"<a href=\"{EscapeHtml(url)}\" target=\"_blank\" style=\"color:#0563C1;text-decoration:underline;\">";
+        }
+
+        var anchor = hyperlink.Anchor?.Value;
+        if (!string.IsNullOrEmpty(anchor))
+        {
+            var encoded = System.Net.WebUtility.HtmlEncode(anchor);
+            return $"<a href=\"#{encoded}\" data-anchor=\"{encoded}\">";
+        }
+
+        return "<a href=\"#\" target=\"_blank\" style=\"color:#0563C1;text-decoration:underline;\">";
+    }
+
+    /// <summary>
+    /// Zakładka (w:bookmarkStart) jako niewidoczny marker round-tripu — cel wewnętrznych
+    /// hyperlinków i pól PAGEREF (wpisy spisu treści celują w zakładki _Toc… przy
+    /// nagłówkach). Bez zachowania zakładek każdy zapis unieważniał cele TOC
+    /// („Błąd! Nie zdefiniowano zakładki." po aktualizacji pola w Wordzie).
+    /// _GoBack (pozycja kursora Worda) pomijany. Writer odtwarza parę
+    /// bookmarkStart/bookmarkEnd w miejscu markera.
+    /// </summary>
+    private static string RenderBookmarkStart(BookmarkStart bookmark)
+    {
+        var name = bookmark.Name?.Value;
+        if (string.IsNullOrEmpty(name) || name == "_GoBack") return string.Empty;
+        return $"<span class=\"docx-bookmark\" data-bm-name=\"{System.Net.WebUtility.HtmlEncode(name)}\" style=\"display:none;\"></span>";
+    }
+
+    /// <summary>
     /// Konwertuje zawartość paragrafu ze złożonymi kodami pól
     /// </summary>
     private string ConvertComplexFieldParagraphContent(Paragraph paragraph, WordprocessingDocument document, OpenXmlPart? sourcePart)
@@ -2498,6 +2768,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         AppendComplexFieldContent(paragraph.Elements(), html, new ComplexFieldState(), document, sourcePart);
         return html.ToString();
     }
+
+    /// <summary>
+    /// Instrukcje pól złożonych round-tripowane markerami docx-fld-marker: spis treści (TOC)
+    /// i odsyłacze numeru strony jego wpisów (PAGEREF). Bez tego pierwszy zapis z edytora
+    /// zamieniał pole na martwy tekst — Word tracił możliwość aktualizacji spisu.
+    /// </summary>
+    private static bool IsRoundTrippedFieldInstruction(string instruction)
+    {
+        var instr = instruction.TrimStart();
+        return instr.StartsWith("TOC", StringComparison.OrdinalIgnoreCase)
+            || instr.StartsWith("PAGEREF", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Niewidoczny marker początku pola złożonego (instrukcja w data-fld-instr).</summary>
+    private static string FieldMarkerBegin(string instruction) =>
+        $"<span class=\"docx-fld-marker\" data-fld=\"begin\" data-fld-instr=\"{System.Net.WebUtility.HtmlEncode(instruction.Trim())}\" style=\"display:none;\"></span>";
+
+    /// <summary>Niewidoczny marker końca pola złożonego.</summary>
+    private const string FieldMarkerEndHtml =
+        "<span class=\"docx-fld-marker\" data-fld=\"end\" style=\"display:none;\"></span>";
+
+    /// <summary>
+    /// Stos otwartych pól złożonych (fldChar Begin bez End). Żyje na poziomie konwertera,
+    /// bo pole potrafi przekraczać granice akapitów (TOC: begin w pierwszym wpisie spisu,
+    /// end w ostatnim), a ComplexFieldState jest tworzony per akapit. Wartość elementu:
+    /// czy dla tej ramki wyemitowano marker round-tripu (End musi go wtedy domknąć).
+    /// </summary>
+    private readonly List<bool> _openFieldFrames = new();
 
     /// <summary>
     /// Stan maszyny pól złożonych (fldChar Begin/Separate/End), współdzielony między poziomem
@@ -2526,13 +2824,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     AppendComplexFieldRun(run, html, state, document, sourcePart);
                     break;
                 case Hyperlink hyperlink:
-                    html.Append(ConvertHyperlinkToHtml(hyperlink, document));
+                    // Wspólny stan pola: PAGEREF wpisu spisu treści żyje WEWNĄTRZ w:hyperlink.
+                    html.Append(ConvertHyperlinkToHtml(hyperlink, document, sourcePart, state));
                     break;
                 case SimpleField simpleField:
                     html.Append(ConvertSimpleFieldToHtml(simpleField));
                     break;
                 case SdtRun sdtRun:
                     AppendComplexFieldSdtRun(sdtRun, html, state, document, sourcePart);
+                    break;
+                case BookmarkStart bookmark:
+                    html.Append(RenderBookmarkStart(bookmark));
                     break;
             }
         }
@@ -2572,6 +2874,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 state.Instruction = string.Empty;
                 state.Separated = false;
                 state.ValueHandled = false;
+                // Ramka otwartego pola — na poziomie KONWERTERA, nie stanu akapitu: pole TOC
+                // otwiera się w pierwszym wpisie spisu, a domyka w ostatnim (inne akapity).
+                _openFieldFrames.Add(false);
             }
             else if (fctVal == FieldCharValues.Separate)
             {
@@ -2581,8 +2886,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 // editor fills those in live. Everything else (DATE/TIME, REF,
                 // TOC, MERGEFIELD, …) keeps its cached value (rendered from the
                 // runs after the separator) so no field value is lost.
+                // UWAGA: „PAGEREF" też zawiera „PAGE" — to odsyłacz do zakładki (numer strony
+                // CELU, np. wpis spisu treści), nie numer bieżącej strony; placeholder {page}
+                // pokazywałby złą wartość, więc PAGEREF renderuje wartość zbuforowaną.
                 var instr = state.Instruction.Trim().ToUpperInvariant();
-                if (instr.Contains("PAGE") && !instr.Contains("NUMPAGES") && !instr.Contains("SECTIONPAGES"))
+                if (instr.Contains("PAGE") && !instr.Contains("PAGEREF")
+                    && !instr.Contains("NUMPAGES") && !instr.Contains("SECTIONPAGES"))
                 {
                     html.Append(FieldSpan("field-page", "{page}", run));
                     state.ValueHandled = true;
@@ -2592,6 +2901,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     html.Append(FieldSpan("field-numpages", "{pages}", run));
                     state.ValueHandled = true;
                 }
+                else if (IsRoundTrippedFieldInstruction(state.Instruction))
+                {
+                    // TOC/PAGEREF: instrukcja pola round-tripuje markerem — writer odtwarza
+                    // fldChar begin+instrText+separate, więc Word dalej umie zaktualizować
+                    // spis treści po zapisie z edytora. Wartość zbuforowana renderuje się
+                    // normalnie za markerem.
+                    html.Append(FieldMarkerBegin(state.Instruction));
+                    if (_openFieldFrames.Count > 0) _openFieldFrames[^1] = true;
+                }
             }
             else if (fctVal == FieldCharValues.End)
             {
@@ -2599,7 +2917,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 {
                     // Pole bez separatora - spróbuj zinterpretować
                     var instrEnd = state.Instruction.Trim().ToUpperInvariant();
-                    if (instrEnd.Contains("PAGE") && !instrEnd.Contains("NUMPAGES"))
+                    if (instrEnd.Contains("PAGE") && !instrEnd.Contains("PAGEREF") && !instrEnd.Contains("NUMPAGES"))
                     {
                         html.Append(FieldSpan("field-page", "{page}", run));
                     }
@@ -2607,6 +2925,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     {
                         html.Append(FieldSpan("field-numpages", "{pages}", run));
                     }
+                    else if (IsRoundTrippedFieldInstruction(state.Instruction))
+                    {
+                        // Pole bez separatora (bez wartości zbuforowanej) — marker początku,
+                        // domknięcie emituje zdjęcie ramki poniżej.
+                        html.Append(FieldMarkerBegin(state.Instruction));
+                        if (_openFieldFrames.Count > 0) _openFieldFrames[^1] = true;
+                    }
+                }
+                if (_openFieldFrames.Count > 0)
+                {
+                    var markerEmitted = _openFieldFrames[^1];
+                    _openFieldFrames.RemoveAt(_openFieldFrames.Count - 1);
+                    if (markerEmitted) html.Append(FieldMarkerEndHtml);
                 }
                 state.InField = false;
                 state.Instruction = string.Empty;
@@ -2715,6 +3046,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         return 0;
     }
+
+    /// <summary>
+    /// Style akapitowe spisu treści: TOC1..TOC9, TOCHeading oraz polskie identyfikatory
+    /// „Spistreści…"/„Nagłówekspisutreści" (styleId bywa lokalizowany w plikach z polskiego
+    /// Worda). Ich pStyle round-tripuje przez data-style-id.
+    /// </summary>
+    private static bool IsTocParagraphStyleId(string styleId) =>
+        Regex.IsMatch(styleId, @"^TOC(\d|Heading)$", RegexOptions.IgnoreCase)
+        || styleId.StartsWith("Spistre", StringComparison.OrdinalIgnoreCase)
+        || styleId.StartsWith("Nagwekspisutreci", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Mapuje nazwane style Worda (Title/Subtitle) na klasy CSS dla warstwy prezentacyjnej.
@@ -3198,12 +3539,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
             if (!afterAuto)
             {
+                // w:after jako padding-bottom, NIE margin-bottom (ADR-0053): Word SUMUJE
+                // after akapitu z before następnego, a marginesy CSS rodzeństwa kolapsują
+                // do max — między akapitami znikał mniejszy z dwóch odstępów. Padding nie
+                // kolapsuje: gap = padding-bottom(A) + margin-top(B) = suma jak w Wordzie.
+                // Akapit z tłem/obramowaniem wraca na margin-bottom w ConvertParagraphToHtml.
                 if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
-                    css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
+                    css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
                 else if (spacing.AfterLines?.Value != null)
                 {
                     var pt = spacing.AfterLines.Value / 100.0 * (_defaultFontSizePt ?? 11);
-                    css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", pt));
+                    css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", pt));
                 }
             }
 
@@ -3730,6 +4076,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private static string FootnoteHtmlId(long ooxmlId) => $"fn-{ooxmlId}";
 
     /// <summary>
+    /// Odczytuje format numeracji przypisów z settings.xml (<c>w:footnotePr/w:numFmt</c> lub
+    /// <c>w:endnotePr/w:numFmt</c>, document-wide). Zwraca token rozumiany przez GUI albo <c>null</c>,
+    /// gdy formatu brak lub jest spoza wspieranego zbioru (GUI zdegraduje do domyślnej Worda:
+    /// dolne = cyfry, końcowe = małe rzymskie). Sekcyjne override (<c>sectPr</c>) nie są czytane.
+    /// </summary>
+    private static string? ReadNoteNumberFormat(DocumentSettingsPart? settingsPart, bool endnote)
+    {
+        var settings = settingsPart?.Settings;
+        if (settings == null)
+            return null;
+
+        var numFmt = endnote
+            ? settings.GetFirstChild<EndnoteDocumentWideProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value
+            : settings.GetFirstChild<FootnoteDocumentWideProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value;
+        if (numFmt == null)
+            return null;
+
+        // Tylko formaty, które GUI umie odwzorować (mapowanie jak w bloku list ConvertParagraph);
+        // reszta → null (degradacja do domyślnej), bez utraty treści/round-tripu (settings.xml zachowany).
+        if (numFmt == NumberFormatValues.Decimal) return "decimal";
+        if (numFmt == NumberFormatValues.LowerRoman) return "lowerRoman";
+        if (numFmt == NumberFormatValues.UpperRoman) return "upperRoman";
+        if (numFmt == NumberFormatValues.LowerLetter) return "lowerLetter";
+        if (numFmt == NumberFormatValues.UpperLetter) return "upperLetter";
+        return null;
+    }
+
+    /// <summary>
     /// Renderuje odwołanie do przypisu jako semantyczny <c>&lt;sup&gt;</c> z numerem widocznym
     /// (kolejność pierwszych odwołań) i stabilnym <c>data-footnote-id</c>. Wiele odwołań do tego
     /// samego przypisu współdzieli numer i identyfikator.
@@ -3974,7 +4348,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Kolor wypełnienia BIERZEMY z properties kształtu (spPr/a:solidFill), nie z pierwszego
         // solidFill w poddrzewie — ten mógłby należeć do a:ln (obrys) lub ukrytej linii w extLst.
-        var fillHex = GetShapeFillHex(drawing, custom);
+        // Jawny a:noFill w spPr wygrywa ze WSZYSTKIM (także z wps:style/a:fillRef) — inaczej
+        // niewidoczny w Wordzie kształt-obwiednia maluje się solidnym kolorem NAD sąsiednim
+        // kształtem logo (kwadrat zamiast lwa w stopce).
+        var noFill = ShapeHasExplicitNoFill(drawing, custom);
+        var fillHex = noFill ? null : GetShapeFillHex(drawing, custom);
         var strokeHex = HexColorOrNull(outline?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>()
             .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
 
@@ -3983,7 +4361,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // grafika z oryginału NIE rysowała się w edytorze. Tłumaczymy ścieżkę na inline SVG.
         if (custom != null && widthPx > 0 && heightPx > 0)
         {
-            var svg = BuildCustomGeometrySvg(custom, widthPx, heightPx, fillHex, strokeHex, lineWidthPx);
+            var svg = BuildCustomGeometrySvg(custom, widthPx, heightPx, fillHex, strokeHex, lineWidthPx, noFill);
             if (!string.IsNullOrEmpty(svg))
                 return $"<div class=\"docx-shape docx-custgeom\" data-shape=\"custom\" "
                      + $"style=\"{StripSize(pos)}width:{widthPx}px;height:{heightPx}px;\">{svg}</div>";
@@ -4037,6 +4415,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return FillReferenceHex(fillRef);
     }
 
+    /// <summary>
+    /// Czy kształt deklaruje JAWNY brak wypełnienia: <c>spPr/a:noFill</c> (bezpośrednie dziecko
+    /// właściwości kształtu — a:noFill wewnątrz a:ln to brak OBRYSU i tu nie łapie się przez
+    /// Elements). Jawny noFill ma pierwszeństwo przed fallbackami koloru (Descendants/fillRef),
+    /// inaczej kształt niewidoczny w Wordzie malowałby się solidnym kolorem.
+    /// </summary>
+    private static bool ShapeHasExplicitNoFill(Drawing drawing, DocumentFormat.OpenXml.Drawing.CustomGeometry? custom)
+    {
+        var geom = (OpenXmlElement?)custom
+            ?? drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>().FirstOrDefault();
+        return geom?.Parent?.Elements<DocumentFormat.OpenXml.Drawing.NoFill>().Any() == true;
+    }
+
     /// <summary>Hex (bez „#") z a:solidFill: jawny a:srgbClr, inaczej a:schemeClr rozwiązany z theme1.xml.</summary>
     private string? SolidFillHex(DocumentFormat.OpenXml.Drawing.SolidFill? fill)
         => fill == null ? null
@@ -4088,7 +4479,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// (guides/formuły pomijane — rzadkie w eksportowanych ścieżkach). Zwraca "" gdy brak ścieżki.
     /// </summary>
     private static string BuildCustomGeometrySvg(DocumentFormat.OpenXml.Drawing.CustomGeometry custom,
-        int widthPx, int heightPx, string? fillHex, string? strokeHex, int strokeWidthPx)
+        int widthPx, int heightPx, string? fillHex, string? strokeHex, int strokeWidthPx, bool noFill = false)
     {
         var pathList = custom.GetFirstChild<DocumentFormat.OpenXml.Drawing.PathList>();
         if (pathList == null) return string.Empty;
@@ -4152,7 +4543,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Brak rozwiązanego wypełnienia: NIE malujemy solidnego czarnego bloba (najgorszy wynik dla
         // logo/wordmark). currentColor dziedziczy kolor tekstu otoczenia (w stopkach zwykle brand/tekst).
-        var fill = fillHex != null ? $"#{fillHex}" : "currentColor";
+        // Jawny a:noFill → fill="none" (kontur/obwiednia bez tuszu, jak w Wordzie).
+        var fill = noFill ? "none" : fillHex != null ? $"#{fillHex}" : "currentColor";
         var stroke = strokeHex != null
             ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
             : string.Empty;
@@ -4504,36 +4896,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>
     /// Konwertuje hiperłącze na HTML
     /// </summary>
-    private string ConvertHyperlinkToHtml(Hyperlink hyperlink, WordprocessingDocument document)
+    /// <summary>
+    /// w:hyperlink → &lt;a&gt;. Poprzednio renderowane były WYŁĄCZNIE węzły Text runów —
+    /// tabulator i pole PAGEREF wewnątrz hyperlinka wpisu spisu treści ginęły (tytuł sklejony
+    /// z numerem strony, bez kropek). Teraz treść idzie pełną maszyną (formatowanie, taby,
+    /// pola złożone ze wspólnym stanem — PAGEREF renderuje zbuforowany numer + marker
+    /// round-tripu), a kotwica wewnętrzna (w:anchor) daje href="#cel" zamiast martwego "#".
+    /// </summary>
+    private string ConvertHyperlinkToHtml(Hyperlink hyperlink, WordprocessingDocument document,
+        OpenXmlPart? sourcePart = null, ComplexFieldState? state = null)
     {
         var html = new StringBuilder();
-        
-        var relationshipId = hyperlink.Id?.Value;
-        string? url = null;
-
-        if (relationshipId != null)
-        {
-            var rel = document.MainDocumentPart?.HyperlinkRelationships
-                .FirstOrDefault(r => r.Id == relationshipId);
-            url = rel?.Uri?.ToString();
-        }
-
-        html.Append($"<a href=\"{EscapeHtml(url ?? "#")}\" target=\"_blank\" style=\"color:#0563C1;text-decoration:underline;\">");
-        
-        foreach (var run in hyperlink.Elements<Run>())
-        {
-            var runProps = run.RunProperties;
-            var cssStyle = GetRunStyleClean(runProps);
-            
-            html.Append($"<span style=\"{cssStyle}\">");
-            foreach (var child in run.Elements())
-            {
-                if (child is Text text)
-                    html.Append(EscapeHtml(text.Text));
-            }
-            html.Append("</span>");
-        }
-
+        html.Append(BuildAnchorOpenTag(hyperlink, document));
+        AppendComplexFieldContent(hyperlink.Elements(), html, state ?? new ComplexFieldState(), document, sourcePart);
         html.Append("</a>");
         return html.ToString();
     }
@@ -5645,7 +6020,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
             css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeVal)));
         if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
-            css.Append(string.Format(inv, "margin-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
+            css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
         if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
         {
             var lineRule = spacing.LineRule?.Value;
@@ -5902,7 +6277,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     inner.Append(ConvertRunToHtml(run, document, sourcePart));
                     break;
                 case Hyperlink hl:
-                    inner.Append(ConvertHyperlinkToHtml(hl, document));
+                    inner.Append(ConvertHyperlinkToHtml(hl, document, sourcePart));
                     break;
                 case SimpleField sf:
                     inner.Append(ConvertSimpleFieldToHtml(sf));

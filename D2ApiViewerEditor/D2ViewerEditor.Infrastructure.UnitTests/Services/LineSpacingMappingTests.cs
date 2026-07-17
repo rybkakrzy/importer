@@ -1,4 +1,4 @@
-using D2ViewerEditor.Infrastructure.Services;
+﻿using D2ViewerEditor.Infrastructure.Services;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -195,8 +195,10 @@ public class LineSpacingMappingTests
     [Test]
     public void SpaceBeforeAfter_MapToMarginsInPoints()
     {
+        // before = margin-top, after = padding-bottom (ADR-0053: padding nie kolapsuje,
+        // więc after(A) + before(B) sumują się między akapitami jak w Wordzie).
         var css = ParagraphCss(new SpacingBetweenLines { Before = "240", After = "200" });
         css.Should().Contain("margin-top:12pt;");
-        css.Should().Contain("margin-bottom:10pt;");
+        css.Should().Contain("padding-bottom:10pt;");
     }
 }

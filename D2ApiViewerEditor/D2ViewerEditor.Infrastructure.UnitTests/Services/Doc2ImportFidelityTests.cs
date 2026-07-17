@@ -330,7 +330,7 @@ public class Doc2ImportFidelityTests
         var html = _reader.Convert(ms).Html;
 
         html.Should().Contain("margin-top:12pt;");     // 240 tw = 12 pt (odstęp PRZED)
-        html.Should().Contain("margin-bottom:6pt;");   // 120 tw = 6 pt (odstęp PO)
+        html.Should().Contain("padding-bottom:6pt;");  // 120 tw = 6 pt (odstęp PO, ADR-0053)
         html.Should().Contain("line-height:1.8;");     // 360/240 × 1.2 (kalibracja PG-09, font nieznany)
         html.Should().Contain("--w-line-tw:360;");     // marker round-trip oryginału
         html.Should().Contain("<br/>");                // ręczne złamanie wiersza
@@ -514,6 +514,36 @@ public class Doc2ImportFidelityTests
 
         html.Should().Contain("docx-custgeom").And.Contain("fill=\"#FF6200\"");
         html.Should().NotContain("#000000");
+    }
+
+    [Test]
+    public void CustomGeometryShape_ExplicitNoFill_RendersWithoutInk()
+    {
+        // Kształt z JAWNYM a:noFill w spPr (np. niewidoczna obwiednia logo w stopce) mimo
+        // referencji stylu wps:style/a:fillRef. Wcześniej noFill był ignorowany → fallback
+        // (fillRef/Descendants) malował solidny kolor, który zakrywał sąsiedni kształt logo
+        // („kwadrat zamiast lwa"). Word takiego kształtu nie maluje → fill="none".
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""714375"" cy=""714375""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp>
+        <wps:spPr><a:custGeom><a:pathLst>
+          <a:path w=""100"" h=""100""><a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo>
+            <a:lnTo><a:pt x=""100"" y=""0""/></a:lnTo><a:lnTo><a:pt x=""100"" y=""100""/></a:lnTo><a:close/></a:path>
+        </a:pathLst></a:custGeom><a:noFill/></wps:spPr>
+        <wps:style><a:fillRef idx=""1""><a:schemeClr val=""accent1""/></a:fillRef></wps:style>
+      </wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        using var ms = DocxFromRawBodyWithTheme(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-custgeom");
+        html.Should().Contain("fill=\"none\"");
+        // Ani kolor motywu z fillRef, ani currentColor — jawny noFill wygrywa ze wszystkim.
+        html.Should().NotContain("fill=\"#FF6200\"").And.NotContain("fill=\"currentColor\"");
     }
 
     [Test]

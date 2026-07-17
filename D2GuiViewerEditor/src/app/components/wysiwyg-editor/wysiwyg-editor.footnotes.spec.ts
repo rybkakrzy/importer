@@ -244,4 +244,39 @@ describe('WysiwygEditorComponent — przypisy dolne', () => {
     expect(saved).not.toContain('Pierwszy przypis.');
     expect(saved).not.toContain('footnote-item');
   });
+
+  it('numeracja wg formatu z dokumentu (w:numFmt): upperLetter → A, B w odwołaniach i wpisach', () => {
+    component.footnoteNumberFormat = 'upperLetter';
+    const host = load();
+
+    // Odwołania w treści (<sup>) przeliczone przez syncFootnotesWithBody na format dokumentu.
+    const refs = Array.from(host.querySelectorAll('sup.footnote-ref')) as HTMLElement[];
+    expect(refs.map(r => r.textContent)).toEqual(['A', 'B']);
+    expect(refs[0].getAttribute('aria-label')).toBe('Przypis A');
+
+    // Etykiety wpisów regionu też wg formatu.
+    const items = Array.from(host.querySelectorAll('.footnotes-region .footnote-item')) as HTMLElement[];
+    expect(items.map(i => i.querySelector('.footnote-item-number')?.textContent)).toEqual(['A', 'B']);
+  });
+
+  it('bez formatu z dokumentu przypisy dolne domyślnie cyframi (jak MS Word)', () => {
+    const host = load();
+    const refs = Array.from(host.querySelectorAll('sup.footnote-ref')) as HTMLElement[];
+    expect(refs.map(r => r.textContent)).toEqual(['1', '2']);
+  });
+
+  it('_formatNoteLabel + _toWordLetters: rzymskie/litery jak Word', () => {
+    const fmt = (component as unknown as {
+      _formatNoteLabel(n: number, f: string | undefined, e: boolean): string;
+    })._formatNoteLabel.bind(component);
+    expect(fmt(4, 'lowerRoman', false)).toBe('iv');
+    expect(fmt(4, 'upperRoman', false)).toBe('IV');
+    expect(fmt(1, 'lowerLetter', false)).toBe('a');
+    expect(fmt(27, 'lowerLetter', false)).toBe('aa'); // Word: powtórzona litera, nie „aa" bijektywne
+    expect(fmt(28, 'upperLetter', false)).toBe('BB');
+    // Fallback wg typu: dolne = cyfry, końcowe = rzymskie.
+    expect(fmt(3, undefined, false)).toBe('3');
+    expect(fmt(3, undefined, true)).toBe('iii');
+    expect(fmt(3, 'wtf-nieznany', false)).toBe('3');
+  });
 });

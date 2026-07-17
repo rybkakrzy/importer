@@ -151,6 +151,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private string? _docDefaultSpacingLineRule;
     // Układ kolumn sekcji bazowej (0) z data-col-* kontenera .document-content (ADR-0039).
     private ColumnLayout? _docDefaultColumns;
+    // Licznik pól złożonych otwartych markerem docx-fld-marker (TOC/PAGEREF) — End emitowany
+    // tylko przy dodatnim liczniku (osierocony End uszkadza dokument), brakujące End domykane
+    // po konwersji body.
+    private int _openFieldMarkerCount;
+    // Unikalne w:id zakładek odtwarzanych z markerów docx-bookmark (cele PAGEREF/TOC).
+    private int _nextBookmarkId = 1;
 
     /// <summary>
     /// Konwertuje HTML na plik DOCX
@@ -192,6 +198,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _docDefaultSpacingBeforeTw = _docDefaultSpacingAfterTw = null;
             _docDefaultSpacingLine = _docDefaultSpacingLineRule = null;
             _docDefaultColumns = null;
+            _openFieldMarkerCount = 0;
+            _nextBookmarkId = 1;
 
             var body = new Body();
             _mainPart.Document.Body = body;
@@ -213,6 +221,24 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             AddDocumentStyles(document);
 
             ConvertHtmlToBody(htmlDoc.DocumentNode, body);
+
+            // Strażnik balansu pól złożonych: pole otwarte markerem begin (TOC/PAGEREF),
+            // którego marker końca zniknął w edycji, domykamy na końcu treści — niedomknięty
+            // fldChar Begin uszkadza dokument w Wordzie.
+            if (_openFieldMarkerCount > 0)
+            {
+                var lastPara = body.Elements<Paragraph>().LastOrDefault();
+                if (lastPara == null)
+                {
+                    lastPara = new Paragraph();
+                    body.Append(lastPara);
+                }
+                while (_openFieldMarkerCount > 0)
+                {
+                    lastPara.Append(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
+                    _openFieldMarkerCount--;
+                }
+            }
 
             // Ustaw metadane
             if (metadata != null)
@@ -3559,7 +3585,22 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 baseRunProps = null;
         }
 
-        foreach (var child in node.ChildNodes)
+        AppendInlineChildren(paragraph, node.ChildNodes, baseRunProps);
+
+        if (!paragraph.Elements<Run>().Any() && !paragraph.Elements<Hyperlink>().Any())
+        {
+            paragraph.Append(new Run(new Text("") { Space = SpaceProcessingModeValues.Preserve }));
+        }
+    }
+
+    /// <summary>
+    /// Pętla treści inline akapitu — wydzielona z <see cref="AppendInlineContent"/>, bo wrappery
+    /// segmentów linii tabulatorowej readera (span.docx-tab-text) są PRZEZROCZYSTE: ich dzieci
+    /// (hyperlink wpisu spisu treści, markery pól, zakładki) muszą trafić na poziom akapitu.
+    /// </summary>
+    private void AppendInlineChildren(Paragraph paragraph, IEnumerable<HtmlNode> children, RunProperties? baseRunProps)
+    {
+        foreach (var child in children)
         {
             // Pole tekstowe wewnątrz akapitu/li (div w <li> jest poprawnym flow content —
             // reader nie hoistuje go przed element listy) → drawing inline w tym akapicie.
@@ -3599,17 +3640,118 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 }
             }
 
+            if (child.NodeType == HtmlNodeType.Element
+                && child.Name.Equals("span", StringComparison.OrdinalIgnoreCase))
+            {
+                // Wrapper segmentu linii tabulatorowej (reader, spis treści) — przezroczysty:
+                // dzieci są treścią akapitu (hyperlink/markery pól muszą wrócić na ten poziom).
+                if (child.HasClass("docx-tab-text"))
+                {
+                    AppendInlineChildren(paragraph, child.ChildNodes, MergeRunProps(baseRunProps, child));
+                    continue;
+                }
+
+                // Zakładka (cel PAGEREF/hyperlinków wewnętrznych, np. _Toc… przy nagłówku) —
+                // odtwarzamy parę bookmarkStart/bookmarkEnd z unikalnym w:id.
+                if (child.HasClass("docx-bookmark"))
+                {
+                    var bmName = System.Net.WebUtility.HtmlDecode(child.GetAttributeValue("data-bm-name", ""));
+                    if (!string.IsNullOrEmpty(bmName))
+                    {
+                        var bmId = (_nextBookmarkId++).ToString();
+                        paragraph.Append(new BookmarkStart { Name = bmName, Id = bmId });
+                        paragraph.Append(new BookmarkEnd { Id = bmId });
+                    }
+                    continue;
+                }
+            }
+
+            // Hiperłącze inline → PRAWDZIWY w:hyperlink (wcześniej degradowało do stylizowanych
+            // runów — klik przestawał działać w Wordzie po pierwszym zapisie).
+            if (child.NodeType == HtmlNodeType.Element
+                && child.Name.Equals("a", StringComparison.OrdinalIgnoreCase))
+            {
+                var hyperlink = BuildHyperlinkElement(child, baseRunProps);
+                if (hyperlink != null)
+                {
+                    paragraph.Append(hyperlink);
+                    continue;
+                }
+            }
+
             var runs = CreateRunsFromNode(child, baseRunProps);
             foreach (var run in runs)
             {
                 paragraph.Append(run);
             }
         }
+    }
 
-        if (!paragraph.Elements<Run>().Any() && !paragraph.Elements<Hyperlink>().Any())
+    /// <summary>Klon odziedziczonych RunProperties wzbogacony o inline style danego węzła.</summary>
+    private RunProperties? MergeRunProps(RunProperties? baseRunProps, HtmlNode node)
+    {
+        var style = node.GetAttributeValue("style", "");
+        if (string.IsNullOrEmpty(style)) return baseRunProps;
+        var merged = (baseRunProps?.CloneNode(true) as RunProperties) ?? new RunProperties();
+        ApplyRunStyle(merged, style);
+        return merged.HasChildren ? merged : baseRunProps;
+    }
+
+    /// <summary>
+    /// Odtwarza w:hyperlink z inline'owego &lt;a&gt;. Kotwica wewnętrzna (data-anchor lub
+    /// href="#zakładka" — wpisy spisu treści) → w:anchor BEZ narzucania koloru (wpisy TOC
+    /// w Wordzie wyglądają jak zwykły tekst; stylizację niosą runy). URL → relacja zewnętrzna
+    /// ze stylem Hyperlink (parytet z dotychczasowym wyglądem). Null przy nieprawidłowym URI —
+    /// wywołujący degraduje do zwykłych runów.
+    /// </summary>
+    private Hyperlink? BuildHyperlinkElement(HtmlNode node, RunProperties? inheritedProps)
+    {
+        var href = node.GetAttributeValue("href", "");
+        var anchor = System.Net.WebUtility.HtmlDecode(node.GetAttributeValue("data-anchor", ""));
+        if (string.IsNullOrEmpty(anchor) && href.StartsWith('#') && href.Length > 1)
+            anchor = System.Net.WebUtility.HtmlDecode(href[1..]);
+
+        Hyperlink hyperlink;
+        var isInternal = !string.IsNullOrEmpty(anchor);
+        if (isInternal)
         {
-            paragraph.Append(new Run(new Text("") { Space = SpaceProcessingModeValues.Preserve }));
+            hyperlink = new Hyperlink { Anchor = anchor, History = true };
         }
+        else
+        {
+            if (string.IsNullOrEmpty(href) || href == "#") return null;
+            try
+            {
+                var relId = _mainPart!.AddHyperlinkRelationship(new Uri(href, UriKind.RelativeOrAbsolute), true).Id;
+                hyperlink = new Hyperlink { Id = relId, History = true };
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        foreach (var child in node.ChildNodes)
+        {
+            // Markery pól (PAGEREF wpisu TOC żyje WEWNĄTRZ hyperlinka) i taby idą
+            // przez CreateRunsFromNode jak każda treść inline.
+            foreach (var run in CreateRunsFromNode(child, inheritedProps))
+            {
+                if (!isInternal)
+                {
+                    run.RunProperties ??= new RunProperties();
+                    if (!run.RunProperties.Elements<Color>().Any())
+                        run.RunProperties.Append(new Color { Val = "0563C1" });
+                    if (!run.RunProperties.Elements<Underline>().Any())
+                        run.RunProperties.Append(new Underline { Val = UnderlineValues.Single });
+                    if (!run.RunProperties.Elements<RunStyle>().Any())
+                        run.RunProperties.Append(new RunStyle { Val = "Hyperlink" });
+                }
+                hyperlink.Append(run);
+            }
+        }
+
+        return hyperlink;
     }
 
     /// <summary>
@@ -3709,6 +3851,51 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                         runs.AddRange(CreateRunsFromNode(segChild, inheritedProps));
                     break;
                 }
+
+                // Wypełniacz tabulatora (spis treści, w:leader) → sam w:tab. Kropki są
+                // prezentacyjne (pseudo-element CSS GUI), a pozycję i znak wypełniacza
+                // odtwarza pPr/w:tabs z data-tab-stops — nie schodzimy w dzieci (w środku
+                // jest tylko literalny \t, który dałby DRUGI tabulator).
+                if (node.HasClass("docx-tab-leader"))
+                {
+                    var leaderTab = new Run();
+                    if (inheritedProps != null)
+                        leaderTab.Append(inheritedProps.CloneNode(true));
+                    leaderTab.Append(new TabChar());
+                    runs.Add(leaderTab);
+                    break;
+                }
+
+                // Marker pola złożonego (reader: TOC/PAGEREF) → fldChar begin+instrText+separate
+                // lub end. Dzięki temu Word po zapisie z edytora dalej umie zaktualizować spis
+                // treści (F9). Osierocony end (użytkownik usunął początek) jest pomijany —
+                // niesparowany fldChar uszkadza dokument.
+                if (node.HasClass("docx-fld-marker"))
+                {
+                    var kind = node.GetAttributeValue("data-fld", "");
+                    if (kind == "begin")
+                    {
+                        var instr = System.Net.WebUtility.HtmlDecode(node.GetAttributeValue("data-fld-instr", "")).Trim();
+                        if (!string.IsNullOrEmpty(instr))
+                        {
+                            runs.Add(new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }));
+                            runs.Add(new Run(new FieldCode($" {instr} ") { Space = SpaceProcessingModeValues.Preserve }));
+                            runs.Add(new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }));
+                            _openFieldMarkerCount++;
+                        }
+                    }
+                    else if (kind == "end" && _openFieldMarkerCount > 0)
+                    {
+                        runs.Add(new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
+                        _openFieldMarkerCount--;
+                    }
+                    break;
+                }
+
+                // Zakładka w kontekście inline — parę bookmarkStart/End odtwarza poziom akapitu
+                // (AppendInlineContent); tu tylko nie emitujemy nic (span jest pusty).
+                if (node.HasClass("docx-bookmark"))
+                    break;
 
                 var newProps = (inheritedProps?.CloneNode(true) as RunProperties) ?? new RunProperties();
 
@@ -4176,6 +4363,27 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             if (unit == "px") val = OoxmlUnits.PixelsToPoints(val);
             spacing.After = ((int)Math.Round(OoxmlUnits.PointsToTwips(val))).ToString();
             hasSpacing = true;
+        }
+
+        // ADR-0053: reader emituje w:after jako padding-bottom (odstępy akapitów SUMUJĄ się
+        // jak w Wordzie zamiast kolapsować jak marginesy CSS); margin-bottom wyżej zostaje
+        // honorowane (akapity z tłem/obramowaniem i treść autorstwa GUI sprzed zmiany).
+        // Gdy występują oba, padding-bottom (bardziej szczegółowe źródło) wygrywa.
+        var paddingBottomMatch = Regex.Match(style, @"(?<![\w-])padding-bottom:\s*([\d.,]+)(px|pt)?");
+        if (paddingBottomMatch.Success)
+        {
+            var val = double.Parse(paddingBottomMatch.Groups[1].Value.Replace(',', '.'), inv);
+            var unit = paddingBottomMatch.Groups[2].Value;
+            if (unit == "px") val = OoxmlUnits.PixelsToPoints(val);
+            var afterTw = (int)Math.Round(OoxmlUnits.PointsToTwips(val));
+            // padding-bottom:0 przy akapicie z tłem/ramką to tylko reset klasowego
+            // domyślnego odstępu (after siedzi w margin-bottom) — zero nie może
+            // nadpisać niezerowej wartości z margin-bottom.
+            if (afterTw > 0 || !marginBottomMatch.Success)
+            {
+                spacing.After = afterTw.ToString();
+                hasSpacing = true;
+            }
         }
 
         var lineHeightMatch = Regex.Match(style, @"line-height:\s*([\d.,]+)(pt)?");

@@ -88,6 +88,13 @@ export interface DocumentContent {
   footnotes?: Footnote[];
   endnotes?: Endnote[];
   /**
+   * Format numeracji przypisów z dokumentu (w:numFmt): 'decimal' | 'lowerRoman' | 'upperRoman'
+   * | 'lowerLetter' | 'upperLetter'. Undefined = dokument nie ustala → domyślna Worda
+   * (dolne = cyfry, końcowe = małe rzymskie). Tylko do wyświetlania (round-trip przez settings.xml).
+   */
+  footnoteNumberFormat?: string;
+  endnoteNumberFormat?: string;
+  /**
    * Dokument źródłowy jest chroniony przed edycją (settings.xml: wymuszone
    * w:documentProtection lub w:writeProtection). Edytor otwiera go tylko do odczytu.
    */

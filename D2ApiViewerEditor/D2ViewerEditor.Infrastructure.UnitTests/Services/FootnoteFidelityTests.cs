@@ -69,6 +69,24 @@ public class FootnoteFidelityTests
     }
 
     [Test]
+    public void Import_ReadsFootnoteNumberFormatFromSettings()
+    {
+        Import(FootnoteTestDocuments.FootnoteWithNumberFormat(NumberFormatValues.UpperRoman))
+            .FootnoteNumberFormat.Should().Be("upperRoman",
+                "format numeracji z w:footnotePr/w:numFmt ma trafić do modelu dla GUI");
+
+        Import(FootnoteTestDocuments.FootnoteWithNumberFormat(NumberFormatValues.LowerLetter))
+            .FootnoteNumberFormat.Should().Be("lowerLetter");
+    }
+
+    [Test]
+    public void Import_NoFootnotePr_LeavesNumberFormatNull()
+    {
+        // TwoFootnotes nie ma settings.xml → brak formatu → GUI użyje domyślnej Worda (cyfry).
+        Import(FootnoteTestDocuments.TwoFootnotes()).FootnoteNumberFormat.Should().BeNull();
+    }
+
+    [Test]
     public void Import_References_RenderAsSupWithStableIdAndDisplayNumber()
     {
         var content = Import(FootnoteTestDocuments.TwoFootnotes());

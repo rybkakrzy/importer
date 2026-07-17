@@ -829,6 +829,8 @@
               (footnotesChange)="footnotes.set($event)"
               [endnotes]="endnotes() ?? undefined"
               (endnotesChange)="endnotes.set($event)"
+              [footnoteNumberFormat]="footnoteNumberFormat() ?? undefined"
+              [endnoteNumberFormat]="endnoteNumberFormat() ?? undefined"
               (contentChange)="onContentChange($event)"
               (stateChange)="onStateChange($event)"
               (selectionChange)="onEditorSelectionChange()"

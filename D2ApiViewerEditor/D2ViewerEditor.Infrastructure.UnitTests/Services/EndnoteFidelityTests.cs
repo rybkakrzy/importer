@@ -51,6 +51,17 @@ public class EndnoteFidelityTests
     // ---------- Import ----------
 
     [Test]
+    public void Import_ReadsEndnoteNumberFormatFromSettings()
+    {
+        Import(EndnoteTestDocuments.EndnoteWithNumberFormat(NumberFormatValues.Decimal))
+            .EndnoteNumberFormat.Should().Be("decimal",
+                "format numeracji z w:endnotePr/w:numFmt ma trafić do modelu dla GUI");
+
+        // Brak settings.xml (SingleEndnote) → brak formatu → GUI użyje domyślnej Worda (rzymskie).
+        Import(EndnoteTestDocuments.SingleEndnote()).EndnoteNumberFormat.Should().BeNull();
+    }
+
+    [Test]
     public void Import_SingleEndnote_ProducesModelWithReferenceAndContent()
     {
         var content = Import(EndnoteTestDocuments.SingleEndnote());

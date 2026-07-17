@@ -168,6 +168,38 @@ internal static class EndnoteTestDocuments
 
     // ----- low-level helpers -----
 
+    /// <summary>
+    /// One endnote plus a document-wide numbering format in settings.xml
+    /// (<c>w:endnotePr/w:numFmt</c>) — used to assert the reader surfaces the format token.
+    /// </summary>
+    internal static byte[] EndnoteWithNumberFormat(NumberFormatValues numFmt)
+    {
+        using var ms = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+            body.Append(new Paragraph(TextRun("Zdanie"), EndnoteReferenceRun(1), TextRun(".")));
+
+            var endnotesPart = main.AddNewPart<EndnotesPart>();
+            var endnotesRoot = new Endnotes();
+            AppendTechnicalSeparators(endnotesRoot);
+            endnotesRoot.Append(UserEndnote(1, new Paragraph(AutoNumberMarkRun(), TextRun("Przypis końcowy."))));
+            endnotesPart.Endnotes = endnotesRoot;
+            endnotesPart.Endnotes.Save();
+
+            var settingsPart = main.AddNewPart<DocumentSettingsPart>();
+            settingsPart.Settings = new Settings(
+                new EndnoteDocumentWideProperties(new NumberingFormat { Val = numFmt }));
+            settingsPart.Settings.Save();
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     private static byte[] Build(Action<Endnotes> buildEndnotes, Action<Body> buildBody)
     {
         using var ms = new MemoryStream();

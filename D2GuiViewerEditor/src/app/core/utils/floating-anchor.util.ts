@@ -14,6 +14,43 @@ export const EMU_PER_PX = 9525;
 
 const ANCHOR_BLOCK_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li';
 
+/**
+ * Geometria pasma nagłówka/stopki potrzebna do przeliczenia kotwicy między układem KONTRAKTU
+ * (data-x-emu/data-y-emu: X od lewej krawędzi STRONY, Y od góry OBSZARU TREŚCI = y_page − marginTop
+ * — tak emituje reader i tak zapisuje writer: wp:anchor X=Page/Y=Margin) a układem PASMA
+ * (absolut wewnątrz .header-display/.header-editor-content, których origin jest przesunięty o
+ * padding-left pasma = margines lewy i o offset pasma od góry strony).
+ */
+export interface HfBandGeometry {
+  band: 'header' | 'footer';
+  marginLeftPx: number;
+  marginTopPx: number;
+  /** Górna krawędź KONTENERA pasma od góry strony: header = dystans nagłówka;
+   *  footer = wysokość strony − dystans stopki − pasmo stopki (min-height, przybliżenie). */
+  bandTopPx: number;
+}
+
+/**
+ * Kontrakt → układ pasma: pozycja `left/top` absolutu wewnątrz kontenera nagłówka/stopki,
+ * przy której obraz ląduje w tym samym miejscu strony co w MS Word. Wartości mogą być ujemne
+ * (obiekt wystaje poza pasmo — np. logo sięgające nad dystans nagłówka); kontenery pasm mają
+ * overflow visible, więc render jest poprawny.
+ */
+export function contractToBand(xPx: number, yPx: number, geo: HfBandGeometry): { leftPx: number; topPx: number } {
+  return {
+    leftPx: xPx - geo.marginLeftPx,
+    topPx: yPx + geo.marginTopPx - geo.bandTopPx,
+  };
+}
+
+/** Układ pasma → kontrakt (dokładna odwrotność contractToBand) — do zapisu data-x/y-emu po dragu. */
+export function bandToContract(leftPx: number, topPx: number, geo: HfBandGeometry): { xPx: number; yPx: number } {
+  return {
+    xPx: leftPx + geo.marginLeftPx,
+    yPx: topPx - geo.marginTopPx + geo.bandTopPx,
+  };
+}
+
 /** Czy element jest pływający (pozycjonowany absolutnie względem strony). */
 export function isFloatingElement(el: HTMLElement): boolean {
   const mode = el.dataset['posMode'] ?? '';
