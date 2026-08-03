@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
@@ -7,11 +8,6 @@ namespace D2ViewerEditor.Application.Features.Documents.Queries.OpenDocument;
 
 public class OpenDocumentQueryHandler : IRequestHandler<OpenDocumentQuery, Result<DocumentContent>>
 {
-    // Sentinele rozpoznawane przez kontroler → mapowane na właściwe kody HTTP / payload dla GUI.
-    public const string PasswordRequiredSentinel = "PASSWORD_REQUIRED";
-    public const string WrongPasswordSentinel = "WRONG_PASSWORD";
-    public const string UnsupportedLegacyDocSentinel = "UNSUPPORTED_LEGACY_DOC";
-
     private readonly IDocxToHtmlConverter _converter;
     private readonly IDocumentInputNormalizer _normalizer;
 
@@ -33,11 +29,11 @@ public class OpenDocumentQueryHandler : IRequestHandler<OpenDocumentQuery, Resul
             case DocumentInputStatus.Ok:
                 break;
             case DocumentInputStatus.PasswordRequired:
-                return Result<DocumentContent>.Failure(PasswordRequiredSentinel);
+                return Result<DocumentContent>.Failure(ErrorCodes.DocumentProtected);
             case DocumentInputStatus.WrongPassword:
-                return Result<DocumentContent>.Failure(WrongPasswordSentinel);
+                return Result<DocumentContent>.Failure(ErrorCodes.DocumentUnlockFailed);
             case DocumentInputStatus.UnsupportedLegacyDoc:
-                return Result<DocumentContent>.Failure(UnsupportedLegacyDocSentinel);
+                return Result<DocumentContent>.Failure(ErrorCodes.UnsupportedLegacyDoc);
             default:
                 return Result<DocumentContent>.Failure("Nie rozpoznano formatu pliku lub plik jest uszkodzony.");
         }

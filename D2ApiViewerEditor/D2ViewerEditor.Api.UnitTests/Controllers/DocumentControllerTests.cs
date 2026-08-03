@@ -1,4 +1,5 @@
 using D2ViewerEditor.Api.Controllers;
+using D2ViewerEditor.Application.Common;
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadImage;
 using D2ViewerEditor.Application.Features.Documents.Queries.GetNewDocument;
@@ -192,7 +193,7 @@ public class DocumentControllerTests
         fileMock.Length.Returns(100);
         fileMock.OpenReadStream().Returns(new MemoryStream(new byte[] { 1, 2, 3 }));
         _mediator.Send(Arg.Any<OpenDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(Result<DocumentContent>.Failure(OpenDocumentQueryHandler.UnsupportedLegacyDocSentinel));
+            .Returns(Result<DocumentContent>.Failure(ErrorCodes.UnsupportedLegacyDoc));
 
         var result = await _controller.OpenDocument(fileMock);
 
@@ -209,7 +210,7 @@ public class DocumentControllerTests
         fileMock.Length.Returns(100);
         fileMock.OpenReadStream().Returns(new MemoryStream(new byte[] { 1, 2, 3 }));
         _mediator.Send(Arg.Any<OpenDocumentQuery>(), Arg.Any<CancellationToken>())
-            .Returns(Result<DocumentContent>.Failure(OpenDocumentQueryHandler.PasswordRequiredSentinel));
+            .Returns(Result<DocumentContent>.Failure(ErrorCodes.DocumentProtected));
 
         var result = await _controller.OpenDocument(fileMock);
 

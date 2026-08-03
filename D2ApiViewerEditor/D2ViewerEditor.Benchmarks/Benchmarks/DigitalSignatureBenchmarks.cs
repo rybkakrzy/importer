@@ -22,7 +22,8 @@ namespace D2ViewerEditor.Benchmarks.Benchmarks;
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
 public class DigitalSignatureBenchmarks
 {
-    private const string CertPassword = "BenchmarkP@ssw0rd!";
+    // Ephemeral, per-run passphrase for the in-memory self-signed PFX — never a stored/hardcoded credential.
+    private static readonly string CertPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     private DigitalSignatureService _service = null!;
     private byte[] _certBytes = null!;

@@ -1,3 +1,4 @@
+using D2ViewerEditor.Application.Common;
 using D2ViewerEditor.Application.Features.Documents.Queries.OpenDocument;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
@@ -119,7 +120,7 @@ public class OpenDocumentQueryHandlerTests
         var result = await _handler.Handle(new OpenDocumentQuery(stream, "tajne.docx"), CancellationToken.None);
 
         result.IsFailure.Should().BeTrue();
-        result.Error.Should().Be(OpenDocumentQueryHandler.PasswordRequiredSentinel);
+        result.Error.Should().Be(ErrorCodes.DocumentProtected);
         _converter.DidNotReceive().Convert(Arg.Any<Stream>());
     }
 
@@ -132,7 +133,7 @@ public class OpenDocumentQueryHandlerTests
 
         var result = await _handler.Handle(new OpenDocumentQuery(stream, "tajne.docx", "złe"), CancellationToken.None);
 
-        result.Error.Should().Be(OpenDocumentQueryHandler.WrongPasswordSentinel);
+        result.Error.Should().Be(ErrorCodes.DocumentUnlockFailed);
     }
 
     [Test]
@@ -144,7 +145,7 @@ public class OpenDocumentQueryHandlerTests
 
         var result = await _handler.Handle(new OpenDocumentQuery(stream, "stary.doc"), CancellationToken.None);
 
-        result.Error.Should().Be(OpenDocumentQueryHandler.UnsupportedLegacyDocSentinel);
+        result.Error.Should().Be(ErrorCodes.UnsupportedLegacyDoc);
         _converter.DidNotReceive().Convert(Arg.Any<Stream>());
     }
 

@@ -165,6 +165,75 @@ public class DocumentControllerTests
     }
 
     [Test]
+    public async Task CreateDocument_WhenExecutableExtensionWithSpoofedDocxContentType_ReturnsBadRequest()
+    {
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile("payload.exe", IngestExternalDocumentCommandHandler.DocxMimeType, "MZ"),
+            ReturnUrl = "https://app.example.com/cb"
+        };
+
+        var result = await _controller.CreateDocument(request, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        await _mediator.DidNotReceiveWithAnyArgs().Send(default(IRequest<Result<IngestExternalDocumentResult>>)!, default);
+    }
+
+    [TestCase("doc.docx.exe")]
+    [TestCase("doc.pdf.bat")]
+    [TestCase("doc")]
+    [TestCase("archive.zip")]
+    public async Task CreateDocument_WhenExtensionOutsideAllowlist_ReturnsBadRequest(string fileName)
+    {
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile(fileName, IngestExternalDocumentCommandHandler.PdfMimeType, "abc"),
+            ReturnUrl = "https://app.example.com/cb"
+        };
+
+        var result = await _controller.CreateDocument(request, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        await _mediator.DidNotReceiveWithAnyArgs().Send(default(IRequest<Result<IngestExternalDocumentResult>>)!, default);
+    }
+
+    [Test]
+    public async Task CreateDocument_WhenDeclaredContentTypeMismatchesExtension_ReturnsBadRequest()
+    {
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile("doc.docx", IngestExternalDocumentCommandHandler.PdfMimeType, "abc"),
+            ReturnUrl = "https://app.example.com/cb"
+        };
+
+        var result = await _controller.CreateDocument(request, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        await _mediator.DidNotReceiveWithAnyArgs().Send(default(IRequest<Result<IngestExternalDocumentResult>>)!, default);
+    }
+
+    [TestCase(@"..\..\windows\evil.docx")]
+    [TestCase("../../etc/evil.docx")]
+    [TestCase(@"C:\temp\evil.docx")]
+    public async Task CreateDocument_WhenFileNameCarriesPath_StripsDirectoryBeforeIngest(string fileName)
+    {
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile(fileName, IngestExternalDocumentCommandHandler.DocxMimeType, "abc"),
+            ReturnUrl = "https://app.example.com/cb"
+        };
+        _mediator.Send(Arg.Any<IngestExternalDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IngestExternalDocumentResult>.Success(
+                new IngestExternalDocumentResult(Guid.NewGuid(), Guid.NewGuid(), "evil.docx", DateTime.UtcNow)));
+
+        await _controller.CreateDocument(request, CancellationToken.None);
+
+        await _mediator.Received(1).Send(
+            Arg.Is<IngestExternalDocumentCommand>(c => c.FileName == "evil.docx"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task CreateDocument_WhenIngestFails_ReturnsBadRequest()
     {
         var request = new CreateDocumentRequest

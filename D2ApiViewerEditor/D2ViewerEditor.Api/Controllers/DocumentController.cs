@@ -54,12 +54,12 @@ public class DocumentController : BaseApiController
         // Specjalne przypadki wejścia — GUI rozpoznaje po polu `code` i reaguje (prompt hasła / komunikat).
         return result.Error switch
         {
-            OpenDocumentQueryHandler.PasswordRequiredSentinel => StatusCode(StatusCodes.Status422UnprocessableEntity,
-                new { code = "PASSWORD_REQUIRED", error = "Dokument jest zabezpieczony hasłem. Podaj hasło, aby go otworzyć." }),
-            OpenDocumentQueryHandler.WrongPasswordSentinel => StatusCode(StatusCodes.Status422UnprocessableEntity,
-                new { code = "WRONG_PASSWORD", error = "Nieprawidłowe hasło do dokumentu." }),
-            OpenDocumentQueryHandler.UnsupportedLegacyDocSentinel => BadRequest(
-                new { code = "UNSUPPORTED_LEGACY_DOC", error = "Plik .doc (starszy, binarny format Worda) wymaga konwersji do .docx. Otwórz go w Wordzie i zapisz jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx), a następnie wczytaj ponownie." }),
+            ErrorCodes.DocumentProtected => StatusCode(StatusCodes.Status422UnprocessableEntity,
+                new { code = ErrorCodes.DocumentProtected, error = "Dokument jest zabezpieczony hasłem. Podaj hasło, aby go otworzyć." }),
+            ErrorCodes.DocumentUnlockFailed => StatusCode(StatusCodes.Status422UnprocessableEntity,
+                new { code = ErrorCodes.DocumentUnlockFailed, error = "Nieprawidłowe hasło do dokumentu." }),
+            ErrorCodes.UnsupportedLegacyDoc => BadRequest(
+                new { code = ErrorCodes.UnsupportedLegacyDoc, error = "Plik .doc (starszy, binarny format Worda) wymaga konwersji do .docx. Otwórz go w Wordzie i zapisz jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx), a następnie wczytaj ponownie." }),
             _ => HandleResult(result)
         };
     }

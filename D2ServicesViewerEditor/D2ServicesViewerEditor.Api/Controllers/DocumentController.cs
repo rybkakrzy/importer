@@ -14,6 +14,17 @@ namespace D2ServicesViewerEditor.Api.Controllers;
 [Produces("application/json")]
 public class DocumentController : ControllerBase
 {
+    // Allowlist rozszerzeń przyjmowanych na granicy zaufania. Rozszerzenie jest źródłem prawdy,
+    // deklarowany Content-Type musi się z nim zgadzać (klient może go dowolnie podać).
+    private static readonly char[] PathSeparators = { '/', '\\', ':' };
+
+    private static readonly IReadOnlyDictionary<string, string> AllowedDocumentMimeByExtension =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".docx"] = IngestExternalDocumentCommandHandler.DocxMimeType,
+            [".pdf"] = IngestExternalDocumentCommandHandler.PdfMimeType
+        };
+
     private readonly ILogger<DocumentController> _logger;
     private readonly IMediator _mediator;
 
@@ -50,12 +61,18 @@ public class DocumentController : ControllerBase
             classification = parsed;
         }
 
-        var mimeType = ResolveMimeType(request.File);
-        var isDocx = string.Equals(mimeType, IngestExternalDocumentCommandHandler.DocxMimeType, StringComparison.OrdinalIgnoreCase);
-        var isPdf = string.Equals(mimeType, IngestExternalDocumentCommandHandler.PdfMimeType, StringComparison.OrdinalIgnoreCase);
+        // Nazwa pliku pochodzi od klienta — bierzemy wyłącznie segment nazwy (bez ścieżki),
+        // a rozszerzenie musi należeć do allowlisty ZANIM cokolwiek wczytamy z formularza.
+        var fileName = SanitizeFileName(request.File.FileName);
+        var extension = Path.GetExtension(fileName);
 
-        if (!isDocx && !isPdf)
+        if (!AllowedDocumentMimeByExtension.TryGetValue(extension, out var mimeType))
             return BadRequest(new { error = "Wspierane są tylko pliki DOCX i PDF" });
+
+        if (!IsDeclaredContentTypeAcceptable(request.File.ContentType, mimeType))
+            return BadRequest(new { error = "Deklarowany typ MIME nie zgadza się z rozszerzeniem pliku" });
+
+        var isDocx = string.Equals(mimeType, IngestExternalDocumentCommandHandler.DocxMimeType, StringComparison.OrdinalIgnoreCase);
 
         if (isDocx && string.IsNullOrWhiteSpace(request.ReturnUrl))
             return BadRequest(new { error = "ReturnUrl jest wymagany dla plików DOCX" });
@@ -81,7 +98,7 @@ public class DocumentController : ControllerBase
 
         var command = new IngestExternalDocumentCommand(
             Content: content,
-            FileName: request.File.FileName,
+            FileName: fileName,
             MimeType: mimeType,
             CreatedBy: createdBy,
             Metadata: metadataJson
@@ -198,19 +215,24 @@ public class DocumentController : ControllerBase
         return Ok(new DocumentStatusResponse(status.MasterId, statusEnum));
     }
 
-    private static string ResolveMimeType(IFormFile file)
+    // Nazwa pliku z multipartu bywa pełną ścieżką (klient/legacy przeglądarki). Odcinamy wszystko
+    // do ostatniego separatora — niezależnie od platformy hosta, bo Path.GetFileName na Linuksie
+    // nie traktuje '\' jako separatora.
+    private static string SanitizeFileName(string? fileName)
     {
-        if (!string.IsNullOrWhiteSpace(file.ContentType))
-            return file.ContentType;
+        if (string.IsNullOrWhiteSpace(fileName))
+            return string.Empty;
 
-        var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
-        return ext switch
-        {
-            ".docx" => IngestExternalDocumentCommandHandler.DocxMimeType,
-            ".pdf" => IngestExternalDocumentCommandHandler.PdfMimeType,
-            _ => "application/octet-stream"
-        };
+        var lastSeparator = fileName.LastIndexOfAny(PathSeparators);
+        return (lastSeparator < 0 ? fileName : fileName[(lastSeparator + 1)..]).Trim();
     }
+
+    // Content-Type jest deklaracją klienta: akceptujemy go tylko wtedy, gdy zgadza się z typem
+    // wynikającym z rozszerzenia. Brak deklaracji nie blokuje uploadu (rozszerzenie już przeszło
+    // allowlistę), a spójność z magic-bytes weryfikuje IFileUploadSecurityService w handlerze.
+    private static bool IsDeclaredContentTypeAcceptable(string? declaredContentType, string expectedMimeType) =>
+        string.IsNullOrWhiteSpace(declaredContentType)
+        || string.Equals(declaredContentType, expectedMimeType, StringComparison.OrdinalIgnoreCase);
 }
 
 public class CreateDocumentRequest

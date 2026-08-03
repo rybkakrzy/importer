@@ -18,16 +18,34 @@ public static class BenchmarkAssets
 
     public const string RegressionOriginalFileName = "orginał_GOOD.docx";
 
+    private const string DefaultAssetsDirectory = @"sciezka_do_projektu";
+
     /// <summary>Directory holding optional real regression files. Override with D2_BENCH_ASSETS.</summary>
-    public static string AssetsDirectory =>
-        Environment.GetEnvironmentVariable("D2_BENCH_ASSETS")
-        ?? @"C:\Projekty\Jit\ImportParametryzacji\importer";
+    public static string AssetsDirectory
+    {
+        get
+        {
+            var configured = Environment.GetEnvironmentVariable("D2_BENCH_ASSETS");
+            var directory = string.IsNullOrWhiteSpace(configured) ? DefaultAssetsDirectory : configured;
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        }
+    }
 
     public static byte[]? TryLoadRegressionOriginal()
     {
-        var path = Path.Combine(AssetsDirectory, RegressionOriginalFileName);
-        return File.Exists(path) ? File.ReadAllBytes(path) : null;
+        // The asset name is a fixed constant, but the base directory comes from the environment.
+        // Resolve both to canonical paths and read only when the result stays inside that directory.
+        var directory = AssetsDirectory;
+        var path = Path.GetFullPath(Path.Combine(directory, Path.GetFileName(RegressionOriginalFileName)));
+
+        if (!IsInside(directory, path) || !File.Exists(path))
+            return null;
+
+        return File.ReadAllBytes(path);
     }
+
+    private static bool IsInside(string directory, string candidate) =>
+        candidate.StartsWith(directory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
     public static byte[] Simple() => Build(body =>
     {

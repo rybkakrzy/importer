@@ -22,7 +22,7 @@ więc można je bezpiecznie puścić ponownie.
 $container = "d2viewereditor_postgres"
 $db        = "d2viewereditor"
 $dbUser    = "postgres"
-$sqlDir    = "c:\Projekty\Jit\ImportParametryzacji\importer\infra\sql"
+$sqlDir    = "sciezka_do_projektu"
 $migration = "010_extend_document_status.sql"
 
 # 1. Sprawdź, czy kontener Postgres działa
@@ -52,7 +52,7 @@ podman exec $container psql -U $dbUser -d $db -c "SELECT col_description('docume
 $container = "d2viewereditor_postgres"
 $db        = "d2viewereditor"
 $dbUser    = "postgres"
-$sqlDir    = "c:\Projekty\Jit\ImportParametryzacji\importer\infra\sql"
+$sqlDir    = "sciezka_do_projektu"
 
 Get-ChildItem $sqlDir -Filter "*.sql" | Sort-Object Name | ForEach-Object {
     Write-Host "==> $($_.Name)" -ForegroundColor Cyan

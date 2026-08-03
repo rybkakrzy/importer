@@ -30,14 +30,19 @@ public sealed record DocxPackageReport(
         using var ms = new MemoryStream(docx);
         using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
 
+        // Entry names come from an untrusted package: an entry escaping the archive root
+        // ("../word/document.xml") would still satisfy the part matchers below. Drop those
+        // before anything is matched or read — same rule as the production upload guard.
+        var entries = zip.Entries.Where(e => IsSafeEntryName(e.FullName)).ToList();
+
         string Read(Predicate<string> match)
         {
-            var entry = zip.Entries.FirstOrDefault(e => match(e.FullName));
+            var entry = entries.FirstOrDefault(e => match(e.FullName));
             if (entry == null) return string.Empty;
             using var r = new StreamReader(entry.Open());
             return r.ReadToEnd();
         }
-        bool Has(Predicate<string> match) => zip.Entries.Any(e => match(e.FullName));
+        bool Has(Predicate<string> match) => entries.Any(e => match(e.FullName));
 
         var styles = Read(n => Regex.IsMatch(n, @"word/styles\d*\.xml$"));
         var doc = Read(n => n.EndsWith("word/document.xml"));
@@ -47,7 +52,7 @@ public sealed record DocxPackageReport(
         var docDefaults = Regex.Match(styles, "<w:docDefaults>.*?<w:rFonts ([^>]*)/>", RegexOptions.Singleline);
 
         return new DocxPackageReport(
-            PartCount: zip.Entries.Count,
+            PartCount: entries.Count,
             Styles: Regex.Matches(styles, "<w:style ").Count,
             TableStyles: Regex.Matches(styles, "<w:style [^>]*w:type=\"table\"").Count,
             HasNumbering: Has(n => n.EndsWith("word/numbering.xml")),
@@ -61,6 +66,15 @@ public sealed record DocxPackageReport(
             RowHeights: Regex.Matches(doc, "<w:trHeight ").Count,
             FileSizeBytes: docx.LongLength,
             HtmlLength: htmlLength);
+    }
+
+    private static bool IsSafeEntryName(string entryName)
+    {
+        var normalized = entryName.Replace('\\', '/');
+        return !normalized.StartsWith('/')
+            && !normalized.StartsWith("../", StringComparison.Ordinal)
+            && !normalized.Contains("/../", StringComparison.Ordinal)
+            && !normalized.Contains(':', StringComparison.Ordinal);
     }
 }
 

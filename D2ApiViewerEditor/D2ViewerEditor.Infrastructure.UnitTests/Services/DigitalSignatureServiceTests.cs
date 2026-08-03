@@ -16,7 +16,8 @@ namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
 [TestFixture]
 public class DigitalSignatureServiceTests
 {
-    private const string CertPassword = "pwd-123";
+    // Ephemeral, per-run passphrase for the throwaway PFX — never a stored/hardcoded credential.
+    private static readonly string CertPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     private DigitalSignatureService _svc = null!;
 

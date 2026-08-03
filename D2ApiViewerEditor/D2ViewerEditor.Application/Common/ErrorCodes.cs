@@ -11,9 +11,21 @@ public static class ErrorCodes
     /// <summary>Dokument nie zawiera treści (pusty plik / zawartość zerowej długości).</summary>
     public const string DocumentContentEmpty = "DOCUMENT_CONTENT_EMPTY";
 
+    /// <summary>Dokument jest zaszyfrowany — GUI musi poprosić użytkownika o hasło i ponowić otwarcie.</summary>
+    public const string DocumentProtected = "PASSWORD_REQUIRED";
+
+    /// <summary>Hasło podane przy otwieraniu nie odszyfrowało dokumentu.</summary>
+    public const string DocumentUnlockFailed = "WRONG_PASSWORD";
+
+    /// <summary>Plik jest binarnym dokumentem .doc (starszy format Worda) — wymaga konwersji do .docx.</summary>
+    public const string UnsupportedLegacyDoc = "UNSUPPORTED_LEGACY_DOC";
+
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
-        DocumentContentEmpty
+        DocumentContentEmpty,
+        DocumentProtected,
+        DocumentUnlockFailed,
+        UnsupportedLegacyDoc
     };
 
     /// <summary>Czy podany kod jest znanym, stabilnym kodem domenowym (do wystawienia klientowi).</summary>
