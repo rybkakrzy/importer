@@ -2,10 +2,14 @@ import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
+import { MsalService } from '@azure/msal-angular';
 import { NotificationService } from '../services/notification.service';
 import { ConnectionStatusService } from '../services/connection-status.service';
 import { LastHttpErrorService } from '../services/last-http-error.service';
 import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../errors/document-error.util';
+import { MSAL_CUSTOM_CONFIG } from '../config/runtime-config';
+import { ensureInteractiveReauth } from '../auth/interactive-reauth';
+import { isProtectedApiRequest } from './api-token.interceptor';
 
 /**
  * Interceptor HTTP — centralna obsługa błędów API (RFC 7807 ProblemDetails)
@@ -15,10 +19,23 @@ export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
   const connectionStatus = inject(ConnectionStatusService);
   const lastHttpError = inject(LastHttpErrorService);
   const router = inject(Router);
+  const auth = inject(MSAL_CUSTOM_CONFIG);
+  const msal = auth.enabled !== false ? inject(MsalService) : null;
 
   return next(req).pipe(
     catchError((error: HttpErrorResponse) => {
       let errorMessage = 'Wystąpił nieoczekiwany błąd';
+
+      if (error.status === 401 && msal && isProtectedApiRequest(req.url)) {
+        // Bug 13942097: 401 z chronionego API = sesja wygasła/token odrzucony. Bez tej gałęzi
+        // aplikacja NIGDY nie ponawiała autoryzacji (guardy klasyfikowały 401 jak brak roli →
+        // /brak-uprawnien; ratunkiem było czyszczenie ciasteczek). Inicjujemy redirect
+        // logowania (raz na życie strony) i wyciszamy toast — strona odpływa do /authorize.
+        recordLastError(lastHttpError, error, req, 'Sesja wygasła (401) — ponowna autoryzacja');
+        const scopes = auth.apiScopes?.length ? auth.apiScopes : ['openid', 'profile'];
+        ensureInteractiveReauth(msal.instance, scopes);
+        return throwError(() => error);
+      }
 
       if (error.status === 403) {
         // 403 → dedicated "Brak uprawnień" view (not a toast, and distinct from 401/404/500).

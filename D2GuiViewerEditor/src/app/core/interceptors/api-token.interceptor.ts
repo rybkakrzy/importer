@@ -1,9 +1,11 @@
 import { HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { from, of, switchMap, catchError } from 'rxjs';
+import { EMPTY, from, of, switchMap, catchError } from 'rxjs';
 import { MsalService } from '@azure/msal-angular';
+import { InteractionRequiredAuthError } from '@azure/msal-browser';
 import { environment } from '../../../environments/environment';
 import { MSAL_CUSTOM_CONFIG } from '../config/runtime-config';
+import { ensureInteractiveReauth, hasFreshIdToken } from '../auth/interactive-reauth';
 
 // API base resolved once (environment.apiUrl may be scheme-relative, e.g. `//host:15111/api`).
 const apiBase = new URL(environment.apiUrl, window.location.origin).toString();
@@ -14,7 +16,7 @@ const healthUrl = `${apiBaseWithSlash}health`;
 export const API_ACCESS_TOKEN_KEY = 'api_access_token';
 
 /** True for backend API calls that must carry a token — excludes the anonymous health endpoint. */
-function isProtectedApiRequest(url: string): boolean {
+export function isProtectedApiRequest(url: string): boolean {
   const absolute = new URL(url, window.location.origin).toString();
   if (absolute === healthUrl || absolute.startsWith(`${healthUrl}/`)) {
     return false;
@@ -50,13 +52,39 @@ export const apiTokenInterceptor: HttpInterceptorFn = (req, next) => {
   // silent call hits the cache instead of failing at the token endpoint.
   const loginScopes = auth.apiScopes?.length ? auth.apiScopes : ['openid', 'profile'];
 
-  return from(msal.instance.acquireTokenSilent({ account, scopes: loginScopes })).pipe(
-    // Token acquisition failed (e.g. interaction required) → send without header; the backend
-    // returns 401 and the global error handling kicks in. Downstream HTTP errors are NOT caught
-    // here (no `next(req)` inside catchError), so a 401 never silently retries.
-    catchError(() => of(null)),
-    switchMap((result) => {
-      const token = result?.idToken ?? null;
+  // Bug 13942097: silent musi dostarczyć ŚWIEŻY idToken. Cache hit MSAL waliduje tylko access
+  // token — idToken sprzed godzin przechodził do API i wracał 401 bez żadnej próby ponownego
+  // logowania. Przeterminowany → forceRefresh; interaction_required (wygasła sesja Entra) →
+  // interaktywny redirect do logowania (jedyny moment w aplikacji, który go inicjuje).
+  const acquireFreshIdToken = async (): Promise<string | null> => {
+    let result = await msal.instance.acquireTokenSilent({ account, scopes: loginScopes });
+    if (!hasFreshIdToken(result)) {
+      result = await msal.instance.acquireTokenSilent({
+        account,
+        scopes: loginScopes,
+        forceRefresh: true,
+      });
+    }
+    if (!hasFreshIdToken(result)) {
+      throw new InteractionRequiredAuthError('stale_id_token');
+    }
+    return result.idToken;
+  };
+
+  return from(acquireFreshIdToken()).pipe(
+    catchError((error) => {
+      if (error instanceof InteractionRequiredAuthError) {
+        ensureInteractiveReauth(msal.instance, loginScopes);
+        // Strona odpływa do /authorize — bieżące żądanie wygaszamy bez emisji (żaden toast
+        // „nieoczekiwany błąd" nie powinien mignąć w trakcie nawigacji do logowania).
+        return EMPTY;
+      }
+      // Inne błędy silent (sieć itp.) → jak dotąd: żądanie bez nagłówka; backend odpowie 401,
+      // a obsługa 401 w httpErrorInterceptor jest siatką bezpieczeństwa. Downstream HTTP errors
+      // are NOT caught here (no `next(req)` inside catchError), so a 401 never silently retries.
+      return of(null);
+    }),
+    switchMap((token: string | null) => {
       // Persist the token we send to the API so other parts of the app (and debugging) can read it.
       if (token) {
         localStorage.setItem(API_ACCESS_TOKEN_KEY, token);
