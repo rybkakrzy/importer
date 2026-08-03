@@ -232,6 +232,127 @@ public class TocFidelityTests
         toc.InnerText.Should().NotContain("{page}");
     }
 
+    /// <summary>
+    /// Kształt 1:1 z realnego Worda: spis owinięty w SdtBlock (galeria „Table of Contents"),
+    /// tab-stop z kropkami zdefiniowany w STYLU TOC1 (styles.xml), NIE w direct pPr wpisu;
+    /// runy wpisu z w:webHidden/w:noProof; instrukcja PAGEREF podzielona na DWA runy instrText.
+    /// </summary>
+    private static MemoryStream BuildRealisticWordToc()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new Style
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = "TOC1",
+                StyleName = new StyleName { Val = "toc 1" },
+                StyleParagraphProperties = new StyleParagraphProperties(
+                    new Tabs(new TabStop
+                    {
+                        Val = TabStopValues.Right,
+                        Leader = TabStopLeaderCharValues.Dot,
+                        Position = 9062
+                    }))
+            });
+            stylesPart.Styles.Save();
+
+            static RunProperties Hidden() => new(new NoProof(), new WebHidden());
+
+            var entry = new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = "TOC1" }),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }),
+                new Run(new FieldCode(" TOC \\o \"1-3\" \\h \\z \\u ") { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }),
+                new Hyperlink(
+                    new Run(new Text("Wstęp")),
+                    new Run(Hidden(), new TabChar()),
+                    new Run(Hidden(), new FieldChar { FieldCharType = FieldCharValues.Begin }),
+                    new Run(Hidden(), new FieldCode(" PAGEREF _Toc99 ") { Space = SpaceProcessingModeValues.Preserve }),
+                    new Run(Hidden(), new FieldCode("\\h ") { Space = SpaceProcessingModeValues.Preserve }),
+                    new Run(Hidden(), new FieldChar { FieldCharType = FieldCharValues.Separate }),
+                    new Run(Hidden(), new Text("5")),
+                    new Run(Hidden(), new FieldChar { FieldCharType = FieldCharValues.End }))
+                { Anchor = "_Toc99", History = true },
+                new Run(new FieldChar { FieldCharType = FieldCharValues.End }));
+
+            var sdt = new SdtBlock(
+                new SdtProperties(
+                    new SdtId { Val = 12345 },
+                    new SdtContentDocPartObject(
+                        new DocPartGallery { Val = "Table of Contents" },
+                        new DocPartUnique())),
+                new SdtContentBlock(entry));
+            body.Append(sdt);
+
+            body.Append(new Paragraph(
+                new BookmarkStart { Name = "_Toc99", Id = "7" },
+                new Run(new Text("Wstęp")),
+                new BookmarkEnd { Id = "7" }));
+
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
+    [Test]
+    public void Read_RealisticWordToc_SdtAndStyleLevelTabs_RendersDotsAndPlainTextLook()
+    {
+        using var stream = BuildRealisticWordToc();
+
+        var html = _reader.Convert(stream).Html;
+
+        // Stop z kropkami pochodzi ze STYLU TOC1 — efektywne stopy muszą go znaleźć.
+        html.Should().Contain("docx-tab-leader");
+        html.Should().Contain("data-leader=\"dot\"");
+        html.Should().Contain("data-tab-stops=\"9062:right:dot\"");
+
+        // Tytuł i ZBUFOROWANY numer celu (instrukcja PAGEREF sklejona z dwóch runów).
+        html.Should().Contain("Wstęp");
+        html.Should().Contain(">5<");
+        html.Should().NotContain("{page}");
+        html.Should().Contain("data-fld-instr=\"PAGEREF _Toc99");
+
+        // Wpis wygląda jak zwykły tekst, nie jak link (Word): kotwica dziedziczy kolor,
+        // bez niebieskiego i podkreślenia przeglądarki; tooltip jak w Wordzie.
+        var anchorTag = html.Substring(html.IndexOf("<a href=\"#_Toc99\"", StringComparison.Ordinal));
+        anchorTag = anchorTag[..(anchorTag.IndexOf('>') + 1)];
+        anchorTag.Should().Contain("color:inherit");
+        anchorTag.Should().Contain("text-decoration:inherit");
+        anchorTag.Should().Contain("title=\"Ctrl+klik");
+        anchorTag.Should().NotContain("#0563C1");
+
+        // Wrapper sdt (galeria TOC) przeżywa, zakładka-cel obecna.
+        html.Should().Contain("sdt-block");
+        html.Should().Contain("data-bm-name=\"_Toc99\"");
+    }
+
+    [Test]
+    public void RoundTrip_RealisticWordToc_KeepsSdtFieldAndLeader()
+    {
+        using var stream = BuildRealisticWordToc();
+        var html1 = _reader.Convert(stream).Html;
+        var bytes1 = _writer.Convert(html1);
+        var html2 = _reader.Convert(new MemoryStream(bytes1)).Html;
+
+        // Po pełnym round-tripie spis nadal renderuje się z kropkami i numerem,
+        // a pole/kotwica/zakładka istnieją w pakiecie.
+        html2.Should().Contain("data-leader=\"dot\"");
+        html2.Should().Contain(">5<");
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes1), false);
+        var body = doc.MainDocumentPart!.Document!.Body!;
+        body.Descendants<FieldCode>().Select(f => f.Text).Should().Contain(t => t.Contains("PAGEREF _Toc99"));
+        body.Descendants<Hyperlink>().Should().Contain(h => h.Anchor!.Value == "_Toc99");
+        body.Descendants<BookmarkStart>().Should().Contain(b => b.Name!.Value == "_Toc99");
+        body.Descendants<SdtBlock>().Should().NotBeEmpty("wrapper galerii TOC round-tripuje");
+    }
+
     [Test]
     public void Write_OrphanEndMarker_IsSkipped()
     {

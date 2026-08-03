@@ -1115,7 +1115,39 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   onEditorClick(ev: MouseEvent): void {
     this._navigateToNoteFromRef(ev);
+    this._navigateFromInternalAnchor(ev);
     this.stopEditingHeaderFooter();
+  }
+
+  /**
+   * Ctrl+klik (lub Cmd na macOS) w hyperlink WEWNĘTRZNY (`a[data-anchor]` — np. wpis spisu
+   * treści) przenosi do celu-zakładki w treści, jak w MS Word („Ctrl+klik, aby przejść").
+   * Zwykły klik zostaje edycją (karetka) — również zachowanie Worda. Cel to niewidoczny
+   * marker `span.docx-bookmark[data-bm-name]` (display:none), więc scrollujemy jego BLOK.
+   */
+  private _navigateFromInternalAnchor(ev: MouseEvent): void {
+    if (!ev.ctrlKey && !ev.metaKey) return;
+    const target = ev.target as HTMLElement | null;
+    const anchor = target?.closest?.('a[data-anchor]') as HTMLElement | null;
+    if (!anchor) return;
+    const name = anchor.getAttribute('data-anchor');
+    if (!name) return;
+    ev.preventDefault();
+    const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(name) : name.replace(/"/g, '\\"');
+    for (const page of this.pageEditorRefs?.toArray() ?? []) {
+      const bookmark = page.nativeElement.querySelector<HTMLElement>(
+        `span.docx-bookmark[data-bm-name="${escaped}"]`
+      );
+      if (!bookmark) continue;
+      const block =
+        (bookmark.closest('p, h1, h2, h3, h4, h5, h6, li, td') as HTMLElement | null) ?? bookmark;
+      block.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+      if (!this.readOnly) {
+        (bookmark.closest('.editor-content') as HTMLElement | null)?.focus?.({ preventScroll: true });
+        this._placeCaretAfterElement(bookmark);
+      }
+      return;
+    }
   }
 
   private _navigateToNoteFromRef(ev: MouseEvent): void {
@@ -5887,7 +5919,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (budgetPx < lineHeightPx) return null;
     // .docx-tab-leader = linia flex z wypełniaczem tabulatora (wpis spisu treści) —
     // jednoliniowa, cięcie w środku rozerwałoby układ segmentów flex.
-    if (block.querySelector('.docx-tab-seg, .docx-tab-leader, .docx-textbox, [data-pos-mode]')) return null;
+    if (block.querySelector('.docx-tab-seg, .docx-tab-leader, .docx-textbox, [data-pos-mode], [data-docx-xml]')) return null;
     // Listy dzielą się MIĘDZY punktami (jak Word; tabele mają własną ścieżkę po wierszach) —
     // bez tego lista dłuższa niż reszta strony jechała W CAŁOŚCI dalej, zostawiając pustkę.
     if (block.tagName === 'UL' || block.tagName === 'OL') {

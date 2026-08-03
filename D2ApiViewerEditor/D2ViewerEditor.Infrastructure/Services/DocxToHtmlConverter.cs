@@ -11,12 +11,23 @@ using D2ViewerEditor.Infrastructure.DocxModel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using A = DocumentFormat.OpenXml.Drawing;
+using Pic = DocumentFormat.OpenXml.Drawing.Pictures;
+using Wpg = DocumentFormat.OpenXml.Office2010.Word.DrawingGroup;
+using Wps = DocumentFormat.OpenXml.Office2010.Word.DrawingShape;
 using DomainFootnote = D2ViewerEditor.Domain.Models.Footnote;
 using WpFootnote = DocumentFormat.OpenXml.Wordprocessing.Footnote;
 using DomainEndnote = D2ViewerEditor.Domain.Models.Endnote;
 using WpEndnote = DocumentFormat.OpenXml.Wordprocessing.Endnote;
 
 namespace D2ViewerEditor.Infrastructure.Services;
+
+/// <summary>
+/// Wpis części relacji zachowanej w <c>data-docx-rels</c> (pass-through grafik XML,
+/// ADR-0056). Serializowany do JSON (klucze <c>ct</c>/<c>data</c>) i base64 w atrybucie;
+/// wspólny kontrakt readera i writera.
+/// </summary>
+internal sealed record PreservedRelEntry(string ct, string data);
 
 /// <summary>
 /// Serwis do konwersji dokumentów DOCX na HTML
@@ -77,6 +88,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private long _marginTopTwips;
     private long _marginRightTwips;
     private long _marginBottomTwips;
+    private long _headerDistanceTwips;
+    private long _footerDistanceTwips;
+
+    // Pasmo aktualnie konwertowanej części pakietu. Kotwica `relativeFrom="paragraph"`
+    // w nagłówku/stopce liczy się od akapitu PASMA (header = dystans nagłówka od góry
+    // strony, footer = dolna krawędź obszaru treści), nie od góry obszaru treści body —
+    // inaczej pływające logo w nagłówku ląduje o (margines − dystans) za nisko i
+    // zasłania pierwsze wiersze dokumentu.
+    private enum HfBand { None, Header, Footer }
+    private HfBand _anchorBand = HfBand.None;
 
     // ── Liczniki numeracji list (semantyka Worda) ────────────────────────────────
     // Word utrzymuje licznik per ABSTRAKCYJNA definicja numeracji: różne w:num wskazujące ten sam
@@ -413,6 +434,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _marginRightTwips = page.RightMarginTwips is { } r ? r : 1440;
         _marginTopTwips = page.TopMarginTwips is { } t ? Math.Abs(t) : 1440;
         _marginBottomTwips = page.BottomMarginTwips is { } b ? Math.Abs(b) : 1440;
+        _headerDistanceTwips = page.HeaderDistanceTwips ?? 720;
+        _footerDistanceTwips = page.FooterDistanceTwips ?? 720;
     }
 
     /// <summary>
@@ -446,11 +469,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Pionowo: origin edytora = góra obszaru treści (≈ górny margines poniżej pasma
         // nagłówka), więc odejmujemy górny margines od współrzędnej page-relative.
+        // Dla kotwic w nagłówku/stopce akapit odniesienia leży w PASMIE, nie w obszarze
+        // treści: header zaczyna się na wysokości dystansu nagłówka, footer na dolnej
+        // krawędzi obszaru treści (tak samo liczy pasma GUI — HfBandGeometry.bandTopPx).
+        long? bandParagraphBase = _anchorBand switch
+        {
+            HfBand.Header => OoxmlUnits.TwipsToEmu(_headerDistanceTwips),
+            HfBand.Footer when pageH > 0 => pageH - mBottom,
+            _ => null,
+        };
         long yPage = ResolveAxis(
             offsetText: posV?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>()?.Text,
             alignText: posV?.GetFirstChild<DocumentFormat.OpenXml.Drawing.Wordprocessing.VerticalAlignment>()?.Text,
             relFrom: posV?.RelativeFrom?.InnerText,
-            objectSize: heightEmu, pageSize: pageH, marginStart: mTop, marginEnd: mBottom, horizontal: false);
+            objectSize: heightEmu, pageSize: pageH, marginStart: mTop, marginEnd: mBottom, horizontal: false,
+            bandParagraphBase: bandParagraphBase);
 
         return (xPage, yPage - mTop);
     }
@@ -461,7 +494,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// jawny offset, albo wyrównanie (<c>wp:align</c>) w obrębie tej rozpiętości.
     /// </summary>
     private static long ResolveAxis(string? offsetText, string? alignText, string? relFrom,
-        long objectSize, long pageSize, long marginStart, long marginEnd, bool horizontal)
+        long objectSize, long pageSize, long marginStart, long marginEnd, bool horizontal,
+        long? bandParagraphBase = null)
     {
         // Baza (lewa/górna krawędź układu odniesienia) i jego rozpiętość — wg relativeFrom.
         long baseStart;
@@ -486,6 +520,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 break;
             // margin / column / character / text / line / paragraph i brak wartości → obszar treści.
             default:
+                // W pasmie nagłówka/stopki oś PIONOWA kotwiczona do akapitu (paragraph/line
+                // lub brak relativeFrom) liczy się od akapitu pasma, nie od góry obszaru
+                // treści; "margin"/"topMargin" itd. zachowują układ strony jak w body.
+                if (!horizontal && bandParagraphBase is { } bandBase
+                    && relFrom is null or "paragraph" or "line")
+                {
+                    baseStart = bandBase;
+                    extent = 0;
+                    break;
+                }
                 baseStart = marginStart;
                 extent = pageSize > 0 ? pageSize - marginStart - marginEnd : 0;
                 break;
@@ -924,7 +968,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             LoadImageFromPart(part, imagePart);
         }
-        return ConvertHeaderFooterToHtml(part.Header, part, document);
+        _anchorBand = HfBand.Header;
+        try { return ConvertHeaderFooterToHtml(part.Header, part, document); }
+        finally { _anchorBand = HfBand.None; }
     }
 
     private string ConvertFooterPartToHtml(FooterPart part, WordprocessingDocument document)
@@ -933,7 +979,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             LoadImageFromPart(part, imagePart);
         }
-        return ConvertHeaderFooterToHtml(part.Footer, part, document);
+        _anchorBand = HfBand.Footer;
+        try { return ConvertHeaderFooterToHtml(part.Footer, part, document); }
+        finally { _anchorBand = HfBand.None; }
     }
 
     /// <summary>
@@ -2737,8 +2785,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var anchor = hyperlink.Anchor?.Value;
         if (!string.IsNullOrEmpty(anchor))
         {
+            // color/text-decoration:inherit INLINE — bez tego przeglądarka maluje kotwicę
+            // domyślnym niebieskim podkreśleniem i spis treści wygląda jak lista linków;
+            // w Wordzie wpisy TOC wyglądają jak zwykły tekst (stylizację niosą runy).
+            // title = zachowanie Worda (tooltip „Ctrl+klik…"); GUI nawiguje Ctrl+klikiem.
             var encoded = System.Net.WebUtility.HtmlEncode(anchor);
-            return $"<a href=\"#{encoded}\" data-anchor=\"{encoded}\">";
+            return $"<a href=\"#{encoded}\" data-anchor=\"{encoded}\" " +
+                   "title=\"Ctrl+klik, aby przejść do elementu\" " +
+                   "style=\"color:inherit;text-decoration:inherit;\">";
         }
 
         return "<a href=\"#\" target=\"_blank\" style=\"color:#0563C1;text-decoration:underline;\">";
@@ -3716,6 +3770,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 return ConvertDrawingToHtml(drawing, document, sourcePart);
             case Picture picture:
                 return ConvertPictureToHtml(picture, document, sourcePart);
+            case EmbeddedObject embedded:
+                // w:object (OLE — równanie/arkusz/stary obiekt): Word pokazuje statyczny podgląd
+                // v:imagedata. Dotąd CICHY drop w default (obiekt znikał z podglądu i z pliku
+                // po zapisie, mimo że ParagraphHasVisibleContent liczył go jako treść) — ADR-0056.
+                return ConvertEmbeddedObjectToHtml(embedded, document, sourcePart);
             case AlternateContent alternate:
                 return ConvertAlternateContentToHtml(alternate, document, sourcePart);
             case FootnoteReference footnoteRef:
@@ -3914,6 +3973,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string ConvertAlternateContentToHtml(AlternateContent alternate, WordprocessingDocument document, OpenXmlPart? sourcePart)
     {
+        // Gałąź, która dała TYLKO niewidoczne placeholdery pass-through (np. nierenderowalna
+        // grupa w Choice), nie może blokować kolejnych gałęzi — Fallback z w:pict często ma
+        // renderowalną wersję VML i użytkownik dostaje WIDOCZNY podgląd zamiast pustki.
+        string? placeholderOnly = null;
         foreach (var branch in alternate.ChildElements)
         {
             if (branch is not (AlternateContentChoice or AlternateContentFallback)) continue;
@@ -3931,7 +3994,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 foreach (var pict in branch.Descendants<Picture>())
                     html.Append(ConvertPictureToHtml(pict, document, sourcePart));
             }
-            if (html.Length > 0 || _pendingTextBoxes.Count > pendingBefore) return html.ToString();
+            if (_pendingTextBoxes.Count > pendingBefore) return html.ToString();
+            if (html.Length == 0) continue;
+
+            if (IsPreservedPlaceholderOnly(html.ToString()))
+            {
+                placeholderOnly ??= html.ToString();
+                continue;
+            }
+            // Widoczny render z DALSZEJ gałęzi (Fallback VML), gdy wcześniejsza była
+            // niereprezentowalna: podgląd bierzemy z VML, ale pass-through musi nieść CAŁE
+            // mc:AlternateContent — zapis samego w:pict trwale zdegradowałby dokument
+            // (utrata nowoczesnej gałęzi DrawingML).
+            return placeholderOnly != null
+                ? SwapPreservedAttrsForAlternate(html.ToString(), alternate, sourcePart, document)
+                : html.ToString();
         }
         // Żadna gałąź nie dała obrazu — ostatnia szansa: pole tekstowe w kształcie (drop treści
         // = utrata danych). Pierwsza gałąź z txbxContent wygrywa (Choice i Fallback niosą TĘ SAMĄ
@@ -3943,8 +4020,51 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             if (!string.IsNullOrEmpty(textBox)) return HoistTextBox(textBox);
         }
 
+        // Żadna reprezentacja webowa — dotąd element znikał bez śladu (i po zapisie z pliku).
+        // ADR-0056: niewidoczny placeholder z CAŁYM mc:AlternateContent w pass-through
+        // (lepsza wierność niż placeholder pojedynczego w:drawing z gałęzi — zachowuje
+        // OBIE wersje: DrawingML i VML).
+        var (acW, acH) = alternate.Descendants<Drawing>().Select(DrawingExtentPx).FirstOrDefault();
+        var acPart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+        var preservedAc = RenderPreservedPlaceholder(alternate, acPart, acW, acH, "alternate");
+        if (!string.IsNullOrEmpty(preservedAc)) return preservedAc;
+        // Pass-through całego AC nieprzenośny (limity rozmiaru/relacje) — placeholder
+        // z gałęzi wciąż lepszy niż cichy drop.
+        if (placeholderOnly != null) return placeholderOnly;
+
         _log.LogDebug("mc:AlternateContent bez konwertowalnego obrazu ani pola tekstowego — element pominięty.");
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Czy fragment HTML składa się WYŁĄCZNIE z niewidocznych placeholderów pass-through
+    /// (span.docx-preserved z RenderPreservedPlaceholder) — czyli nie daje żadnego widocznego
+    /// podglądu. Placeholdery są samozamykające i bez treści, więc po ich usunięciu zostaje
+    /// wyłącznie biały znak.
+    /// </summary>
+    private static bool IsPreservedPlaceholderOnly(string html)
+    {
+        if (!html.Contains("docx-preserved", StringComparison.Ordinal)) return false;
+        var stripped = Regex.Replace(html, "<span class=\"docx-preserved\"[^>]*></span>", string.Empty);
+        return string.IsNullOrWhiteSpace(stripped);
+    }
+
+    /// <summary>
+    /// Podmienia w widocznym renderze gałęzi (np. VML z Fallbacku) marker pass-through na
+    /// marker CAŁEGO <c>mc:AlternateContent</c>, żeby zapis odtworzył obie gałęzie zamiast
+    /// samego w:pict. Podmiana tylko przy dokładnie JEDNYM markerze w HTML (więcej = nie
+    /// wiadomo, który niesie element — zostawiamy oryginał; podgląd i tak jest poprawny).
+    /// </summary>
+    private string SwapPreservedAttrsForAlternate(string html, AlternateContent alternate,
+        OpenXmlPart? sourcePart, WordprocessingDocument document)
+    {
+        var acPart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+        var acAttrs = BuildPreservedXmlAttrs(alternate, acPart);
+        if (acAttrs.Length == 0) return html;
+
+        const string markerPattern = "data-docx-xml=\"[^\"]*\"( data-docx-rels=\"[^\"]*\")?";
+        if (Regex.Matches(html, markerPattern).Count != 1) return html;
+        return Regex.Replace(html, markerPattern, acAttrs.TrimStart().Replace("$", "$$"));
     }
 
     /// <summary>
@@ -4314,11 +4434,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// PODGLĄD-only: writer nie odtwarza tych kształtów do DOCX (tak samo jak istniejące
     /// linie/prostokąty) — oryginał v1 jest nietykalny, a celem jest widoczność w edytorze.
     /// </summary>
-    private string RenderVectorShapeAsHtml(Drawing drawing)
+    private string RenderVectorShapeAsHtml(Drawing drawing, string preservedAttrs = "")
     {
         var custom = drawing.Descendants<DocumentFormat.OpenXml.Drawing.CustomGeometry>().FirstOrDefault();
-        var preset = drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>()
-            .FirstOrDefault()?.Preset?.Value;
+        var presetGeom = drawing.Descendants<DocumentFormat.OpenXml.Drawing.PresetGeometry>().FirstOrDefault();
+        var preset = presetGeom?.Preset?.Value;
 
         var extent = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
         var widthPx = extent?.Cx != null ? (int)OoxmlUnits.EmuToPixels(extent.Cx.Value) : 0;
@@ -4337,13 +4457,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var pos = BuildTextBoxLayoutCss(drawing); // reużycie: rozmiar + ewentualna pozycja absolutna
         // BuildTextBoxLayoutCss dokłada width/min-height; dla linii chcemy własną wysokość/tło.
 
+        // Rotacja/flip (a:xfrm@rot/@flipH/@flipV) — dotąd nigdzie nieczytane: obrócone
+        // kształty renderowały się poziomo. Transform czysto prezentacyjny (boks bez zmian).
+        var transformCss = BuildShapeTransformCss(((OpenXmlElement?)custom ?? presetGeom)?.Parent);
+        // Kształt jest podglądem sterowanym data-docx-xml — karetka/Backspace w środku
+        // zniszczyłyby SVG bez możliwości odtworzenia (ADR-0056).
+        const string editGuard = " contenteditable=\"false\"";
+
         if (isLine)
         {
             // Pozioma linia: wysokość = grubość, tło = kolor; szerokość z extentu (fallback 100%).
             var w = widthPx > 0 ? $"{widthPx}px" : "100%";
-            return $"<div class=\"docx-shape docx-line\" data-shape=\"line\" "
+            return $"<div class=\"docx-shape docx-line\" data-shape=\"line\"{editGuard}{preservedAttrs} "
                  + $"style=\"{StripSize(pos)}width:{w};height:{lineWidthPx}px;"
-                 + $"background:#{lineColor};margin:2px 0;\"></div>";
+                 + $"background:#{lineColor};margin:2px 0;{transformCss}\"></div>";
         }
 
         // Kolor wypełnienia BIERZEMY z properties kształtu (spPr/a:solidFill), nie z pierwszego
@@ -4355,16 +4482,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var fillHex = noFill ? null : GetShapeFillHex(drawing, custom);
         var strokeHex = HexColorOrNull(outline?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>()
             .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
+        // Gradient (a:gradFill) — dotąd ignorowany (kształt dostawał currentColor/brak tła).
+        var gradient = noFill ? null : GetShapeGradient(((OpenXmlElement?)custom ?? presetGeom)?.Parent);
 
         // Custom geometry (a:custGeom) — dowolna ścieżka wektorowa (logo/wordmark, ikona
         // ostrzeżenia „!"). Wcześniej dropowana w całości (RenderVectorShape zwracał ""), więc
         // grafika z oryginału NIE rysowała się w edytorze. Tłumaczymy ścieżkę na inline SVG.
         if (custom != null && widthPx > 0 && heightPx > 0)
         {
-            var svg = BuildCustomGeometrySvg(custom, widthPx, heightPx, fillHex, strokeHex, lineWidthPx, noFill);
+            var svg = BuildCustomGeometrySvg(custom, widthPx, heightPx, fillHex, strokeHex, lineWidthPx, noFill, gradient);
             if (!string.IsNullOrEmpty(svg))
-                return $"<div class=\"docx-shape docx-custgeom\" data-shape=\"custom\" "
-                     + $"style=\"{StripSize(pos)}width:{widthPx}px;height:{heightPx}px;\">{svg}</div>";
+                return $"<div class=\"docx-shape docx-custgeom\" data-shape=\"custom\"{editGuard}{preservedAttrs} "
+                     + $"style=\"{StripSize(pos)}width:{widthPx}px;height:{heightPx}px;{transformCss}\">{svg}</div>";
         }
 
         // Prostokąt / elipsa / zaokrąglony prostokąt z wypełnieniem — potrzebny widoczny rozmiar i tło.
@@ -4373,20 +4502,512 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                       || preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.RoundRectangle;
         if (isBlock && widthPx > 0 && heightPx > 0)
         {
-            var bg = fillHex != null ? $"background:#{fillHex};" : string.Empty;
+            var bg = gradient != null
+                ? $"background:{BuildCssLinearGradient(gradient.Value)};"
+                : fillHex != null ? $"background:#{fillHex};" : string.Empty;
             // Obrys tylko gdy a:ln faktycznie ma wypełnienie (noFill → brak ramki, jak w Wordzie).
             var border = strokeHex != null ? $"border:{lineWidthPx}px solid #{strokeHex};" : string.Empty;
             var radius = preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Ellipse
                 ? "border-radius:50%;"
                 : preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.RoundRectangle
-                    ? "border-radius:12%;"
+                    ? RoundRectRadiusCss(presetGeom, widthPx, heightPx)
                     : string.Empty;
             var shapeName = preset == DocumentFormat.OpenXml.Drawing.ShapeTypeValues.Ellipse ? "ellipse" : "rect";
-            return $"<div class=\"docx-shape docx-{shapeName}\" data-shape=\"{shapeName}\" "
-                 + $"style=\"{pos}{bg}{border}{radius}box-sizing:border-box;\"></div>";
+            return $"<div class=\"docx-shape docx-{shapeName}\" data-shape=\"{shapeName}\"{editGuard}{preservedAttrs} "
+                 + $"style=\"{pos}{bg}{border}{radius}box-sizing:border-box;{transformCss}\"></div>";
+        }
+
+        // Tabela częstych presetów (strzałki, trójkąty, gwiazdy…) → inline SVG (ADR-0056).
+        // Preset spoza tabeli → "" (caller emituje niewidoczny placeholder z pass-through).
+        if (presetGeom?.Preset?.InnerText is string presetName && widthPx > 0 && heightPx > 0)
+        {
+            var svg = BuildPresetGeometrySvg(presetName, widthPx, heightPx, fillHex, strokeHex, lineWidthPx, noFill, gradient);
+            if (!string.IsNullOrEmpty(svg))
+                return $"<div class=\"docx-shape docx-preset\" data-shape=\"{EscapeHtml(presetName)}\"{editGuard}{preservedAttrs} "
+                     + $"style=\"{StripSize(pos)}width:{widthPx}px;height:{heightPx}px;{transformCss}\">{svg}</div>";
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// CSS transform z <c>a:xfrm</c> właściwości kształtu (rotacja w 1/60000°, flipH/flipV).
+    /// Pusty string, gdy brak transformacji.
+    /// </summary>
+    private static string BuildShapeTransformCss(OpenXmlElement? spPr)
+        => BuildShapeTransformCssFromXfrm(spPr?.GetFirstChild<A.Transform2D>());
+
+    private static string BuildShapeTransformCssFromXfrm(A.Transform2D? xfrm)
+        => xfrm == null
+            ? string.Empty
+            : BuildTransformCss(xfrm.Rotation?.Value, xfrm.HorizontalFlip?.Value, xfrm.VerticalFlip?.Value);
+
+    private static string BuildTransformCss(int? rotation, bool? flipH, bool? flipV)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var parts = new List<string>();
+        if (rotation is int rot && rot != 0)
+            parts.Add(string.Format(inv, "rotate({0:0.##}deg)", rot / 60000.0));
+        if (flipH == true) parts.Add("scaleX(-1)");
+        if (flipV == true) parts.Add("scaleY(-1)");
+        return parts.Count == 0
+            ? string.Empty
+            : $"transform:{string.Join(' ', parts)};transform-origin:center center;";
+    }
+
+    /// <summary>
+    /// Liniowy gradient wypełnienia z <c>spPr/a:gradFill</c>: posortowane stopy (pozycja %,
+    /// hex) + kąt w stopniach (OOXML: 0° = wschód, zgodnie z ruchem wskazówek). Null gdy
+    /// brak gradientu albo mniej niż 2 rozwiązywalne stopy.
+    /// </summary>
+    private (List<(double pos, string hex)> stops, double angleDeg)? GetShapeGradient(OpenXmlElement? spPr)
+    {
+        var grad = spPr?.Elements<A.GradientFill>().FirstOrDefault();
+        if (grad == null) return null;
+
+        var stops = new List<(double pos, string hex)>();
+        foreach (var gs in grad.Descendants<A.GradientStop>())
+        {
+            var hex = ResolvedDrawingColorHex(gs.GetFirstChild<A.RgbColorModelHex>(),
+                gs.GetFirstChild<A.SchemeColor>());
+            if (hex == null) continue;
+            stops.Add(((gs.Position?.Value ?? 0) / 1000.0, hex));
+        }
+        if (stops.Count < 2) return null;
+        stops.Sort((a, b) => a.pos.CompareTo(b.pos));
+
+        var angle = (grad.GetFirstChild<A.LinearGradientFill>()?.Angle?.Value ?? 0) / 60000.0;
+        return (stops, angle);
+    }
+
+    /// <summary>CSS linear-gradient z gradientu OOXML (kąt CSS: 0° = północ, OOXML: 0° = wschód).</summary>
+    private static string BuildCssLinearGradient((List<(double pos, string hex)> stops, double angleDeg) gradient)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var cssDeg = (gradient.angleDeg + 90.0) % 360.0;
+        var stopsCss = string.Join(", ",
+            gradient.stops.Select(s => string.Format(inv, "#{0} {1:0.##}%", s.hex, s.pos)));
+        return string.Format(inv, "linear-gradient({0:0.##}deg, {1})", cssDeg, stopsCss);
+    }
+
+    /// <summary>
+    /// Definicja SVG linearGradient (objectBoundingBox) + referencja url(#id) dla gradientu
+    /// OOXML. Id deterministyczne z treści (stabilne między zapisami; duplikat id między
+    /// kształtami = identyczna definicja, render bez zmian).
+    /// </summary>
+    private static (string defs, string fillRef) BuildSvgLinearGradient(
+        (List<(double pos, string hex)> stops, double angleDeg) gradient)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var rad = gradient.angleDeg * Math.PI / 180.0;
+        var dx = Math.Cos(rad) / 2.0;
+        var dy = Math.Sin(rad) / 2.0;
+        string F(double v) => v.ToString("0.###", inv);
+
+        var key = string.Join("|", gradient.stops.Select(s => $"{s.pos:0.##}:{s.hex}")) + "@" + gradient.angleDeg.ToString("0.##", inv);
+        var id = "dg" + (uint)key.GetHashCode();
+
+        var stopsXml = string.Join(string.Empty, gradient.stops.Select(s =>
+            string.Format(inv, "<stop offset=\"{0:0.##}%\" stop-color=\"#{1}\"/>", s.pos, s.hex)));
+        var defs = $"<defs><linearGradient id=\"{id}\" x1=\"{F(0.5 - dx)}\" y1=\"{F(0.5 - dy)}\" "
+                 + $"x2=\"{F(0.5 + dx)}\" y2=\"{F(0.5 + dy)}\">{stopsXml}</linearGradient></defs>";
+        return (defs, $"url(#{id})");
+    }
+
+    /// <summary>
+    /// Promień zaokrąglenia roundRect z <c>a:avLst</c> (gd name="adj", fmla="val N",
+    /// N/100000 × min(w,h)); domyślna wartość Worda 16667 (dotąd hardkodowane 12%).
+    /// </summary>
+    private static string RoundRectRadiusCss(A.PresetGeometry? presetGeom, int widthPx, int heightPx)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double adj = 16667;
+        var gd = presetGeom?.AdjustValueList?.Elements<A.ShapeGuide>()
+            .FirstOrDefault(g => g.Name?.Value == "adj");
+        if (gd?.Formula?.Value is string f && f.StartsWith("val ", StringComparison.Ordinal)
+            && double.TryParse(f[4..], System.Globalization.NumberStyles.Float, inv, out var v))
+        {
+            adj = v;
+        }
+        var radius = Math.Max(0, adj) / 100000.0 * Math.Min(widthPx, heightPx);
+        return string.Format(inv, "border-radius:{0:0.##}px;", radius);
+    }
+
+    /// <summary>
+    /// Inline SVG dla częstych geometrii presetowych (strzałki/trójkąty/gwiazda/wielokąty/
+    /// chevron/plus) w viewBox 0 0 w h z domyślnymi adjust values Worda. Nieznany preset →
+    /// "" (caller degraduje do niewidocznego placeholdera pass-through). Obsługuje też
+    /// prymitywy rect/ellipse/line — używane przy renderze DZIECI grup (ADR-0056).
+    /// </summary>
+    private static string BuildPresetGeometrySvg(string presetName, int w, int h,
+        string? fillHex, string? strokeHex, int strokeWidthPx, bool noFill,
+        (List<(double pos, string hex)> stops, double angleDeg)? gradient)
+    {
+        if (w <= 0 || h <= 0) return string.Empty;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        string F(double v) => v.ToString("0.##", inv);
+
+        // Grot strzałki/chevronu: połowa mniejszego wymiaru (przybliżenie domyślnych adj Worda).
+        double hd = Math.Min(w, h) / 2.0;
+        // Grubość ramienia plusa: 1/3 mniejszego wymiaru.
+        double pt3 = Math.Min(w, h) / 3.0;
+
+        string Pts(params (double x, double y)[] p)
+            => string.Join(" ", p.Select(q => $"{F(q.x)},{F(q.y)}"));
+
+        string? star5Points()
+        {
+            var pts = new List<(double x, double y)>();
+            double cx = w / 2.0, cy = h / 2.0, rx = w / 2.0, ry = h / 2.0;
+            for (int k = 0; k < 10; k++)
+            {
+                var r = k % 2 == 0 ? 1.0 : 0.382;
+                var ang = -Math.PI / 2 + k * Math.PI / 5;
+                pts.Add((cx + rx * r * Math.Cos(ang), cy + ry * r * Math.Sin(ang)));
+            }
+            return Pts(pts.ToArray());
+        }
+
+        string? inner = presetName switch
+        {
+            "triangle" => $"<polygon points=\"{Pts((w / 2.0, 0), (w, h), (0, h))}\"/>",
+            "rtTriangle" => $"<polygon points=\"{Pts((0, 0), (0, h), (w, h))}\"/>",
+            "diamond" => $"<polygon points=\"{Pts((w / 2.0, 0), (w, h / 2.0), (w / 2.0, h), (0, h / 2.0))}\"/>",
+            "parallelogram" => $"<polygon points=\"{Pts((w * 0.25, 0), (w, 0), (w * 0.75, h), (0, h))}\"/>",
+            "trapezoid" => $"<polygon points=\"{Pts((w * 0.25, 0), (w * 0.75, 0), (w, h), (0, h))}\"/>",
+            "pentagon" => $"<polygon points=\"{Pts((w / 2.0, 0), (w, h * 0.38), (w * 0.81, h), (w * 0.19, h), (0, h * 0.38))}\"/>",
+            "hexagon" => $"<polygon points=\"{Pts((w * 0.25, 0), (w * 0.75, 0), (w, h / 2.0), (w * 0.75, h), (w * 0.25, h), (0, h / 2.0))}\"/>",
+            "octagon" => $"<polygon points=\"{Pts((w * 0.29, 0), (w * 0.71, 0), (w, h * 0.29), (w, h * 0.71), (w * 0.71, h), (w * 0.29, h), (0, h * 0.71), (0, h * 0.29))}\"/>",
+            "star5" => $"<polygon points=\"{star5Points()}\"/>",
+            "rightArrow" => $"<polygon points=\"{Pts((0, h * 0.25), (w - hd, h * 0.25), (w - hd, 0), (w, h / 2.0), (w - hd, h), (w - hd, h * 0.75), (0, h * 0.75))}\"/>",
+            "leftArrow" => $"<polygon points=\"{Pts((w, h * 0.25), (hd, h * 0.25), (hd, 0), (0, h / 2.0), (hd, h), (hd, h * 0.75), (w, h * 0.75))}\"/>",
+            "upArrow" => $"<polygon points=\"{Pts((w * 0.25, h), (w * 0.25, hd), (0, hd), (w / 2.0, 0), (w, hd), (w * 0.75, hd), (w * 0.75, h))}\"/>",
+            "downArrow" => $"<polygon points=\"{Pts((w * 0.25, 0), (w * 0.25, h - hd), (0, h - hd), (w / 2.0, h), (w, h - hd), (w * 0.75, h - hd), (w * 0.75, 0))}\"/>",
+            "leftRightArrow" => $"<polygon points=\"{Pts((hd, 0), (hd, h * 0.25), (w - hd, h * 0.25), (w - hd, 0), (w, h / 2.0), (w - hd, h), (w - hd, h * 0.75), (hd, h * 0.75), (hd, h), (0, h / 2.0))}\"/>",
+            "chevron" => $"<polygon points=\"{Pts((0, 0), (w - hd, 0), (w, h / 2.0), (w - hd, h), (0, h), (hd, h / 2.0))}\"/>",
+            "homePlate" => $"<polygon points=\"{Pts((0, 0), (w - hd, 0), (w, h / 2.0), (w - hd, h), (0, h))}\"/>",
+            "plus" => $"<polygon points=\"{Pts(((w - pt3) / 2, 0), ((w + pt3) / 2, 0), ((w + pt3) / 2, (h - pt3) / 2), (w, (h - pt3) / 2), (w, (h + pt3) / 2), ((w + pt3) / 2, (h + pt3) / 2), ((w + pt3) / 2, h), ((w - pt3) / 2, h), ((w - pt3) / 2, (h + pt3) / 2), (0, (h + pt3) / 2), (0, (h - pt3) / 2), ((w - pt3) / 2, (h - pt3) / 2))}\"/>",
+            // Prymitywy dla dzieci grup (top-level rect/ellipse/line renderują się divami).
+            "rect" => $"<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\"/>",
+            "roundRect" => $"<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" rx=\"{F(Math.Min(w, h) * 0.16667)}\"/>",
+            "ellipse" => $"<ellipse cx=\"{F(w / 2.0)}\" cy=\"{F(h / 2.0)}\" rx=\"{F(w / 2.0)}\" ry=\"{F(h / 2.0)}\"/>",
+            "line" or "straightConnector1" => $"<line x1=\"0\" y1=\"0\" x2=\"{w}\" y2=\"{h}\"/>",
+            _ => null
+        };
+        if (inner == null) return string.Empty;
+
+        var defs = string.Empty;
+        string fill;
+        if (noFill) fill = "none";
+        else if (gradient != null)
+        {
+            var (d, fillRef) = BuildSvgLinearGradient(gradient.Value);
+            defs = d;
+            fill = fillRef;
+        }
+        else fill = fillHex != null ? $"#{fillHex}" : "currentColor";
+
+        var isLinePrimitive = inner.StartsWith("<line", StringComparison.Ordinal);
+        var stroke = strokeHex != null || isLinePrimitive
+            ? $" stroke=\"#{strokeHex ?? "000000"}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
+            : string.Empty;
+
+        inner = inner.Insert(inner.Length - 2, $" fill=\"{(isLinePrimitive ? "none" : fill)}\"{stroke}");
+        return $"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {w} {h}\" "
+             + $"width=\"{w}\" height=\"{h}\" preserveAspectRatio=\"none\" "
+             + $"style=\"display:block;\">{defs}{inner}</svg>";
+    }
+
+    /// <summary>
+    /// Renderuje grupę kształtów <c>wpg:wgp</c> (i canvas) jako kontener z dziećmi
+    /// pozycjonowanymi transformacją przestrzeni potomnej (<c>a:chOff/a:chExt</c> →
+    /// <c>a:off/a:ext</c>) — dotąd grupa kolapsowała do PIERWSZEGO blipa/geometrii
+    /// (heurystyka Descendants), reszta dzieci ginęła. Zwraca "" gdy jakiekolwiek dziecko
+    /// jest nieodwzorowalne (bez połowicznego renderu — caller emituje wtedy niewidoczny
+    /// placeholder pass-through; oryginał i tak jedzie w data-docx-xml).
+    /// </summary>
+    private string RenderGroupDrawingAsHtml(Drawing drawing, WordprocessingDocument document, OpenXmlPart? sourcePart)
+    {
+        var group = drawing.Descendants<Wpg.WordprocessingGroup>().FirstOrDefault();
+        if (group == null) return string.Empty;
+
+        var (contW, contH) = DrawingExtentPx(drawing);
+        var xfrmGrp = group.GetFirstChild<Wpg.GroupShapeProperties>()?.TransformGroup;
+        if (contW <= 0 || contH <= 0)
+        {
+            contW = xfrmGrp?.Extents?.Cx != null ? (int)OoxmlUnits.EmuToPixels(xfrmGrp.Extents.Cx.Value) : 0;
+            contH = xfrmGrp?.Extents?.Cy != null ? (int)OoxmlUnits.EmuToPixels(xfrmGrp.Extents.Cy.Value) : 0;
+        }
+        if (contW <= 0 || contH <= 0) return string.Empty;
+
+        long extCx = xfrmGrp?.Extents?.Cx ?? 0;
+        long extCy = xfrmGrp?.Extents?.Cy ?? 0;
+        long chCx = xfrmGrp?.ChildExtents?.Cx ?? extCx;
+        long chCy = xfrmGrp?.ChildExtents?.Cy ?? extCy;
+        long chOffX = xfrmGrp?.ChildOffset?.X ?? 0;
+        long chOffY = xfrmGrp?.ChildOffset?.Y ?? 0;
+        var scaleX = chCx > 0 && extCx > 0 ? (double)extCx / chCx : 1.0;
+        var scaleY = chCy > 0 && extCy > 0 ? (double)extCy / chCy : 1.0;
+
+        var groupFillHex = GroupOwnFillHex(group.GetFirstChild<Wpg.GroupShapeProperties>(), null);
+        var inner = RenderGroupChildrenHtml(group, document, sourcePart,
+            scaleX, scaleY, chOffX, chOffY, groupFillHex, depth: 0);
+        if (string.IsNullOrEmpty(inner)) return string.Empty;
+
+        var preservedAttrs = BuildPreservedXmlAttrs(drawing, sourcePart);
+        var transformCss = BuildTransformCss(xfrmGrp?.Rotation?.Value,
+            xfrmGrp?.HorizontalFlip?.Value, xfrmGrp?.VerticalFlip?.Value);
+        var posCss = StripSize(BuildTextBoxLayoutCss(drawing));
+        if (!posCss.Contains("position:absolute"))
+            posCss += "position:relative;display:inline-block;";
+        return $"<div class=\"docx-shape docx-group\" data-shape=\"group\" contenteditable=\"false\"{preservedAttrs} "
+             + $"style=\"{posCss}width:{contW}px;height:{contH}px;overflow:visible;{transformCss}\">{inner}</div>";
+    }
+
+    /// <summary>
+    /// Wspólna pętla dzieci grupy (top-level <c>wpg:wgp</c> i zagnieżdżone <c>wpg:grpSp</c>):
+    /// kształty, obrazy i pod-grupy w przestrzeni potomnej rodzica. Pusty string, gdy
+    /// JAKIEKOLWIEK dziecko jest nieodwzorowalne — grupa degraduje w całości do placeholdera
+    /// pass-through (świadomie bez częściowego renderu, który kłamałby wizualnie).
+    /// </summary>
+    private string RenderGroupChildrenHtml(OpenXmlElement group, WordprocessingDocument document,
+        OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY,
+        string? groupFillHex, int depth)
+    {
+        var inner = new StringBuilder();
+        foreach (var child in group.ChildElements)
+        {
+            switch (child)
+            {
+                case Wps.WordprocessingShape wsp:
+                {
+                    var html = RenderGroupChildShape(wsp, document, sourcePart,
+                        scaleX, scaleY, chOffX, chOffY, groupFillHex);
+                    if (string.IsNullOrEmpty(html)) return string.Empty;
+                    inner.Append(html);
+                    break;
+                }
+                case Pic.Picture pic:
+                {
+                    var html = RenderGroupChildPicture(pic, document, sourcePart, scaleX, scaleY, chOffX, chOffY);
+                    if (string.IsNullOrEmpty(html)) return string.Empty;
+                    inner.Append(html);
+                    break;
+                }
+                case Wpg.GroupShape nested:
+                {
+                    var html = RenderNestedGroupShape(nested, document, sourcePart,
+                        scaleX, scaleY, chOffX, chOffY, groupFillHex, depth);
+                    if (string.IsNullOrEmpty(html)) return string.Empty;
+                    inner.Append(html);
+                    break;
+                }
+                case Wpg.GraphicFrame:
+                    // Wykres/diagram osadzony w grupie — brak reprezentacji webowej; render
+                    // częściowy (grupa bez ramki) łamałby zasadę „wszystko albo placeholder".
+                    return string.Empty;
+            }
+        }
+        return inner.ToString();
+    }
+
+    /// <summary>
+    /// Zagnieżdżona grupa <c>wpg:grpSp</c>: kontener absolutny w przestrzeni rodzica +
+    /// rekurencyjny render dzieci we WŁASNEJ przestrzeni potomnej (skala składana
+    /// rodzic × ext/chExt). Dotąd KAŻDA grupa z pod-grupą degradowała do niewidocznego
+    /// placeholdera. Limit głębokości chroni przed patologicznie zagnieżdżonymi dokumentami.
+    /// </summary>
+    private const int MaxNestedGroupDepth = 8;
+
+    private string RenderNestedGroupShape(Wpg.GroupShape nested, WordprocessingDocument document,
+        OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY,
+        string? inheritedFillHex, int depth)
+    {
+        if (depth >= MaxNestedGroupDepth) return string.Empty;
+        var grpSpPr = nested.GetFirstChild<Wpg.GroupShapeProperties>();
+        var xfrm = grpSpPr?.TransformGroup;
+        if (xfrm?.Offset?.X == null || xfrm.Offset.Y == null
+            || xfrm.Extents?.Cx == null || xfrm.Extents.Cy == null)
+        {
+            return string.Empty;
+        }
+
+        var leftPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.X.Value - chOffX) * scaleX));
+        var topPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.Y.Value - chOffY) * scaleY));
+        var wPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cx.Value * scaleX));
+        var hPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cy.Value * scaleY));
+        if (wPx <= 0 || hPx <= 0) return string.Empty;
+
+        long extCx = xfrm.Extents.Cx.Value;
+        long extCy = xfrm.Extents.Cy.Value;
+        long chCx = xfrm.ChildExtents?.Cx ?? extCx;
+        long chCy = xfrm.ChildExtents?.Cy ?? extCy;
+        var innerScaleX = chCx > 0 ? scaleX * extCx / chCx : scaleX;
+        var innerScaleY = chCy > 0 ? scaleY * extCy / chCy : scaleY;
+
+        var fillHex = GroupOwnFillHex(grpSpPr, inheritedFillHex);
+        var inner = RenderGroupChildrenHtml(nested, document, sourcePart,
+            innerScaleX, innerScaleY, xfrm.ChildOffset?.X ?? 0, xfrm.ChildOffset?.Y ?? 0,
+            fillHex, depth + 1);
+        if (string.IsNullOrEmpty(inner)) return string.Empty;
+
+        var transformCss = BuildTransformCss(xfrm.Rotation?.Value,
+            xfrm.HorizontalFlip?.Value, xfrm.VerticalFlip?.Value);
+        return $"<div style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
+             + $"width:{wPx}px;height:{hPx}px;overflow:visible;{transformCss}\">{inner}</div>";
+    }
+
+    /// <summary>
+    /// Wypełnienie zadeklarowane na właściwościach grupy (cel <c>a:grpFill</c> dzieci);
+    /// brak → wypełnienie dziedziczone z grupy nadrzędnej.
+    /// </summary>
+    private string? GroupOwnFillHex(OpenXmlElement? grpSpPr, string? inherited)
+        => SolidFillHex(grpSpPr?.Elements<A.SolidFill>().FirstOrDefault()) ?? inherited;
+
+    /// <summary>Dziecko grupy: kształt wps:wsp → absolutnie pozycjonowany SVG w przestrzeni grupy.</summary>
+    private string RenderGroupChildShape(Wps.WordprocessingShape wsp, WordprocessingDocument document,
+        OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY, string? groupFillHex)
+    {
+        var spPr = wsp.GetFirstChild<Wps.ShapeProperties>();
+        var xfrm = spPr?.GetFirstChild<A.Transform2D>();
+        if (xfrm?.Offset?.X == null || xfrm.Offset.Y == null
+            || xfrm.Extents?.Cx == null || xfrm.Extents.Cy == null)
+        {
+            return string.Empty;
+        }
+
+        var leftPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.X.Value - chOffX) * scaleX));
+        var topPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.Y.Value - chOffY) * scaleY));
+        var wPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cx.Value * scaleX));
+        var hPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cy.Value * scaleY));
+        if (wPx <= 0 || hPx <= 0) return string.Empty;
+
+        // a:blipFill = wypełnienie kształtu obrazem (np. fotografia w kafelku logo).
+        // Przybliżenie: obraz rozciągnięty na boks kształtu bez przycinania do geometrii —
+        // dotąd taki kształt malował się sylwetką currentColor. Wierny oryginał wraca z pass-through.
+        var blipRel = spPr!.GetFirstChild<A.BlipFill>()?.Blip?.Embed?.Value;
+        if (blipRel != null)
+        {
+            var part = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+            if (part == null) return string.Empty;
+            var src = TryResolveImageDataUrl(part, blipRel,
+                OoxmlUnits.PixelsToEmu(wPx), OoxmlUnits.PixelsToEmu(hPx));
+            if (src == null) return string.Empty;
+            return $"<img src=\"{src}\" style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
+                 + $"width:{wPx}px;height:{hPx}px;max-width:none;{BuildShapeTransformCssFromXfrm(xfrm)}\" />";
+        }
+
+        var noFill = spPr.Elements<A.NoFill>().Any();
+        string? fillHex;
+        if (spPr.Elements<A.GroupFill>().Any())
+        {
+            // a:grpFill: dziecko maluje się wypełnieniem GRUPY — dotąd null → currentColor,
+            // czyli sylwetka w kolorze tekstu zamiast koloru brandowego grupy.
+            fillHex = groupFillHex;
+        }
+        else
+        {
+            fillHex = noFill ? null
+                : SolidFillHex(spPr.Elements<A.SolidFill>().FirstOrDefault())
+                  ?? FillReferenceHex(wsp.Descendants<A.FillReference>().FirstOrDefault());
+        }
+        var outline = spPr.GetFirstChild<A.Outline>();
+        var strokeHex = HexColorOrNull(outline?.Elements<A.SolidFill>()
+            .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
+        var strokeW = outline?.Width != null && outline.Width.Value > 0
+            ? Math.Max(1, (int)Math.Round(OoxmlUnits.EmuToPixels(outline.Width.Value)))
+            : 1;
+        var gradient = noFill ? null : GetShapeGradient(spPr);
+
+        string svg;
+        var custom = spPr.GetFirstChild<A.CustomGeometry>();
+        if (custom != null)
+        {
+            svg = BuildCustomGeometrySvg(custom, wPx, hPx, fillHex, strokeHex, strokeW, noFill, gradient);
+        }
+        else
+        {
+            var presetName = spPr.GetFirstChild<A.PresetGeometry>()?.Preset?.InnerText;
+            svg = presetName != null
+                ? BuildPresetGeometrySvg(presetName, wPx, hPx, fillHex, strokeHex, strokeW, noFill, gradient)
+                : string.Empty;
+        }
+        if (string.IsNullOrEmpty(svg)) return string.Empty;
+
+        var transformCss = BuildShapeTransformCssFromXfrm(xfrm);
+        return $"<div style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
+             + $"width:{wPx}px;height:{hPx}px;{transformCss}\">{svg}</div>";
+    }
+
+    /// <summary>Dziecko grupy: pic:pic → absolutnie pozycjonowany obraz w przestrzeni grupy.</summary>
+    private string RenderGroupChildPicture(Pic.Picture pic, WordprocessingDocument document,
+        OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY)
+    {
+        var xfrm = pic.ShapeProperties?.Transform2D;
+        if (xfrm?.Offset?.X == null || xfrm.Offset.Y == null
+            || xfrm.Extents?.Cx == null || xfrm.Extents.Cy == null)
+        {
+            return string.Empty;
+        }
+
+        var leftPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.X.Value - chOffX) * scaleX));
+        var topPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.Y.Value - chOffY) * scaleY));
+        var wPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cx.Value * scaleX));
+        var hPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cy.Value * scaleY));
+        if (wPx <= 0 || hPx <= 0) return string.Empty;
+
+        var relId = pic.Descendants<A.Blip>().FirstOrDefault()?.Embed?.Value;
+        if (relId == null) return string.Empty;
+        var effectivePart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+        if (effectivePart == null) return string.Empty;
+
+        var src = TryResolveImageDataUrl(effectivePart, relId,
+            OoxmlUnits.PixelsToEmu(wPx), OoxmlUnits.PixelsToEmu(hPx));
+        if (src == null) return string.Empty;
+
+        var transformCss = BuildShapeTransformCssFromXfrm(xfrm);
+        return $"<img src=\"{src}\" style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
+             + $"width:{wPx}px;height:{hPx}px;max-width:none;{transformCss}\" />";
+    }
+
+    /// <summary>
+    /// Renderowalny data:URL obrazu z relacji części (cache _images + WebGraphicForLegacy
+    /// dla EMF/WMF). Null gdy relacja nierozwiązywalna.
+    /// </summary>
+    private string? TryResolveImageDataUrl(OpenXmlPart effectivePart, string relationshipId,
+        long widthEmu, long heightEmu)
+    {
+        string? base64Data = null;
+        string? contentType = null;
+        if (_images.TryGetValue(ImageCacheKey(effectivePart, relationshipId), out var cached))
+        {
+            base64Data = cached.Base64Data;
+            contentType = cached.ContentType;
+        }
+        else
+        {
+            try
+            {
+                if (effectivePart.GetPartById(relationshipId) is ImagePart imagePart)
+                {
+                    LoadImageFromPart(effectivePart, imagePart);
+                    if (_images.TryGetValue(ImageCacheKey(effectivePart, relationshipId), out var lazy))
+                    {
+                        base64Data = lazy.Base64Data;
+                        contentType = lazy.ContentType;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Nie udało się rozwiązać relacji obrazu {RelId} w części {PartUri}: {Error}",
+                    relationshipId, effectivePart.Uri, ex.Message);
+            }
+        }
+        if (base64Data == null || contentType == null) return null;
+
+        var legacy = WebGraphicForLegacy(System.Convert.FromBase64String(base64Data), contentType, widthEmu, heightEmu);
+        return legacy?.dataUrl ?? $"data:{contentType};base64,{base64Data}";
     }
 
     /// <summary>
@@ -4431,14 +5052,122 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>Hex (bez „#") z a:solidFill: jawny a:srgbClr, inaczej a:schemeClr rozwiązany z theme1.xml.</summary>
     private string? SolidFillHex(DocumentFormat.OpenXml.Drawing.SolidFill? fill)
         => fill == null ? null
-            : HexColorOrNull(fill.RgbColorModelHex?.Val?.Value)
-              ?? ResolveDrawingSchemeColor(fill.SchemeColor?.Val?.Value);
+            : ResolvedDrawingColorHex(fill.RgbColorModelHex, fill.SchemeColor);
 
     /// <summary>Hex (bez „#") z a:fillRef (referencja wypełnienia w stylu kształtu).</summary>
     private string? FillReferenceHex(DocumentFormat.OpenXml.Drawing.FillReference? fillRef)
         => fillRef == null ? null
-            : HexColorOrNull(fillRef.RgbColorModelHex?.Val?.Value)
-              ?? ResolveDrawingSchemeColor(fillRef.SchemeColor?.Val?.Value);
+            : ResolvedDrawingColorHex(fillRef.RgbColorModelHex, fillRef.SchemeColor);
+
+    /// <summary>
+    /// Kolor DrawingML z pary srgbClr/schemeClr Z transformacjami dzieci (lumMod/lumOff/
+    /// tint/shade/satMod/alpha) — Word tak buduje odcienie brandowe („Akcent 1, jaśniejszy
+    /// 40%"). Dotąd transformacje były ignorowane i odcień przekłamany do koloru bazowego.
+    /// </summary>
+    private string? ResolvedDrawingColorHex(
+        DocumentFormat.OpenXml.Drawing.RgbColorModelHex? srgb,
+        DocumentFormat.OpenXml.Drawing.SchemeColor? scheme)
+    {
+        if (HexColorOrNull(srgb?.Val?.Value) is string hex)
+            return ApplyDrawingColorTransforms(hex, srgb!);
+        var baseHex = ResolveDrawingSchemeColor(scheme?.Val?.Value);
+        return baseHex == null || scheme == null ? baseHex
+            : ApplyDrawingColorTransforms(baseHex, scheme);
+    }
+
+    /// <summary>
+    /// Aplikuje transformacje koloru DrawingML (dzieci elementu koloru, w kolejności
+    /// dokumentu): a:tint (ku bieli), a:shade (ku czerni), a:satMod, a:lumMod/a:lumOff
+    /// (jasność w HSL — mechanizm odcieni motywu Worda), a:alpha (przezroczystość →
+    /// 8-znakowy hex RRGGBBAA, wspierany przez SVG/CSS). Przybliżenie w sRGB — wystarczające
+    /// wizualnie; dokładna korekcja gamma nie jest warta złożoności podglądu.
+    /// </summary>
+    private static string ApplyDrawingColorTransforms(string hex, OpenXmlElement colorElement)
+    {
+        if (!colorElement.HasChildren) return hex;
+
+        double r = System.Convert.ToInt32(hex[..2], 16) / 255.0;
+        double g = System.Convert.ToInt32(hex[2..4], 16) / 255.0;
+        double b = System.Convert.ToInt32(hex[4..6], 16) / 255.0;
+        double alpha = 1.0;
+        static double Pct(Int32Value? v) => Math.Clamp((v?.Value ?? 100000) / 100000.0, 0.0, 1.0);
+
+        foreach (var t in colorElement.ChildElements)
+        {
+            switch (t)
+            {
+                case DocumentFormat.OpenXml.Drawing.Tint tint:
+                {
+                    var f = Pct(tint.Val);
+                    r = r * f + (1 - f); g = g * f + (1 - f); b = b * f + (1 - f);
+                    break;
+                }
+                case DocumentFormat.OpenXml.Drawing.Shade shade:
+                {
+                    var f = Pct(shade.Val);
+                    r *= f; g *= f; b *= f;
+                    break;
+                }
+                case DocumentFormat.OpenXml.Drawing.SaturationModulation satMod:
+                {
+                    var (h, s, l) = RgbToHsl(r, g, b);
+                    (r, g, b) = HslToRgb(h, Math.Clamp(s * ((satMod.Val?.Value ?? 100000) / 100000.0), 0, 1), l);
+                    break;
+                }
+                case DocumentFormat.OpenXml.Drawing.LuminanceModulation lumMod:
+                {
+                    var (h, s, l) = RgbToHsl(r, g, b);
+                    (r, g, b) = HslToRgb(h, s, Math.Clamp(l * ((lumMod.Val?.Value ?? 100000) / 100000.0), 0, 1));
+                    break;
+                }
+                case DocumentFormat.OpenXml.Drawing.LuminanceOffset lumOff:
+                {
+                    var (h, s, l) = RgbToHsl(r, g, b);
+                    (r, g, b) = HslToRgb(h, s, Math.Clamp(l + (lumOff.Val?.Value ?? 0) / 100000.0, 0, 1));
+                    break;
+                }
+                case DocumentFormat.OpenXml.Drawing.Alpha a:
+                    alpha = Pct(a.Val);
+                    break;
+            }
+        }
+
+        static int Byte255(double v) => (int)Math.Round(Math.Clamp(v, 0, 1) * 255);
+        var rgbHex = $"{Byte255(r):X2}{Byte255(g):X2}{Byte255(b):X2}";
+        return alpha < 1.0 ? rgbHex + $"{Byte255(alpha):X2}" : rgbHex;
+    }
+
+    private static (double h, double s, double l) RgbToHsl(double r, double g, double b)
+    {
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var l = (max + min) / 2.0;
+        if (max == min) return (0, 0, l);
+        var d = max - min;
+        var s = l > 0.5 ? d / (2.0 - max - min) : d / (max + min);
+        double h;
+        if (max == r) h = (g - b) / d + (g < b ? 6 : 0);
+        else if (max == g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        return (h / 6.0, s, l);
+    }
+
+    private static (double r, double g, double b) HslToRgb(double h, double s, double l)
+    {
+        if (s == 0) return (l, l, l);
+        static double Hue(double p, double q, double t)
+        {
+            if (t < 0) t += 1;
+            if (t > 1) t -= 1;
+            if (t < 1.0 / 6) return p + (q - p) * 6 * t;
+            if (t < 1.0 / 2) return q;
+            if (t < 2.0 / 3) return p + (q - p) * (2.0 / 3 - t) * 6;
+            return p;
+        }
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        return (Hue(p, q, h + 1.0 / 3), Hue(p, q, h), Hue(p, q, h - 1.0 / 3));
+    }
 
     /// <summary>
     /// Rozwiązuje DrawingML-owy <c>a:schemeClr</c> (dk1/lt1/dk2/lt2/tx1/bg1/tx2/bg2/accent1..6/
@@ -4473,63 +5202,143 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
-    /// Tłumaczy <c>a:custGeom</c> (ścieżki DrawingML) na inline <c>&lt;svg&gt;&lt;path&gt;</c>.
-    /// Obsługiwane komendy: moveTo/lnTo/cubicBezTo/quadBezTo/close — pokrywają kształty
-    /// wielokątne i krzywe (glify logo). Współrzędne literalne w przestrzeni <c>a:path w/h</c>
-    /// (guides/formuły pomijane — rzadkie w eksportowanych ścieżkach). Zwraca "" gdy brak ścieżki.
+    /// Tłumaczy <c>a:custGeom</c> (ścieżki DrawingML) na inline <c>&lt;svg&gt;</c>.
+    /// Komendy: moveTo/lnTo/cubicBezTo/quadBezTo/arcTo/close. Współrzędne = literały LUB
+    /// nazwy guide'ów (a:avLst/a:gdLst — ewaluator formuł ECMA-376). Ścieżka bez atrybutów
+    /// w/h używa przestrzeni kształtu w EMU; ścieżki o różnych w/h są normalizowane do
+    /// wspólnego viewBoxu. Atrybuty pojedynczej a:path fill="none"/stroke="0" honorowane
+    /// per subścieżka. Zwraca "" gdy brak przetłumaczalnej ścieżki.
     /// </summary>
     private static string BuildCustomGeometrySvg(DocumentFormat.OpenXml.Drawing.CustomGeometry custom,
-        int widthPx, int heightPx, string? fillHex, string? strokeHex, int strokeWidthPx, bool noFill = false)
+        int widthPx, int heightPx, string? fillHex, string? strokeHex, int strokeWidthPx, bool noFill = false,
+        (List<(double pos, string hex)> stops, double angleDeg)? gradient = null)
     {
         var pathList = custom.GetFirstChild<DocumentFormat.OpenXml.Drawing.PathList>();
-        if (pathList == null) return string.Empty;
+        var paths = pathList?.Elements<DocumentFormat.OpenXml.Drawing.Path>().ToList();
+        if (paths == null || paths.Count == 0) return string.Empty;
 
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        long spaceW = 0, spaceH = 0;
-        var d = new StringBuilder();
 
-        static bool TryPt(DocumentFormat.OpenXml.Drawing.Point? p,
-            System.Globalization.CultureInfo inv, out double x, out double y)
+        // Przestrzeń współrzędnych: a:path @w/@h; ścieżka BEZ w/h pracuje w przestrzeni
+        // kształtu w EMU (dotąd spaceW zostawało 0 i taka geometria w ogóle się nie renderowała).
+        long emuW = Math.Max(1L, OoxmlUnits.PixelsToEmu(widthPx));
+        long emuH = Math.Max(1L, OoxmlUnits.PixelsToEmu(heightPx));
+        long PathW(DocumentFormat.OpenXml.Drawing.Path p) => p.Width?.Value is long w && w > 0 ? w : emuW;
+        long PathH(DocumentFormat.OpenXml.Drawing.Path p) => p.Height?.Value is long h && h > 0 ? h : emuH;
+        long spaceW = paths.Max(PathW);
+        long spaceH = paths.Max(PathH);
+
+        // Guides w przestrzeni kształtu (EMU). Mieszanie guide'ów z jawnym w/h ścieżki jest
+        // niespotykane w plikach z Worda — wtedy literały i tak parsują się wprost.
+        var guides = EvaluateGeometryGuides(custom, emuW, emuH);
+
+        bool TryVal(string? token, out double result)
         {
-            x = y = 0;
-            if (p?.X?.Value == null || p.Y?.Value == null) return false;
-            return double.TryParse(p.X.Value, System.Globalization.NumberStyles.Float, inv, out x)
-                && double.TryParse(p.Y.Value, System.Globalization.NumberStyles.Float, inv, out y);
+            result = 0;
+            if (string.IsNullOrEmpty(token)) return false;
+            return double.TryParse(token, System.Globalization.NumberStyles.Float, inv, out result)
+                || guides.TryGetValue(token, out result);
         }
-        string F(double v) => v.ToString(inv);
+        string F(double v) => v.ToString("0.###", inv);
 
-        foreach (var path in pathList.Elements<DocumentFormat.OpenXml.Drawing.Path>())
+        // Brak rozwiązanego wypełnienia: NIE malujemy solidnego czarnego bloba (najgorszy wynik dla
+        // logo/wordmark). currentColor dziedziczy kolor tekstu otoczenia (w stopkach zwykle brand/tekst).
+        // Jawny a:noFill → fill="none" (kontur/obwiednia bez tuszu, jak w Wordzie).
+        var defs = string.Empty;
+        string fill;
+        if (noFill) fill = "none";
+        else if (gradient != null)
         {
-            if (path.Width?.Value is long w && w > spaceW) spaceW = w;
-            if (path.Height?.Value is long h && h > spaceH) spaceH = h;
+            var (gDefs, gRef) = BuildSvgLinearGradient(gradient.Value);
+            defs = gDefs;
+            fill = gRef;
+        }
+        else fill = fillHex != null ? $"#{fillHex}" : "currentColor";
+        var stroke = strokeHex != null
+            ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
+            : string.Empty;
+
+        var svgPaths = new StringBuilder();
+        foreach (var path in paths)
+        {
+            // Normalizacja: każda a:path może mieć WŁASNE w/h — skala do wspólnego viewBoxu.
+            var sx = (double)spaceW / PathW(path);
+            var sy = (double)spaceH / PathH(path);
+            var d = new StringBuilder();
+            // Bieżący punkt ścieżki — a:arcTo definiuje łuk WZGLĘDEM niego (start łuku = punkt
+            // bieżący na elipsie pod kątem stAng).
+            double curX = 0, curY = 0;
+
+            bool TryPt(DocumentFormat.OpenXml.Drawing.Point? p, out double x, out double y)
+            {
+                x = y = 0;
+                if (!TryVal(p?.X?.Value, out x) || !TryVal(p?.Y?.Value, out y)) return false;
+                x *= sx;
+                y *= sy;
+                return true;
+            }
 
             foreach (var cmd in path.ChildElements)
             {
                 switch (cmd)
                 {
-                    case DocumentFormat.OpenXml.Drawing.MoveTo mv when TryPt(mv.Point, inv, out var x, out var y):
+                    case DocumentFormat.OpenXml.Drawing.MoveTo mv when TryPt(mv.Point, out var x, out var y):
                         d.Append('M').Append(F(x)).Append(' ').Append(F(y)).Append(' ');
+                        curX = x; curY = y;
                         break;
-                    case DocumentFormat.OpenXml.Drawing.LineTo ln when TryPt(ln.Point, inv, out var x, out var y):
+                    case DocumentFormat.OpenXml.Drawing.LineTo ln when TryPt(ln.Point, out var x, out var y):
                         d.Append('L').Append(F(x)).Append(' ').Append(F(y)).Append(' ');
+                        curX = x; curY = y;
                         break;
                     case DocumentFormat.OpenXml.Drawing.CubicBezierCurveTo cb:
                     {
                         var p = cb.Elements<DocumentFormat.OpenXml.Drawing.Point>().ToList();
-                        if (p.Count == 3 && TryPt(p[0], inv, out var x1, out var y1)
-                            && TryPt(p[1], inv, out var x2, out var y2) && TryPt(p[2], inv, out var ex, out var ey))
+                        if (p.Count == 3 && TryPt(p[0], out var x1, out var y1)
+                            && TryPt(p[1], out var x2, out var y2) && TryPt(p[2], out var ex, out var ey))
+                        {
                             d.Append('C').Append(F(x1)).Append(' ').Append(F(y1)).Append(' ')
                                 .Append(F(x2)).Append(' ').Append(F(y2)).Append(' ')
                                 .Append(F(ex)).Append(' ').Append(F(ey)).Append(' ');
+                            curX = ex; curY = ey;
+                        }
                         break;
                     }
                     case DocumentFormat.OpenXml.Drawing.QuadraticBezierCurveTo qb:
                     {
                         var p = qb.Elements<DocumentFormat.OpenXml.Drawing.Point>().ToList();
-                        if (p.Count == 2 && TryPt(p[0], inv, out var x1, out var y1)
-                            && TryPt(p[1], inv, out var ex, out var ey))
+                        if (p.Count == 2 && TryPt(p[0], out var x1, out var y1)
+                            && TryPt(p[1], out var ex, out var ey))
+                        {
                             d.Append('Q').Append(F(x1)).Append(' ').Append(F(y1)).Append(' ')
                                 .Append(F(ex)).Append(' ').Append(F(ey)).Append(' ');
+                            curX = ex; curY = ey;
+                        }
+                        break;
+                    }
+                    case DocumentFormat.OpenXml.Drawing.ArcTo arc:
+                    {
+                        // a:arcTo: wR/hR = półosie elipsy, stAng/swAng w 1/60000° (0° = wschód,
+                        // dodatnie = zgodnie z ruchem wskazówek — spójne z układem y-w-dół SVG).
+                        // Promienie/kąty również mogą być nazwami guide'ów.
+                        if (TryVal(arc.WidthRadius?.Value, out var wr) && TryVal(arc.HeightRadius?.Value, out var hr)
+                            && TryVal(arc.StartAngle?.Value, out var stRaw) && TryVal(arc.SwingAngle?.Value, out var swRaw)
+                            && wr > 0 && hr > 0)
+                        {
+                            wr *= sx;
+                            hr *= sy;
+                            var theta1 = stRaw / 60000.0 * Math.PI / 180.0;
+                            var delta = swRaw / 60000.0 * Math.PI / 180.0;
+                            var cx = curX - wr * Math.Cos(theta1);
+                            var cy = curY - hr * Math.Sin(theta1);
+                            var ex = cx + wr * Math.Cos(theta1 + delta);
+                            var ey = cy + hr * Math.Sin(theta1 + delta);
+                            var largeArc = Math.Abs(delta) > Math.PI ? 1 : 0;
+                            var sweep = delta >= 0 ? 1 : 0;
+                            d.Append('A').Append(F(wr)).Append(' ').Append(F(hr)).Append(" 0 ")
+                                .Append(largeArc).Append(' ').Append(sweep).Append(' ')
+                                .Append(F(ex)).Append(' ').Append(F(ey)).Append(' ');
+                            curX = ex; curY = ey;
+                        }
                         break;
                     }
                     case DocumentFormat.OpenXml.Drawing.CloseShapePath:
@@ -4537,22 +5346,114 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                         break;
                 }
             }
+            if (d.Length == 0) continue;
+
+            // Atrybuty pojedynczej a:path: fill="none" = subścieżka bez tuszu (sam kontur),
+            // stroke="0" = bez obrysu — dotąd wszystkie subścieżki dostawały wspólny fill
+            // i kontury pomocnicze zamalowywały się na solidny kolor.
+            var pathNoFill = path.Fill != null
+                && path.Fill.Value == DocumentFormat.OpenXml.Drawing.PathFillModeValues.None;
+            var pathStroke = path.Stroke?.Value ?? true;
+            svgPaths.Append($"<path d=\"{d.ToString().Trim()}\" fill=\"{(pathNoFill ? "none" : fill)}\""
+                + $"{(pathStroke ? stroke : string.Empty)}/>");
         }
+        if (svgPaths.Length == 0 || spaceW <= 0 || spaceH <= 0) return string.Empty;
 
-        if (d.Length == 0 || spaceW <= 0 || spaceH <= 0) return string.Empty;
-
-        // Brak rozwiązanego wypełnienia: NIE malujemy solidnego czarnego bloba (najgorszy wynik dla
-        // logo/wordmark). currentColor dziedziczy kolor tekstu otoczenia (w stopkach zwykle brand/tekst).
-        // Jawny a:noFill → fill="none" (kontur/obwiednia bez tuszu, jak w Wordzie).
-        var fill = noFill ? "none" : fillHex != null ? $"#{fillHex}" : "currentColor";
-        var stroke = strokeHex != null
-            ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
-            : string.Empty;
         // preserveAspectRatio=none: proporcje extentu == proporcje przestrzeni ścieżki (Word je
         // dopasowuje), więc rozciągamy dokładnie do rozmiaru z wp:extent.
         return $"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {spaceW} {spaceH}\" "
              + $"width=\"{widthPx}\" height=\"{heightPx}\" preserveAspectRatio=\"none\" "
-             + $"style=\"display:block;\"><path d=\"{d.ToString().Trim()}\" fill=\"{fill}\"{stroke}/></svg>";
+             + $"style=\"display:block;\">{defs}{svgPaths}</svg>";
+    }
+
+    /// <summary>
+    /// Ewaluuje guide'y geometrii (<c>a:avLst</c>, potem <c>a:gdLst</c> — w kolejności
+    /// dokumentu, formuły mogą odwoływać się do wcześniejszych) na słownik nazwa→wartość.
+    /// Wbudowane zmienne przestrzeni kształtu (w/h/ss/hc/vc/…) i stałe kątowe (cd4 = 90°
+    /// w 1/60000°) wg ECMA-376. Formuła nieobliczalna → guide pominięty; współrzędna z jego
+    /// nazwą nie sparsuje się i kształt degraduje do pass-through zamiast renderować się błędnie.
+    /// </summary>
+    private static Dictionary<string, double> EvaluateGeometryGuides(
+        DocumentFormat.OpenXml.Drawing.CustomGeometry custom, double w, double h)
+    {
+        var ss = Math.Min(w, h);
+        var guides = new Dictionary<string, double>(StringComparer.Ordinal)
+        {
+            ["w"] = w, ["h"] = h, ["l"] = 0, ["t"] = 0, ["r"] = w, ["b"] = h,
+            ["hc"] = w / 2, ["vc"] = h / 2, ["ss"] = ss, ["ls"] = Math.Max(w, h),
+            ["wd2"] = w / 2, ["wd3"] = w / 3, ["wd4"] = w / 4, ["wd5"] = w / 5,
+            ["wd6"] = w / 6, ["wd8"] = w / 8, ["wd10"] = w / 10,
+            ["hd2"] = h / 2, ["hd3"] = h / 3, ["hd4"] = h / 4, ["hd5"] = h / 5,
+            ["hd6"] = h / 6, ["hd8"] = h / 8, ["hd10"] = h / 10,
+            ["ssd2"] = ss / 2, ["ssd4"] = ss / 4, ["ssd6"] = ss / 6, ["ssd8"] = ss / 8,
+            ["ssd16"] = ss / 16, ["ssd32"] = ss / 32,
+            ["cd2"] = 10800000, ["cd4"] = 5400000, ["cd8"] = 2700000,
+            ["3cd4"] = 16200000, ["3cd8"] = 8100000, ["5cd8"] = 13500000, ["7cd8"] = 18900000,
+        };
+        foreach (var list in new OpenXmlElement?[] { custom.AdjustValueList, custom.ShapeGuideList })
+        {
+            if (list == null) continue;
+            foreach (var gd in list.Elements<DocumentFormat.OpenXml.Drawing.ShapeGuide>())
+            {
+                if (gd.Name?.Value is string name && gd.Formula?.Value is string fmla
+                    && TryEvalGuideFormula(fmla, guides, out var val))
+                {
+                    guides[name] = val;
+                }
+            }
+        }
+        return guides;
+    }
+
+    /// <summary>
+    /// Formuła guide'a DrawingML („op a1 a2 a3", argumenty = literały lub nazwy guide'ów;
+    /// kąty w 1/60000°). Operatory wg ECMA-376 §20.1.9.11.
+    /// </summary>
+    private static bool TryEvalGuideFormula(string formula,
+        IReadOnlyDictionary<string, double> guides, out double result)
+    {
+        result = 0;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var tok = formula.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tok.Length == 0) return false;
+
+        var args = new double[tok.Length - 1];
+        for (var i = 1; i < tok.Length; i++)
+        {
+            if (!double.TryParse(tok[i], System.Globalization.NumberStyles.Float, inv, out args[i - 1])
+                && !guides.TryGetValue(tok[i], out args[i - 1]))
+            {
+                return false;
+            }
+        }
+        static double Rad(double deg60k) => deg60k / 60000.0 * Math.PI / 180.0;
+        static double Deg60k(double rad) => rad * 180.0 / Math.PI * 60000.0;
+
+        switch (tok[0])
+        {
+            case "val" when args.Length == 1: result = args[0]; return true;
+            case "*/" when args.Length == 3 && args[2] != 0: result = args[0] * args[1] / args[2]; return true;
+            case "+-" when args.Length == 3: result = args[0] + args[1] - args[2]; return true;
+            case "+/" when args.Length == 3 && args[2] != 0: result = (args[0] + args[1]) / args[2]; return true;
+            case "?:" when args.Length == 3: result = args[0] > 0 ? args[1] : args[2]; return true;
+            case "abs" when args.Length == 1: result = Math.Abs(args[0]); return true;
+            case "max" when args.Length == 2: result = Math.Max(args[0], args[1]); return true;
+            case "min" when args.Length == 2: result = Math.Min(args[0], args[1]); return true;
+            case "mod" when args.Length == 3:
+                result = Math.Sqrt(args[0] * args[0] + args[1] * args[1] + args[2] * args[2]); return true;
+            case "pin" when args.Length == 3:
+                result = Math.Clamp(args[1], Math.Min(args[0], args[2]), Math.Max(args[0], args[2])); return true;
+            case "sqrt" when args.Length == 1 && args[0] >= 0: result = Math.Sqrt(args[0]); return true;
+            case "sin" when args.Length == 2: result = args[0] * Math.Sin(Rad(args[1])); return true;
+            case "cos" when args.Length == 2: result = args[0] * Math.Cos(Rad(args[1])); return true;
+            case "tan" when args.Length == 2: result = args[0] * Math.Tan(Rad(args[1])); return true;
+            case "at2" when args.Length == 2: result = Deg60k(Math.Atan2(args[1], args[0])); return true;
+            case "cat2" when args.Length == 3:
+                result = args[0] * Math.Cos(Math.Atan2(args[2], args[1])); return true;
+            case "sat2" when args.Length == 3:
+                result = args[0] * Math.Sin(Math.Atan2(args[2], args[1])); return true;
+            default: return false;
+        }
     }
 
     private static string? HexColorOrNull(string? value)
@@ -4950,6 +5851,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string ConvertDrawingToHtml(Drawing drawing, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
+        var dispatchPart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+
+        // Dispatch po a:graphicData/@uri (ADR-0056): kontenery (grupa/canvas) i typy bez
+        // reprezentacji webowej (wykres/SmartArt) NIE mogą wpadać w heurystykę „pierwszy blip",
+        // która kolapsowała grupę do jednego obrazka, a wykres/diagram dropowała bez śladu.
+        var graphicUri = drawing.Descendants<A.GraphicData>().FirstOrDefault()?.Uri?.Value ?? string.Empty;
+        var (extWpx, extHpx) = DrawingExtentPx(drawing);
+        if (graphicUri.EndsWith("/wordprocessingGroup", StringComparison.OrdinalIgnoreCase)
+            || graphicUri.EndsWith("/wordprocessingCanvas", StringComparison.OrdinalIgnoreCase))
+        {
+            var group = RenderGroupDrawingAsHtml(drawing, document, dispatchPart);
+            if (!string.IsNullOrEmpty(group)) return group;
+            return RenderPreservedPlaceholder(drawing, dispatchPart, extWpx, extHpx, "group");
+        }
+        if (graphicUri.EndsWith("/chart", StringComparison.OrdinalIgnoreCase)
+            || graphicUri.Contains("/diagram", StringComparison.OrdinalIgnoreCase))
+        {
+            return RenderPreservedPlaceholder(drawing, dispatchPart, extWpx, extHpx, "chart");
+        }
+
         var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
         if (blip?.Embed?.Value == null)
         {
@@ -4961,7 +5882,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // Kształt wektorowy bez obrazu i tekstu (linia/prostokąt) — częsty w stopkach jako
             // separator/ramka. Wcześniej dropowany (brak blipa) → niewidoczny. Renderujemy
             // przybliżenie: linia = border, prostokąt z wypełnieniem = kolorowy blok.
-            var shape = RenderVectorShapeAsHtml(drawing);
+            // Pass-through: oryginalny w:drawing jedzie w data-docx-xml (podgląd ≠ źródło prawdy).
+            var shape = RenderVectorShapeAsHtml(drawing, BuildPreservedXmlAttrs(drawing, dispatchPart));
             if (!string.IsNullOrEmpty(shape)) return shape;
 
             // r:link = obraz linkowany (plik poza pakietem DOCX) — nie mamy jego bajtów i nie
@@ -4969,7 +5891,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             if (blip?.Link?.Value != null)
                 _log.LogWarning("Pominięto obraz z relacją zewnętrzną r:link={RelId} (obrazy linkowane nie są osadzone w pakiecie).",
                     blip.Link.Value);
-            return string.Empty;
+
+            // Rysunek bez reprezentacji (nieznana geometria itp.) — dotąd cichy drop; teraz
+            // niewidoczny placeholder z oryginałem w pass-through.
+            return RenderPreservedPlaceholder(drawing, dispatchPart, extWpx, extHpx, "drawing");
         }
 
         var relationshipId = blip.Embed.Value;
@@ -5115,6 +6040,158 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                $"{altAttr}{posAttrs}{borderAttrs}{cropAttrs}{legacyAttr}{originalAttr} />";
     }
 
+    // ═════════════════ Pass-through grafik XML (ADR-0056) ═════════════════
+    // Element graficzny, którego writer nie umie odtworzyć z HTML (kształt DrawingML,
+    // VML, OLE, grupa, wykres…), niesie ORYGINALNY OOXML w data-docx-xml (base64
+    // OuterXml — wzorzec data-sdt-props) + bajty części relacji w data-docx-rels
+    // (base64 JSON {rId:{ct,data}}). Writer odtwarza fragment 1:1, więc autosave
+    // przestaje wycinać grafiki z wersji edytowalnej (v2). Atrybut base64 jest
+    // odporny na normalizację innerHTML przeglądarki (inline SVG podglądu nie jest
+    // źródłem prawdy przy zapisie).
+
+    internal const int MaxPreservedXmlBytes = 1024 * 1024;      // 1 MB fragmentu XML
+    internal const int MaxPreservedRelsBytes = 4 * 1024 * 1024; // 4 MB części na fragment
+    internal const string OoxmlRelationshipNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    /// <summary>
+    /// Buduje atrybuty pass-through (<c>data-docx-xml</c> + opcjonalnie <c>data-docx-rels</c>)
+    /// dla elementu graficznego. Pusty string, gdy fragmentu nie da się bezpiecznie zachować
+    /// (limit rozmiaru, relacja zewnętrzna/nierozwiązywalna) — wtedy zachowanie jak dotąd.
+    /// </summary>
+    private string BuildPreservedXmlAttrs(OpenXmlElement element, OpenXmlPart? sourcePart)
+    {
+        try
+        {
+            var xmlBytes = Encoding.UTF8.GetBytes(element.OuterXml);
+            if (xmlBytes.Length > MaxPreservedXmlBytes)
+            {
+                _log.LogWarning("Fragment grafiki XML {Name} przekracza limit {Limit} B — bez pass-through.",
+                    element.LocalName, MaxPreservedXmlBytes);
+                return string.Empty;
+            }
+
+            var relIds = CollectRelationshipIds(element);
+            var relsAttr = string.Empty;
+            if (relIds.Count > 0)
+            {
+                if (sourcePart == null) return string.Empty;
+                var map = new Dictionary<string, PreservedRelEntry>();
+                long total = 0;
+                foreach (var rid in relIds)
+                {
+                    OpenXmlPart target;
+                    try { target = sourcePart.GetPartById(rid); }
+                    catch
+                    {
+                        // Relacja zewnętrzna/nierozwiązywalna — odtworzony fragment z wiszącym
+                        // rId uszkodziłby dokument, więc rezygnujemy z pass-through.
+                        _log.LogInformation("Grafika XML {Name}: relacja {RelId} nierozwiązywalna — bez pass-through.",
+                            element.LocalName, rid);
+                        return string.Empty;
+                    }
+                    using var partStream = target.GetStream(FileMode.Open, FileAccess.Read);
+                    using var buffer = new MemoryStream();
+                    partStream.CopyTo(buffer);
+                    total += buffer.Length;
+                    if (total > MaxPreservedRelsBytes)
+                    {
+                        _log.LogWarning("Grafika XML {Name}: części relacji przekraczają limit {Limit} B — bez pass-through.",
+                            element.LocalName, MaxPreservedRelsBytes);
+                        return string.Empty;
+                    }
+                    map[rid] = new PreservedRelEntry(target.ContentType, System.Convert.ToBase64String(buffer.ToArray()));
+                }
+                var json = System.Text.Json.JsonSerializer.Serialize(map);
+                relsAttr = $" data-docx-rels=\"{System.Convert.ToBase64String(Encoding.UTF8.GetBytes(json))}\"";
+            }
+
+            return $" data-docx-xml=\"{System.Convert.ToBase64String(xmlBytes)}\"{relsAttr}";
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Nie udało się zbudować pass-through grafiki XML {Name}: {Error}",
+                element.LocalName, ex.Message);
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Wszystkie wartości atrybutów z przestrzeni relacji (r:embed/r:id/r:link/…) we fragmencie.</summary>
+    internal static List<string> CollectRelationshipIds(OpenXmlElement element)
+    {
+        var ids = new List<string>();
+        void Scan(OpenXmlElement el)
+        {
+            foreach (var attr in el.GetAttributes())
+            {
+                if (attr.NamespaceUri == OoxmlRelationshipNs
+                    && !string.IsNullOrEmpty(attr.Value) && !ids.Contains(attr.Value))
+                {
+                    ids.Add(attr.Value!);
+                }
+            }
+            foreach (var child in el.ChildElements) Scan(child);
+        }
+        Scan(element);
+        return ids;
+    }
+
+    /// <summary>
+    /// Niewidoczny placeholder zachowujący układ (rozmiar extentu) dla grafiki XML bez
+    /// reprezentacji webowej — zamiast dotychczasowego cichego dropu. Oryginał jedzie
+    /// w data-docx-xml; zgodnie z regułą GRAPHICS_CONVERSION nigdy nie malujemy
+    /// widocznego placeholdera. Pusty string, gdy pass-through niemożliwy (stan jak dotąd,
+    /// ale z logiem zamiast ciszy).
+    /// </summary>
+    private string RenderPreservedPlaceholder(OpenXmlElement element, OpenXmlPart? sourcePart,
+        int widthPx, int heightPx, string kind)
+    {
+        var attrs = BuildPreservedXmlAttrs(element, sourcePart);
+        if (attrs.Length == 0)
+        {
+            _log.LogWarning("Grafika XML {Kind} ({Name}) pominięta BEZ zachowania (fragment nieprzenośny).",
+                kind, element.LocalName);
+            return string.Empty;
+        }
+        _log.LogInformation("Grafika XML {Kind} ({Name}) zachowana pass-through jako niewidoczny placeholder {W}x{H}px.",
+            kind, element.LocalName, widthPx, heightPx);
+        var size = widthPx > 0 && heightPx > 0
+            ? $"width:{widthPx}px;height:{heightPx}px;"
+            : string.Empty;
+        return $"<span class=\"docx-preserved\" data-preserved=\"{kind}\" contenteditable=\"false\"" +
+               $"{attrs} style=\"display:inline-block;overflow:hidden;vertical-align:baseline;{size}\"></span>";
+    }
+
+    /// <summary>Wymiary z wp:extent rysunku w px (0, gdy brak).</summary>
+    private static (int w, int h) DrawingExtentPx(Drawing drawing)
+    {
+        var extent = drawing.Descendants<A.Wordprocessing.Extent>().FirstOrDefault();
+        var w = extent?.Cx != null ? (int)OoxmlUnits.EmuToPixels(extent.Cx.Value) : 0;
+        var h = extent?.Cy != null ? (int)OoxmlUnits.EmuToPixels(extent.Cy.Value) : 0;
+        return (w, h);
+    }
+
+    /// <summary>
+    /// Wymiary w px z atrybutu style (width/height w pt) pierwszego dziecka VML niosącego
+    /// style — wspólne dla w:pict i w:object (podgląd OLE).
+    /// </summary>
+    private static (int w, int h) VmlStyleSizePx(OpenXmlElement container)
+    {
+        foreach (var el in container.Descendants())
+        {
+            string style;
+            try { style = el.GetAttribute("style", "").Value ?? ""; } catch { continue; }
+            if (string.IsNullOrEmpty(style)) continue;
+            var wm = Regex.Match(style, @"width:\s*([\d.]+)pt");
+            var hm = Regex.Match(style, @"height:\s*([\d.]+)pt");
+            if (!wm.Success && !hm.Success) continue;
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var w = wm.Success ? (int)(double.Parse(wm.Groups[1].Value, inv) * 96 / 72) : 0;
+            var h = hm.Success ? (int)(double.Parse(hm.Groups[1].Value, inv) * 96 / 72) : 0;
+            return (w, h);
+        }
+        return (0, 0);
+    }
+
     private const string OfficeVmlNamespace = "urn:schemas-microsoft-com:office:office";
 
     /// <summary>Atrybut z przestrzeni office VML (o:hr, o:hralign, …); brak → pusty string.</summary>
@@ -5187,8 +6264,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var imageData = picture.Descendants<DocumentFormat.OpenXml.Vml.ImageData>().FirstOrDefault();
         if (imageData?.RelationshipId?.Value == null)
         {
+            var vmlPart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+
             // Legacy VML pole tekstowe (v:textbox → w:txbxContent) bez obrazu — zachowaj treść.
-            return HoistTextBox(RenderTextBoxContent(picture, document, sourcePart));
+            var vmlTextBox = RenderTextBoxContent(picture, document, sourcePart);
+            if (!string.IsNullOrEmpty(vmlTextBox)) return HoistTextBox(vmlTextBox);
+
+            // Kształt VML (v:rect/v:roundrect/v:oval/v:line) → SVG przez GraphicConversionService
+            // (hook zapowiadany w GRAPHICS_CONVERSION §10; ADR-0056). Podgląd jest tylko
+            // prezentacją — oryginalny w:pict jedzie w data-docx-xml i writer odtwarza go 1:1.
+            foreach (var vmlChild in picture.ChildElements)
+            {
+                if (vmlChild.NamespaceUri != "urn:schemas-microsoft-com:vml") continue;
+                var converted = _graphics.ConvertVmlShapeForEditor(vmlChild.OuterXml);
+                if (converted?.Web == null) continue;
+                var preservedVml = BuildPreservedXmlAttrs(picture, vmlPart);
+                var wPx = converted.Web.WidthPx > 0 ? converted.Web.WidthPx : 200;
+                var hPx = converted.Web.HeightPx > 0 ? converted.Web.HeightPx : 150;
+                _log.LogInformation("Kształt VML {Name} odwzorowany jako SVG {W}x{H}px (pass-through: {Preserved}).",
+                    vmlChild.LocalName, wPx, hPx, preservedVml.Length > 0);
+                return $"<img src=\"{converted.Web.ToDataUrl()}\" style=\"width:{wPx}px;height:{hPx}px;\" "
+                     + $"data-vml-shape=\"{EscapeHtml(vmlChild.LocalName)}\" contenteditable=\"false\"{preservedVml} />";
+            }
+
+            // Pozostałe VML (v:shape z path, v:group, gradienty/cienie…) — dotąd CICHY drop
+            // (znikały z podglądu i z pliku po zapisie); teraz niewidoczny placeholder
+            // zachowujący oryginał do round-tripu.
+            var (vmlW, vmlH) = VmlStyleSizePx(picture);
+            return RenderPreservedPlaceholder(picture, vmlPart, vmlW, vmlH, "vml");
         }
 
         var relationshipId = imageData.RelationshipId.Value;
@@ -5255,6 +6358,41 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return $"<img src=\"{vmlSrc}\" " +
                $"style=\"max-width:100%;width:{vmlWidth}px;height:{vmlHeight}px;\" " +
                $"data-image-id=\"{relationshipId}\"{vmlLegacyAttr}{vmlOriginalAttr} />";
+    }
+
+    /// <summary>
+    /// w:object (OLE): renderuje statyczny podgląd <c>v:imagedata</c> (dokładnie to, co pokazuje
+    /// Word) i niesie CAŁY oryginalny element + części relacji (binarium OLE, obraz podglądu)
+    /// w pass-through data-docx-xml/data-docx-rels (ADR-0056). Bez podglądu → niewidoczny
+    /// placeholder. Gdy pass-through niemożliwy (np. binarium ponad limit), podgląd degraduje
+    /// do zwykłego obrazu (lepsze niż dotychczasowa niewidoczna utrata).
+    /// </summary>
+    private string ConvertEmbeddedObjectToHtml(EmbeddedObject embedded, WordprocessingDocument document,
+        OpenXmlPart? sourcePart)
+    {
+        var effectivePart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
+        var preserved = BuildPreservedXmlAttrs(embedded, effectivePart);
+
+        var relId = embedded.Descendants<DocumentFormat.OpenXml.Vml.ImageData>()
+            .FirstOrDefault()?.RelationshipId?.Value;
+        if (relId != null && effectivePart != null)
+        {
+            var (w, h) = VmlStyleSizePx(embedded);
+            if (w <= 0) w = 200;
+            if (h <= 0) h = 150;
+            var src = TryResolveImageDataUrl(effectivePart, relId,
+                OoxmlUnits.PixelsToEmu(w), OoxmlUnits.PixelsToEmu(h));
+            if (src != null)
+            {
+                _log.LogInformation("w:object (OLE) — podgląd v:imagedata {W}x{H}px, pass-through: {Preserved}.",
+                    w, h, preserved.Length > 0);
+                return $"<img src=\"{src}\" style=\"width:{w}px;height:{h}px;\" "
+                     + $"data-ole-preview=\"1\" contenteditable=\"false\"{preserved} />";
+            }
+        }
+
+        var (pw, ph) = VmlStyleSizePx(embedded);
+        return RenderPreservedPlaceholder(embedded, effectivePart, pw, ph, "object");
     }
 
     /// <summary>

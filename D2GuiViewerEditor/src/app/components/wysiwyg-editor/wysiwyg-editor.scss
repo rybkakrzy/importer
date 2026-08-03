@@ -521,6 +521,27 @@ body.table-resizing * {
   max-width: none !important;
 }
 
+// Kształty XML (ADR-0056): div.docx-shape niesie inline SVG/rozmiar z readera;
+// generyczne reguły img { max-width:100% } w absolutnie pozycjonowanym kontenerze
+// zapadałyby podgląd do ~0px (ta sama klasa buga co .docx-tab-seg wyżej). Podgląd
+// jest niedotykalny (contenteditable=false z readera; źródłem prawdy jest
+// data-docx-xml) — user-select:none gasi przypadkowe zaznaczenia wnętrza SVG.
+.docx-shape {
+  box-sizing: border-box;
+  user-select: none;
+
+  svg,
+  img {
+    max-width: none !important;
+  }
+}
+
+// Niewidoczny placeholder pass-through (grafika bez reprezentacji webowej —
+// nieznany preset/VML/wykres): trzyma wymiary extentu w układzie, zero tuszu.
+.docx-preserved {
+  user-select: none;
+}
+
 // Wypełniacz tabulatora (w:leader — kropki spisu treści, podkreślenia formularzy).
 // Span niesie inline flex:1/position:relative/overflow:hidden (reader); tu malujemy
 // znaki wypełniacza pseudo-elementem: realne glify w foncie akapitu (jak w Wordzie),

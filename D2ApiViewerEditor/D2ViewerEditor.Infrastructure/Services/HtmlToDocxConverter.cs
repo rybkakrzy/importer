@@ -626,6 +626,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 case "img":
                 {
                     pendingTextParagraph ??= new Paragraph();
+                    // Pass-through (ADR-0056): podgląd VML/OLE z data-docx-xml → oryginalny
+                    // fragment zamiast konwersji podglądowego SVG (który jako a:blip psuje pakiet).
+                    if (child.GetAttributeValue("data-docx-xml", "") != ""
+                        && TryRestorePreservedElement(child) is { } preservedHfImg)
+                    {
+                        pendingTextParagraph.Append(new Run(preservedHfImg));
+                        break;
+                    }
                     var imgRun = CreateImageRun(child);
                     if (imgRun != null) pendingTextParagraph.Append(imgRun);
                     break;
@@ -675,6 +683,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 case "header":
                 case "footer":
                 {
+                    // Pass-through grafiki XML (ADR-0056): kształt/grupa w paśmie wraca 1:1
+                    // z data-docx-xml (dotąd generyczna rekursja gubiła go przy każdym zapisie).
+                    if (child.GetAttributeValue("data-docx-xml", "") != ""
+                        && TryRestorePreservedElement(child) is { } preservedHfBlock)
+                    {
+                        FlushPending();
+                        parent.Append(new Paragraph(new Run(preservedHfBlock)));
+                        break;
+                    }
                     // Pole tekstowe (np. adres w stopce Qutasator) — do bufora, przypinane do
                     // następnego akapitu; pozostałe kontenery — zejdź w dzieci.
                     if (IsTextBoxNode(child))
@@ -1190,6 +1207,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var elements = new List<OpenXmlElement>();
         var tagName = node.Name.ToLower();
+
+        // Pass-through grafiki XML (ADR-0056): element z data-docx-xml (div.docx-shape,
+        // span.docx-preserved, img podglądu VML/OLE) niesie oryginalny OOXML — odtwarzamy
+        // 1:1 zamiast stratnej konwersji HTML (dotąd kształty ginęły w generycznej rekursji).
+        if (node.NodeType == HtmlNodeType.Element
+            && node.GetAttributeValue("data-docx-xml", "") != ""
+            && TryRestorePreservedElement(node) is { } preservedElement)
+        {
+            elements.Add(new Paragraph(new Run(preservedElement)));
+            return elements;
+        }
 
         switch (tagName)
         {
@@ -3793,6 +3821,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             case HtmlNodeType.Element:
                 var tagName = node.Name.ToLower();
 
+                // Pass-through grafiki XML (ADR-0056) w kontekście inline: kształt/VML/OLE
+                // z data-docx-xml wraca jako oryginalny run child (w:drawing/w:pict/w:object).
+                if (node.GetAttributeValue("data-docx-xml", "") != ""
+                    && TryRestorePreservedElement(node) is { } preservedInline)
+                {
+                    runs.Add(new Run(preservedInline));
+                    break;
+                }
+
                 // Manualny page break: reader emituje <div class="page-break"> WEWNĄTRZ akapitu
                 // (Break siedzi w runie), więc trafia tu, a nie do bloku. Bez tego znak rozpoczęcia
                 // nowej strony ginął po round-tripie (R-15). Jeden węzeł page-break → jeden Break,
@@ -5059,6 +5096,143 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     }
 
     private int PxToTwips(int px) => (int)OoxmlUnits.PixelsToTwips(px);
+
+    // ═════════════════ Pass-through grafik XML (ADR-0056) ═════════════════
+    // Element HTML z data-docx-xml niesie ORYGINALNY fragment OOXML (w:drawing/w:pict/
+    // w:object/mc:AlternateContent, base64 OuterXml — wzorzec data-sdt-props) oraz bajty
+    // części relacji w data-docx-rels (base64 JSON {rId:{ct,data}}). Odtwarzamy fragment
+    // 1:1 z przepięciem rId na nowo dodane części — bez tego kształty/OLE/grupy ginęły
+    // przy KAŻDYM zapisie (body/nagłówki są regenerowane z HTML). Uszkodzony/nadmiarowy
+    // marker → null (degradacja do stratnej ścieżki, nigdy wysypka ani uszkodzony pakiet).
+
+    /// <summary>
+    /// Odtwarza zachowany fragment OOXML z atrybutów pass-through. Null, gdy marker jest
+    /// nieobecny/uszkodzony/ponad limit, root spoza białej listy albo brakuje części relacji.
+    /// </summary>
+    private OpenXmlElement? TryRestorePreservedElement(HtmlNode node)
+    {
+        var encoded = node.GetAttributeValue("data-docx-xml", "");
+        if (string.IsNullOrEmpty(encoded)) return null;
+        try
+        {
+            var xmlBytes = System.Convert.FromBase64String(encoded);
+            if (xmlBytes.Length == 0 || xmlBytes.Length > DocxToHtmlConverter.MaxPreservedXmlBytes) return null;
+            var xml = System.Text.Encoding.UTF8.GetString(xmlBytes);
+
+            // Twarda walidacja XML (XXE/DTD/encje zablokowane) PRZED oddaniem SDK.
+            var settings = new System.Xml.XmlReaderSettings
+            {
+                DtdProcessing = System.Xml.DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersFromEntities = 0
+            };
+            using (var sr = new StringReader(xml))
+            using (var xr = System.Xml.XmlReader.Create(sr, settings))
+            {
+                while (xr.Read()) { }
+            }
+
+            var root = System.Xml.Linq.XElement.Parse(xml);
+            const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            const string mcNs = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+            OpenXmlElement? element = (root.Name.NamespaceName, root.Name.LocalName) switch
+            {
+                (wNs, "drawing") => new Drawing(xml),
+                (wNs, "pict") => new Picture(xml),
+                (wNs, "object") => new EmbeddedObject(xml),
+                (mcNs, "AlternateContent") => new AlternateContent(xml),
+                _ => null
+            };
+            if (element == null) return null;
+
+            return RestorePreservedRels(node, element) ? element : null;
+        }
+        catch
+        {
+            // Uszkodzony marker (ręczna edycja, obce dane) — degradacja bez wyjątku.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Odtwarza części relacji fragmentu (data-docx-rels) w bieżącym kontenerze
+    /// (body/header/footer/przypisy) i przepina rId we fragmencie na nowe. False, gdy
+    /// jakikolwiek wymagany rId nie ma bajtów (wiszący rId = uszkodzony dokument).
+    /// </summary>
+    private bool RestorePreservedRels(HtmlNode node, OpenXmlElement element)
+    {
+        var referenced = DocxToHtmlConverter.CollectRelationshipIds(element);
+        if (referenced.Count == 0) return true;
+
+        var container = _currentImageContainer ?? (OpenXmlPart?)_mainPart;
+        if (container == null) return false;
+
+        Dictionary<string, PreservedRelEntry>? map = null;
+        var encodedRels = node.GetAttributeValue("data-docx-rels", "");
+        if (!string.IsNullOrEmpty(encodedRels))
+        {
+            var jsonBytes = System.Convert.FromBase64String(encodedRels);
+            if (jsonBytes.Length > DocxToHtmlConverter.MaxPreservedRelsBytes * 2) return false;
+            map = System.Text.Json.JsonSerializer
+                .Deserialize<Dictionary<string, PreservedRelEntry>>(jsonBytes);
+        }
+        if (map == null || referenced.Any(r => !map.ContainsKey(r))) return false;
+
+        foreach (var rid in referenced)
+        {
+            var entry = map[rid];
+            var bytes = System.Convert.FromBase64String(entry.data);
+            var newPart = CreatePreservedPart(container, entry.ct);
+            if (newPart == null) return false;
+            using (var stream = new MemoryStream(bytes))
+            {
+                newPart.FeedData(stream);
+            }
+            ReplaceRelationshipId(element, rid, container.GetIdOfPart(newPart));
+        }
+        return true;
+    }
+
+    /// <summary>Nowa część dla odtwarzanej relacji: obrazy → ImagePart, reszta → EmbeddedObjectPart.</summary>
+    private static OpenXmlPart? CreatePreservedPart(OpenXmlPart container, string contentType)
+    {
+        try
+        {
+            if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            {
+                return container switch
+                {
+                    MainDocumentPart m => m.AddImagePart(contentType),
+                    HeaderPart h => h.AddImagePart(contentType),
+                    FooterPart f => f.AddImagePart(contentType),
+                    FootnotesPart fn => fn.AddImagePart(contentType),
+                    EndnotesPart en => en.AddImagePart(contentType),
+                    _ => null
+                };
+            }
+            return container.AddNewPart<EmbeddedObjectPart>(contentType);
+        }
+        catch
+        {
+            // Kontener nie wspiera danego typu części — degradacja (fragment nie zostanie odtworzony).
+            return null;
+        }
+    }
+
+    /// <summary>Przepina wszystkie atrybuty r:* o wartości oldId na newId w całym fragmencie.</summary>
+    private static void ReplaceRelationshipId(OpenXmlElement element, string oldId, string newId)
+    {
+        void Fix(OpenXmlElement el)
+        {
+            foreach (var attr in el.GetAttributes())
+            {
+                if (attr.NamespaceUri == DocxToHtmlConverter.OoxmlRelationshipNs && attr.Value == oldId)
+                    el.SetAttribute(new OpenXmlAttribute(attr.Prefix, attr.LocalName, attr.NamespaceUri, newId));
+            }
+            foreach (var child in el.ChildElements) Fix(child);
+        }
+        Fix(element);
+    }
 
     /// <summary>
     /// Buduje SdtProperties (Tag/Alias) na podstawie atrybutów data-sdt-* z elementu HTML.

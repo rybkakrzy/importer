@@ -216,4 +216,109 @@ public class DocxAnchorPositionFidelityTests
         DataY(html).Should().Be(0);
         html.Should().Contain("data-pos-mode=\"front\"");
     }
+
+    // ── Anchors inside the header/footer band ────────────────────────────────
+    // The reference paragraph of a band anchor lives in the BAND, not the body text
+    // area: header paragraphs start at the header distance from the page top, footer
+    // paragraphs at the bottom edge of the content area. Resolving them against the
+    // body origin dropped a header logo one (margin − distance) too low, over the
+    // first body lines.
+
+    private const long HeaderDistanceEmu = 720L * 635;   // 457 200
+    private const long PageHeightEmu = 16838L * 635;     // 10 692 130
+
+    /// <summary>DOCX whose DEFAULT header (or footer) carries the anchored image.</summary>
+    private static MemoryStream BuildDocxWithAnchoredImageInBand(
+        string posVXml, long cx, long cy, bool footer = false)
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+            body.Append(new Paragraph(new Run(new Text("body"))));
+
+            var sectPr = new SectionProperties(
+                new PageSize { Width = 11906, Height = 16838 },
+                new PageMargin { Top = 1440, Bottom = 1440, Left = 1440, Right = 1440, Header = 720, Footer = 720, Gutter = 0 });
+
+            var posH = H("page", Off(0));
+            if (footer)
+            {
+                var footerPart = mainPart.AddNewPart<FooterPart>();
+                var imagePart = footerPart.AddImagePart(ImagePartType.Png);
+                using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+                footerPart.Footer = new Footer(new Paragraph(
+                    BuildAnchoredImageRun(footerPart.GetIdOfPart(imagePart), posH, posVXml, cx, cy)));
+                sectPr.PrependChild(new FooterReference
+                { Type = HeaderFooterValues.Default, Id = mainPart.GetIdOfPart(footerPart) });
+            }
+            else
+            {
+                var headerPart = mainPart.AddNewPart<HeaderPart>();
+                var imagePart = headerPart.AddImagePart(ImagePartType.Png);
+                using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+                headerPart.Header = new Header(new Paragraph(
+                    BuildAnchoredImageRun(headerPart.GetIdOfPart(imagePart), posH, posVXml, cx, cy)));
+                sectPr.PrependChild(new HeaderReference
+                { Type = HeaderFooterValues.Default, Id = mainPart.GetIdOfPart(headerPart) });
+            }
+
+            body.Append(sectPr);
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
+    [Test]
+    public void Header_Vertical_Paragraph_Offset_ResolvesAgainstHeaderBand()
+    {
+        // Logo anchored at the top of the header paragraph (the letterhead pattern).
+        // Editor origin is the content top (= top margin), the header paragraph sits at
+        // the header distance → contract y must be distance − margin (negative), NOT 0.
+        using var stream = BuildDocxWithAnchoredImageInBand(V("paragraph", Off(0)), cx: 1_000_000, cy: 1_000_000);
+
+        var headerHtml = _converter.Convert(stream).Header!.Html;
+
+        DataY(headerHtml).Should().Be(HeaderDistanceEmu - MarginEmu);
+    }
+
+    [Test]
+    public void Header_Vertical_Margin_Offset_KeepsPageLayoutOrigin()
+    {
+        // relativeFrom="margin" keeps the page's margin geometry even inside the band.
+        using var stream = BuildDocxWithAnchoredImageInBand(V("margin", Off(0)), cx: 1_000_000, cy: 1_000_000);
+
+        var headerHtml = _converter.Convert(stream).Header!.Html;
+
+        DataY(headerHtml).Should().Be(0);
+    }
+
+    [Test]
+    public void Footer_Vertical_Paragraph_Offset_ResolvesAgainstFooterBand()
+    {
+        // Footer paragraphs start at the bottom edge of the content area
+        // (page height − bottom margin), mirroring the GUI band geometry.
+        using var stream = BuildDocxWithAnchoredImageInBand(
+            V("paragraph", Off(0)), cx: 1_000_000, cy: 300_000, footer: true);
+
+        var footerHtml = _converter.Convert(stream).Footer!.Html;
+
+        DataY(footerHtml).Should().Be(PageHeightEmu - MarginEmu - MarginEmu);
+    }
+
+    [Test]
+    public void Body_Vertical_Paragraph_Offset_StaysContentRelative_AfterBandConversion()
+    {
+        // The band context must not leak into the body: converting a document whose
+        // header holds an anchor leaves body anchors resolved against the content top.
+        using var stream = BuildDocxWithAnchoredImage(
+            H("page", Off(0)), V("paragraph", Off(500_000)), cx: 1_000_000, cy: 300_000);
+
+        var html = _converter.Convert(stream).Html;
+
+        DataY(html).Should().Be(500_000);
+    }
 }
