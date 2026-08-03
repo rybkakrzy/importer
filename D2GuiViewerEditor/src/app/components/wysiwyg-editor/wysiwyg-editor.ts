@@ -5917,14 +5917,22 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     lineHeightPx: number
   ): [HTMLElement, HTMLElement] | null {
     if (budgetPx < lineHeightPx) return null;
-    // .docx-tab-leader = linia flex z wypełniaczem tabulatora (wpis spisu treści) —
-    // jednoliniowa, cięcie w środku rozerwałoby układ segmentów flex.
-    if (block.querySelector('.docx-tab-seg, .docx-tab-leader, .docx-textbox, [data-pos-mode], [data-docx-xml]')) return null;
     // Listy dzielą się MIĘDZY punktami (jak Word; tabele mają własną ścieżkę po wierszach) —
     // bez tego lista dłuższa niż reszta strony jechała W CAŁOŚCI dalej, zostawiając pustkę.
+    // Gałąź PRZED guardem tab-segów: tab-seg/textbox w punkcie blokuje cięcie LINII, ale
+    // podział między nietkniętymi punktami jest bezpieczny (bankowe numeracje „1) ⇥ tekst").
     if (block.tagName === 'UL' || block.tagName === 'OL') {
       return this._splitListBetweenItems(block, budgetPx, measurer);
     }
+    // Formant blokowy (content control) to kontener wielu akapitów — jako całość robił
+    // z sekcji dokumentu jeden niepodzielny mega-blok (dziura na pół strony, gdy nie
+    // mieścił się w resztce). Dzielimy między jego dziećmi jak Word.
+    if (block.tagName === 'DIV' && block.classList.contains('sdt-block')) {
+      return this._splitSdtBetweenChildren(block, budgetPx, measurer, lineHeightPx);
+    }
+    // .docx-tab-leader = linia flex z wypełniaczem tabulatora (wpis spisu treści) —
+    // jednoliniowa, cięcie w środku rozerwałoby układ segmentów flex.
+    if (block.querySelector('.docx-tab-seg, .docx-tab-leader, .docx-textbox, [data-pos-mode], [data-docx-xml]')) return null;
     if (block.tagName !== 'P' && !/^H[1-6]$/.test(block.tagName)) return null;
 
     measurer.innerHTML = '';
@@ -6011,6 +6019,74 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       cont.setAttribute('start', String(start + lastFitting + 1));
     }
     return [list, cont];
+  }
+
+  /**
+   * Górne/dolne krawędzie bezpośrednich dzieci kontenera (px od zewnętrznego początku
+   * bloku, pomiar w measurerze). Wydzielone, żeby testy jsdom mogły wstrzyknąć
+   * deterministyczną geometrię.
+   */
+  private _measureChildEdges(container: HTMLElement, measurer: HTMLElement): { top: number; bottom: number }[] {
+    measurer.innerHTML = '';
+    measurer.appendChild(container);
+    const base = measurer.getBoundingClientRect().top;
+    const edges = (Array.from(container.children) as HTMLElement[]).map(ch => {
+      const r = ch.getBoundingClientRect();
+      return { top: r.top - base, bottom: r.bottom - base };
+    });
+    measurer.removeChild(container);
+    return edges;
+  }
+
+  /**
+   * Dzieli formant blokowy (`div.sdt-block`) MIĘDZY jego dziećmi-blokami; dziecko graniczne
+   * próbuje dodatkowo ciąć po liniach rekurencją przez `_splitBlockAtBudget` (akapit w SDT
+   * łamie się przez granicę strony dokładnie jak poza formantem — tak robi Word; obejmuje
+   * to też SDT zagnieżdżone). Kontynuacja = klon kontenera (te same data-sdt-props —
+   * scalanie `_mergeSplitParasWithin` skleja fragmenty przed zapisem, więc writer widzi
+   * JEDEN formant) + `data-split-para="cont"`. Null = nic nie da się odciąć.
+   */
+  private _splitSdtBetweenChildren(
+    sdt: HTMLElement,
+    budgetPx: number,
+    measurer: HTMLElement,
+    lineHeightPx: number
+  ): [HTMLElement, HTMLElement] | null {
+    const children = Array.from(sdt.children) as HTMLElement[];
+    if (children.length === 0) return null;
+
+    const edges = this._measureChildEdges(sdt, measurer);
+    const EPS = 0.5;
+    let lastFitting = -1;
+    for (let i = 0; i < children.length; i++) {
+      const bottom = edges[i]?.bottom ?? 0;
+      if (bottom > 0 && bottom <= budgetPx + EPS) lastFitting = i;
+      else if (bottom > budgetPx + EPS) break;
+    }
+    if (lastFitting >= children.length - 1) return null;
+
+    // Dziecko graniczne: resztka budżetu liczona od jego górnej krawędzi w kontenerze.
+    const boundary = children[lastFitting + 1];
+    const boundaryBudget = budgetPx - (edges[lastFitting + 1]?.top ?? 0);
+    let boundaryParts: [HTMLElement, HTMLElement] | null = null;
+    if (boundaryBudget >= lineHeightPx) {
+      boundaryParts = this._splitBlockAtBudget(boundary, boundaryBudget, measurer, lineHeightPx);
+    }
+    if (lastFitting < 0 && !boundaryParts) return null;
+
+    const cont = sdt.cloneNode(false) as HTMLElement;
+    cont.setAttribute('data-split-para', 'cont');
+    cont.style.marginTop = '0';
+    if (boundaryParts) {
+      // Head fragmentu granicznego zostaje w SDT (boundary wciąż jest jego dzieckiem
+      // po podziale in-place), tail otwiera kontynuację.
+      cont.appendChild(boundaryParts[1]);
+      if (boundary.parentNode !== sdt) sdt.appendChild(boundaryParts[0]);
+    } else {
+      cont.appendChild(boundary);
+    }
+    for (let i = lastFitting + 2; i < children.length; i++) cont.appendChild(children[i]);
+    return [sdt, cont];
   }
 
   /**
@@ -6850,7 +6926,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     root.querySelectorAll('[data-split-para="cont"]').forEach(cont => {
       const el = cont as HTMLElement;
       const prev = el.previousElementSibling;
-      if (prev && prev.tagName === el.tagName) {
+      // Fragment kontenera SDT może skleić się wyłącznie z poprzednikiem-SDT — goły match
+      // po tagu wlałby treść formantu np. w div-marker sekcji, gdy head usunięto w edycji.
+      const sdtSafe = !el.classList.contains('sdt-block') || !!prev?.classList.contains('sdt-block');
+      if (prev && prev.tagName === el.tagName && sdtSafe) {
         while (el.firstChild) prev.appendChild(el.firstChild);
         el.remove();
       } else {

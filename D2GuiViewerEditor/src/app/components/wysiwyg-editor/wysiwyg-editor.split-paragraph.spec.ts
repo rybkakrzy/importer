@@ -234,6 +234,112 @@ describe('WysiwygEditorComponent — podział akapitu na granicy strony (ADR-004
     expect(content).toContain('<li>c</li>');
   });
 
+  // ---------- formanty blokowe (div.sdt-block): podział między dziećmi ----------
+
+  /** Stub geometrii dzieci kontenera (jsdom bez layoutu): perChildPx na blok-dziecko. */
+  function stubChildEdges(perChildPx = 300): void {
+    (component as any)._measureChildEdges = (container: HTMLElement) =>
+      (Array.from(container.children) as HTMLElement[]).map((_c, i) => ({
+        top: i * perChildPx,
+        bottom: (i + 1) * perChildPx,
+      }));
+  }
+
+  it('sdt-block dłuższy niż reszta strony dzieli się między dziećmi (bez dziury na pół strony)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<p data-h="400">intro</p>' +
+      '<div class="sdt-block" data-sdt-props="UFJPUFM=" data-h="1200">' +
+      '<p>a</p><p>b</p><p>c</p><p>d</p></div>'
+    );
+    stubBlockHeights();
+    stubChildEdges(); // 300 px/dziecko → w ~533 px resztki mieści się 1 dziecko
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('<p>a</p>');
+    expect(pages[0]).not.toContain('<p>c</p>');
+    expect(pages[1]).toMatch(/<div[^>]*data-split-para="cont"/);
+    // Kontynuacja jest dalej formantem: klasa + props (rendering ciągły między stronami).
+    expect(pages[1]).toContain('class="sdt-block"');
+    expect(pages[1]).toContain('data-sdt-props="UFJPUFM="');
+    expect(pages[1]).toContain('<p>d</p>');
+  });
+
+  it('dziecko graniczne SDT tnie się rekurencyjnie po liniach (fragment akapitu zostaje na stronie)', () => {
+    const sdt = document.createElement('div');
+    sdt.className = 'sdt-block';
+    sdt.setAttribute('data-sdt-props', 'UFJPUFM=');
+    sdt.innerHTML = '<p>pierwszy</p><p>graniczny-akapit</p><p>ostatni</p>';
+    stubChildEdges(); // dzieci: 0-300, 300-600, 600-900
+    // Rekurencja wchodzi w _splitBlockAtBudget dziecka granicznego — stub tnie tekst na pół.
+    (component as any)._splitBlockAtBudget = (block: HTMLElement, budgetPx: number) => {
+      if (block.tagName !== 'P') return null;
+      const text = block.textContent ?? '';
+      block.textContent = text.slice(0, 5);
+      const cont = document.createElement('p');
+      cont.textContent = text.slice(5);
+      cont.setAttribute('data-split-para', 'cont');
+      return [block, cont];
+    };
+
+    const parts = (component as any)._splitSdtBetweenChildren(
+      sdt, 450, document.createElement('div'), 20);
+
+    expect(parts).not.toBeNull();
+    const [head, cont] = parts as [HTMLElement, HTMLElement];
+    // Head: pierwsze dziecko + head fragmentu granicznego; cont: tail + reszta.
+    expect(head.textContent).toBe('pierwszygrani');
+    expect(cont.textContent).toBe('czny-akapitostatni');
+    expect(cont.classList.contains('sdt-block')).toBe(true);
+    expect(cont.getAttribute('data-split-para')).toBe('cont');
+  });
+
+  it('getContent scala fragmenty SDT w JEDEN formant (writer nie może dostać dwóch)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<div class="sdt-block" data-sdt-props="UFJPUFM="><p>a</p><p>b</p></div>',
+      '<div class="sdt-block" data-sdt-props="UFJPUFM=" data-split-para="cont" style="margin-top: 0px;"><p>c</p></div>'
+    );
+
+    const content = component.getContent();
+    expect(content).not.toContain('data-split-para');
+    expect((content.match(/sdt-block/g) ?? []).length).toBe(1);
+    expect(content).toContain('<p>c</p>');
+  });
+
+  it('osierocony fragment SDT nie wlewa się w obcy div (np. marker sekcji)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<div class="docx-section-break" data-break-type="nextPage"></div>' +
+      '<div class="sdt-block" data-sdt-props="UFJPUFM=" data-split-para="cont"><p>tresc</p></div>'
+    );
+
+    const content = component.getContent();
+    expect(content).not.toContain('data-split-para');
+    const tmp = document.createElement('div');
+    tmp.innerHTML = content;
+    expect(tmp.querySelector('.docx-section-break')!.textContent).toBe('');
+    expect(tmp.querySelector('.sdt-block')!.textContent).toBe('tresc');
+  });
+
+  it('lista z tab-segiem w punkcie dzieli się MIĘDZY punktami (guard tab-segów nie blokuje list)', () => {
+    const ol = document.createElement('ol');
+    ol.innerHTML =
+      '<li><span class="docx-tab-seg">1)</span>aaa</li><li>bbb</li><li>ccc</li><li>ddd</li>';
+    stubListItemBottoms();
+
+    const parts = (component as any)._splitBlockAtBudget(
+      ol, 250, document.createElement('div'), 20);
+
+    expect(parts).not.toBeNull();
+    const [head, cont] = parts as [HTMLElement, HTMLElement];
+    expect(head.children.length).toBe(2);
+    expect(cont.children.length).toBe(2);
+  });
+
   // ---------- karetka: akapity logiczne ----------
 
   it('kotwica karetki w fragmencie kontynuacji wskazuje akapit LOGICZNY z globalnym offsetem', () => {

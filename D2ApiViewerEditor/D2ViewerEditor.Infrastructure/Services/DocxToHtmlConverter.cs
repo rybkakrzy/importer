@@ -4733,12 +4733,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var (contW, contH) = DrawingExtentPx(drawing);
         var xfrmGrp = group.GetFirstChild<Wpg.GroupShapeProperties>()?.TransformGroup;
-        if (contW <= 0 || contH <= 0)
+        if (contW <= 0 && contH <= 0)
         {
             contW = xfrmGrp?.Extents?.Cx != null ? (int)OoxmlUnits.EmuToPixels(xfrmGrp.Extents.Cx.Value) : 0;
             contH = xfrmGrp?.Extents?.Cy != null ? (int)OoxmlUnits.EmuToPixels(xfrmGrp.Extents.Cy.Value) : 0;
         }
-        if (contW <= 0 || contH <= 0) return string.Empty;
+        if (contW <= 0 && contH <= 0) return string.Empty;
+        // Extent zerowy na JEDNEJ osi = legalna pozioma/pionowa linia (separator stopki);
+        // minimum 1px, żeby obrys dziecka miał gdzie się namalować.
+        contW = Math.Max(contW, 1);
+        contH = Math.Max(contH, 1);
 
         long extCx = xfrmGrp?.Extents?.Cx ?? 0;
         long extCy = xfrmGrp?.Extents?.Cy ?? 0;
@@ -4766,47 +4770,48 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     /// <summary>
     /// Wspólna pętla dzieci grupy (top-level <c>wpg:wgp</c> i zagnieżdżone <c>wpg:grpSp</c>):
-    /// kształty, obrazy i pod-grupy w przestrzeni potomnej rodzica. Pusty string, gdy
-    /// JAKIEKOLWIEK dziecko jest nieodwzorowalne — grupa degraduje w całości do placeholdera
-    /// pass-through (świadomie bez częściowego renderu, który kłamałby wizualnie).
+    /// kształty, obrazy i pod-grupy w przestrzeni potomnej rodzica. Kontrakt (dzieci i zwrot):
+    /// <c>null</c> = element NIEODWZOROWALNY → cała grupa degraduje do placeholdera
+    /// pass-through (bez częściowego renderu, który kłamałby wizualnie); <c>""</c> = element
+    /// BEZ TUSZU (zerowa powierzchnia bez obrysu) — pomijany bez ubijania grupy.
     /// </summary>
-    private string RenderGroupChildrenHtml(OpenXmlElement group, WordprocessingDocument document,
+    private string? RenderGroupChildrenHtml(OpenXmlElement group, WordprocessingDocument document,
         OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY,
         string? groupFillHex, int depth)
     {
         var inner = new StringBuilder();
         foreach (var child in group.ChildElements)
         {
+            string? html;
             switch (child)
             {
                 case Wps.WordprocessingShape wsp:
-                {
-                    var html = RenderGroupChildShape(wsp, document, sourcePart,
+                    html = RenderGroupChildShape(wsp, document, sourcePart,
                         scaleX, scaleY, chOffX, chOffY, groupFillHex);
-                    if (string.IsNullOrEmpty(html)) return string.Empty;
-                    inner.Append(html);
                     break;
-                }
                 case Pic.Picture pic:
-                {
-                    var html = RenderGroupChildPicture(pic, document, sourcePart, scaleX, scaleY, chOffX, chOffY);
-                    if (string.IsNullOrEmpty(html)) return string.Empty;
-                    inner.Append(html);
+                    html = RenderGroupChildPicture(pic, document, sourcePart, scaleX, scaleY, chOffX, chOffY);
                     break;
-                }
                 case Wpg.GroupShape nested:
-                {
-                    var html = RenderNestedGroupShape(nested, document, sourcePart,
+                    html = RenderNestedGroupShape(nested, document, sourcePart,
                         scaleX, scaleY, chOffX, chOffY, groupFillHex, depth);
-                    if (string.IsNullOrEmpty(html)) return string.Empty;
-                    inner.Append(html);
                     break;
-                }
                 case Wpg.GraphicFrame:
                     // Wykres/diagram osadzony w grupie — brak reprezentacji webowej; render
                     // częściowy (grupa bez ramki) łamałby zasadę „wszystko albo placeholder".
-                    return string.Empty;
+                    html = null;
+                    break;
+                default:
+                    continue;
             }
+            if (html == null)
+            {
+                _log.LogInformation(
+                    "Grupa kształtów: dziecko {Child} nieodwzorowalne — cała grupa w pass-through.",
+                    child.LocalName);
+                return null;
+            }
+            inner.Append(html);
         }
         return inner.ToString();
     }
@@ -4819,24 +4824,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private const int MaxNestedGroupDepth = 8;
 
-    private string RenderNestedGroupShape(Wpg.GroupShape nested, WordprocessingDocument document,
+    private string? RenderNestedGroupShape(Wpg.GroupShape nested, WordprocessingDocument document,
         OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY,
         string? inheritedFillHex, int depth)
     {
-        if (depth >= MaxNestedGroupDepth) return string.Empty;
+        if (depth >= MaxNestedGroupDepth) return null;
         var grpSpPr = nested.GetFirstChild<Wpg.GroupShapeProperties>();
         var xfrm = grpSpPr?.TransformGroup;
         if (xfrm?.Offset?.X == null || xfrm.Offset.Y == null
             || xfrm.Extents?.Cx == null || xfrm.Extents.Cy == null)
         {
-            return string.Empty;
+            return null;
         }
 
-        var leftPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.X.Value - chOffX) * scaleX));
-        var topPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.Y.Value - chOffY) * scaleY));
-        var wPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cx.Value * scaleX));
-        var hPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cy.Value * scaleY));
-        if (wPx <= 0 || hPx <= 0) return string.Empty;
+        var leftPx = OoxmlUnits.EmuToPixels((xfrm.Offset.X.Value - chOffX) * scaleX);
+        var topPx = OoxmlUnits.EmuToPixels((xfrm.Offset.Y.Value - chOffY) * scaleY);
+        var wPx = OoxmlUnits.EmuToPixels(xfrm.Extents.Cx.Value * scaleX);
+        var hPx = OoxmlUnits.EmuToPixels(xfrm.Extents.Cy.Value * scaleY);
+        if (wPx <= 0 && hPx <= 0) return string.Empty;
+        // Oś zerowa (pod-grupa liniowa) — minimum 1px na obrys dzieci.
+        wPx = Math.Max(wPx, 1);
+        hPx = Math.Max(hPx, 1);
 
         long extCx = xfrm.Extents.Cx.Value;
         long extCy = xfrm.Extents.Cy.Value;
@@ -4849,13 +4857,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var inner = RenderGroupChildrenHtml(nested, document, sourcePart,
             innerScaleX, innerScaleY, xfrm.ChildOffset?.X ?? 0, xfrm.ChildOffset?.Y ?? 0,
             fillHex, depth + 1);
-        if (string.IsNullOrEmpty(inner)) return string.Empty;
+        if (inner == null) return null;
+        if (inner.Length == 0) return string.Empty;
 
         var transformCss = BuildTransformCss(xfrm.Rotation?.Value,
             xfrm.HorizontalFlip?.Value, xfrm.VerticalFlip?.Value);
-        return $"<div style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
-             + $"width:{wPx}px;height:{hPx}px;overflow:visible;{transformCss}\">{inner}</div>";
+        return $"<div style=\"position:absolute;left:{Px(leftPx)}px;top:{Px(topPx)}px;"
+             + $"width:{Px(wPx)}px;height:{Px(hPx)}px;overflow:visible;{transformCss}\">{inner}</div>";
     }
+
+    /// <summary>Px do CSS/SVG: invariant culture (pl-PL dałoby przecinek dziesiętny), max 2 miejsca.</summary>
+    private static string Px(double v)
+        => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Wypełnienie zadeklarowane na właściwościach grupy (cel <c>a:grpFill</c> dzieci);
@@ -4864,8 +4877,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? GroupOwnFillHex(OpenXmlElement? grpSpPr, string? inherited)
         => SolidFillHex(grpSpPr?.Elements<A.SolidFill>().FirstOrDefault()) ?? inherited;
 
-    /// <summary>Dziecko grupy: kształt wps:wsp → absolutnie pozycjonowany SVG w przestrzeni grupy.</summary>
-    private string RenderGroupChildShape(Wps.WordprocessingShape wsp, WordprocessingDocument document,
+    /// <summary>
+    /// Dziecko grupy: kształt wps:wsp → absolutnie pozycjonowany SVG w przestrzeni grupy.
+    /// Zwrot: <c>null</c> = nieodwzorowalny (grupa degraduje), <c>""</c> = bez tuszu (pomijany).
+    /// </summary>
+    private string? RenderGroupChildShape(Wps.WordprocessingShape wsp, WordprocessingDocument document,
         OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY, string? groupFillHex)
     {
         var spPr = wsp.GetFirstChild<Wps.ShapeProperties>();
@@ -4873,14 +4889,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (xfrm?.Offset?.X == null || xfrm.Offset.Y == null
             || xfrm.Extents?.Cx == null || xfrm.Extents.Cy == null)
         {
-            return string.Empty;
+            return null;
         }
 
-        var leftPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.X.Value - chOffX) * scaleX));
-        var topPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.Y.Value - chOffY) * scaleY));
-        var wPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cx.Value * scaleX));
-        var hPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cy.Value * scaleY));
-        if (wPx <= 0 || hPx <= 0) return string.Empty;
+        // Ułamkowe px: trunkacja do int daje 0 dla detali < 9525 EMU (< 1px), a przez regułę
+        // „wszystko albo nic" jedno takie dziecko zgasiłoby całą grupę.
+        var leftPx = OoxmlUnits.EmuToPixels((xfrm.Offset.X.Value - chOffX) * scaleX);
+        var topPx = OoxmlUnits.EmuToPixels((xfrm.Offset.Y.Value - chOffY) * scaleY);
+        var wPx = OoxmlUnits.EmuToPixels(xfrm.Extents.Cx.Value * scaleX);
+        var hPx = OoxmlUnits.EmuToPixels(xfrm.Extents.Cy.Value * scaleY);
+        if (wPx < 0 || hPx < 0) return null;
 
         // a:blipFill = wypełnienie kształtu obrazem (np. fotografia w kafelku logo).
         // Przybliżenie: obraz rozciągnięty na boks kształtu bez przycinania do geometrii —
@@ -4888,13 +4906,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var blipRel = spPr!.GetFirstChild<A.BlipFill>()?.Blip?.Embed?.Value;
         if (blipRel != null)
         {
+            if (wPx <= 0 || hPx <= 0) return string.Empty;
             var part = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
-            if (part == null) return string.Empty;
+            if (part == null) return null;
             var src = TryResolveImageDataUrl(part, blipRel,
                 OoxmlUnits.PixelsToEmu(wPx), OoxmlUnits.PixelsToEmu(hPx));
-            if (src == null) return string.Empty;
-            return $"<img src=\"{src}\" style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
-                 + $"width:{wPx}px;height:{hPx}px;max-width:none;{BuildShapeTransformCssFromXfrm(xfrm)}\" />";
+            if (src == null) return null;
+            return $"<img src=\"{src}\" style=\"position:absolute;left:{Px(leftPx)}px;top:{Px(topPx)}px;"
+                 + $"width:{Px(wPx)}px;height:{Px(hPx)}px;max-width:none;{BuildShapeTransformCssFromXfrm(xfrm)}\" />";
         }
 
         var noFill = spPr.Elements<A.NoFill>().Any();
@@ -4919,6 +4938,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             : 1;
         var gradient = noFill ? null : GetShapeGradient(spPr);
 
+        // Zerowa powierzchnia bez obrysu = brak tuszu (pomiń); z obrysem to linia pozioma/
+        // pionowa — oś zerowa dostaje szerokość obrysu, żeby kreska była widoczna jak w Wordzie.
+        if (wPx <= 0 || hPx <= 0)
+        {
+            var hasStroke = strokeHex != null;
+            if (!hasStroke || (wPx <= 0 && hPx <= 0)) return string.Empty;
+            wPx = Math.Max(wPx, strokeW);
+            hPx = Math.Max(hPx, strokeW);
+        }
+
         string svg;
         var custom = spPr.GetFirstChild<A.CustomGeometry>();
         if (custom != null)
@@ -4929,45 +4958,49 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             var presetName = spPr.GetFirstChild<A.PresetGeometry>()?.Preset?.InnerText;
             svg = presetName != null
-                ? BuildPresetGeometrySvg(presetName, wPx, hPx, fillHex, strokeHex, strokeW, noFill, gradient)
+                ? BuildPresetGeometrySvg(presetName, (int)Math.Round(wPx), (int)Math.Round(hPx),
+                    fillHex, strokeHex, strokeW, noFill, gradient)
                 : string.Empty;
         }
-        if (string.IsNullOrEmpty(svg)) return string.Empty;
+        if (string.IsNullOrEmpty(svg)) return null;
 
         var transformCss = BuildShapeTransformCssFromXfrm(xfrm);
-        return $"<div style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
-             + $"width:{wPx}px;height:{hPx}px;{transformCss}\">{svg}</div>";
+        return $"<div style=\"position:absolute;left:{Px(leftPx)}px;top:{Px(topPx)}px;"
+             + $"width:{Px(wPx)}px;height:{Px(hPx)}px;{transformCss}\">{svg}</div>";
     }
 
-    /// <summary>Dziecko grupy: pic:pic → absolutnie pozycjonowany obraz w przestrzeni grupy.</summary>
-    private string RenderGroupChildPicture(Pic.Picture pic, WordprocessingDocument document,
+    /// <summary>
+    /// Dziecko grupy: pic:pic → absolutnie pozycjonowany obraz w przestrzeni grupy.
+    /// Zwrot: <c>null</c> = nieodwzorowalny (grupa degraduje), <c>""</c> = bez tuszu (pomijany).
+    /// </summary>
+    private string? RenderGroupChildPicture(Pic.Picture pic, WordprocessingDocument document,
         OpenXmlPart? sourcePart, double scaleX, double scaleY, long chOffX, long chOffY)
     {
         var xfrm = pic.ShapeProperties?.Transform2D;
         if (xfrm?.Offset?.X == null || xfrm.Offset.Y == null
             || xfrm.Extents?.Cx == null || xfrm.Extents.Cy == null)
         {
-            return string.Empty;
+            return null;
         }
 
-        var leftPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.X.Value - chOffX) * scaleX));
-        var topPx = (int)OoxmlUnits.EmuToPixels((long)((xfrm.Offset.Y.Value - chOffY) * scaleY));
-        var wPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cx.Value * scaleX));
-        var hPx = (int)OoxmlUnits.EmuToPixels((long)(xfrm.Extents.Cy.Value * scaleY));
+        var leftPx = OoxmlUnits.EmuToPixels((xfrm.Offset.X.Value - chOffX) * scaleX);
+        var topPx = OoxmlUnits.EmuToPixels((xfrm.Offset.Y.Value - chOffY) * scaleY);
+        var wPx = OoxmlUnits.EmuToPixels(xfrm.Extents.Cx.Value * scaleX);
+        var hPx = OoxmlUnits.EmuToPixels(xfrm.Extents.Cy.Value * scaleY);
         if (wPx <= 0 || hPx <= 0) return string.Empty;
 
         var relId = pic.Descendants<A.Blip>().FirstOrDefault()?.Embed?.Value;
-        if (relId == null) return string.Empty;
+        if (relId == null) return null;
         var effectivePart = sourcePart ?? (OpenXmlPart?)document.MainDocumentPart;
-        if (effectivePart == null) return string.Empty;
+        if (effectivePart == null) return null;
 
         var src = TryResolveImageDataUrl(effectivePart, relId,
             OoxmlUnits.PixelsToEmu(wPx), OoxmlUnits.PixelsToEmu(hPx));
-        if (src == null) return string.Empty;
+        if (src == null) return null;
 
         var transformCss = BuildShapeTransformCssFromXfrm(xfrm);
-        return $"<img src=\"{src}\" style=\"position:absolute;left:{leftPx}px;top:{topPx}px;"
-             + $"width:{wPx}px;height:{hPx}px;max-width:none;{transformCss}\" />";
+        return $"<img src=\"{src}\" style=\"position:absolute;left:{Px(leftPx)}px;top:{Px(topPx)}px;"
+             + $"width:{Px(wPx)}px;height:{Px(hPx)}px;max-width:none;{transformCss}\" />";
     }
 
     /// <summary>
@@ -5210,7 +5243,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// per subścieżka. Zwraca "" gdy brak przetłumaczalnej ścieżki.
     /// </summary>
     private static string BuildCustomGeometrySvg(DocumentFormat.OpenXml.Drawing.CustomGeometry custom,
-        int widthPx, int heightPx, string? fillHex, string? strokeHex, int strokeWidthPx, bool noFill = false,
+        double widthPx, double heightPx, string? fillHex, string? strokeHex, int strokeWidthPx, bool noFill = false,
         (List<(double pos, string hex)> stops, double angleDeg)? gradient = null)
     {
         var pathList = custom.GetFirstChild<DocumentFormat.OpenXml.Drawing.PathList>();
@@ -5254,8 +5287,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             fill = gRef;
         }
         else fill = fillHex != null ? $"#{fillHex}" : "currentColor";
+        // vector-effect: viewBox custGeom jest w jednostkach ścieżki (typowo EMU) — stroke-width
+        // podany w px byłby przeskalowany do niewidzialności (1px / ~9525 EMU). Non-scaling
+        // utrzymuje szerokość obrysu w pikselach ekranu, jak renderuje ją Word.
         var stroke = strokeHex != null
-            ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\""
+            ? $" stroke=\"#{strokeHex}\" stroke-width=\"{Math.Max(1, strokeWidthPx)}\" vector-effect=\"non-scaling-stroke\""
             : string.Empty;
 
         var svgPaths = new StringBuilder();
@@ -5362,7 +5398,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // preserveAspectRatio=none: proporcje extentu == proporcje przestrzeni ścieżki (Word je
         // dopasowuje), więc rozciągamy dokładnie do rozmiaru z wp:extent.
         return $"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {spaceW} {spaceH}\" "
-             + $"width=\"{widthPx}\" height=\"{heightPx}\" preserveAspectRatio=\"none\" "
+             + $"width=\"{F(widthPx)}\" height=\"{F(heightPx)}\" preserveAspectRatio=\"none\" "
              + $"style=\"display:block;\">{defs}{svgPaths}</svg>";
     }
 
@@ -6154,11 +6190,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         _log.LogInformation("Grafika XML {Kind} ({Name}) zachowana pass-through jako niewidoczny placeholder {W}x{H}px.",
             kind, element.LocalName, widthPx, heightPx);
-        var size = widthPx > 0 && heightPx > 0
+        // Obiekt pływający (wp:anchor / VML position:absolute) nie zajmuje w Wordzie miejsca
+        // w przepływie — jego placeholder musi mieć zerowy ślad, inaczej rozpycha akapit
+        // (w pasmach dodatkowo zaniża wysokość treści stron). Rozmiar zostaje tylko dla inline.
+        var size = widthPx > 0 && heightPx > 0 && !IsFloatingGraphicElement(element)
             ? $"width:{widthPx}px;height:{heightPx}px;"
-            : string.Empty;
+            : "width:0;height:0;";
         return $"<span class=\"docx-preserved\" data-preserved=\"{kind}\" contenteditable=\"false\"" +
                $"{attrs} style=\"display:inline-block;overflow:hidden;vertical-align:baseline;{size}\"></span>";
+    }
+
+    /// <summary>
+    /// Czy zachowywany element graficzny jest PŁYWAJĄCY (poza przepływem tekstu):
+    /// DrawingML <c>wp:anchor</c> albo VML z inline <c>position:absolute</c>. Dla takich
+    /// placeholder pass-through nie może rezerwować miejsca w linii.
+    /// </summary>
+    private static bool IsFloatingGraphicElement(OpenXmlElement element)
+    {
+        if (element is A.Wordprocessing.Anchor || element.Descendants<A.Wordprocessing.Anchor>().Any())
+            return true;
+        return element.Descendants()
+            .Any(d => d.NamespaceUri == "urn:schemas-microsoft-com:vml"
+                && d.GetAttributes().Any(a => a.LocalName == "style"
+                    && a.Value?.Contains("position:absolute", StringComparison.OrdinalIgnoreCase) == true));
     }
 
     /// <summary>Wymiary z wp:extent rysunku w px (0, gdy brak).</summary>

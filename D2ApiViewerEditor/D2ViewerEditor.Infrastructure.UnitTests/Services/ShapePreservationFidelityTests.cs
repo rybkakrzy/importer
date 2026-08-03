@@ -389,6 +389,145 @@ public class ShapePreservationFidelityTests
         html.Should().NotContain("docx-group", "render częściowy grupy jest zabroniony");
     }
 
+    // ── Dzieci sub-pikselowe / oś zerowa / placeholder pływający (ADR-0058; repro:
+    // logo bankowe w stopce = grupa custGeom z detalami < 1px, separator extent cy=0) ──
+
+    private const string SubPixelGroupBody = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""714515"" cy=""714528""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"">
+      <wpg:wgp>
+        <wpg:grpSpPr><a:xfrm>
+          <a:off x=""0"" y=""0""/><a:ext cx=""714515"" cy=""714528""/>
+          <a:chOff x=""0"" y=""0""/><a:chExt cx=""714515"" cy=""714528""/>
+        </a:xfrm></wpg:grpSpPr>
+        <wps:wsp><wps:spPr>
+          <a:xfrm><a:off x=""0"" y=""0""/><a:ext cx=""714515"" cy=""714528""/></a:xfrm>
+          <a:custGeom><a:avLst/><a:gdLst/><a:pathLst><a:path w=""714515"" h=""714528"">
+            <a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo><a:lnTo><a:pt x=""714515"" y=""0""/></a:lnTo>
+            <a:lnTo><a:pt x=""714515"" y=""714528""/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>
+        </wps:spPr><wps:style>
+          <a:lnRef idx=""0""><a:srgbClr val=""000000""><a:alpha val=""0""/></a:srgbClr></a:lnRef>
+          <a:fillRef idx=""1""><a:srgbClr val=""FF6100""/></a:fillRef>
+          <a:effectRef idx=""0""><a:scrgbClr r=""0"" g=""0"" b=""0""/></a:effectRef><a:fontRef idx=""none""/>
+        </wps:style></wps:wsp>
+        <wps:wsp><wps:spPr>
+          <a:xfrm><a:off x=""300000"" y=""300000""/><a:ext cx=""8000"" cy=""8000""/></a:xfrm>
+          <a:custGeom><a:avLst/><a:gdLst/><a:pathLst><a:path w=""8000"" h=""8000"">
+            <a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo><a:lnTo><a:pt x=""8000"" y=""0""/></a:lnTo>
+            <a:lnTo><a:pt x=""8000"" y=""8000""/></a:lnTo><a:close/></a:path></a:pathLst></a:custGeom>
+          <a:solidFill><a:srgbClr val=""FFFFFF""/></a:solidFill>
+        </wps:spPr></wps:wsp>
+      </wpg:wgp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+
+    [Test]
+    public void Read_GroupWithSubPixelChild_RendersWholeGroup()
+    {
+        var html = _reader.Convert(DocxFromRawBody(SubPixelGroupBody)).Html;
+
+        html.Should().Contain("docx-group", "sub-pikselowy detal gasił CAŁĄ grupę (logo w stopce)");
+        html.Should().NotContain("data-preserved=\"group\"");
+        html.Should().Contain("#FF6100", "wypełnienie z wps:style/a:fillRef musi się malować");
+        html.Should().Contain("width:0.84px", "detal renderuje się w ułamkowych px, nie znika");
+    }
+
+    private const string ZeroHeightLineGroupBody = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""4571924"" cy=""0""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"">
+      <wpg:wgp>
+        <wpg:grpSpPr><a:xfrm>
+          <a:off x=""0"" y=""0""/><a:ext cx=""4571924"" cy=""0""/>
+          <a:chOff x=""0"" y=""0""/><a:chExt cx=""4571924"" cy=""0""/>
+        </a:xfrm></wpg:grpSpPr>
+        <wps:wsp><wps:spPr>
+          <a:xfrm><a:off x=""0"" y=""0""/><a:ext cx=""4571924"" cy=""0""/></a:xfrm>
+          <a:custGeom><a:avLst/><a:gdLst/><a:pathLst><a:path w=""4571924"" h=""0"">
+            <a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo><a:lnTo><a:pt x=""4571924"" y=""0""/></a:lnTo>
+          </a:path></a:pathLst></a:custGeom>
+          <a:ln w=""12700"" cap=""flat""><a:solidFill><a:srgbClr val=""FF5D00""/></a:solidFill></a:ln>
+        </wps:spPr></wps:wsp>
+      </wpg:wgp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+
+    [Test]
+    public void Read_ZeroHeightLineGroup_RendersVisibleStroke()
+    {
+        var html = _reader.Convert(DocxFromRawBody(ZeroHeightLineGroupBody)).Html;
+
+        html.Should().Contain("docx-group", "grupa-linia o zerowej wysokości musi się renderować");
+        html.Should().NotContain("data-preserved=\"group\"");
+        html.Should().Contain("stroke=\"#FF5D00\"");
+        html.Should().Contain("vector-effect=\"non-scaling-stroke\"",
+            "stroke-width w px musi przetrwać viewBox w jednostkach EMU");
+    }
+
+    [Test]
+    public void Read_FloatingUnrepresentableGraphic_PlaceholderHasZeroFootprint()
+    {
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:anchor distT=""0"" distB=""0"" distL=""114300"" distR=""114300"" simplePos=""0""
+      relativeHeight=""251658240"" behindDoc=""0"" locked=""0"" layoutInCell=""1"" allowOverlap=""1"">
+    <wp:simplePos x=""0"" y=""0""/>
+    <wp:positionH relativeFrom=""page""><wp:posOffset>6130290</wp:posOffset></wp:positionH>
+    <wp:positionV relativeFrom=""page""><wp:posOffset>9729977</wp:posOffset></wp:positionV>
+    <wp:extent cx=""714515"" cy=""714528""/><wp:wrapSquare wrapText=""bothSides""/>
+    <wp:docPr id=""1"" name=""G""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"">
+      <wpg:wgp>
+        <wpg:grpSpPr><a:xfrm><a:off x=""0"" y=""0""/><a:ext cx=""714515"" cy=""714528""/></a:xfrm></wpg:grpSpPr>
+        <wpg:graphicFrame/>
+      </wpg:wgp>
+    </a:graphicData></a:graphic>
+  </wp:anchor></w:drawing>
+</w:r></w:p>";
+        var html = _reader.Convert(DocxFromRawBody(body)).Html;
+
+        html.Should().Contain("data-preserved=\"group\"", "graphicFrame w grupie nadal degraduje");
+        var placeholder = System.Text.RegularExpressions.Regex
+            .Match(html, "<span class=\"docx-preserved\"[^>]*>").Value;
+        placeholder.Should().Contain("width:0;height:0;",
+            "pływający placeholder nie może rezerwować miejsca w linii");
+        placeholder.Should().NotContain("width:75px");
+    }
+
+    [Test]
+    public void Read_InlineUnrepresentableGraphic_PlaceholderKeepsExtentSize()
+    {
+        // Kontrast do testu wyżej: grafika INLINE realnie zajmuje miejsce w linii.
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""714515"" cy=""714528""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"">
+      <wpg:wgp>
+        <wpg:grpSpPr><a:xfrm><a:off x=""0"" y=""0""/><a:ext cx=""714515"" cy=""714528""/></a:xfrm></wpg:grpSpPr>
+        <wpg:graphicFrame/>
+      </wpg:wgp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        var html = _reader.Convert(DocxFromRawBody(body)).Html;
+
+        var placeholder = System.Text.RegularExpressions.Regex
+            .Match(html, "<span class=\"docx-preserved\"[^>]*>").Value;
+        placeholder.Should().Contain("width:75px;height:75px;");
+    }
+
+    [Test]
+    public void RoundTrip_SubPixelGroup_RestoresOriginalXml()
+    {
+        var html = _reader.Convert(DocxFromRawBody(SubPixelGroupBody)).Html;
+        var docx = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(docx), false);
+        var group = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<Wpg.WordprocessingGroup>().Single();
+        group.Elements<Wps.WordprocessingShape>().Should().HaveCount(2,
+            "oba dzieci (w tym sub-pikselowe) muszą wrócić z pass-through 1:1");
+    }
+
     [Test]
     public void Read_GroupChildWithGrpFill_InheritsGroupFill()
     {
