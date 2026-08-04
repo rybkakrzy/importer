@@ -7348,6 +7348,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         // displayed content (rule 10 — no apparent editing): wpis sekcyjny > warianty bazy.
         el.innerHTML = this._editableHeaderHtml(this.editingHfPageIndex());
         this.wrapExistingImages(el);
+        this._positionBandShapesForEditing(el, this.editingHfPageIndex(), 'header');
         this.attachEditorListeners(el);
         el.focus();
         this.placeCaretAtPoint(el, clickX, clickY);
@@ -7373,6 +7374,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       if (el) {
         el.innerHTML = this._editableFooterHtml(this.editingHfPageIndex());
         this.wrapExistingImages(el);
+        this._positionBandShapesForEditing(el, this.editingHfPageIndex(), 'footer');
         this.attachEditorListeners(el);
         el.focus();
         this.placeCaretAtPoint(el, clickX, clickY);
@@ -7503,13 +7505,48 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  /** Czysty HTML pasma z surowego innerHTML edycji (unwrap wrapperów obrazów). */
+  /** Czysty HTML pasma z surowego innerHTML edycji (unwrap wrapperów obrazów +
+   *  przywrócenie KONTRAKTOWYCH współrzędnych kształtów ze stasha edycji pasma). */
   private _cleanBandHtml(html: string): string {
-    if (!html || !html.includes('editor-image-wrapper')) return html;
+    if (!html || (!html.includes('editor-image-wrapper') && !html.includes('data-band-orig-left'))) {
+      return html;
+    }
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
     this._unwrapImageWrappers(tmp);
+    // Kształty przeliczone na układ pasma na czas edycji — do modelu wraca DOKŁADNY
+    // oryginał z data-band-orig-* (bez dryfu zaokrągleń przy wielokrotnych edycjach).
+    tmp.querySelectorAll<HTMLElement>('[data-band-orig-left]').forEach(el => {
+      el.style.left = el.getAttribute('data-band-orig-left') ?? el.style.left;
+      el.style.top = el.getAttribute('data-band-orig-top') ?? el.style.top;
+      el.removeAttribute('data-band-orig-left');
+      el.removeAttribute('data-band-orig-top');
+    });
     return tmp.innerHTML;
+  }
+
+  /**
+   * Tryb EDYCJI pasma: kotwiczone kształty (div.docx-shape/.docx-textbox z inline absolutem)
+   * niosą współrzędne KONTRAKTU (X od lewej krawędzi strony, Y od góry obszaru treści) —
+   * kontener pasma ma inny origin, więc bez przeliczenia logo „znikało" (np. top:927px
+   * wypadał daleko poza pasmem). Przeliczenie jak w wyświetlaniu (_positionBandAnchors),
+   * ale z zapamiętaniem oryginału w data-band-orig-* — commit (_cleanBandHtml) przywraca
+   * kontrakt 1:1, więc model i zapis DOCX pozostają nietknięte.
+   */
+  private _positionBandShapesForEditing(el: HTMLElement, pageIndex: number, band: 'header' | 'footer'): void {
+    const floated = Array.from(
+      el.querySelectorAll<HTMLElement>('.docx-shape, .docx-textbox'),
+    ).filter(s => s.style.position === 'absolute' && !s.hasAttribute('data-band-orig-left'));
+    if (floated.length === 0) return;
+    const geo = this._bandGeoFor(pageIndex, band);
+    floated.forEach(shape => {
+      shape.setAttribute('data-band-orig-left', shape.style.left);
+      shape.setAttribute('data-band-orig-top', shape.style.top);
+      const { leftPx, topPx } = contractToBand(
+        parseFloat(shape.style.left) || 0, parseFloat(shape.style.top) || 0, geo);
+      shape.style.left = `${Math.round(leftPx)}px`;
+      shape.style.top = `${Math.round(topPx)}px`;
+    });
   }
 
   onHeaderInput(event: Event): void {

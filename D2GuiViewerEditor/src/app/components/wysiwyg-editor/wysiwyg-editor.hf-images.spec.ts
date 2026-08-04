@@ -172,4 +172,48 @@ describe('WysiwygEditorComponent — obrazy kotwiczone w nagłówku/stopce', () 
     // Edycyjny absolut wrappera nie może zostać na <img> — display pozycjonuje z kontraktu.
     expect(saved).not.toContain('position:absolute');
   });
+
+  // ── Kształty (div.docx-shape) w trybie EDYCJI pasma ─────────────────────
+  // Zgłoszenie: logo (grupa kształtów) widoczne w wyświetlaniu, ale ZNIKAŁO po kliknięciu
+  // w edycję stopki — inline absolut kontraktu (np. top:927px) wypadał daleko poza pasmem.
+
+  const SHAPE =
+    '<div class="docx-shape docx-group" data-shape="group" contenteditable="false" ' +
+    'style="position:absolute;left:643px;top:927px;width:75px;height:75px;"><svg></svg></div>';
+
+  it('edycja pasma: kształt dostaje współrzędne pasma + stash oryginału (kontrakt)', () => {
+    const el = document.createElement('div');
+    el.innerHTML = `<p>Tekst</p>${SHAPE}`;
+    (component as unknown as {
+      _positionBandShapesForEditing(e: HTMLElement, i: number, b: 'header' | 'footer'): void;
+    })._positionBandShapesForEditing(el, 0, 'footer');
+
+    const shape = el.querySelector('.docx-shape') as HTMLElement;
+    const geo = bandGeoFor('footer');
+    const expected = contractToBand(643, 927, geo);
+    expect(parseInt(shape.style.left, 10)).toBe(Math.round(expected.leftPx));
+    expect(parseInt(shape.style.top, 10)).toBe(Math.round(expected.topPx));
+    expect(shape.getAttribute('data-band-orig-left')).toBe('643px');
+    expect(shape.getAttribute('data-band-orig-top')).toBe('927px');
+  });
+
+  it('commit pasma: kształt wraca do DOKŁADNYCH współrzędnych kontraktu (bez dryfu)', () => {
+    const el = document.createElement('div');
+    el.innerHTML = `<p>Tekst</p>${SHAPE}`;
+    (component as unknown as {
+      _positionBandShapesForEditing(e: HTMLElement, i: number, b: 'header' | 'footer'): void;
+    })._positionBandShapesForEditing(el, 0, 'footer');
+
+    const cleaned = (component as unknown as {
+      _cleanBandHtml(h: string): string;
+    })._cleanBandHtml(el.innerHTML);
+
+    const tpl = document.createElement('template');
+    tpl.innerHTML = cleaned;
+    const shape = tpl.content.querySelector('.docx-shape') as HTMLElement;
+    expect(shape.style.left).toBe('643px');
+    expect(shape.style.top).toBe('927px');
+    expect(cleaned).not.toContain('data-band-orig-left');
+    expect(cleaned).not.toContain('data-band-orig-top');
+  });
 });

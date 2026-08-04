@@ -431,6 +431,60 @@ public class ShapePreservationFidelityTests
         html.Should().NotContain("data-preserved=\"group\"");
         html.Should().Contain("#FF6100", "wypełnienie z wps:style/a:fillRef musi się malować");
         html.Should().Contain("width:0.84px", "detal renderuje się w ułamkowych px, nie znika");
+        // lnRef z alpha=0 (przezroczysty) = kształt BEZ obrysu — fallback lnRef nie może malować
+        // czarnych konturów na sylwetce logo.
+        html.Should().NotContain("stroke=\"#000000\"");
+    }
+
+    [Test]
+    public void Read_ZeroHeightLine_LnRefOnlyStroke_RendersStroke()
+    {
+        // Realny wariant separatora stopki: a:ln deklaruje TYLKO grubość (bez solidFill),
+        // kolor kreski siedzi w wps:style/a:lnRef — dotąd strokeHex=null → linia „bez tuszu"
+        // była pomijana i cała grupa znikała.
+        var body = ZeroHeightLineGroupBody
+            .Replace(@"<a:ln w=""12700"" cap=""flat""><a:solidFill><a:srgbClr val=""FF5D00""/></a:solidFill></a:ln>",
+                @"<a:ln w=""12700"" cap=""flat""/>")
+            .Replace("</wps:spPr></wps:wsp>",
+                @"</wps:spPr><wps:style>
+  <a:lnRef idx=""1""><a:srgbClr val=""FF5D00""/></a:lnRef>
+  <a:fillRef idx=""0""><a:srgbClr val=""FFFFFF""><a:alpha val=""0""/></a:srgbClr></a:fillRef>
+  <a:effectRef idx=""0""><a:scrgbClr r=""0"" g=""0"" b=""0""/></a:effectRef><a:fontRef idx=""none""/>
+</wps:style></wps:wsp>");
+        var html = _reader.Convert(DocxFromRawBody(body)).Html;
+
+        html.Should().Contain("docx-group");
+        html.Should().Contain("stroke=\"#FF5D00\"", "kolor kreski musi przyjść z wps:style/a:lnRef");
+    }
+
+    [Test]
+    public void Read_TopLevelZeroHeightLine_RendersVisibleStroke()
+    {
+        // Linia jako pojedynczy kształt (bez grupy): extent cy=0 + obrys z lnRef — oś zerowa
+        // dostaje grubość kreski zamiast gasić render (jak w dzieciach grup).
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""4571924"" cy=""0""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp><wps:spPr>
+        <a:xfrm><a:off x=""0"" y=""0""/><a:ext cx=""4571924"" cy=""0""/></a:xfrm>
+        <a:custGeom><a:avLst/><a:gdLst/><a:pathLst><a:path w=""4571924"" h=""0"">
+          <a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo><a:lnTo><a:pt x=""4571924"" y=""0""/></a:lnTo>
+        </a:path></a:pathLst></a:custGeom>
+        <a:ln w=""12700"" cap=""flat""/>
+      </wps:spPr><wps:style>
+        <a:lnRef idx=""1""><a:srgbClr val=""FF5D00""/></a:lnRef>
+        <a:fillRef idx=""0""><a:srgbClr val=""FFFFFF""><a:alpha val=""0""/></a:srgbClr></a:fillRef>
+        <a:effectRef idx=""0""><a:scrgbClr r=""0"" g=""0"" b=""0""/></a:effectRef><a:fontRef idx=""none""/>
+      </wps:style></wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        var html = _reader.Convert(DocxFromRawBody(body)).Html;
+
+        html.Should().Contain("docx-custgeom", "linia o zerowej wysokości musi się renderować");
+        html.Should().NotContain("data-preserved=");
+        html.Should().Contain("stroke=\"#FF5D00\"");
+        html.Should().Contain("vector-effect=\"non-scaling-stroke\"");
     }
 
     private const string ZeroHeightLineGroupBody = @"<w:p><w:r>

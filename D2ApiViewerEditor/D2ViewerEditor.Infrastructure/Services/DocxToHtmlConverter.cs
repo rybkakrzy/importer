@@ -4480,20 +4480,33 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // kształtem logo (kwadrat zamiast lwa w stopce).
         var noFill = ShapeHasExplicitNoFill(drawing, custom);
         var fillHex = noFill ? null : GetShapeFillHex(drawing, custom);
-        var strokeHex = HexColorOrNull(outline?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>()
-            .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
+        // Kolor obrysu: a:ln/solidFill, a bez niego referencja stylu kształtu (wps:style/a:lnRef —
+        // tak deklarują kreskę linie separatorów); jawny a:noFill w a:ln = brak obrysu.
+        var strokeHex = outline?.Elements<DocumentFormat.OpenXml.Drawing.NoFill>().Any() == true ? null
+            : HexColorOrNull(outline?.Elements<DocumentFormat.OpenXml.Drawing.SolidFill>()
+                  .FirstOrDefault()?.RgbColorModelHex?.Val?.Value)
+              ?? LineReferenceHex(drawing.Descendants<DocumentFormat.OpenXml.Drawing.LineReference>().FirstOrDefault());
         // Gradient (a:gradFill) — dotąd ignorowany (kształt dostawał currentColor/brak tła).
         var gradient = noFill ? null : GetShapeGradient(((OpenXmlElement?)custom ?? presetGeom)?.Parent);
 
         // Custom geometry (a:custGeom) — dowolna ścieżka wektorowa (logo/wordmark, ikona
         // ostrzeżenia „!"). Wcześniej dropowana w całości (RenderVectorShape zwracał ""), więc
         // grafika z oryginału NIE rysowała się w edytorze. Tłumaczymy ścieżkę na inline SVG.
-        if (custom != null && widthPx > 0 && heightPx > 0)
+        // Extent zerowy na JEDNEJ osi = pozioma/pionowa linia — oś zerowa dostaje szerokość
+        // obrysu (kreska musi mieć gdzie się namalować), jak w dzieciach grup.
+        var cgW = widthPx;
+        var cgH = heightPx;
+        if (custom != null && strokeHex != null && (cgW <= 0 ^ cgH <= 0))
         {
-            var svg = BuildCustomGeometrySvg(custom, widthPx, heightPx, fillHex, strokeHex, lineWidthPx, noFill, gradient);
+            cgW = Math.Max(cgW, lineWidthPx);
+            cgH = Math.Max(cgH, lineWidthPx);
+        }
+        if (custom != null && cgW > 0 && cgH > 0)
+        {
+            var svg = BuildCustomGeometrySvg(custom, cgW, cgH, fillHex, strokeHex, lineWidthPx, noFill, gradient);
             if (!string.IsNullOrEmpty(svg))
                 return $"<div class=\"docx-shape docx-custgeom\" data-shape=\"custom\"{editGuard}{preservedAttrs} "
-                     + $"style=\"{StripSize(pos)}width:{widthPx}px;height:{heightPx}px;{transformCss}\">{svg}</div>";
+                     + $"style=\"{StripSize(pos)}width:{cgW}px;height:{cgH}px;{transformCss}\">{svg}</div>";
         }
 
         // Prostokąt / elipsa / zaokrąglony prostokąt z wypełnieniem — potrzebny widoczny rozmiar i tło.
@@ -4931,8 +4944,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                   ?? FillReferenceHex(wsp.Descendants<A.FillReference>().FirstOrDefault());
         }
         var outline = spPr.GetFirstChild<A.Outline>();
-        var strokeHex = HexColorOrNull(outline?.Elements<A.SolidFill>()
-            .FirstOrDefault()?.RgbColorModelHex?.Val?.Value);
+        // Jawny a:noFill w a:ln = brak obrysu (wygrywa z lnRef); bez jawnego koloru w a:ln
+        // kolor kreski pochodzi ze stylu kształtu (wps:style/a:lnRef) — tak deklarują obrys
+        // linie separatorów stopek.
+        var strokeHex = outline?.Elements<A.NoFill>().Any() == true ? null
+            : HexColorOrNull(outline?.Elements<A.SolidFill>()
+                  .FirstOrDefault()?.RgbColorModelHex?.Val?.Value)
+              ?? LineReferenceHex(wsp.Descendants<A.LineReference>().FirstOrDefault());
         var strokeW = outline?.Width != null && outline.Width.Value > 0
             ? Math.Max(1, (int)Math.Round(OoxmlUnits.EmuToPixels(outline.Width.Value)))
             : 1;
@@ -5091,6 +5109,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? FillReferenceHex(DocumentFormat.OpenXml.Drawing.FillReference? fillRef)
         => fillRef == null ? null
             : ResolvedDrawingColorHex(fillRef.RgbColorModelHex, fillRef.SchemeColor);
+
+    /// <summary>
+    /// Hex obrysu z <c>wps:style/a:lnRef</c> — linie bankowych stopek deklarują kolor kreski
+    /// TYLKO tutaj (spPr/a:ln bez solidFill), a kształty logo odwrotnie: lnRef z alpha=0
+    /// (przezroczysty = brak obrysu). Pełna przezroczystość (sufiks „00" hexu RRGGBBAA) → null,
+    /// żeby nie malować obrysów, których Word nie pokazuje.
+    /// </summary>
+    private string? LineReferenceHex(DocumentFormat.OpenXml.Drawing.LineReference? lnRef)
+    {
+        if (lnRef == null) return null;
+        var hex = ResolvedDrawingColorHex(lnRef.RgbColorModelHex, lnRef.SchemeColor);
+        return hex is { Length: 8 } && hex.EndsWith("00", StringComparison.Ordinal) ? null : hex;
+    }
 
     /// <summary>
     /// Kolor DrawingML z pary srgbClr/schemeClr Z transformacjami dzieci (lumMod/lumOff/
