@@ -60,6 +60,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? _defaultParagraphStyleId;
     // Układ kolumn sekcji bazowej (0), ustalany w ConvertBodyToHtml (ADR-0039).
     private ColumnLayout? _baseSectionColumns;
+
+    /// <summary>
+    /// Szerokość (twips) dostępna dla treści w BIEŻĄCYM punkcie konwersji: szpalta sekcji
+    /// wielokolumnowej albo pełna szerokość obszaru treści. Null = nieznana (bez clampu).
+    /// Utrzymywane przez pętlę body (per sekcja) i konwersję nagłówka/stopki; konsumowane
+    /// przez ConvertTableToHtml — Word DOSKALOWUJE tabelę szerszą niż szpalta (zachowując
+    /// oryginalny tblGrid w pliku), my analogicznie skalujemy TYLKO px podglądu.
+    /// </summary>
+    private long? _availableContentWidthTwips;
     // CSS bazowy zbudowany z powyższych — baza dla akapitów w KOMÓRKACH TABEL (styl tabeli
     // może go nadpisać własnym w:pPr); akapity body dziedziczą interlinię z kontenera.
     private string _defaultParagraphSpacingCss = "";
@@ -969,8 +978,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             LoadImageFromPart(part, imagePart);
         }
         _anchorBand = HfBand.Header;
+        // Pasma nie dziedziczą kolumn sekcji — tabela pasma ma do dyspozycji pełną szerokość.
+        var prevAvail = _availableContentWidthTwips;
+        _availableContentWidthTwips = FullContentWidthTwips();
         try { return ConvertHeaderFooterToHtml(part.Header, part, document); }
-        finally { _anchorBand = HfBand.None; }
+        finally { _anchorBand = HfBand.None; _availableContentWidthTwips = prevAvail; }
     }
 
     private string ConvertFooterPartToHtml(FooterPart part, WordprocessingDocument document)
@@ -980,8 +992,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             LoadImageFromPart(part, imagePart);
         }
         _anchorBand = HfBand.Footer;
+        var prevAvail = _availableContentWidthTwips;
+        _availableContentWidthTwips = FullContentWidthTwips();
         try { return ConvertHeaderFooterToHtml(part.Footer, part, document); }
-        finally { _anchorBand = HfBand.None; }
+        finally { _anchorBand = HfBand.None; _availableContentWidthTwips = prevAvail; }
+    }
+
+    /// <summary>Pełna szerokość obszaru treści (strona − marginesy) w twipach, null gdy nieznana.</summary>
+    private long? FullContentWidthTwips()
+    {
+        if (_pageWidthTwips is not { } w || w <= 0) return null;
+        var content = w - _marginLeftTwips - _marginRightTwips;
+        return content > 0 ? content : null;
     }
 
     /// <summary>
@@ -1181,6 +1203,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var elements = body.Elements().ToList();
         var orderedSections = GetSectionPropertiesInDocumentOrder(body);
+        // Szerokość szpalty BIEŻĄCEJ sekcji (treść przed k-tym paragraph-level sectPr należy
+        // do sekcji, którą ten sectPr kończy) — konsumuje ją clamp tabel w ConvertTableToHtml.
+        _availableContentWidthTwips = SectionColumnWidthTwips(orderedSections.FirstOrDefault());
         int i = 0;
         while (i < elements.Count)
         {
@@ -1216,6 +1241,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 if (endedSection != null)
                 {
                     html.Append(BuildSectionBreakMarkerHtml(endedSection, orderedSections));
+                    // Od tego miejsca obowiązuje geometria NASTĘPNEJ sekcji.
+                    var endedIdx = orderedSections.IndexOf(endedSection);
+                    if (endedIdx >= 0 && endedIdx + 1 < orderedSections.Count)
+                        _availableContentWidthTwips = SectionColumnWidthTwips(orderedSections[endedIdx + 1]);
                 }
                 i++;
             }
@@ -1223,6 +1252,37 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         html.Append("</div>");
         return html.ToString();
+    }
+
+    /// <summary>
+    /// Szerokość szpalty sekcji w twipach: pełny obszar treści (strona − marginesy) podzielony
+    /// na kolumny, gdy sekcja jest wielokolumnowa (nierówne kolumny → NAJSZERSZA — tabela żyje
+    /// w jednej z nich, a szerszej ramy niż najszersza szpalta i tak nie ma). Null = geometria
+    /// nieznana (bez clampu tabel).
+    /// </summary>
+    private long? SectionColumnWidthTwips(SectionProperties? section)
+    {
+        var page = section != null ? SectionPropertiesReader.ReadPageSettings(section) : null;
+        var pageW = page?.PageWidthTwips ?? _pageWidthTwips;
+        if (pageW is not > 0) return null;
+        var mL = page?.LeftMarginTwips ?? _marginLeftTwips;
+        var mR = page?.RightMarginTwips ?? _marginRightTwips;
+        var content = pageW.Value - mL - mR;
+        if (content <= 0) return null;
+        var cols = page?.Columns;
+        if (cols is { Count: > 1 })
+        {
+            if (!cols.EqualWidth && cols.Columns is { Count: > 0 })
+            {
+                content = Math.Max(1, cols.Columns.Max(c => (long)c.WidthTwips));
+            }
+            else
+            {
+                var space = (long)cols.SpaceTwips * (cols.Count - 1);
+                content = Math.Max(1, (content - space) / cols.Count);
+            }
+        }
+        return content;
     }
 
     /// <summary>
@@ -6520,6 +6580,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var gridColumnsPx = ReadTableGridColumnsPx(table);
         var isFixedLayout = tableProps?.TableLayout?.Type?.Value == TableLayoutValues.Fixed;
         var useFixedLayout = isFixedLayout || hasExplicitWidth;
+
+        // Word DOSKALOWUJE tabelę szerszą niż szpalta (sekcja wielokolumnowa!) do jej
+        // szerokości — siatka w pliku zostaje oryginalna, kompresja jest tylko renderowa.
+        // My analogicznie: skalujemy WYŁĄCZNIE px podglądu (colgroup style + width tabeli);
+        // data-w-tw niesie dalej oryginalne twipy, więc zapis nie utrwala kompresji.
+        var indentTw = tableProps?.TableIndentation?.Width?.Value ?? 0;
+        var availTw = _availableContentWidthTwips is { } a && a > 0
+            ? a - Math.Max(0, indentTw)
+            : (long?)null;
+        if (availTw is > 0 && gridColumnsPx.Count > 0)
+        {
+            var availPx = TwipsToPx((int)availTw.Value);
+            var totalPx = gridColumnsPx.Sum(c => c.Px);
+            if (availPx > 0 && totalPx > availPx)
+            {
+                var f = (double)availPx / totalPx;
+                gridColumnsPx = gridColumnsPx
+                    .Select(c => (Px: Math.Max(1, (int)Math.Round(c.Px * f)), c.Tw))
+                    .ToList();
+                if (hasExplicitWidth && tableWidth.EndsWith("px", StringComparison.Ordinal))
+                    tableWidth = $"{Math.Min(availPx, gridColumnsPx.Sum(c => c.Px))}px";
+            }
+        }
 
         // When a fixed-layout table declares no explicit width, fall back to the grid sum
         // so the fixed layout has a width to distribute across the columns.
