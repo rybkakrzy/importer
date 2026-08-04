@@ -60,6 +60,13 @@ import {
   isPointerOnEdge,
   viewportDeltaToLayout,
 } from '../../core/utils/floating-anchor.util';
+import {
+  decodeShapeXml,
+  encodeShapeXml,
+  setAnchorPositionPageEmu,
+  scaleShapeExtent,
+  rescaleShapePreview,
+} from '../../core/utils/shape-xml.util';
 
 /** Ikona kotwicy (Material Symbols „anchor", Apache 2.0) — znacznik akapitu-kotwicy jak w Wordzie. */
 const ANCHOR_BADGE_SVG =
@@ -1550,6 +1557,25 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
+    // Kształt pass-through (ADR-0063): uchwyt resize / drag / selekcja.
+    if (target.classList.contains('shape-resize-handle')) {
+      const shapeOfHandle = target.closest('.docx-shape[data-docx-xml]') as HTMLElement | null;
+      if (shapeOfHandle) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.startShapeResize(event, shapeOfHandle);
+        return;
+      }
+    }
+    const shape = target.closest('.docx-shape[data-docx-xml]') as HTMLElement | null;
+    if (shape) {
+      event.preventDefault();
+      this.selectShape(shape);
+      if (shape.style.position === 'absolute') this.startShapeDrag(event, shape);
+      return;
+    }
+    this.clearSelectedShape();
+
     // Sprawdź czy kliknięto na wrapper obrazu lub jego zawartość
     const wrapper = target.closest('.editor-image-wrapper') as HTMLElement | null;
     if (!wrapper) {
@@ -2180,6 +2206,160 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.selectedTextBox.classList.remove('tb-selected');
       this.selectedTextBox = null;
     }
+  }
+
+  // ── Kształty pass-through (ADR-0063): selekcja / drag / resize ────────────
+  // Podgląd kształtu jest pochodną data-docx-xml (writer odtwarza grafikę z XML, nie z DOM),
+  // więc KAŻDA zmiana pozycji/rozmiaru musi aktualizować i style (widok), i XML markera —
+  // inaczej ginie przy pierwszym zapisie.
+
+  private selectedShape: HTMLElement | null = null;
+
+  private selectShape(shape: HTMLElement): void {
+    if (this.selectedShape === shape) return;
+    this.clearSelectedShape();
+    this.clearSelectedTextBox();
+    this.clearSelectedImage();
+    this.selectedShape = shape;
+    shape.classList.add('shape-selected');
+    const handle = document.createElement('span');
+    handle.className = 'shape-resize-handle';
+    handle.setAttribute('contenteditable', 'false');
+    shape.appendChild(handle);
+  }
+
+  private clearSelectedShape(): void {
+    if (!this.selectedShape) return;
+    this.selectedShape.classList.remove('shape-selected');
+    this.selectedShape.querySelectorAll('.shape-resize-handle').forEach(h => h.remove());
+    this.selectedShape = null;
+  }
+
+  /** Drag pływającego kształtu — delty przez skalę zoomu, jak textboxy (ADR-0030). */
+  private startShapeDrag(event: MouseEvent, shape: HTMLElement): void {
+    const page = shape.closest('.page') as HTMLElement | null;
+    const scale = page ? this._pageVisualScale(page) : 1;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = parseFloat(shape.style.left || '0');
+    const startTop = parseFloat(shape.style.top || '0');
+    let dragging = false;
+
+    const onMove = (moveEvent: MouseEvent) => {
+      const dx = viewportDeltaToLayout(moveEvent.clientX - startX, scale);
+      const dy = viewportDeltaToLayout(moveEvent.clientY - startY, scale);
+      if (!dragging && Math.hypot(dx, dy) > 3) dragging = true;
+      if (dragging) {
+        shape.style.left = `${Math.round(startLeft + dx)}px`;
+        shape.style.top = `${Math.round(startTop + dy)}px`;
+      }
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!dragging) return;
+      this._syncShapeXmlPosition(shape);
+      this._notifyShapeContainerChanged(shape);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  /** Proporcjonalny resize z narożnika SE; podgląd i XML skalowane tym samym faktorem. */
+  private startShapeResize(event: MouseEvent, shape: HTMLElement): void {
+    const page = shape.closest('.page') as HTMLElement | null;
+    const scale = page ? this._pageVisualScale(page) : 1;
+    const startX = event.clientX;
+    const startW = parseFloat(shape.style.width || '0') || shape.getBoundingClientRect().width / scale;
+    const startH = parseFloat(shape.style.height || '0') || shape.getBoundingClientRect().height / scale;
+    if (startW <= 0 || startH <= 0) return;
+    // Snapshot geometrii — każdy ruch liczy ŚWIEŻY faktor od oryginału (bez kumulacji
+    // błędów zaokrągleń przy skalowaniu przyrostowym).
+    const snapshot = shape.cloneNode(true) as HTMLElement;
+    let factor = 1;
+
+    const applyFactor = (f: number) => {
+      const restored = snapshot.cloneNode(true) as HTMLElement;
+      shape.replaceChildren(...Array.from(restored.childNodes));
+      shape.setAttribute('style', restored.getAttribute('style') ?? '');
+      rescaleShapePreview(shape, f, f);
+    };
+    const onMove = (moveEvent: MouseEvent) => {
+      const dx = viewportDeltaToLayout(moveEvent.clientX - startX, scale);
+      factor = Math.max(0.05, (startW + dx) / startW);
+      applyFactor(factor);
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (factor === 1) return;
+      this._syncShapeXmlScale(shape, factor, factor);
+      this._notifyShapeContainerChanged(shape);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  /** Kontekst kształtu: edytowane pasmo (header/footer) albo body. */
+  private _shapeContext(shape: HTMLElement): { band: 'header' | 'footer' | null; pageIndex: number } {
+    if (shape.closest('.header-editor-content')) return { band: 'header', pageIndex: this.editingHfPageIndex() };
+    if (shape.closest('.footer-editor-content')) return { band: 'footer', pageIndex: this.editingHfPageIndex() };
+    const page = shape.closest('.page') as HTMLElement | null;
+    const n = Number(page?.getAttribute('data-page-number') ?? '1');
+    return { band: null, pageIndex: Number.isFinite(n) && n >= 1 ? n - 1 : this.activePageIndex() };
+  }
+
+  /** Po dragu: styl → współrzędne KONTRAKTU → wp:anchor (page-relative EMU) w data-docx-xml. */
+  private _syncShapeXmlPosition(shape: HTMLElement): void {
+    const { band, pageIndex } = this._shapeContext(shape);
+    let contractLeft = parseFloat(shape.style.left || '0');
+    let contractTop = parseFloat(shape.style.top || '0');
+    if (band) {
+      const c = bandToContract(contractLeft, contractTop, this._bandGeoFor(pageIndex, band));
+      contractLeft = c.xPx;
+      contractTop = c.yPx;
+      // Stash edycji pasma musi nieść NOWY kontrakt — commit przywraca z niego oryginał.
+      shape.setAttribute('data-band-orig-left', `${Math.round(contractLeft)}px`);
+      shape.setAttribute('data-band-orig-top', `${Math.round(contractTop)}px`);
+    }
+    const b64 = shape.getAttribute('data-docx-xml');
+    const doc = b64 ? decodeShapeXml(b64) : null;
+    if (!doc) return;
+    const xPageEmu = Math.round(contractLeft * EMU_PER_PX);
+    const yPageEmu = Math.round((contractTop + this.pageMarginPx(pageIndex, 'top')) * EMU_PER_PX);
+    if (setAnchorPositionPageEmu(doc, xPageEmu, yPageEmu)) {
+      shape.setAttribute('data-docx-xml', encodeShapeXml(doc));
+    }
+  }
+
+  /** Po resize: skala → wp:extent + root a:xfrm/a:ext (+ VML fallback) w data-docx-xml. */
+  private _syncShapeXmlScale(shape: HTMLElement, fx: number, fy: number): void {
+    const b64 = shape.getAttribute('data-docx-xml');
+    const doc = b64 ? decodeShapeXml(b64) : null;
+    if (!doc) return;
+    if (scaleShapeExtent(doc, fx, fy)) {
+      shape.setAttribute('data-docx-xml', encodeShapeXml(doc));
+    }
+  }
+
+  /** Zmiana kształtu = zmiana treści właściciela (pasmo → model pasma, body → persist). */
+  private _notifyShapeContainerChanged(shape: HTMLElement): void {
+    const { band } = this._shapeContext(shape);
+    if (band === 'header') {
+      const el = this.headerContentEl?.nativeElement;
+      if (el) this._applyEditedHfHtml(el.innerHTML, 'header');
+      this.invalidateHeaderFooterCache();
+      this.emitHeaderFooterChanges();
+      return;
+    }
+    if (band === 'footer') {
+      const el = this.footerContentEl?.nativeElement;
+      if (el) this._applyEditedHfHtml(el.innerHTML, 'footer');
+      this.invalidateHeaderFooterCache();
+      this.emitHeaderFooterChanges();
+      return;
+    }
+    this.onContentChange();
   }
 
   /**
@@ -5645,19 +5825,35 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
             measurer,
             lineHeightPx
           );
+          const advanceColumnOrPage = () => {
+            const nextColumnTop = columnBase
+              + (Math.floor((currentHeight - columnBase) / columnHeight) + 1) * columnHeight;
+            if (nextColumnTop < availableHeight) {
+              currentHeight = nextColumnTop;
+            } else {
+              openPage();
+            }
+          };
           for (let i = 0; i < split.length; i++) {
+            const h = measureBlock(split[i]);
             if (i > 0) {
-              const nextColumnTop = columnBase
-                + (Math.floor((currentHeight - columnBase) / columnHeight) + 1) * columnHeight;
-              if (nextColumnTop < availableHeight) {
-                currentHeight = nextColumnTop;
-              } else {
-                openPage();
+              advanceColumnOrPage();
+            } else {
+              // Bug 13902621: PIERWSZY fragment też musi przejść kontrolę pojemności —
+              // splitter dostaje budżet min. 80px, więc tabela krótsza niż 80px (albo
+              // niedzielna) wracała w całości i była kładziona w resztce strony/kolumny,
+              // w której się NIE mieściła — wizualnie wjeżdżała pod stopkę. Przy braku
+              // miejsca przechodzimy do następnej kolumny/strony (raz — świeża kolumna
+              // to maksimum, które możemy dać; guard pustej strony jak w pushMeasured).
+              const used = columnHeight > 0 ? (currentHeight - columnBase) % columnHeight : 0;
+              const remaining = columnHeight - used;
+              if (h > remaining + 0.5 && pages[pages.length - 1].length > 0) {
+                advanceColumnOrPage();
               }
             }
             pages[pages.length - 1].push(split[i]);
             commitFootnotes(split[i]);
-            currentHeight += measureBlock(split[i]);
+            currentHeight += h;
           }
           bi++;
           continue;
@@ -7054,6 +7250,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wspólne dla serializacji body (_serializeSingleEditor) i commitu pasma nagłówka/stopki.
    */
   private _unwrapImageWrappers(root: HTMLElement): void {
+    // Artefakty selekcji kształtów pass-through (ADR-0063) — czysto edycyjne, nie mogą
+    // trafić do modelu/zapisu (writer odtwarza kształt z data-docx-xml, ale klasa/uchwyt
+    // zaśmiecałyby HTML i cache SafeHtml).
+    root.querySelectorAll('.shape-resize-handle').forEach(h => h.remove());
+    root.querySelectorAll('.shape-selected').forEach(s => (s as HTMLElement).classList.remove('shape-selected'));
     root.querySelectorAll('.editor-image-wrapper').forEach(wrapperEl => {
       const wrapper = wrapperEl as HTMLElement;
       wrapper.classList.remove('selected');
@@ -7508,7 +7709,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   /** Czysty HTML pasma z surowego innerHTML edycji (unwrap wrapperów obrazów +
    *  przywrócenie KONTRAKTOWYCH współrzędnych kształtów ze stasha edycji pasma). */
   private _cleanBandHtml(html: string): string {
-    if (!html || (!html.includes('editor-image-wrapper') && !html.includes('data-band-orig-left'))) {
+    if (!html || (!html.includes('editor-image-wrapper') && !html.includes('data-band-orig-left')
+        && !html.includes('shape-resize-handle') && !html.includes('shape-selected'))) {
       return html;
     }
     const tmp = document.createElement('div');

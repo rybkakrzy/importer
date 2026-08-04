@@ -234,6 +234,45 @@ describe('WysiwygEditorComponent — podział akapitu na granicy strony (ADR-004
     expect(content).toContain('<li>c</li>');
   });
 
+  // ---------- tabele: kontrola pojemności pierwszego fragmentu (bug 13902621) ----------
+
+  it('tabela niemieszcząca się w resztce strony idzie na następną (nie wjeżdża pod stopkę)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<p data-h="800">A</p>' +
+      '<table data-h="200"><tbody><tr><td>Nr ref.</td></tr></tbody></table>'
+    );
+    stubBlockHeights();
+    // Splitter zwraca tabelę w całości (krótsza niż minimalny budżet 80px splittera) —
+    // dokładnie przypadek ze zgłoszenia: 200px tabeli w ~133px resztki strony.
+    (component as any)._splitTableForPagination = (t: HTMLTableElement) => [t];
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('>A</p>');
+    expect(pages[0]).not.toContain('<table');
+    expect(pages[1]).toContain('<table');
+  });
+
+  it('tabela wyższa niż pusta strona ląduje na świeżej stronie bez pętli (guard anty-pętla)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<p data-h="100">A</p>' +
+      '<table data-h="2000"><tbody><tr><td>Wielka</td></tr></tbody></table>'
+    );
+    stubBlockHeights();
+    (component as any)._splitTableForPagination = (t: HTMLTableElement) => [t];
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    // Jedno przejście na świeżą stronę i push mimo przekroczenia — bez trzeciej strony/pętli.
+    expect(pages.length).toBe(2);
+    expect(pages[1]).toContain('<table');
+  });
+
   // ---------- formanty blokowe (div.sdt-block): podział między dziećmi ----------
 
   /** Stub geometrii dzieci kontenera (jsdom bez layoutu): perChildPx na blok-dziecko. */

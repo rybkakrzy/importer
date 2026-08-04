@@ -570,6 +570,50 @@ public class ShapePreservationFidelityTests
     }
 
     [Test]
+    public void RoundTrip_GuiModifiedMarker_PersistsNewGeometryToDocx()
+    {
+        // ADR-0063: GUI po dragu/resize aktualizuje data-docx-xml (base64) — writer musi
+        // odtworzyć ZMODYFIKOWANY oryginał (nowa pozycja/rozmiar w DOCX), nie odrzucić go.
+        const string anchorBody = @"<w:p><w:r>
+  <w:drawing><wp:anchor distT=""0"" distB=""0"" distL=""114300"" distR=""114300"" simplePos=""0""
+      relativeHeight=""251658240"" behindDoc=""0"" locked=""0"" layoutInCell=""1"" allowOverlap=""1"">
+    <wp:simplePos x=""0"" y=""0""/>
+    <wp:positionH relativeFrom=""page""><wp:posOffset>6130290</wp:posOffset></wp:positionH>
+    <wp:positionV relativeFrom=""page""><wp:posOffset>9729977</wp:posOffset></wp:positionV>
+    <wp:extent cx=""714515"" cy=""714528""/><wp:wrapSquare wrapText=""bothSides""/>
+    <wp:docPr id=""7"" name=""G""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp><wps:spPr>
+        <a:xfrm><a:off x=""0"" y=""0""/><a:ext cx=""714515"" cy=""714528""/></a:xfrm>
+        <a:custGeom><a:avLst/><a:gdLst/><a:pathLst><a:path w=""100"" h=""100"">
+          <a:moveTo><a:pt x=""0"" y=""0""/></a:moveTo><a:lnTo><a:pt x=""100"" y=""100""/></a:lnTo><a:close/>
+        </a:path></a:pathLst></a:custGeom>
+        <a:solidFill><a:srgbClr val=""FF6100""/></a:solidFill>
+      </wps:spPr></wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:anchor></w:drawing>
+</w:r></w:p>";
+        var html = _reader.Convert(DocxFromRawBody(anchorBody)).Html;
+
+        // Symulacja edycji GUI: dekoduj marker, przesuń kotwicę (posOffset), zakoduj z powrotem.
+        var match = System.Text.RegularExpressions.Regex.Match(html, "data-docx-xml=\"([^\"]+)\"");
+        match.Success.Should().BeTrue();
+        var xml = Encoding.UTF8.GetString(System.Convert.FromBase64String(match.Groups[1].Value));
+        xml = xml.Replace("<wp:posOffset>6130290</wp:posOffset>", "<wp:posOffset>1234567</wp:posOffset>");
+        var modified = html.Replace(match.Groups[1].Value,
+            System.Convert.ToBase64String(Encoding.UTF8.GetBytes(xml)));
+
+        var docx = _writer.Convert(modified);
+        using var doc = WordprocessingDocument.Open(new MemoryStream(docx), false);
+        var offsets = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.HorizontalPosition>()
+            .SelectMany(p => p.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.PositionOffset>())
+            .Select(o => o.Text)
+            .ToList();
+        offsets.Should().Contain("1234567", "zmodyfikowana pozycja z GUI musi wrócić do DOCX");
+    }
+
+    [Test]
     public void RoundTrip_SubPixelGroup_RestoresOriginalXml()
     {
         var html = _reader.Convert(DocxFromRawBody(SubPixelGroupBody)).Html;

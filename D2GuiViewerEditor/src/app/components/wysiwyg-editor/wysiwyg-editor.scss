@@ -542,6 +542,31 @@ body.table-resizing * {
   user-select: none;
 }
 
+// Selekcja i uchwyt kształtów pass-through (ADR-0063). Kształty są contenteditable=false,
+// więc chwyta się je całą powierzchnią; uchwyt SE skaluje proporcjonalnie.
+.docx-shape[data-docx-xml] {
+  cursor: move;
+
+  &.shape-selected {
+    outline: 2px solid #0066cc;
+    outline-offset: 1px;
+  }
+}
+
+.shape-resize-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #0066cc;
+  border: 1.5px solid #fff;
+  cursor: nwse-resize;
+  z-index: 11;
+  pointer-events: auto;
+}
+
 // Wypełniacz tabulatora (w:leader — kropki spisu treści, podkreślenia formularzy).
 // Span niesie inline flex:1/position:relative/overflow:hidden (reader); tu malujemy
 // znaki wypełniacza pseudo-elementem: realne glify w foncie akapitu (jak w Wordzie),
