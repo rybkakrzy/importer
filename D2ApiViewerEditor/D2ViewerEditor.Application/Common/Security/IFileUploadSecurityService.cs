@@ -45,4 +45,12 @@ public interface IFileUploadSecurityService
         string fileName,
         string contentType,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sama walidacja STRUKTURY DOCX (podpis ZIP + poprawność archiwum + wymagane części OOXML),
+    /// bez MIME/rozszerzenia i bez skanera AV. Dla ścieżek, które mają już bajty po normalizacji
+    /// (np. POST /open — bug 13625398: uszkodzony plik otwierał się „po cichu" jako pusty dokument,
+    /// podczas gdy upload ze strony startowej go odrzucał).
+    /// </summary>
+    UploadValidationResult ValidateDocxStructure(byte[] content);
 }

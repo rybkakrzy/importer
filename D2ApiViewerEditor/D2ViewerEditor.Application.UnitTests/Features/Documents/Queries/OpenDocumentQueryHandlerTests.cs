@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Common;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Application.Features.Documents.Queries.OpenDocument;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
@@ -13,6 +14,7 @@ public class OpenDocumentQueryHandlerTests
 {
     private IDocxToHtmlConverter _converter;
     private IDocumentInputNormalizer _normalizer;
+    private IFileUploadSecurityService _uploadSecurity;
     private OpenDocumentQueryHandler _handler;
 
     [SetUp]
@@ -20,10 +22,57 @@ public class OpenDocumentQueryHandlerTests
     {
         _converter = Substitute.For<IDocxToHtmlConverter>();
         _normalizer = Substitute.For<IDocumentInputNormalizer>();
+        _uploadSecurity = Substitute.For<IFileUploadSecurityService>();
         // Domyślnie: wejście jest poprawnym DOCX (pass-through) → handler woła konwerter.
         _normalizer.Normalize(Arg.Any<byte[]>(), Arg.Any<string?>())
             .Returns(DocumentInputResult.Success(new byte[] { 1, 2, 3 }));
-        _handler = new OpenDocumentQueryHandler(_converter, _normalizer);
+        _uploadSecurity.ValidateDocxStructure(Arg.Any<byte[]>())
+            .Returns(UploadValidationResult.Success("application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
+        _handler = new OpenDocumentQueryHandler(_converter, _normalizer, _uploadSecurity);
+    }
+
+    [Test]
+    public async Task Handle_WhenSignatureMismatch_ShouldReturnFormatInvalidCode()
+    {
+        // Bug 13625398: /open musi odrzucać defekty pliku tym samym kodem co upload strony
+        // startowej — dotąd uszkodzony plik otwierał się „po cichu" jako pusty dokument.
+        _uploadSecurity.ValidateDocxStructure(Arg.Any<byte[]>())
+            .Returns(UploadValidationResult.Failure(UploadRejectionCode.SignatureMismatch, "zły podpis"));
+
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        var result = await _handler.Handle(new OpenDocumentQuery(stream, "x.docx"), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Be(ErrorCodes.DocumentFormatInvalid);
+        _converter.DidNotReceive().Convert(Arg.Any<Stream>());
+    }
+
+    [Test]
+    public async Task Handle_WhenArchiveBroken_ShouldReturnCorruptedCode()
+    {
+        _uploadSecurity.ValidateDocxStructure(Arg.Any<byte[]>())
+            .Returns(UploadValidationResult.Failure(UploadRejectionCode.DocxRequiredPartMissing, "brak części"));
+
+        using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        var result = await _handler.Handle(new OpenDocumentQuery(stream, "x.docx"), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Be(ErrorCodes.DocumentCorrupted);
+        _converter.DidNotReceive().Convert(Arg.Any<Stream>());
+    }
+
+    [Test]
+    public async Task Handle_WhenFormatUnrecognized_ShouldReturnFormatInvalidCode()
+    {
+        // Default branch normalizera (nierozpoznany format) też ma stabilny kod, nie surowy tekst.
+        _normalizer.Normalize(Arg.Any<byte[]>(), Arg.Any<string?>())
+            .Returns(DocumentInputResult.Failure(DocumentInputStatus.Invalid));
+
+        using var stream = new MemoryStream(new byte[] { 9, 9, 9 });
+        var result = await _handler.Handle(new OpenDocumentQuery(stream, "x.docx"), CancellationToken.None);
+
+        result.IsSuccess.Should().BeFalse();
+        result.Error.Should().Be(ErrorCodes.DocumentFormatInvalid);
     }
 
     [Test]

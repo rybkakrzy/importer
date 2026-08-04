@@ -4455,6 +4455,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Undo
    */
   undo(): void {
+    // Bug 13184834: bez flusha klik w oknie debounce'a (500 ms od ostatniej edycji) nie miał
+    // czego cofnąć — ostatnia porcja pisania nie była jeszcze na stosie.
+    this._flushPendingPersist();
     if (this.undoStack.length > 1) {
       // Kotwica kursora PRZED podmianą treści: rebind [innerHTML] przebudowuje DOM stron
       // i kasuje selekcję, więc bez przywrócenia karetka lądowała na początku dokumentu.
@@ -4475,7 +4478,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Snapshot undo jest bez atrybutów etykiet (strip przy serializacji) — przelicz po renderze.
       setTimeout(() => {
         this.refreshListLabels();
-        this._restoreGlobalCaret(caret);
+        // Brak kotwicy (klik toolbara zabrał selekcję, savedSelection pusty) → domknij do
+        // KOŃCA dokumentu; null gubił selekcję całkiem i kursor lądował na początku.
+        this._restoreGlobalCaret(
+          caret ?? { block: Number.MAX_SAFE_INTEGER, offset: Number.MAX_SAFE_INTEGER });
         this.updateFormattingState();
       }, 0);
     }
@@ -4485,6 +4491,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Redo
    */
   redo(): void {
+    // Flush jak w undo(): jeżeli po cofnięciu użytkownik COŚ dopisał, wiszący snapshot
+    // unieważnia redo (nowa edycja czyści redoStack) — dokładnie jak w Wordzie.
+    this._flushPendingPersist();
     if (this.redoStack.length > 0) {
       const entry = this.redoStack.pop()!;
       const next = entry.html;
@@ -4501,7 +4510,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         this.refreshListLabels();
         // Caret goes AFTER the re-inserted text (the position captured when this state was
         // left via undo), not the pre-redo caret which would land before it.
-        this._restoreGlobalCaret(entry.caret);
+        this._restoreGlobalCaret(
+          entry.caret ?? { block: Number.MAX_SAFE_INTEGER, offset: Number.MAX_SAFE_INTEGER });
         this.updateFormattingState();
       }, 0);
     }
@@ -4844,7 +4854,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     this.editorState.update(state => ({
       ...state,
       isModified: this._isDirty,
-      canUndo: this.undoStack.length > 1,
+      // Wiszący snapshot (debounce 500 ms po edycji) liczy się jako stan do cofnięcia —
+      // bez tego przycisk „Cofnij" wyglądał na martwy tuż po pisaniu (bug 13184834).
+      canUndo: this.undoStack.length > 1 || (this._persistTimer !== null && this.undoStack.length >= 1),
       canRedo: this.redoStack.length > 0,
       wordCount
     }));
@@ -4923,25 +4935,42 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this._persistTimer) clearTimeout(this._persistTimer);
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null;
-      // Renumeruj przypisy i przytnij osierocone treści PRZED serializacją — edycja treści
-      // (usunięcie/przeniesienie odwołania) musi uaktualnić numerację i model przypisów.
-      this.syncFootnotesWithBody();
-      this.syncEndnotesWithBody();
-      // Przelicz etykiety list (dodanie/usunięcie li zmienia numery dalszych elementów,
-      // także w innych fragmentach tej samej listy — natywny <ol start> tego nie umie).
-      this.refreshListLabels();
-      const html = this.getContent();
-      this._isInternalUpdate = true;
-      this._content.set(html);
-      this.contentChange.emit(html);
-      this._isInternalUpdate = false;
-      // undo snapshot — tylko jeśli różni się od ostatniego
-      if (this.undoStack.length === 0 || this.undoStack[this.undoStack.length - 1] !== html) {
-        this.undoStack.push(html);
-        if (this.undoStack.length > 100) this.undoStack.shift();
-        this.redoStack = [];
-      }
+      this._persistNow();
     }, 500);
+  }
+
+  /**
+   * Wisący (niewykonany) snapshot wykonaj TERAZ. Bug 13184834: klik „Cofnij" w oknie
+   * debounce'a trafiał na stos BEZ ostatniej porcji pisania — undo() nie miało czego
+   * cofnąć (pierwsze kliknięcie „nic nie robiło", a wiszący timer chwilę później dopisywał
+   * stan i dopiero drugi klik cofał). Flush przed undo/redo zamyka to okno.
+   */
+  private _flushPendingPersist(): void {
+    if (!this._persistTimer) return;
+    clearTimeout(this._persistTimer);
+    this._persistTimer = null;
+    this._persistNow();
+  }
+
+  private _persistNow(): void {
+    // Renumeruj przypisy i przytnij osierocone treści PRZED serializacją — edycja treści
+    // (usunięcie/przeniesienie odwołania) musi uaktualnić numerację i model przypisów.
+    this.syncFootnotesWithBody();
+    this.syncEndnotesWithBody();
+    // Przelicz etykiety list (dodanie/usunięcie li zmienia numery dalszych elementów,
+    // także w innych fragmentach tej samej listy — natywny <ol start> tego nie umie).
+    this.refreshListLabels();
+    const html = this.getContent();
+    this._isInternalUpdate = true;
+    this._content.set(html);
+    this.contentChange.emit(html);
+    this._isInternalUpdate = false;
+    // undo snapshot — tylko jeśli różni się od ostatniego
+    if (this.undoStack.length === 0 || this.undoStack[this.undoStack.length - 1] !== html) {
+      this.undoStack.push(html);
+      if (this.undoStack.length > 100) this.undoStack.shift();
+      this.redoStack = [];
+    }
   }
 
   /**
@@ -6817,8 +6846,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         idx++;
       }
       const target = all[idx].el;
-      this._placeCaretAtTextOffset(target, off);
+      // focus PRZED ustawieniem range: focus() na contenteditable potrafi zresetować
+      // świeżo dodaną selekcję do początku kontenera (jsdom zawsze; przeglądarki przy
+      // pierwszym fokusie) — objaw „kursor wraca na początek dokumentu" (bug 13184834).
       refs[all[idx].page].nativeElement.focus();
+      this._placeCaretAtTextOffset(target, off);
       // Po repaginacji treść mogła przelać się na kolejną stronę POZA widokiem — bez tego
       // użytkownik musiał ręcznie scrollować, by ją zobaczyć. `block:'nearest'` nie rusza
       // widoku, gdy kursor jest już widoczny (brak skoków przy pisaniu w środku strony).
@@ -6833,8 +6865,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const blocks = this._flattenTopBlocks(refs[i].nativeElement);
       if (blocks.length === 0) continue;
       const target = blocks[blocks.length - 1];
-      this._placeCaretAtTextOffset(target, Number.MAX_SAFE_INTEGER);
       refs[i].nativeElement.focus();
+      this._placeCaretAtTextOffset(target, Number.MAX_SAFE_INTEGER);
       target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
       this.editorContent = refs[i];
       this.activePageIndex.set(i);

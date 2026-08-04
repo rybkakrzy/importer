@@ -22,7 +22,7 @@ import { EditorToolbarComponent } from '../editor-toolbar/editor-toolbar';
 import { BarcodeDialogComponent } from '../barcode-dialog/barcode-dialog';
 import { RulerComponent, RulerColumnSegment } from '../ruler/ruler';
 import { DocumentService, OpenDocumentError } from '../../services/document.service';
-import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../../core/errors/document-error.util';
+import { documentDefectMessage } from '../../core/errors/document-error.util';
 import { 
   DocumentContent, 
   DocumentMetadata, 
@@ -1118,10 +1118,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
           return;
         }
 
-        // Pusty dokument — jednolity komunikat (ten sam co na stronie startowej), nie surowa
-        // treść backendu ("Nie przesłano pliku"), która myląco sugerowała brak pliku.
-        if (isEmptyDocumentError(err)) {
-          this.showError(EMPTY_DOCUMENT_MESSAGE);
+        // Znany defekt pliku (pusty / zły format / uszkodzony — bug 13625398) — jednolity
+        // komunikat, ten sam co na stronie startowej; nie surowa treść backendu.
+        const defect = documentDefectMessage(err);
+        if (defect) {
+          this.showError(defect);
           return;
         }
 

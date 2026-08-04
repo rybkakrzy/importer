@@ -19,6 +19,11 @@ describe('WysiwygEditorComponent — undo/redo przywraca pozycję kursora', () =
   let editor: HTMLDivElement;
 
   beforeEach(async () => {
+    // jsdom nie ma queryCommandState — updateFormattingState (wołane po restore karetki
+    // w setTimeout undo/redo) rzucałoby unhandled TypeError zaśmiecającym raport suity.
+    if (typeof (document as any).queryCommandState !== 'function') {
+      (document as any).queryCommandState = () => false;
+    }
     await TestBed.configureTestingModule({
       imports: [WysiwygEditorComponent],
     }).compileComponents();
@@ -127,6 +132,34 @@ describe('WysiwygEditorComponent — undo/redo przywraca pozycję kursora', () =
     await flushTimeout();
 
     expect(caretTextOffset(editor.querySelector('p')!)).toBe(3); // koniec "One"
+  });
+
+  it('klik „Cofnij" w oknie debounce\'a cofa świeżo wpisany tekst (flush wiszącego snapshotu)', async () => {
+    // Bug 13184834 (komentarz QA): „przy pierwszym kliknięciu cofaj nic się nie wydarzyło" —
+    // snapshot jechał z debounce 500 ms, więc stos nie znał ostatniej porcji pisania.
+    editor.innerHTML = '<p>Hello World</p>';
+    (component as any).undoStack = ['<p>Hello Worl</p>'];
+    (component as any).redoStack = [];
+    caretIn(editor.querySelector('p')!.firstChild!, 11);
+    (component as any)._schedulePersist(); // timer wisi — jak w trakcie pisania
+
+    component.undo(); // PIERWSZE kliknięcie — musi cofnąć, nie czekać na timer
+
+    expect((component as any).undoStack.length).toBe(1);
+    expect(component.pageContents()[0]).toContain('Hello Worl');
+    expect(component.pageContents()[0]).not.toContain('Hello World');
+    expect((component as any).redoStack.length).toBe(1);
+    expect((component as any)._persistTimer).toBeNull();
+  });
+
+  it('canUndo jest true w oknie debounce\'a (przycisk nie może wyglądać na martwy)', () => {
+    editor.innerHTML = '<p>Hello World</p>';
+    (component as any).undoStack = ['<p>Hello Worl</p>'];
+    (component as any)._schedulePersist();
+
+    (component as any).updateState();
+
+    expect(component.editorState().canUndo).toBe(true);
   });
 
   it('redo ustawia karetkę PO ponownie wstawionym tekście', async () => {

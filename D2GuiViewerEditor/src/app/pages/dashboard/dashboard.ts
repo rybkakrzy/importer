@@ -8,7 +8,7 @@ import { DocumentService } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { DocumentNavigationService } from '../../core/services/document-navigation.service';
 import { ResourceAccessService } from '../../core/services/resource-access.service';
-import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../../core/errors/document-error.util';
+import { documentDefectMessage } from '../../core/errors/document-error.util';
 
 @Component({
   selector: 'd2-dashboard',
@@ -137,9 +137,8 @@ export class DashboardComponent {
             },
             error: (err) => {
               this.isLoading.set(false);
-              this.errorMessage.set(isEmptyDocumentError(err)
-                ? EMPTY_DOCUMENT_MESSAGE
-                : 'Błąd podczas wczytywania pliku PDF. Spróbuj ponownie.');
+              this.errorMessage.set(documentDefectMessage(err)
+                ?? 'Błąd podczas wczytywania pliku PDF. Spróbuj ponownie.');
             },
           });
         } catch {
@@ -177,9 +176,8 @@ export class DashboardComponent {
           },
           error: (err) => {
             this.isLoading.set(false);
-            this.errorMessage.set(isEmptyDocumentError(err)
-              ? EMPTY_DOCUMENT_MESSAGE
-              : 'Błąd podczas wczytywania dokumentu. Spróbuj ponownie.');
+            this.errorMessage.set(documentDefectMessage(err)
+              ?? 'Błąd podczas wczytywania dokumentu. Spróbuj ponownie.');
           }
         });
       } catch {

@@ -60,6 +60,11 @@ public class DocumentController : BaseApiController
                 new { code = ErrorCodes.DocumentUnlockFailed, error = "Nieprawidłowe hasło do dokumentu." }),
             ErrorCodes.UnsupportedLegacyDoc => BadRequest(
                 new { code = ErrorCodes.UnsupportedLegacyDoc, error = "Plik .doc (starszy, binarny format Worda) wymaga konwersji do .docx. Otwórz go w Wordzie i zapisz jako .docx (Plik → Zapisz jako → Dokument programu Word *.docx), a następnie wczytaj ponownie." }),
+            // Bug 13625398: teksty uzgodnione z QA — spójne między stroną startową a edytorem.
+            ErrorCodes.DocumentFormatInvalid => BadRequest(
+                new { code = ErrorCodes.DocumentFormatInvalid, error = "Nieprawidłowy format dokumentu." }),
+            ErrorCodes.DocumentCorrupted => BadRequest(
+                new { code = ErrorCodes.DocumentCorrupted, error = "Dokument jest uszkodzony." }),
             _ => HandleResult(result)
         };
     }

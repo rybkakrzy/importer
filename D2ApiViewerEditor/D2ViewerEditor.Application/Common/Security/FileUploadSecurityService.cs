@@ -102,6 +102,18 @@ public sealed class FileUploadSecurityService : IFileUploadSecurityService
         return scanFailure ?? UploadValidationResult.Success(expectedMime);
     }
 
+    public UploadValidationResult ValidateDocxStructure(byte[] content)
+    {
+        if (content.Length == 0)
+            return UploadValidationResult.Failure(UploadRejectionCode.Empty, "Zawartość dokumentu nie może być pusta.");
+
+        if (!LooksLikeZip(content))
+            return UploadValidationResult.Failure(UploadRejectionCode.SignatureMismatch,
+                "Podpis binarny pliku nie odpowiada DOCX.");
+
+        return ValidateDocxArchive(content);
+    }
+
     private UploadValidationResult ValidateDocxArchive(byte[] content)
     {
         try

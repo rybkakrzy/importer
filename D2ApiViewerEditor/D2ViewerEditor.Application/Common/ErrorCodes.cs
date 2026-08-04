@@ -20,12 +20,20 @@ public static class ErrorCodes
     /// <summary>Plik jest binarnym dokumentem .doc (starszy format Worda) — wymaga konwersji do .docx.</summary>
     public const string UnsupportedLegacyDoc = "UNSUPPORTED_LEGACY_DOC";
 
+    /// <summary>Plik nie jest rozpoznawalnym dokumentem (podpis binarny ≠ DOCX/format nieznany).</summary>
+    public const string DocumentFormatInvalid = "DOCUMENT_FORMAT_INVALID";
+
+    /// <summary>Plik wygląda jak DOCX, ale archiwum jest uszkodzone / brakuje wymaganych części OOXML.</summary>
+    public const string DocumentCorrupted = "DOCUMENT_CORRUPTED";
+
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
         DocumentContentEmpty,
         DocumentProtected,
         DocumentUnlockFailed,
-        UnsupportedLegacyDoc
+        UnsupportedLegacyDoc,
+        DocumentFormatInvalid,
+        DocumentCorrupted
     };
 
     /// <summary>Czy podany kod jest znanym, stabilnym kodem domenowym (do wystawienia klientowi).</summary>

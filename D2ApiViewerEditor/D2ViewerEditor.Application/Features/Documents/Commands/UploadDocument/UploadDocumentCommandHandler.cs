@@ -40,7 +40,17 @@ public class UploadDocumentCommandHandler : IRequestHandler<UploadDocumentComman
                 cancellationToken);
 
             if (!uploadValidation.IsValid)
-                return Result<UploadDocumentResult>.Failure($"Upload odrzucony ({uploadValidation.Code}): {uploadValidation.Error}");
+            {
+                // Bug 13625398: dla defektów PLIKU komunikaty uzgodnione z QA — identyczne jak na
+                // ścieżce edytora (POST /open). Pozostałe odrzucenia (skaner, limity) bez zmian.
+                return Result<UploadDocumentResult>.Failure(uploadValidation.Code switch
+                {
+                    UploadRejectionCode.SignatureMismatch => "Nieprawidłowy format dokumentu.",
+                    UploadRejectionCode.DocxRequiredPartMissing or UploadRejectionCode.DocxInvalidArchive
+                        => "Dokument jest uszkodzony.",
+                    _ => $"Upload odrzucony ({uploadValidation.Code}): {uploadValidation.Error}"
+                });
+            }
 
             // Generuj GUID master dla dokumentu
             var masterId = Guid.NewGuid();

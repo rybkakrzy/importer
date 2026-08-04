@@ -1,4 +1,5 @@
 using D2ViewerEditor.Application.Common;
+using D2ViewerEditor.Application.Common.Security;
 using D2ViewerEditor.Domain.Common;
 using D2ViewerEditor.Domain.Interfaces;
 using D2ViewerEditor.Domain.Models;
@@ -10,11 +11,16 @@ public class OpenDocumentQueryHandler : IRequestHandler<OpenDocumentQuery, Resul
 {
     private readonly IDocxToHtmlConverter _converter;
     private readonly IDocumentInputNormalizer _normalizer;
+    private readonly IFileUploadSecurityService _uploadSecurity;
 
-    public OpenDocumentQueryHandler(IDocxToHtmlConverter converter, IDocumentInputNormalizer normalizer)
+    public OpenDocumentQueryHandler(
+        IDocxToHtmlConverter converter,
+        IDocumentInputNormalizer normalizer,
+        IFileUploadSecurityService uploadSecurity)
     {
         _converter = converter;
         _normalizer = normalizer;
+        _uploadSecurity = uploadSecurity;
     }
 
     public async Task<Result<DocumentContent>> Handle(OpenDocumentQuery request, CancellationToken cancellationToken)
@@ -35,7 +41,18 @@ public class OpenDocumentQueryHandler : IRequestHandler<OpenDocumentQuery, Resul
             case DocumentInputStatus.UnsupportedLegacyDoc:
                 return Result<DocumentContent>.Failure(ErrorCodes.UnsupportedLegacyDoc);
             default:
-                return Result<DocumentContent>.Failure("Nie rozpoznano formatu pliku lub plik jest uszkodzony.");
+                return Result<DocumentContent>.Failure(ErrorCodes.DocumentFormatInvalid);
+        }
+
+        // Bug 13625398: ta sama walidacja struktury co upload ze strony startowej — bez niej
+        // uszkodzony DOCX (np. bez [Content_Types].xml) otwierał się „po cichu" jako pusty
+        // dokument i komunikaty obu ścieżek były niespójne.
+        var structure = _uploadSecurity.ValidateDocxStructure(normalized.Docx!);
+        if (!structure.IsValid)
+        {
+            return Result<DocumentContent>.Failure(structure.Code == UploadRejectionCode.SignatureMismatch
+                ? ErrorCodes.DocumentFormatInvalid
+                : ErrorCodes.DocumentCorrupted);
         }
 
         using var docxStream = new MemoryStream(normalized.Docx!);

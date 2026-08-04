@@ -6,7 +6,7 @@ import { MsalService } from '@azure/msal-angular';
 import { NotificationService } from '../services/notification.service';
 import { ConnectionStatusService } from '../services/connection-status.service';
 import { LastHttpErrorService } from '../services/last-http-error.service';
-import { EMPTY_DOCUMENT_MESSAGE, isEmptyDocumentError } from '../errors/document-error.util';
+import { documentDefectMessage } from '../errors/document-error.util';
 import { MSAL_CUSTOM_CONFIG } from '../config/runtime-config';
 import { ensureInteractiveReauth } from '../auth/interactive-reauth';
 import { isProtectedApiRequest } from './api-token.interceptor';
@@ -48,10 +48,10 @@ export const httpErrorInterceptor: HttpInterceptorFn = (req, next) => {
       if (error.status === 0) {
         connectionStatus.reportApiError();
         errorMessage = 'Nie można połączyć się z serwerem. Sprawdź połączenie sieciowe.';
-      } else if (isEmptyDocumentError(error)) {
-        // Pusty dokument — jednolity komunikat (stabilny kod `DOCUMENT_CONTENT_EMPTY`), niezależnie
-        // od kształtu odpowiedzi ({code,error} z /open lub ProblemDetails walidacji uploadu).
-        errorMessage = EMPTY_DOCUMENT_MESSAGE;
+      } else if (documentDefectMessage(error)) {
+        // Znany defekt pliku (pusty / zły format / uszkodzony) — jednolity komunikat po stabilnym
+        // kodzie, niezależnie od kształtu odpowiedzi ({code,error} z /open lub ProblemDetails).
+        errorMessage = documentDefectMessage(error)!;
       } else if (error.error) {
         // ProblemDetails (RFC 7807) from backend ExceptionHandlingMiddleware
         if (error.error.detail) {
