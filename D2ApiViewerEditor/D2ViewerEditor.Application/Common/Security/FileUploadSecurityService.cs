@@ -8,6 +8,10 @@ public sealed class FileUploadSecurityService : IFileUploadSecurityService
     private static readonly Dictionary<string, string> DocumentMimeByExtension = new(StringComparer.OrdinalIgnoreCase)
     {
         [".docx"] = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        // Binarny .doc jest wspierany (LegacyDocBinaryConverter) — bez tego wpisu KAŻDY
+        // upload .doc z dashboardu był odrzucany i pliki DOC nie istniały w magazynie
+        // (admin „Lista plików" pokazywała wyłącznie DOCX/PDF).
+        [".doc"] = "application/msword",
         [".pdf"] = "application/pdf"
     };
 
@@ -58,6 +62,23 @@ public sealed class FileUploadSecurityService : IFileUploadSecurityService
             if (!LooksLikePdf(content))
                 return UploadValidationResult.Failure(UploadRejectionCode.SignatureMismatch,
                     "Podpis binarny pliku nie odpowiada PDF.");
+        }
+        else if (string.Equals(expectedMime, "application/msword", StringComparison.Ordinal))
+        {
+            // Binarny .doc = kontener CFB (D0 CF 11 E0…). Częsty wariant to też „.doc" będący
+            // w istocie DOCX (ZIP) — wtedy walidujemy archiwum jak dla .docx; normalizer
+            // otwarcia i tak rozpozna format po zawartości.
+            if (LooksLikeZip(content))
+            {
+                var docAsDocxCheck = ValidateDocxArchive(content);
+                if (!docAsDocxCheck.IsValid)
+                    return docAsDocxCheck;
+            }
+            else if (!LooksLikeCfb(content))
+            {
+                return UploadValidationResult.Failure(UploadRejectionCode.SignatureMismatch,
+                    "Podpis binarny pliku nie odpowiada DOC.");
+            }
         }
         else
         {
@@ -216,6 +237,12 @@ public sealed class FileUploadSecurityService : IFileUploadSecurityService
         var ext = Path.GetExtension(entryName);
         return ext.Length > 0 && SuspiciousDocxExtensions.Contains(ext);
     }
+
+    /// <summary>Nagłówek OLE Compound File (binarny .doc, także zaszyfrowany DOCX): D0 CF 11 E0 A1 B1 1A E1.</summary>
+    private static bool LooksLikeCfb(byte[] content) =>
+        content.Length >= 8
+        && content[0] == 0xD0 && content[1] == 0xCF && content[2] == 0x11 && content[3] == 0xE0
+        && content[4] == 0xA1 && content[5] == 0xB1 && content[6] == 0x1A && content[7] == 0xE1;
 
     private static bool LooksLikePdf(byte[] content) =>
         content.Length >= 5

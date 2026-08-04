@@ -21,6 +21,45 @@ public class FileUploadSecurityServiceTests
     }
 
     [Test]
+    public async Task ValidateDocumentAsync_BinaryDocWithCfbSignature_IsAccepted()
+    {
+        // Bez wpisu .doc w allowliście KAŻDY upload .doc był odrzucany („Wspierane są tylko
+        // pliki DOCX i PDF") — pliki DOC nie istniały w magazynie i na liście admina.
+        var sut = BuildService();
+        var cfb = new byte[512];
+        new byte[] { 0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1 }.CopyTo(cfb, 0);
+
+        var result = await sut.ValidateDocumentAsync(cfb, "stary.doc", "application/msword", CancellationToken.None);
+
+        result.IsValid.Should().BeTrue();
+        result.NormalizedMimeType.Should().Be("application/msword");
+    }
+
+    [Test]
+    public async Task ValidateDocumentAsync_DocWithGarbageBytes_ReturnsSignatureMismatch()
+    {
+        var sut = BuildService();
+
+        var result = await sut.ValidateDocumentAsync([1, 2, 3, 4], "stary.doc", "application/msword", CancellationToken.None);
+
+        result.IsValid.Should().BeFalse();
+        result.Code.Should().Be(UploadRejectionCode.SignatureMismatch);
+    }
+
+    [Test]
+    public async Task ValidateDocumentAsync_DocThatIsReallyZip_RunsDocxArchiveValidation()
+    {
+        // „.doc" będący w istocie DOCX (ZIP) — archiwum przechodzi tę samą walidację co .docx.
+        var sut = BuildService();
+        var zip = BuildDocxArchive("../evil.txt", [1, 2, 3]);
+
+        var result = await sut.ValidateDocumentAsync(zip, "stary.doc", "application/msword", CancellationToken.None);
+
+        result.IsValid.Should().BeFalse();
+        result.Code.Should().Be(UploadRejectionCode.DocxZipSlipRisk);
+    }
+
+    [Test]
     public async Task ValidateDocumentAsync_DocxWithZipSlipEntry_ReturnsFailure()
     {
         var sut = BuildService();
