@@ -191,6 +191,56 @@
   width: 140px;
 }
 
+/* Własny dropdown czcionek (zamiast natywnego datalist, którego nie da się ograniczyć
+   wysokością): przewijalna lista pod inputem, wybór na mousedown (przed blur). */
+.font-family-group {
+  position: relative;
+}
+
+.font-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #c8c8c8;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+}
+
+.font-option {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:hover {
+    background: #f0f0f0;
+  }
+
+  &.active {
+    background: #e3f2fd;
+    font-weight: 600;
+  }
+}
+
+.font-dropdown-empty {
+  padding: 6px 12px;
+  color: #888;
+  font-size: 13px;
+}
+
 .font-size-select {
   width: 65px;
 }

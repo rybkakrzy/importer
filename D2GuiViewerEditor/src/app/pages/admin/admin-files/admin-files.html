@@ -37,12 +37,17 @@
           </tr>
           <tr class="col-filters">
             <th class="col-id">
-              <input class="col-filter-input" type="text" placeholder="Filtruj ID…"
+              <input class="col-filter-input" type="text" placeholder="Filtruj Master/Version ID…"
                      [ngModel]="filterId()" (ngModelChange)="setFilter('id', $event)" />
             </th>
             <th class="col-type">
-              <input class="col-filter-input" type="text" placeholder="Filtruj typ…"
-                     [ngModel]="filterType()" (ngModelChange)="setFilter('type', $event)" />
+              <select class="col-filter-input" [ngModel]="filterExtension()"
+                      (ngModelChange)="setFilter('extension', $event)">
+                <option [value]="''">Wszystkie</option>
+                @for (ext of availableExtensions(); track ext) {
+                  <option [value]="ext">{{ ext.toUpperCase() }}</option>
+                }
+              </select>
             </th>
             <th class="col-date">
               <input class="col-filter-input" type="text" placeholder="Filtruj datę…"
@@ -84,7 +89,7 @@
                   </span>
                   <span class="doc-id">{{ doc.masterId }}</span>
                 </td>
-                <td class="col-type"><span class="chip">{{ friendlyType(doc.mimeType) }}</span></td>
+                <td class="col-type"><span class="chip" [title]="friendlyType(doc.mimeType)">{{ extensionLabel(doc) }}</span></td>
                 <td class="col-date">{{ formatDate(doc.createdAt) }}</td>
                 <td class="col-status">
                   <span class="status-badge" [class]="statusClass(doc.status)">{{ statusLabel(doc.status) }}</span>
@@ -94,58 +99,86 @@
               </tr>
 
               @if (doc.expanded) {
-                <tr class="ver-row detail-actions-row">
-                  <td class="col-id">
-                    <span class="ver-indent"></span>
-                    <span class="detail-actions-label">Szczegóły pozycji</span>
-                  </td>
-                  <td class="col-type"></td>
-                  <td class="col-date"></td>
-                  <td class="col-status"></td>
-                  <td class="col-modified"></td>
-                  <td class="col-action">
-                    <button class="dl-btn dl-btn-sm"
-                            title="Kopiuj link do edycji (Master/Version ID) do schowka"
-                            (click)="copyEditLink(doc, $event)">
-                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                      </svg>
-                      Kopiuj link
-                    </button>
+                <!-- Szczegóły pozycji — karta jak w „Pliki do wysłania" (te same dane, forma
+                     detail-grid: etykieta nad wartością, akcje w nagłówku, wersje jako lista). -->
+                <tr class="detail-row">
+                  <td colspan="6">
+                    <div class="delivery-details">
+                      <div class="detail-item detail-wide detail-header-row">
+                        <span class="detail-label">Szczegóły pozycji</span>
+                        <div class="detail-actions-buttons">
+                          <button class="dl-btn dl-btn-sm"
+                                  title="Kopiuj link do edycji (Master/Version ID) do schowka"
+                                  (click)="copyEditLink(doc, $event)">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                            </svg>
+                            Kopiuj link
+                          </button>
+                        </div>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Master ID</span>
+                        <span class="detail-value mono">{{ doc.masterId }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Nazwa pliku</span>
+                        <span class="detail-value">{{ doc.name || '—' }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Typ</span>
+                        <span class="detail-value">
+                          <span class="chip" [title]="friendlyType(doc.mimeType)">{{ extensionLabel(doc) }}</span>
+                        </span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Status</span>
+                        <span class="status-badge" [class]="statusClass(doc.status)">{{ statusLabel(doc.status) }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Utworzono</span>
+                        <span class="detail-value">{{ formatDate(doc.createdAt) }}</span>
+                      </div>
+                      <div class="detail-item">
+                        <span class="detail-label">Kto modyfikował</span>
+                        <span class="detail-value">{{ doc.lastModifiedBy || '—' }}</span>
+                      </div>
+                      <div class="detail-item detail-wide">
+                        <span class="detail-label">Wersje</span>
+                        <div class="version-list">
+                          @for (ver of doc.versions; track ver.versionId) {
+                            <div class="version-row" [class.active-ver]="ver.isActive">
+                              <span class="detail-value mono version-id">
+                                {{ ver.versionId }}
+                                @if (ver.isActive) { <span class="active-badge">aktywna</span> }
+                              </span>
+                              <span class="version-meta">v{{ ver.versionNumber }}</span>
+                              <span class="version-meta">{{ formatDate(ver.createdAt) }}</span>
+                              <span class="version-meta">{{ formatBytes(ver.sizeInBytes) }}</span>
+                              <button class="dl-btn dl-btn-sm"
+                                      [class.loading]="downloadingId() === doc.masterId + '_' + ver.versionId"
+                                      (click)="downloadVersion(doc.masterId, ver.versionId, doc.name, doc.mimeType, $event)">
+                                @if (downloadingId() === doc.masterId + '_' + ver.versionId) {
+                                  <span class="spinner-sm"></span>
+                                } @else {
+                                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="7 10 12 15 17 10"/>
+                                    <line x1="12" y1="15" x2="12" y2="3"/>
+                                  </svg>
+                                }
+                                Pobierz
+                              </button>
+                            </div>
+                          } @empty {
+                            <span class="detail-value">Brak wersji</span>
+                          }
+                        </div>
+                      </div>
+                    </div>
                   </td>
                 </tr>
-                @for (ver of doc.versions; track ver.versionId) {
-                  <tr class="ver-row" [class.active-ver]="ver.isActive">
-                    <td class="col-id">
-                      <span class="ver-indent"></span>
-                      <span class="ver-name">
-                        {{ ver.versionId }}
-                        @if (ver.isActive) { <span class="active-badge">aktywna</span> }
-                      </span>
-                    </td>
-                    <td class="col-type"></td>
-                    <td class="col-date">{{ formatDate(ver.createdAt) }}</td>
-                    <td class="col-status">{{ formatBytes(ver.sizeInBytes) }}</td>
-                    <td class="col-modified"></td>
-                    <td class="col-action">
-                      <button class="dl-btn dl-btn-sm"
-                              [class.loading]="downloadingId() === doc.masterId + '_' + ver.versionId"
-                              (click)="downloadVersion(doc.masterId, ver.versionId, doc.name, doc.mimeType, $event)">
-                        @if (downloadingId() === doc.masterId + '_' + ver.versionId) {
-                          <span class="spinner-sm"></span>
-                        } @else {
-                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                          </svg>
-                        }
-                        Pobierz
-                      </button>
-                    </td>
-                  </tr>
-                }
               }
             }
           }

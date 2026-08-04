@@ -224,6 +224,27 @@ export class EditorToolbarComponent {
     this.fontMixed() ? '' : this.selectedFontFamily(),
   );
 
+  /**
+   * Placeholder pola czcionki: nazwa AKTUALNIE aktywnego kroju (widoczna także po
+   * kliknięciu, gdy pole jest czyszczone pod wpisywanie) — nie statyczne „Czcionka".
+   * Mieszana selekcja → „—" jak dotąd.
+   */
+  readonly fontPlaceholder = computed(() =>
+    this.fontMixed() ? '—' : (this.selectedFontFamily() || 'Czcionka'),
+  );
+
+  /** Własny dropdown czcionek (zamiast natywnego datalist — tamten nie da się
+   *  ograniczyć wysokością ani przewijać; scroll + max-height w SCSS). */
+  readonly fontDropdownOpen = signal(false);
+  private readonly fontFilter = signal('');
+
+  /** Lista w dropdownie filtrowana wpisywanym tekstem (case-insensitive, substring). */
+  readonly filteredFonts = computed(() => {
+    const filter = this.fontFilter().trim().toLowerCase();
+    const fonts = this.fontFamilies();
+    return filter ? fonts.filter(f => f.toLowerCase().includes(filter)) : fonts;
+  });
+
   /** True while the user is actively editing the font input (guards read-back). */
   private fontEditing = false;
 
@@ -459,11 +480,12 @@ export class EditorToolbarComponent {
    */
   onFontFocus(event: FocusEvent): void {
     this.fontEditing = true;
-    // Clear the field so the native datalist shows the FULL list. If we left the
-    // current font name in place, the browser would filter the options down to
-    // that single entry and no other font could be picked without backspacing.
-    // The current font is restored on blur (see onFontBlur) if nothing is chosen.
+    // Clear the field so the full list is browsable and typing starts a fresh filter.
+    // The current font stays visible in the PLACEHOLDER (fontPlaceholder) and is
+    // restored on blur (see onFontBlur) if nothing is chosen.
     (event.target as HTMLInputElement).value = '';
+    this.fontFilter.set('');
+    this.fontDropdownOpen.set(true);
     // Let the parent snapshot the editor selection before focus moves here.
     this.preserveSelection.emit();
   }
@@ -472,8 +494,33 @@ export class EditorToolbarComponent {
   onFontBlur(event: FocusEvent): void {
     const input = event.target as HTMLInputElement;
     this.fontEditing = false;
+    this.fontDropdownOpen.set(false);
     if (!input.value.trim()) {
       input.value = this.fontInputValue();
+    }
+  }
+
+  /** Wpisywanie filtruje własny dropdown (case-insensitive substring). */
+  onFontInput(event: Event): void {
+    this.fontFilter.set((event.target as HTMLInputElement).value);
+    this.fontDropdownOpen.set(true);
+  }
+
+  /**
+   * Wybór z dropdownu na MOUSEDOWN (przed blur inputa — inaczej blur zamknąłby listę,
+   * zanim klik doleci). preventDefault utrzymuje fokus do czasu commitu.
+   */
+  onFontOptionMouseDown(event: MouseEvent, font: string): void {
+    event.preventDefault();
+    const input = (event.target as HTMLElement)
+      .closest('.font-family-group')?.querySelector('input') as HTMLInputElement | null;
+    this.fontDropdownOpen.set(false);
+    if (input) {
+      this.commitFont(font, input);
+      input.blur();
+    } else {
+      // Defensywnie (testy/układ niestandardowy): commit bez odświeżenia pola.
+      this.commitFontValue(font);
     }
   }
 
@@ -481,11 +528,16 @@ export class EditorToolbarComponent {
     const input = event.target as HTMLInputElement;
     if (event.key === 'Enter') {
       event.preventDefault();
-      this.commitFont(input.value, input);
+      // Enter z filtrem pasującym do dokładnie jednej pozycji wybiera ją (jak klik).
+      const matches = this.filteredFonts();
+      const value = input.value.trim() && matches.length === 1 ? matches[0] : input.value;
+      this.fontDropdownOpen.set(false);
+      this.commitFont(value, input);
       input.blur();
     } else if (event.key === 'Escape') {
       event.preventDefault();
       // Cancel — restore the current effective font, do not overwrite.
+      this.fontDropdownOpen.set(false);
       input.value = this.fontInputValue();
       input.blur();
     }
@@ -506,13 +558,18 @@ export class EditorToolbarComponent {
       input.value = this.fontInputValue();
       return;
     }
+    input.value = this.commitFontValue(value);
+  }
+
+  /** Rdzeń commitu (bez dotykania inputa): normalizacja + emisja przy realnej zmianie. */
+  private commitFontValue(value: string): string {
     const canonical = this.fontProvider.normalize(value);
-    input.value = canonical;
     if (this.fontMixed() || canonical !== this.selectedFontFamily()) {
       this.selectedFontFamily.set(canonical);
       this.fontMixed.set(false);
       this.fontFamilyChange.emit(canonical);
     }
+    return canonical;
   }
 
   /**

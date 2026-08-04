@@ -68,26 +68,40 @@
 
   <div class="toolbar-separator"></div>
 
-  <!-- Grupa: Czcionka (typeable + searchable combobox — item 6) -->
-  <div class="toolbar-group">
+  <!-- Grupa: Czcionka (typeable + searchable combobox — item 6). Własny dropdown zamiast
+       natywnego datalist: przewijalna lista z max-height + placeholder = aktywny krój. -->
+  <div class="toolbar-group font-family-group">
     <input
       type="text"
       class="toolbar-select font-family-select"
-      list="d2-toolbar-font-list"
       [value]="fontInputValue()"
-      [attr.placeholder]="fontMixed() ? '—' : 'Czcionka'"
+      [attr.placeholder]="fontPlaceholder()"
       autocomplete="off"
       spellcheck="false"
       (focus)="onFontFocus($event)"
       (blur)="onFontBlur($event)"
+      (input)="onFontInput($event)"
       (change)="onFontCommit($event)"
       (keydown)="onFontKeydown($event)"
       title="Czcionka (wpisz lub wybierz)">
-    <datalist id="d2-toolbar-font-list">
-      @for (font of fontFamilies(); track font) {
-        <option [value]="font"></option>
-      }
-    </datalist>
+    @if (fontDropdownOpen()) {
+      <div class="font-dropdown" role="listbox">
+        @for (font of filteredFonts(); track font) {
+          <button
+            type="button"
+            class="font-option"
+            role="option"
+            [class.active]="!fontMixed() && font === selectedFontFamily()"
+            [style.fontFamily]="font"
+            (mousedown)="onFontOptionMouseDown($event, font)">
+            {{ font }}
+          </button>
+        }
+        @if (filteredFonts().length === 0) {
+          <div class="font-dropdown-empty">Brak pasujących czcionek</div>
+        }
+      </div>
+    }
   </div>
 
   <!-- Grupa: Rozmiar czcionki -->

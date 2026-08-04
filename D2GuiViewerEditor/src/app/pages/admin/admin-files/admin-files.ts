@@ -2,6 +2,7 @@ import { Component, computed, inject, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { forkJoin, of, catchError, map } from 'rxjs';
 import { AdminService, DocumentWithVersions, DocumentVersionListItem } from '../../../services/admin.service';
 
 @Component({
@@ -17,7 +18,8 @@ export class AdminFilesComponent implements OnInit {
 
   private allDocuments = signal<DocumentWithVersions[]>([]);
   filterId     = signal('');
-  filterType   = signal('');
+  /** Filtr rozszerzenia (select: '' = wszystkie, inaczej np. 'doc'/'docx'/'pdf'). */
+  filterExtension = signal('');
   filterDate   = signal('');
   filterStatus = signal('');
   filterModifiedBy = signal('');
@@ -29,21 +31,58 @@ export class AdminFilesComponent implements OnInit {
   downloadingId = signal<string | null>(null);
   notice = signal<string | null>(null);
 
+  /** Jednorazowe dociągnięcie wersji WSZYSTKICH dokumentów — potrzebne, by filtr ID
+   *  znajdował także po VersionID (lista bazowa nie niesie wersji; ładujemy dopiero,
+   *  gdy użytkownik zaczyna szukać po ID — nie przy każdym wejściu na stronę). */
+  private versionsPreloadState: 'idle' | 'loading' | 'done' = 'idle';
+
   private filteredDocuments = computed(() => {
     const id     = this.filterId().toLowerCase().trim();
-    const type   = this.filterType().toLowerCase().trim();
+    const ext    = this.filterExtension();
     const date   = this.filterDate().toLowerCase().trim();
     const status = this.filterStatus().toLowerCase().trim();
     const modifiedBy = this.filterModifiedBy().toLowerCase().trim();
     return this.allDocuments().filter(d => {
-      if (id     && !d.masterId.toLowerCase().includes(id))                       return false;
-      if (type   && !d.mimeType.toLowerCase().includes(type))                     return false;
-      if (date   && !this.formatDate(d.createdAt).toLowerCase().includes(date))   return false;
-      if (status && !this.statusLabel(d.status).toLowerCase().includes(status))   return false;
+      // Filtr ID: MasterID LUB dowolne VersionID (aktywna wersja jest znana od razu,
+      // pozostałe po dociągnięciu wersji — patrz preloadAllVersions).
+      if (id
+          && !d.masterId.toLowerCase().includes(id)
+          && !d.activeVersionId.toLowerCase().includes(id)
+          && !d.versions.some(v => v.versionId.toLowerCase().includes(id))) return false;
+      if (ext    && this.fileExtension(d) !== ext)                              return false;
+      if (date   && !this.formatDate(d.createdAt).toLowerCase().includes(date)) return false;
+      if (status && !this.statusLabel(d.status).toLowerCase().includes(status)) return false;
       if (modifiedBy && !(d.lastModifiedBy ?? '').toLowerCase().includes(modifiedBy)) return false;
       return true;
     });
   });
+
+  /** Rozszerzenia obecne na liście (opcje selecta filtra typu). */
+  readonly availableExtensions = computed(() => {
+    const set = new Set(this.allDocuments().map(d => this.fileExtension(d)));
+    return Array.from(set).sort();
+  });
+
+  /**
+   * Rozszerzenie pliku (doc/docx/pdf/…): z nazwy pliku, a gdy jej brak — z typu MIME.
+   * To rozróżnia .doc od .docx (etykieta „Word" obu tego nie umiała — filtr „doc" nie
+   * znajdował niczego).
+   */
+  fileExtension(d: { name?: string; mimeType: string }): string {
+    const fromName = /\.([a-z0-9]+)$/i.exec(d.name ?? '')?.[1]?.toLowerCase();
+    if (fromName) return fromName;
+    const byMime: Record<string, string> = {
+      'application/pdf': 'pdf',
+      'application/msword': 'doc',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    };
+    return byMime[d.mimeType] ?? (d.mimeType.split('/')[1] ?? d.mimeType).toLowerCase();
+  }
+
+  /** Etykieta chipa typu: rozszerzenie wielkimi literami (DOC/DOCX/PDF). */
+  extensionLabel(d: { name?: string; mimeType: string }): string {
+    return this.fileExtension(d).toUpperCase();
+  }
 
   totalFiltered = computed(() => this.filteredDocuments().length);
   totalPages    = computed(() => Math.max(1, Math.ceil(this.totalFiltered() / this.pageSize)));
@@ -53,13 +92,41 @@ export class AdminFilesComponent implements OnInit {
     return this.filteredDocuments().slice(start, start + this.pageSize);
   });
 
-  setFilter(field: 'id' | 'type' | 'date' | 'status' | 'modifiedBy', value: string): void {
-    if (field === 'id')     this.filterId.set(value);
-    if (field === 'type')   this.filterType.set(value);
+  setFilter(field: 'id' | 'extension' | 'date' | 'status' | 'modifiedBy', value: string): void {
+    if (field === 'id') {
+      this.filterId.set(value);
+      // Szukanie po ID = także po VersionID → dociągnij wersje raz, w tle.
+      if (value.trim()) this.preloadAllVersions();
+    }
+    if (field === 'extension') this.filterExtension.set(value);
     if (field === 'date')   this.filterDate.set(value);
     if (field === 'status') this.filterStatus.set(value);
     if (field === 'modifiedBy') this.filterModifiedBy.set(value);
     this.currentPage.set(0);
+  }
+
+  /** Dociąga wersje wszystkich dokumentów bez wersji (raz; wyniki lądują w cache
+   *  dokumentów, więc rozwinięcia i kolejne filtrowania z nich korzystają). */
+  private preloadAllVersions(): void {
+    if (this.versionsPreloadState !== 'idle') return;
+    const missing = this.allDocuments().filter(d => d.versions.length === 0);
+    if (missing.length === 0) {
+      this.versionsPreloadState = 'done';
+      return;
+    }
+    this.versionsPreloadState = 'loading';
+    forkJoin(
+      missing.map(d => this.adminService.getDocumentVersions(d.masterId).pipe(
+        map(versions => ({ masterId: d.masterId, versions })),
+        // Pojedynczy błąd nie może ubić całego preloadu — dokument zostaje bez wersji.
+        catchError(() => of({ masterId: d.masterId, versions: [] as DocumentVersionListItem[] })),
+      )),
+    ).subscribe(results => {
+      results.forEach(r => {
+        if (r.versions.length > 0) this.updateDoc(r.masterId, { versions: r.versions });
+      });
+      this.versionsPreloadState = 'done';
+    });
   }
 
   statusLabel(status: string): string {

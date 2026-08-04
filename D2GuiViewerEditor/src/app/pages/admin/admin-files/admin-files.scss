@@ -589,3 +589,100 @@
   padding: 4px 8px;
   font-size: 12px;
 }
+
+/* ── Szczegóły pozycji — karta jak w „Pliki do wysłania" (admin-deliveries) ── */
+
+.detail-row > td {
+  background: var(--color-background-subtle);
+  padding: 6px 0px 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.delivery-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 28px;
+  margin: 4px 8px 0;
+  padding: 16px 20px;
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 10px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.detail-item.detail-wide { grid-column: 1 / -1; }
+
+.detail-header-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.detail-actions-buttons {
+  display: flex;
+  flex-flow: row wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.detail-header-row > .detail-label {
+  font-size: 15px;
+  letter-spacing: .02em;
+  color: var(--color-text-strong);
+}
+
+.detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--color-text-muted);
+}
+
+.detail-value {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.mono {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+}
+
+/* Lista wersji w karcie szczegółów: wiersz = ID + meta + Pobierz. */
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 10px;
+  border-radius: 6px;
+
+  &:nth-child(odd) { background: var(--color-background-subtle); }
+  &.active-ver { background: #e8f5e9; }
+
+  .version-id { flex: 1 1 auto; min-width: 0; }
+  .version-meta {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+  }
+}
