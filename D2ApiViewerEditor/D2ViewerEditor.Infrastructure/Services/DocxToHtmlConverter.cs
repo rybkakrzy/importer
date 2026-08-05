@@ -38,6 +38,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private readonly Dictionary<string, DocumentImage> _images = new();
     private readonly Dictionary<string, string> _styles = new();
     private readonly Dictionary<string, Style> _rawStyles = new();
+    private int _defaultTabStopTwips = 708;
     private readonly List<DocumentStyle> _documentStyles = new();
     // Cache: numPicBulletId -> data URI obrazka punktatora (z części numbering)
     private readonly Dictionary<int, string> _picBulletDataUris = new();
@@ -231,6 +232,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         LoadThemeFonts();
         LoadNumberingPictureBullets();
         LoadPageGeometry(document);
+        var defaultTab = document.MainDocumentPart?.DocumentSettingsPart?.Settings?
+            .GetFirstChild<DefaultTabStop>()?.Val?.Value;
+        _defaultTabStopTwips = defaultTab is > 0 ? defaultTab.Value : 708;
         
         // Załaduj style dokumentu
         var stylesLoaded = ExtractDocumentStyles(document);
@@ -2627,7 +2631,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var segmentElements = new List<List<OpenXmlElement>> { new() };
         var segmentStops = new List<TabStopInfo?> { null };
         var nextRealStop = 0;
-        TabStopInfo? NextRealStop() => nextRealStop < stops.Count ? stops[nextRealStop++] : null;
+        var lastStopTw = 0;
+        // Tab bez jawnego stopu skacze jak w Wordzie na domyślne tabulatory
+        // (w:defaultTabStop, co 708 tw): następna wielokrotność za ostatnią pozycją.
+        TabStopInfo NextRealStop()
+        {
+            if (nextRealStop < stops.Count)
+            {
+                var s = stops[nextRealStop++];
+                lastStopTw = Math.Max(lastStopTw, s.PositionTwips);
+                return s;
+            }
+            lastStopTw = (lastStopTw / _defaultTabStopTwips + 1) * _defaultTabStopTwips;
+            return new TabStopInfo(lastStopTw, "left", null);
+        }
 
         foreach (var child in paragraph.Elements())
         {
@@ -6908,6 +6925,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             .Select(p => p.GetFirstChild<T>())
             .FirstOrDefault(e => e != null);
 
+    /// <summary>
+    /// Efektywne właściwości komórki: pierwszy <c>w:tcPr</c> uzupełniony o elementy, które
+    /// występują wyłącznie w kolejnych tcPr tej samej komórki (patrz CellPropertyElement).
+    /// </summary>
+    private static TableCellProperties? EffectiveCellProps(TableCell cell)
+    {
+        var all = cell.Elements<TableCellProperties>().ToList();
+        if (all.Count <= 1) return all.Count == 1 ? all[0] : null;
+        var merged = (TableCellProperties)all[0].CloneNode(true);
+        foreach (var extra in all.Skip(1))
+            foreach (var child in extra.ChildElements)
+                if (merged.ChildElements.All(c => c.GetType() != child.GetType()))
+                    merged.AppendChild(child.CloneNode(true));
+        return merged;
+    }
+
     private static List<(TableCell Cell, int HMergeExtraSpan)> BuildRowRenderPlan(List<TableCell> rowCells)
     {
         var plan = new List<(TableCell, int)>(rowCells.Count);
@@ -6982,7 +7015,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         int rowSpan)
     {
         var css = new StringBuilder();
-        var props = cell.TableCellProperties;
+        var props = EffectiveCellProps(cell);
 
         // Regiony warunkowego formatowania stylu (najbardziej specyficzny pierwszy).
         var regions = ComputeConditionalRegions(ctx, rowIndex, gridColStart, gridSpan, rowSpan);
@@ -7020,9 +7053,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Wyrównanie pionowe komórki (top/middle/bottom). Emitowane raz z rozwiązaną wartością
         // (domyślnie top jak w Wordzie) — wcześniej „top" szło bezwarunkowo, a rzeczywista wartość
         // dopisywana była drugi raz niżej, zostawiając zduplikowaną deklarację w inline style.
-        var vAlign = props?.TableCellVerticalAlignment?.Val != null
-            ? GetTableVerticalAlignment(props.TableCellVerticalAlignment.Val.Value)
-            : "top";
+        // Fallback jak w Wordzie: bezpośredni tcPr → regiony warunkowe stylu → tcPr stylu
+        // (cała tabela, np. „CenteredContentTable" centrujący pionowo wszystkie komórki).
+        var vAlignVal = props?.TableCellVerticalAlignment?.Val?.Value
+            ?? regions
+                .Select(r => r.GetFirstChild<TableStyleConditionalFormattingTableCellProperties>()
+                    ?.GetFirstChild<TableCellVerticalAlignment>()?.Val?.Value)
+                .FirstOrDefault(v => v != null)
+            ?? ctx.Style.WholeTableCellVerticalAlignment;
+        var vAlign = vAlignVal != null ? GetTableVerticalAlignment(vAlignVal.Value) : "top";
         css.Append($"vertical-align:{vAlign};");
 
         // Tło: bezpośrednie tcPr → regiony stylu warunkowego → tcPr stylu (cała tabela) →
@@ -7201,6 +7240,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public Shading? TableShading;            // w:tblPr/w:shd (bezpośrednie lub ze stylu)
         public Shading? WholeTableCellShading;   // w:tcPr/w:shd stylu — tło każdej komórki
         public TableCellBorders? WholeTableCellBorders; // w:tcPr/w:tcBorders stylu
+        public TableVerticalAlignmentValues? WholeTableCellVerticalAlignment; // w:tcPr/w:vAlign stylu
         public string DefaultCellPaddingCss = "";
         // Domyślne odstępy akapitów w komórkach: docDefaults dokumentu nadpisane przez
         // w:pPr łańcucha stylu tabeli (np. „Tabela – Siatka" zeruje after i interlinię).
@@ -7290,6 +7330,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         ctx.WholeTableCellBorders = chain
             .Select(s => s.StyleTableCellProperties?.GetFirstChild<TableCellBorders>())
             .FirstOrDefault(b => b != null);
+        ctx.WholeTableCellVerticalAlignment = chain
+            .Select(s => s.StyleTableCellProperties?.GetFirstChild<TableCellVerticalAlignment>()?.Val?.Value)
+            .FirstOrDefault(v => v != null);
 
         // Rozmiar pasów (banding).
         ctx.RowBandSize = (int?)tblPr?.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value
@@ -7642,7 +7685,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         WordprocessingDocument document,
         OpenXmlPart? sourcePart)
     {
-        var cellProps = cell.TableCellProperties;
+        var cellProps = EffectiveCellProps(cell);
         // extraColspan absorbs the columns a short row leaves unfilled (see ConvertTableToHtml).
         var gridSpan = GetGridSpan(cell) + Math.Max(0, extraColspan);
         var gridColStart = gridCursor;

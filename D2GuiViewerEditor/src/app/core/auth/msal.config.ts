@@ -3,6 +3,7 @@ import {
   PublicClientApplication,
   InteractionType,
   BrowserCacheLocation,
+  LogLevel,
 } from '@azure/msal-browser';
 import {
   MsalGuardConfiguration,
@@ -31,6 +32,22 @@ export function msalInstanceFactory(auth: AppAuthConfig): IPublicClientApplicati
     },
     cache: {
       cacheLocation: BrowserCacheLocation.LocalStorage,
+    },
+    system: {
+      loggerOptions: {
+        // Błędy/ostrzeżenia MSAL do konsoli (bez PII): bez tego nieudana wymiana kodu na
+        // tokeny po powrocie z Entra (#code w URL) umierała bezgłośnie i środowiskowych
+        // problemów auth (CSP/proxy na /token, zły redirectUri) nie dało się diagnozować.
+        logLevel: LogLevel.Warning,
+        piiLoggingEnabled: false,
+        loggerCallback: (level: LogLevel, message: string) => {
+          if (level === LogLevel.Error) {
+            console.error('[msal]', message);
+          } else {
+            console.warn('[msal]', message);
+          }
+        },
+      },
     },
   });
 }

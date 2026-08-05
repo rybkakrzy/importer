@@ -310,6 +310,66 @@ public class Doc2ImportFidelityTests
             new TableCellProperties(new HorizontalMerge { Val = val }));
     }
 
+    [Test]
+    public void CellVerticalAlign_InSecondTcPrAfterContent_IsApplied()
+    {
+        var cell = new TableCell(
+            new TableCellProperties(new TableCellWidth { Width = "3000", Type = TableWidthUnitValues.Dxa }),
+            new Paragraph(new Run(new Text("x"))),
+            new TableCellProperties(new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center }));
+        var table = new Table(
+            new TableProperties(new TableStyle { Val = "TableGrid" }),
+            new TableGrid(new GridColumn { Width = "3000" }),
+            new TableRow(cell));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("vertical-align:middle;");
+        System.Text.RegularExpressions.Regex.Matches(html, "vertical-align:").Count.Should().Be(1);
+    }
+
+    [Test]
+    public void CellVerticalAlign_FromTableStyleWholeTable_AppliesMiddle()
+    {
+        var style = new Style(
+            new StyleTableCellProperties(
+                new TableCellVerticalAlignment { Val = TableVerticalAlignmentValues.Center }))
+        {
+            Type = StyleValues.Table,
+            StyleId = "CenteredContentTable",
+        };
+        var table = new Table(
+            new TableProperties(new TableStyle { Val = "CenteredContentTable" }),
+            new TableGrid(new GridColumn { Width = "3000" }),
+            new TableRow(new TableCell(
+                new TableCellProperties(),
+                new Paragraph(new Run(new Text("x"))))));
+
+        using var ms = DocxWithStyles(style, table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("vertical-align:middle;");
+        System.Text.RegularExpressions.Regex.Matches(html, "vertical-align:").Count.Should().Be(1);
+    }
+
+    private static MemoryStream DocxWithStyles(Style style, params OpenXmlElement[] bodyChildren)
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(style);
+            var body = new Body();
+            foreach (var c in bodyChildren) body.Append(c);
+            mainPart.Document = new Document(body);
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+        return ms;
+    }
+
     // ---- Tabs inside table cells: no absolutely-positioned segments -------------------
 
     [Test]

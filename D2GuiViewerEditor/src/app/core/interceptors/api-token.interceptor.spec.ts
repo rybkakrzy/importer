@@ -103,14 +103,18 @@ describe('apiTokenInterceptor — świeżość idToken i re-autoryzacja', () => 
     expect(captured().length).toBe(0);
   });
 
-  it('forceRefresh nadal przeterminowany → traktowane jak wygasła sesja (redirect)', async () => {
-    silentImpl = () => Promise.resolve({ idToken: 'STALE', idTokenClaims: { exp: pastExp } });
+  it('forceRefresh nadal „przeterminowany" lokalnie (skew zegara) → wysyła token, bez redirectu', async () => {
+    // Po forceRefresh token jest świeżo wystawiony przez Entra — lokalny exp w przeszłości
+    // oznacza przestawiony zegar klienta. O ważności rozstrzyga backend; pętla redirectów
+    // logowania na maszynie ze skewem to regresja z pierwszej wersji fixa 13942097.
+    silentImpl = () => Promise.resolve({ idToken: 'SKEWED', idTokenClaims: { exp: pastExp } });
 
-    const events = await run();
+    await run();
 
     expect(silentCalls.length).toBe(2);
-    expect(redirectCalls).toBe(1);
-    expect(events).toEqual([]);
+    expect(redirectCalls).toBe(0);
+    expect(captured().length).toBe(1);
+    expect(captured()[0].headers.get('Authorization')).toBe('Bearer SKEWED');
   });
 
   it('inny błąd silent (sieć) → żądanie bez nagłówka jak dotąd, bez redirectu', async () => {

@@ -65,19 +65,25 @@ export const apiTokenInterceptor: HttpInterceptorFn = (req, next) => {
         forceRefresh: true,
       });
     }
-    if (!hasFreshIdToken(result)) {
-      throw new InteractionRequiredAuthError('stale_id_token');
-    }
-    return result.idToken;
+    // Po forceRefresh idToken jest świeżo wystawiony przez Entra — jeśli lokalny zegar wciąż
+    // uznaje go za przeterminowany, to przestawiony zegar klienta, nie wygasła sesja (realnie
+    // wygasła sesja nie dochodzi tutaj: forceRefresh rzuca InteractionRequiredAuthError).
+    // Wysyłamy — o ważności rozstrzyga backend, a 401 łapie httpErrorInterceptor. Wcześniejsze
+    // rzucanie stale_id_token wpędzało klienta ze skewem zegara w pętlę redirectów logowania.
+    return result.idToken || null;
   };
 
   return from(acquireFreshIdToken()).pipe(
     catchError((error) => {
       if (error instanceof InteractionRequiredAuthError) {
-        ensureInteractiveReauth(msal.instance, loginScopes);
-        // Strona odpływa do /authorize — bieżące żądanie wygaszamy bez emisji (żaden toast
-        // „nieoczekiwany błąd" nie powinien mignąć w trakcie nawigacji do logowania).
-        return EMPTY;
+        if (ensureInteractiveReauth(msal.instance, loginScopes)) {
+          // Strona odpływa do /authorize — bieżące żądanie wygaszamy bez emisji (żaden toast
+          // „nieoczekiwany błąd" nie powinien mignąć w trakcie nawigacji do logowania).
+          return EMPTY;
+        }
+        // Bezpiecznik antypętlowy zatrzymał redirect — żądanie leci bez tokenu, żeby stan
+        // (401/„brak uprawnień") był widoczny zamiast wygaszania wszystkiego po cichu.
+        return of(null);
       }
       // Inne błędy silent (sieć itp.) → jak dotąd: żądanie bez nagłówka; backend odpowie 401,
       // a obsługa 401 w httpErrorInterceptor jest siatką bezpieczeństwa. Downstream HTTP errors

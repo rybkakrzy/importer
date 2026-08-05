@@ -50,6 +50,51 @@ describe('interactive-reauth', () => {
     await Promise.resolve(); // odrzucenie obsłużone wewnętrznie — brak unhandled rejection
   });
 
+  it('bezpiecznik antypętlowy: powyżej 3 prób w oknie czasowym NIE nawiguję i zwracam false', async () => {
+    // Pętla z DEV/UAT: nieudana wymiana kodu po powrocie z Entra → każdy przeładunek strony
+    // odpalał kolejny redirect, aż Microsoft ubił sesję throttlingiem. Licznik w sessionStorage
+    // przeżywa przeładowania; flaga modułowa symulowana resetem (nowe „życie strony").
+    const { instance, redirects } = msalStub();
+
+    for (let i = 0; i < 3; i++) {
+      expect(ensureInteractiveReauth(instance, ['User.Read'])).toBe(true);
+      resetInteractiveReauthForTestsKeepingAttempts();
+    }
+    expect(ensureInteractiveReauth(instance, ['User.Read'])).toBe(false);
+
+    expect(redirects.length).toBe(3);
+  });
+
+  /** Reset flagi modułowej BEZ czyszczenia licznika prób (symulacja przeładowania strony). */
+  function resetInteractiveReauthForTestsKeepingAttempts(): void {
+    const attempts = sessionStorage.getItem('d2.reauth.attempts');
+    resetInteractiveReauthForTests();
+    if (attempts !== null) {
+      sessionStorage.setItem('d2.reauth.attempts', attempts);
+    }
+  }
+
+  it('po nieudanym redirect (failed_to_redirect) następny wyzwalacz ponawia próbę', async () => {
+    // Bug z DEV: nawigacja do /authorize nie wyszła (timeout MSAL), a jednorazowa flaga
+    // blokowała każdą kolejną próbę do ręcznego F5 — martwy punkt z serii 401.
+    let attempts = 0;
+    const instance = {
+      getActiveAccount: () => ({ homeAccountId: 'acc' }),
+      getAllAccounts: () => [{ homeAccountId: 'acc' }],
+      acquireTokenRedirect: () => {
+        attempts++;
+        return Promise.reject(new Error('failed_to_redirect'));
+      },
+    } as unknown as IPublicClientApplication;
+
+    ensureInteractiveReauth(instance, ['User.Read']);
+    await Promise.resolve(); // catch zdejmuje flagę
+    await Promise.resolve();
+    ensureInteractiveReauth(instance, ['User.Read']);
+
+    expect(attempts).toBe(2);
+  });
+
   describe('hasFreshIdToken (MSAL waliduje tylko access token — idToken z cache bywa przeterminowany)', () => {
     const result = (idToken: string | null, exp?: number): AuthenticationResult | null =>
       idToken === null

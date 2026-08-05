@@ -446,6 +446,7 @@ img[data-legacy-graphic='blank'] {
   text-align: left;
   vertical-align: top;
   min-width: 30px;
+  overflow-wrap: break-word;
 }
 
 .editor-content table th {

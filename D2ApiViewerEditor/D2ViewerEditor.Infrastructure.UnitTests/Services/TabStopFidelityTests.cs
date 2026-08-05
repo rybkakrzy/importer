@@ -148,6 +148,55 @@ public class TabStopFidelityTests
     }
 
     [Test]
+    public void Read_MoreTabsThanStops_FallsBackToDefaultTabStops()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(new Tabs(
+                    new TabStop { Val = TabStopValues.Left, Position = 5387 })),
+                new Run(new TabChar()),
+                new Run(new TabChar(), new Text("Warszawa, 3.07.2026 r.")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        System.Text.RegularExpressions.Regex.Matches(html, "docx-tab-seg").Count.Should().Be(2);
+        html.Should().Contain("left:359px");   // 5387 tw — jawny stop
+        html.Should().Contain("left:377px");   // 5664 tw — pierwszy domyślny stop za 5387
+        html.Should().Contain("Warszawa, 3.07.2026 r.");
+    }
+
+    [Test]
+    public void Read_MoreTabsThanStops_UsesDefaultTabStopFromSettings()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+            settingsPart.Settings = new Settings(new DefaultTabStop { Val = 1440 });
+            settingsPart.Settings.Save();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(new Tabs(
+                    new TabStop { Val = TabStopValues.Left, Position = 5387 })),
+                new Run(new TabChar()),
+                new Run(new TabChar(), new Text("Za drugim tabem")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("left:384px");   // 5760 tw = pierwsza wielokrotność 1440 za 5387
+        html.Should().Contain("Za drugim tabem");
+    }
+
+    [Test]
     public void Read_PositionalTab_RendersCenteredSegment()
     {
         var ms = new MemoryStream();
