@@ -6894,9 +6894,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     private static int GetGridSpan(TableCell cell)
     {
-        var gs = cell.TableCellProperties?.GridSpan?.Val?.Value;
+        var gs = CellPropertyElement<GridSpan>(cell)?.Val?.Value;
         return gs is > 0 ? gs.Value : 1;
     }
+
+    /// <summary>
+    /// Element właściwości komórki szukany we WSZYSTKICH <c>w:tcPr</c> komórki — generatory
+    /// pism potrafią dołożyć DRUGI tcPr (np. z hMerge) PO treści, na końcu <c>w:tc</c>;
+    /// Word czyta go pobłażliwie, typowane <c>TableCellProperties</c> widzi tylko pierwszy.
+    /// </summary>
+    private static T? CellPropertyElement<T>(TableCell cell) where T : OpenXmlElement =>
+        cell.Elements<TableCellProperties>()
+            .Select(p => p.GetFirstChild<T>())
+            .FirstOrDefault(e => e != null);
 
     private static List<(TableCell Cell, int HMergeExtraSpan)> BuildRowRenderPlan(List<TableCell> rowCells)
     {
@@ -6916,7 +6926,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     private static MergedCellValues? GetHMerge(TableCell cell)
     {
-        var hMerge = cell.TableCellProperties?.HorizontalMerge;
+        var hMerge = CellPropertyElement<HorizontalMerge>(cell);
         if (hMerge == null) return null;
         // Pominięty val oznacza "continue" (ECMA-376) — tak samo jak przy vMerge.
         return hMerge.Val?.Value ?? MergedCellValues.Continue;

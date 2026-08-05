@@ -277,12 +277,37 @@ public class Doc2ImportFidelityTests
         System.Text.RegularExpressions.Regex.Matches(html, "<td").Count.Should().Be(3);
     }
 
+    [Test]
+    public void HMerge_InSecondTcPrAfterContent_StillMergesRow()
+    {
+        var table = ThreeColTable(
+            Row(
+                DoubleTcPrCell("Misio", MergedCellValues.Restart),
+                DoubleTcPrCell("", MergedCellValues.Continue),
+                DoubleTcPrCell("", MergedCellValues.Continue)));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        System.Text.RegularExpressions.Regex.Matches(html, "<td").Count.Should().Be(1);
+        html.Should().Contain("colspan=\"3\"");
+        html.Should().Contain("Misio");
+    }
+
     private static TableCell HMergeCell(string text, MergedCellValues? val)
     {
         var hMerge = val == null ? new HorizontalMerge() : new HorizontalMerge { Val = val };
         return new TableCell(
             new TableCellProperties(hMerge),
             new Paragraph(new Run(new Text(text))));
+    }
+
+    private static TableCell DoubleTcPrCell(string text, MergedCellValues val)
+    {
+        return new TableCell(
+            new TableCellProperties(new TableCellWidth { Width = "1000", Type = TableWidthUnitValues.Dxa }),
+            new Paragraph(new Run(new Text(text))),
+            new TableCellProperties(new HorizontalMerge { Val = val }));
     }
 
     // ---- Tabs inside table cells: no absolutely-positioned segments -------------------
