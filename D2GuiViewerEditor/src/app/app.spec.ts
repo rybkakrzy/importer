@@ -57,4 +57,16 @@ describe('App', () => {
     // App hosts the router outlet — assert it renders without asserting starter-template text.
     expect(compiled.querySelector('router-outlet')).not.toBeNull();
   });
+
+  it('pokazuje startowy wskaźnik ładowania do aktywacji pierwszego widoku (MSAL + guardy)', () => {
+    const fixture = TestBed.createComponent(App);
+    fixture.detectChanges();
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.querySelector('.app-boot-loading')).not.toBeNull();
+    expect(compiled.textContent).toContain('Ładowanie aplikacji');
+
+    fixture.componentInstance.onOutletActivate();
+    fixture.detectChanges();
+    expect(compiled.querySelector('.app-boot-loading')).toBeNull();
+  });
 });

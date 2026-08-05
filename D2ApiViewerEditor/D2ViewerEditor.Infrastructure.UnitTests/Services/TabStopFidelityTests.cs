@@ -117,6 +117,68 @@ public class TabStopFidelityTests
     }
 
     [Test]
+    public void Read_TabbedParagraphWithComplexDateField_IsStillPositioned()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(new Tabs(
+                    new TabStop { Val = TabStopValues.Left, Position = 5245 })),
+                new Run(new TabChar()),
+                new Run(new Text("Warszawa, ") { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }),
+                new Run(new FieldCode(" DATE ")),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }),
+                new Run(new Text("3.07.2026")),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.End }),
+                new Run(new Text(" r.") { Space = SpaceProcessingModeValues.Preserve }))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-tab-seg", "pole złożone nie może wyłączać pozycjonowania tabów");
+        html.Should().Contain("data-tab-align=\"left\"");
+        html.Should().Contain("left:349px");
+        html.Should().Contain("Warszawa, ").And.Contain("3.07.2026").And.Contain(" r.");
+        html.Should().NotContain("min-width:2em", "tab nie może degradować do wcięcia przy marginesie");
+    }
+
+    [Test]
+    public void Read_PositionalTab_RendersCenteredSegment()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(
+                new Paragraph(new Run(
+                    new PositionalTab
+                    {
+                        Alignment = AbsolutePositionTabAlignmentValues.Center,
+                        RelativeTo = AbsolutePositionTabPositioningBaseValues.Margin,
+                        Leader = AbsolutePositionTabLeaderCharValues.None,
+                    },
+                    new Text("Warszawa, 3.07.2026 r."))),
+                new SectionProperties(
+                    new PageSize { Width = 11906, Height = 16838 },
+                    new PageMargin { Top = 1417, Right = 1417, Bottom = 1417, Left = 1417, Header = 708, Footer = 708 })));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-tab-seg");
+        html.Should().Contain("data-tab-align=\"center\"");
+        html.Should().Contain("translateX(-50%)");
+        html.Should().Contain("Warszawa, 3.07.2026 r.");
+    }
+
+    [Test]
     public void Write_DataTabStops_RecreatesTabsInParagraphProperties()
     {
         var html = "<p data-tab-stops=\"4536:center;9072:right:dot\">Lewa\tŚrodek\tPrawa</p>";

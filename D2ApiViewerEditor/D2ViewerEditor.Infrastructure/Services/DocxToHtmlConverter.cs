@@ -2303,6 +2303,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var effectiveTabStops = GetEffectiveTabStops(paraProps);
         var hasComplexField = paragraph.Descendants<FieldChar>().Any();
         var hasTabChar = paragraph.Descendants<TabChar>().Any();
+        var hasPositionalTab = paragraph.Descendants<PositionalTab>().Any();
 
         // Linia z WYPEŁNIACZEM tabulatora (w:leader — kropki spisu treści, podkreślenia
         // formularzy): flex, tab → span.docx-tab-leader (flex:1, znaki wypełniacza maluje
@@ -2318,16 +2319,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // segment's start, right aligns its end, center centres it — the semantic difference Word
         // draws). Applied to body paragraphs as well as header/footer: a flex row only spreads
         // segments evenly and ignores where the stops actually sit, so left/right tabs in the body
-        // collapsed to equal gaps. Complex fields keep the legacy path (their runs are stateful).
+        // collapsed to equal gaps.
         // Inside a TABLE CELL the absolute segments are anchored to the paragraph while the stop
         // positions describe page-scale geometry — in a narrow cell the segment escapes the cell
         // and paints over the neighbouring column (and the cell's text-align stops applying).
         // Word resolves tabs in cells against the cell's own text column, so fall back to the
         // inline/flex rendering there; data-tab-stops still round-trips the stops unchanged.
         var usePositionedTabs = !useLeaderTabs
-            && effectiveTabStops.Count > 0
-            && hasTabChar
-            && !hasComplexField
+            && ((effectiveTabStops.Count > 0 && hasTabChar) || hasPositionalTab)
             && !isInTableCell;
 
         // Fallback flex row only when there are tab characters but no resolvable stop positions
@@ -2439,14 +2438,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             html.Append(BuildLeaderTabContent(paragraph, effectiveTabStops, document, sourcePart));
         }
+        else if (usePositionedTabs)
+        {
+            html.Append(BuildPositionedTabContent(paragraph, effectiveTabStops, document, sourcePart));
+        }
         // Obsługa złożonych pól (FieldChar Begin/Separate/End)
         else if (hasComplexField)
         {
             html.Append(ConvertComplexFieldParagraphContent(paragraph, document, sourcePart));
-        }
-        else if (usePositionedTabs)
-        {
-            html.Append(BuildPositionedTabContent(paragraph, effectiveTabStops, document, sourcePart));
         }
         else
         {
@@ -2625,50 +2624,58 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string BuildPositionedTabContent(Paragraph paragraph, List<TabStopInfo> stops,
         WordprocessingDocument document, OpenXmlPart? sourcePart)
     {
-        var segments = new List<StringBuilder> { new() };
+        var segmentElements = new List<List<OpenXmlElement>> { new() };
+        var segmentStops = new List<TabStopInfo?> { null };
+        var nextRealStop = 0;
+        TabStopInfo? NextRealStop() => nextRealStop < stops.Count ? stops[nextRealStop++] : null;
 
         foreach (var child in paragraph.Elements())
         {
-            switch (child)
+            if (child is ParagraphProperties) continue;
+            if (child is Run run && run.Elements().Any(rc => rc is TabChar or PositionalTab))
             {
-                case Run run:
-                    var flags = GetRunSemanticFlags(run.RunProperties);
-                    var (prefix, suffix) = BuildRunWrapper(run.RunProperties,
-                        flags.Bold, flags.Italic, flags.Underline, flags.Strike, flags.Sup, flags.Sub);
-                    var chunk = new StringBuilder();
-                    void FlushChunk()
+                var current = CloneRunShell(run);
+                void FlushSubRun()
+                {
+                    if (current.ChildElements.Count > (run.RunProperties != null ? 1 : 0))
+                        segmentElements[^1].Add(current);
+                    current = CloneRunShell(run);
+                }
+                foreach (var rc in run.Elements())
+                {
+                    if (rc is RunProperties) continue;
+                    if (rc is TabChar)
                     {
-                        if (chunk.Length > 0)
-                        {
-                            segments[^1].Append(prefix).Append(chunk).Append(suffix);
-                            chunk.Clear();
-                        }
+                        FlushSubRun();
+                        segmentElements.Add(new List<OpenXmlElement>());
+                        segmentStops.Add(NextRealStop());
                     }
-                    foreach (var rc in run.Elements())
+                    else if (rc is PositionalTab ptab)
                     {
-                        if (rc is TabChar)
-                        {
-                            FlushChunk();
-                            segments.Add(new StringBuilder());
-                        }
-                        else
-                        {
-                            chunk.Append(ConvertRunChildToHtml(rc, document, sourcePart));
-                        }
+                        FlushSubRun();
+                        segmentElements.Add(new List<OpenXmlElement>());
+                        segmentStops.Add(SyntheticStopForPositionalTab(ptab));
                     }
-                    FlushChunk();
-                    break;
-                case Hyperlink hyperlink:
-                    segments[^1].Append(ConvertHyperlinkToHtml(hyperlink, document, sourcePart));
-                    break;
-                case SimpleField simpleField:
-                    segments[^1].Append(ConvertSimpleFieldToHtml(simpleField));
-                    break;
-                case SdtRun sdtRun:
-                    segments[^1].Append(ConvertSdtRunToHtml(sdtRun, document, sourcePart));
-                    break;
+                    else
+                    {
+                        current.AppendChild(rc.CloneNode(true));
+                    }
+                }
+                FlushSubRun();
+            }
+            else
+            {
+                segmentElements[^1].Add(child);
             }
         }
+
+        var state = new ComplexFieldState();
+        var segments = segmentElements.Select(els =>
+        {
+            var sb = new StringBuilder();
+            AppendComplexFieldContent(els, sb, state, document, sourcePart);
+            return sb;
+        }).ToList();
 
         var html = new StringBuilder();
         // Strut: pusty segment 0 (akapit zaczyna się tabem) nie dawałby linii wysokości.
@@ -2676,7 +2683,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         for (int k = 1; k < segments.Count; k++)
         {
-            var stop = k - 1 < stops.Count ? stops[k - 1] : null;
+            var stop = segmentStops[k];
             if (stop == null)
             {
                 html.Append(segments[k]);
@@ -2696,6 +2703,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
 
         return html.ToString();
+    }
+
+    private static Run CloneRunShell(Run run)
+    {
+        var shell = new Run();
+        if (run.RunProperties != null)
+            shell.AppendChild(run.RunProperties.CloneNode(true));
+        return shell;
+    }
+
+    private TabStopInfo SyntheticStopForPositionalTab(PositionalTab ptab)
+    {
+        var widthTw = _availableContentWidthTwips ?? FullContentWidthTwips() ?? 9072;
+        var alignment = ptab.Alignment?.Value;
+        if (alignment == AbsolutePositionTabAlignmentValues.Center)
+            return new TabStopInfo((int)(widthTw / 2), "center", null);
+        if (alignment == AbsolutePositionTabAlignmentValues.Right)
+            return new TabStopInfo((int)widthTw, "right", null);
+        return new TabStopInfo(0, "left", null);
     }
 
     /// <summary>
@@ -6872,28 +6898,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return gs is > 0 ? gs.Value : 1;
     }
 
-    /// <summary>
-    /// Plan renderowania komórek wiersza z obsługą legacy <c>w:hMerge</c>: komórka restart
-    /// pochłania kolumny siatki (gridSpan) kolejnych komórek continue, a same continue nie
-    /// emitują <c>&lt;td&gt;</c> — analogicznie do kontynuacji vMerge. Continue bez
-    /// poprzedzającego restart renderuje się normalnie (dokument niepoprawny; nie gubimy treści).
-    /// </summary>
     private static List<(TableCell Cell, int HMergeExtraSpan)> BuildRowRenderPlan(List<TableCell> rowCells)
     {
         var plan = new List<(TableCell, int)>(rowCells.Count);
-        for (var i = 0; i < rowCells.Count; i++)
+        foreach (var cell in rowCells)
         {
-            var cell = rowCells[i];
-            var extra = 0;
-            if (GetHMerge(cell) == MergedCellValues.Restart)
+            if (plan.Count > 0 && GetHMerge(cell) == MergedCellValues.Continue)
             {
-                while (i + 1 < rowCells.Count && GetHMerge(rowCells[i + 1]) == MergedCellValues.Continue)
-                {
-                    extra += GetGridSpan(rowCells[i + 1]);
-                    i++;
-                }
+                var (prev, extra) = plan[^1];
+                plan[^1] = (prev, extra + GetGridSpan(cell));
+                continue;
             }
-            plan.Add((cell, extra));
+            plan.Add((cell, 0));
         }
         return plan;
     }

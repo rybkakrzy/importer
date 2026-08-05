@@ -251,10 +251,24 @@ public class Doc2ImportFidelityTests
     }
 
     [Test]
-    public void HMergeContinue_WithoutRestart_RendersNormally_NoContentLoss()
+    public void HMergeContinue_WithoutExplicitRestart_FoldsIntoPreviousCell()
     {
         var table = ThreeColTable(
-            Row(Cell("A"), HMergeCell("ORPHAN", MergedCellValues.Continue), Cell("C")));
+            Row(Cell("Umowa"), HMergeCell("", MergedCellValues.Continue), HMergeCell("", null)));
+
+        using var ms = Docx(table, new Paragraph());
+        var html = _reader.Convert(ms).Html;
+
+        System.Text.RegularExpressions.Regex.Matches(html, "<td").Count.Should().Be(1);
+        html.Should().Contain("colspan=\"3\"");
+        html.Should().Contain("Umowa");
+    }
+
+    [Test]
+    public void HMergeContinue_AsFirstCellOfRow_RendersNormally_NoContentLoss()
+    {
+        var table = ThreeColTable(
+            Row(HMergeCell("ORPHAN", MergedCellValues.Continue), Cell("B"), Cell("C")));
 
         using var ms = Docx(table, new Paragraph());
         var html = _reader.Convert(ms).Html;

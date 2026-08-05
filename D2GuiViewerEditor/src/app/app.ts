@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, DestroyRef } from '@angular/core';
+import { Component, OnInit, inject, DestroyRef, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { RouterOutlet } from '@angular/router';
 import { MsalService, MsalBroadcastService } from '@azure/msal-angular';
@@ -13,7 +13,13 @@ import { primeApiToken } from './core/auth/api-token-primer';
   imports: [RouterOutlet, GlobalBannersComponent],
   template: `
     <d2-global-banners />
-    <router-outlet />
+    @if (!outletActivated()) {
+      <div class="app-boot-loading" aria-live="polite">
+        <span class="app-boot-spinner" aria-hidden="true"></span>
+        <span class="app-boot-text">Ładowanie aplikacji…</span>
+      </div>
+    }
+    <router-outlet (activate)="onOutletActivate()" />
   `,
   // Shell flex layout lives in global styles.scss (under `d2-root`): the routed
   // page components are inserted by <router-outlet> and don't inherit this
@@ -25,6 +31,35 @@ import { primeApiToken } from './core/auth/api-token-primer';
       height: 100vh;
       overflow: hidden;
     }
+
+    .app-boot-loading {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: #6b7280;
+      opacity: 0;
+      animation: app-boot-fade-in .25s ease .2s forwards;
+    }
+
+    .app-boot-spinner {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 3px solid #e5e7eb;
+      border-top-color: #ff6200;
+      animation: app-boot-spin .8s linear infinite;
+    }
+
+    .app-boot-text {
+      font-size: 14px;
+      letter-spacing: .01em;
+    }
+
+    @keyframes app-boot-spin { to { transform: rotate(360deg); } }
+    @keyframes app-boot-fade-in { to { opacity: 1; } }
   `]
 })
 export class App implements OnInit {
@@ -32,6 +67,12 @@ export class App implements OnInit {
   private readonly broadcast = inject(MsalBroadcastService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly authConfig = inject(MSAL_CUSTOM_CONFIG);
+
+  readonly outletActivated = signal(false);
+
+  onOutletActivate(): void {
+    this.outletActivated.set(true);
+  }
 
   ngOnInit(): void {
     // Redirect completion is handled by MsalRedirectComponent (<app-redirect>), which owns the
