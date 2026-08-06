@@ -9,6 +9,41 @@
   min-height: 44px;
 }
 
+/* Przycisk „Więcej" istnieje tylko w wąskim oknie (media queries niżej). */
+.toolbar-more-btn {
+  display: none;
+}
+
+/* Wąskie okno: jedna linia narzędzi — grupy niższego priorytetu (tb-collapse) schowane,
+   przycisk „Więcej" rozwija je jako kolejne wiersze NA ŻĄDANIE. Stałe zawijanie zjadało
+   przestrzeń roboczą dokumentu przy małym oknie przeglądarki. */
+@media (max-width: 1120px) {
+  .editor-toolbar {
+    flex-wrap: nowrap;
+  }
+
+  .editor-toolbar.more-open {
+    flex-wrap: wrap;
+  }
+
+  .editor-toolbar:not(.more-open) .tb-tier1 {
+    display: none;
+  }
+
+  .toolbar-more-btn {
+    display: flex;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+}
+
+/* Bardzo wąsko: chowamy też format bloku (zostają szukaj/undo, czcionka, rozmiar, B/I/U). */
+@media (max-width: 860px) {
+  .editor-toolbar:not(.more-open) .tb-tier2 {
+    display: none;
+  }
+}
+
 .toolbar-group {
   display: flex;
   align-items: center;

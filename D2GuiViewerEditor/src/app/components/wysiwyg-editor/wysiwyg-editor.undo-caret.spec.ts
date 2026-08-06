@@ -177,4 +177,33 @@ describe('WysiwygEditorComponent — undo/redo przywraca pozycję kursora', () =
 
     expect(caretTextOffset(editor.querySelector('p')!)).toBe(11);
   });
+
+  it('fragmenty tabeli dzielonej między strony nie przesuwają indeksu bloku karetki', async () => {
+    // Żywy DOM po paginacji: tabela wielostronicowa = DWA <table data-split-table-id>,
+    // snapshot undo (getContent) ma je SCALONE w jedną. Bez składania łańcucha fragmentów
+    // tabel indeks bloku z żywego DOM ≠ indeks w przywróconej treści — kursor po undo
+    // lądował o N bloków dalej (objaw z dokumentów importowanych, gdzie edycja następuje
+    // ZA tabelą kredytową dzieloną między strony).
+    editor.innerHTML =
+      '<table data-split-table-id="t1"><tbody><tr><td><p>Wiersz 1</p></td></tr></tbody></table>' +
+      '<table data-split-table-id="t1"><tbody><tr><td><p>Wiersz 2</p></td></tr></tbody></table>' +
+      '<p>Akapit po tabeli</p>';
+    const para = editor.lastElementChild as HTMLElement;
+    caretIn(para.firstChild!, 6);
+
+    const caret = (component as any)._globalCaretFromRange(
+      window.getSelection()!.getRangeAt(0), [{ nativeElement: editor }]);
+    // Bloki logiczne: [tabela (2 fragmenty), akapit] → akapit ma indeks 1, nie 2.
+    expect(caret).toEqual({ block: 1, offset: 6 });
+
+    // Restore do treści SCALONEJ (kształt snapshotu undo) — kursor trafia do akapitu.
+    simulateRerender(
+      '<table data-split-table-id="t1"><tbody>' +
+      '<tr><td><p>Wiersz 1</p></td></tr><tr><td><p>Wiersz 2</p></td></tr>' +
+      '</tbody></table>' +
+      '<p>Akapit po tabeli</p>');
+    (component as any)._restoreGlobalCaret(caret);
+
+    expect(caretTextOffset(editor.lastElementChild as Element)).toBe(6);
+  });
 });

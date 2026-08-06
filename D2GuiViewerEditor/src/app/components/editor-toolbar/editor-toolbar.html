@@ -1,4 +1,4 @@
-<div class="editor-toolbar" (mousedown)="onToolbarMouseDown($event)">
+<div class="editor-toolbar" [class.more-open]="moreOpen()" (mousedown)="onToolbarMouseDown($event)">
   <!-- Grupa: Wyszukiwanie i Kopiowanie formatu -->
   <div class="toolbar-group">
     <button
@@ -32,10 +32,10 @@
   </div>
 
   @if (!readOnly) {
-  <div class="toolbar-separator"></div>
+  <div class="toolbar-separator tb-collapse tb-tier2"></div>
 
   <!-- Grupa: Format bloku - Custom Dropdown -->
-  <div class="toolbar-group">
+  <div class="toolbar-group tb-collapse tb-tier2">
     <div class="style-dropdown" [class.open]="showStyleDropdown()">
       <button 
         class="style-dropdown-trigger"
@@ -210,10 +210,10 @@
     </button>
   </div>
 
-  <div class="toolbar-separator"></div>
+  <div class="toolbar-separator tb-collapse tb-tier1"></div>
 
   <!-- Grupa: Wyrównanie -->
-  <div class="toolbar-group">
+  <div class="toolbar-group tb-collapse tb-tier1">
     <button
       class="toolbar-btn"
       [class.active]="isAlignActive('left')"
@@ -252,10 +252,10 @@
     </button>
   </div>
 
-  <div class="toolbar-separator"></div>
+  <div class="toolbar-separator tb-collapse tb-tier1"></div>
 
   <!-- Grupa: Listy i wcięcia -->
-  <div class="toolbar-group">
+  <div class="toolbar-group tb-collapse tb-tier1">
     <button
       class="toolbar-btn"
       [class.active]="isActive('bulletList')"
@@ -301,10 +301,10 @@
     </button>
   </div>
 
-  <div class="toolbar-separator"></div>
+  <div class="toolbar-separator tb-collapse tb-tier1"></div>
 
   <!-- Grupa: Wstawianie -->
-  <div class="toolbar-group">
+  <div class="toolbar-group tb-collapse tb-tier1">
     <button 
       class="toolbar-btn" 
       (click)="openLinkDialog()"
@@ -348,6 +348,19 @@
       </svg>
     </button>
   </div>
+
+  <!-- Wąskie okno: grupy niższego priorytetu (tb-collapse) chowane do jednej linii;
+       „Więcej" rozwija je z powrotem (drugi wiersz na żądanie zamiast stałego zawijania). -->
+  <button
+    class="toolbar-btn toolbar-more-btn"
+    [class.active]="moreOpen()"
+    (click)="toggleMore()"
+    title="Więcej narzędzi"
+    aria-label="Więcej narzędzi">
+    <svg viewBox="0 0 24 24" width="18" height="18">
+      <path fill="currentColor" d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+    </svg>
+  </button>
   }
 </div>
 

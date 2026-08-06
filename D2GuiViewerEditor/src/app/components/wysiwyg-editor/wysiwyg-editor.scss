@@ -967,6 +967,14 @@ body.image-moving * {
   overflow: visible; /* Pozwala na wyświetlanie pasków narzędzi */
 }
 
+/* Word maluje obiekty rysunkowe BODY (textboxy/kształty zakotwiczone w treści) NAD obszarem
+   nagłówka/stopki — pasmo (z-index:5) nie może ich przykrywać, gdy kotwica leży przy jego
+   granicy. Obrazy data-pos-mode="front" mają już z-index:10 — wyrównujemy kształty/textboxy. */
+.editor-content .docx-shape[data-docx-xml],
+.editor-content .docx-textbox {
+  z-index: 6;
+}
+
 .page-header {
   border-bottom: 1px dashed transparent;
 }

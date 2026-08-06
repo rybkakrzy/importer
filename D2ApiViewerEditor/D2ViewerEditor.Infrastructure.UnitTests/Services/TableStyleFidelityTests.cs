@@ -674,17 +674,22 @@ public class TableStyleFidelityTests
         borders.TopBorder!.Color!.Value.Should().Be("FF0000");
     }
 
-    // border-style:none w formie rozbitej NIE może fałszywie generować obramowań (ani ich kasować
-    // na sztywno) — brak widocznej linii = brak w:tcBorders (styl tabeli decyduje).
+    // border-style:none w formie rozbitej = JAWNY brak linii. Reader zawsze rozwiązuje
+    // obramowania (własne + ze stylu tabeli) do inline CSS, więc „none" w edytorze to stan
+    // faktyczny — bez zapisania w:tcBorders None Word przywracał czarną siatkę ze stylu
+    // tabeli (zgłoszenie: szare/białe obramowania czerniały po pobraniu pliku).
     [Test]
-    public void Write_CellBorderStyleNoneSeparateForm_DoesNotEmitBorders()
+    public void Write_CellBorderStyleNoneSeparateForm_EmitsExplicitNone()
     {
         var html =
             "<table data-tbl-style=\"TableGrid\" style=\"border-collapse:collapse;\"><tr><td style=\"" +
             "border-style: none; padding: 0px 7px;\">A</td></tr></table>";
 
         var cell = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First();
-        (cell.TableCellProperties?.TableCellBorders).Should().BeNull();
+        var borders = cell.TableCellProperties?.TableCellBorders;
+        borders.Should().NotBeNull();
+        borders!.Elements<BorderType>().Should().HaveCount(4)
+            .And.OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.None);
     }
 
     [Test]

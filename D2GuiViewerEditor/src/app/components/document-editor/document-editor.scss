@@ -962,6 +962,10 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* Okno węższe niż strona (794px): zwykłe `center` wypycha lewą krawędź strony poza
+     zasięg scrolla (overflow rozkłada się na obie strony) — edytor wygląda na „ucięty".
+     `safe center` degraduje do wyrównania do lewej, gdy treść nie mieści się w osi. */
+  align-items: safe center;
   padding: 20px;
   position: relative;
 

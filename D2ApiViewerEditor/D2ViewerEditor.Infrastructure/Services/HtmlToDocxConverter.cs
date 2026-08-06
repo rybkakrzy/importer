@@ -2758,8 +2758,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 borders.Append(border);
                 hasBorders = true;
             }
-            else if (style.Contains($"{prefix}:none") || style.Contains($"{prefix}: none"))
+            else if (IsCssBorderNone(style, prefix))
             {
+                // Jawnie „brak linii" MUSI trafić do w:tcBorders jako None — bez tego Word
+                // stosuje obramowanie ze stylu tabeli (czarna siatka po zapisie). Przeglądarka
+                // serializuje none w kilku formach: „none", „medium none", „medium none currentcolor".
                 var border = (BorderType)Activator.CreateInstance(borderType)!;
                 border.Val = BorderValues.None;
                 border.Size = 0;
@@ -2775,6 +2778,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             borders.Append(new LeftBorder { Val = aStyle, Size = aSize, Color = aColor });
             borders.Append(new BottomBorder { Val = aStyle, Size = aSize, Color = aColor });
             borders.Append(new RightBorder { Val = aStyle, Size = aSize, Color = aColor });
+            hasBorders = true;
+        }
+
+        // Jednolite „brak obramowania": CSSOM zwija cztery identyczne strony none do
+        // `border: none` / `border-style: none` — jak wyżej, jawny None do wszystkich stron.
+        if (!hasBorders && (IsCssBorderNone(style, "border") || IsCssBorderNone(style, "border-style")))
+        {
+            borders.Append(new TopBorder { Val = BorderValues.None, Size = 0 });
+            borders.Append(new LeftBorder { Val = BorderValues.None, Size = 0 });
+            borders.Append(new BottomBorder { Val = BorderValues.None, Size = 0 });
+            borders.Append(new RightBorder { Val = BorderValues.None, Size = 0 });
             hasBorders = true;
         }
 
@@ -2833,6 +2847,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var match = Regex.Match(style, $@"(?<![a-z-]){Regex.Escape(property)}\s*:\s*([^;]+)");
         return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    /// <summary>
+    /// Czy deklaracja CSS o danym prefiksie oznacza „brak linii" — w dowolnej formie serializacji
+    /// przeglądarki: „none", „medium none", „medium none currentcolor", „hidden".
+    /// </summary>
+    private static bool IsCssBorderNone(string style, string prefix)
+    {
+        var value = GetCssDeclarationValue(style, prefix);
+        if (value == null) return false;
+        return Regex.IsMatch(value, @"\b(none|hidden)\b", RegexOptions.IgnoreCase);
     }
 
     /// <summary>Normalizuje token koloru CSS (hex #rgb/#rrggbb, rgb(), rgba()) do 6-znakowego hex; null gdy nie kolor.</summary>

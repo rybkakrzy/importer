@@ -353,6 +353,60 @@ public class Doc2ImportFidelityTests
         System.Text.RegularExpressions.Regex.Matches(html, "vertical-align:").Count.Should().Be(1);
     }
 
+    // ---- Zapis obramowań komórek po renormalizacji CSSOM przeglądarki ------------------
+    // Po edycji w edytorze przeglądarka przepisuje atrybut style (cztery strony none →
+    // `border: none` / `medium none`; kolory → rgb()). Brak rozpoznania = brak w:tcBorders
+    // = Word stosuje obramowania ze stylu tabeli (czarna siatka zamiast szarych/białych).
+
+    [Test]
+    public void Write_BorderNoneNormalizedByBrowser_EmitsExplicitNoneBorders()
+    {
+        var html = "<table><tr><td style=\"border: medium none;\"><p>x</p></td></tr></table>";
+
+        var bytes = _writer.Convert(html);
+
+        var borders = FirstCellBorders(bytes);
+        borders.Should().NotBeNull("jawny None musi nadpisać obramowanie ze stylu tabeli");
+        borders!.Elements<BorderType>().Should().HaveCount(4)
+            .And.OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.None);
+    }
+
+    [Test]
+    public void Write_UniformRgbBorder_KeepsColorAndStyle()
+    {
+        var html = "<table><tr><td style=\"border: 0.5px solid rgb(217, 217, 217);\"><p>x</p></td></tr></table>";
+
+        var bytes = _writer.Convert(html);
+
+        var borders = FirstCellBorders(bytes);
+        borders.Should().NotBeNull();
+        borders!.Elements<BorderType>().Should().HaveCount(4)
+            .And.OnlyContain(b => b.Val!.Value == BorderValues.Single && b.Color!.Value == "D9D9D9");
+    }
+
+    [Test]
+    public void Write_MixedSides_ColoredAndMediumNone_EmitsBoth()
+    {
+        var html = "<table><tr><td style=\"border-top: 0.5px solid #D9D9D9; border-bottom: medium none;\">" +
+                   "<p>x</p></td></tr></table>";
+
+        var bytes = _writer.Convert(html);
+
+        var borders = FirstCellBorders(bytes);
+        borders.Should().NotBeNull();
+        borders!.GetFirstChild<TopBorder>()!.Val!.Value.Should().Be(BorderValues.Single);
+        borders.GetFirstChild<TopBorder>()!.Color!.Value.Should().Be("D9D9D9");
+        borders.GetFirstChild<BottomBorder>()!.Val!.Value.Should().Be(BorderValues.None);
+    }
+
+    private static TableCellBorders? FirstCellBorders(byte[] docxBytes)
+    {
+        using var doc = WordprocessingDocument.Open(new MemoryStream(docxBytes), false);
+        return doc.MainDocumentPart!.Document!.Body!
+            .Descendants<TableCell>().First()
+            .TableCellProperties?.GetFirstChild<TableCellBorders>();
+    }
+
     private static MemoryStream DocxWithStyles(Style style, params OpenXmlElement[] bodyChildren)
     {
         var ms = new MemoryStream();

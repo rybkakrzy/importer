@@ -654,8 +654,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const { leftPx, topPx } = contractToBand(xPx, yPx, geo);
       el.style.left = `${Math.round(leftPx)}px`;
       el.style.top = `${Math.round(topPx)}px`;
+      // Kotwica pionowa paragraph-relative: znacznik z offsetem (px) — po renderze
+      // _alignBandParagraphAnchors dopina top do realnego akapitu-gospodarza (jak Word).
+      const voff = this._paragraphRelativeVOffsetPx(el);
+      if (voff !== null) el.setAttribute('data-band-para-voff', String(voff));
     });
     return tpl.innerHTML;
+  }
+
+  /**
+   * Offset pionowy (px) kotwicy relative-to-paragraph z data-docx-xml kształtu;
+   * null, gdy kotwica nie jest paragraph/line-relative (wtedy kontrakt wystarcza).
+   */
+  private _paragraphRelativeVOffsetPx(el: HTMLElement): number | null {
+    const b64 = el.getAttribute('data-docx-xml');
+    const doc = b64 ? decodeShapeXml(b64) : null;
+    if (!doc) return null;
+    const posV = doc.getElementsByTagName('wp:positionV')[0];
+    const relFrom = posV?.getAttribute('relativeFrom');
+    if (relFrom !== 'paragraph' && relFrom !== 'line') return null;
+    const offset = Number(posV.getElementsByTagName('wp:posOffset')[0]?.textContent ?? NaN);
+    return Number.isFinite(offset) ? Math.round(offset / EMU_PER_PX) : 0;
   }
 
   /** Inwalidacja cache nagłówka/stopki — wołać po każdej edycji */
@@ -6062,9 +6081,48 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Repaginacja przenosi bloki między stronami — znacznik kotwicy musi pojechać
       // za akapitem-kotwicą (albo zniknąć, jeśli element wypadł z DOM).
       this._scheduleAnchorBadgeRefresh();
+      this._alignBandParagraphAnchors();
     } finally {
       this._isRepaginating = false;
     }
+  }
+
+  /**
+   * Kotwice pionowe paragraph-relative w pasmach nagłówka/stopki: Word liczy pozycję od
+   * AKAPITU-gospodarza kotwicy, a przeliczenie kontrakt→pasmo przybliża akapit górą pasma —
+   * logo zakotwiczone w dalszym akapicie stopki lądowało za wysoko (nachodziło na body).
+   * Po renderze znamy realny offset akapitu w pasmie, więc dopinamy top do gospodarza.
+   */
+  private _alignBandParagraphAnchors(): void {
+    const container = this.pageEditorRefs?.first?.nativeElement.closest('.pages-container');
+    if (!container) return;
+    container.querySelectorAll<HTMLElement>(
+      '.page-header [data-band-para-voff], .page-footer [data-band-para-voff]',
+    ).forEach((shape) => {
+      const host = this._bandAnchorHostParagraph(shape);
+      const ref = shape.offsetParent as HTMLElement | null;
+      if (!host || !ref) return;
+      // offsetTop akapitu w układzie, w którym rozwiązuje się style.top kształtu
+      // (offsetTop ignoruje transform zoomu — spójnie z resztą pomiarów paginacji).
+      let top = 0;
+      let n: HTMLElement | null = host;
+      while (n && n !== ref && ref.contains(n)) {
+        top += n.offsetTop;
+        n = n.offsetParent as HTMLElement | null;
+      }
+      const off = Number(shape.getAttribute('data-band-para-voff')) || 0;
+      shape.style.top = `${Math.round(top + off)}px`;
+    });
+  }
+
+  /** Akapit-gospodarz kotwicy pasma: rodzic <p> (obraz w akapicie) albo następny akapit
+   *  (kształty hoistowane PRZED akapit-gospodarza — ADR-0030). */
+  private _bandAnchorHostParagraph(shape: HTMLElement): HTMLElement | null {
+    const inPara = shape.closest('p');
+    if (inPara) return inPara as HTMLElement;
+    let sib: Element | null = shape.nextElementSibling;
+    while (sib && sib.tagName !== 'P') sib = sib.nextElementSibling;
+    return sib as HTMLElement | null;
   }
 
   /**
@@ -6979,15 +7037,29 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     // Cofnij do początku łańcucha fragmentów, dosumowując długości wcześniejszych fragmentów.
     let gi = hit;
-    while (gi > 0 && all[gi].getAttribute('data-split-para') === 'cont') {
+    while (gi > 0 && this._isContinuationBlock(all[gi - 1], all[gi])) {
       gi--;
       offset += (all[gi].textContent ?? '').length;
     }
     let logical = 0;
     for (let k = 0; k < gi; k++) {
-      if (all[k].getAttribute('data-split-para') !== 'cont') logical++;
+      if (k === 0 || !this._isContinuationBlock(all[k - 1], all[k])) logical++;
     }
     return { block: logical, offset };
+  }
+
+  /**
+   * Czy blok jest KONTYNUACJĄ poprzedniego bloku logicznego — fragmentem z paginacji:
+   * ogon dzielonego akapitu (data-split-para="cont") albo kolejny fragment tej samej
+   * logicznej tabeli (data-split-table-id). Snapshoty undo trzymają treść SCALONĄ
+   * (getContent), więc indeks bloku liczony po żywym, podzielonym DOM musi składać
+   * łańcuchy OBU rodzajów — bez tabel kursor po undo lądował o N bloków dalej w
+   * dokumentach importowanych (tabele wielostronicowe przed miejscem edycji).
+   */
+  private _isContinuationBlock(prev: HTMLElement | null, el: HTMLElement): boolean {
+    if (el.getAttribute('data-split-para') === 'cont') return true;
+    const tid = el.getAttribute('data-split-table-id');
+    return !!tid && !!prev && prev.getAttribute('data-split-table-id') === tid;
   }
 
   /**
@@ -7027,7 +7099,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     let logical = -1;
     for (let g = 0; g < all.length; g++) {
-      if (all[g].el.getAttribute('data-split-para') === 'cont') continue;
+      if (g > 0 && this._isContinuationBlock(all[g - 1].el, all[g].el)) continue;
       logical++;
       if (logical !== caret.block) continue;
       // Łańcuch fragmentów: zjedź offsetem do fragmentu, w którym wypada pozycja.
@@ -7035,7 +7107,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       let off = caret.offset;
       while (
         idx + 1 < all.length &&
-        all[idx + 1].el.getAttribute('data-split-para') === 'cont' &&
+        this._isContinuationBlock(all[idx].el, all[idx + 1].el) &&
         off > (all[idx].el.textContent ?? '').length
       ) {
         off -= (all[idx].el.textContent ?? '').length;
