@@ -1,4 +1,5 @@
 ﻿using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.ExtendedProperties;
 using DocumentFormat.OpenXml.Packaging;
@@ -5119,32 +5120,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
     private void SetDocumentMetadata(WordprocessingDocument document, DocumentMetadata metadata)
     {
-        // Core Properties (OPC package properties)
-        var props = document.PackageProperties;
-        
-        if (!string.IsNullOrEmpty(metadata.Title))
-            props.Title = metadata.Title;
-        if (!string.IsNullOrEmpty(metadata.Author))
-            props.Creator = metadata.Author;
-        if (!string.IsNullOrEmpty(metadata.Subject))
-            props.Subject = metadata.Subject;
-        if (!string.IsNullOrEmpty(metadata.Keywords))
-            props.Keywords = metadata.Keywords;
-        if (!string.IsNullOrEmpty(metadata.Description))
-            props.Description = metadata.Description;
-        if (!string.IsNullOrEmpty(metadata.Category))
-            props.Category = metadata.Category;
-        if (!string.IsNullOrEmpty(metadata.ContentStatus))
-            props.ContentStatus = metadata.ContentStatus;
-        if (!string.IsNullOrEmpty(metadata.LastModifiedBy))
-            props.LastModifiedBy = metadata.LastModifiedBy;
-        if (!string.IsNullOrEmpty(metadata.Revision))
-            props.Revision = metadata.Revision;
-        if (!string.IsNullOrEmpty(metadata.Version))
-            props.Version = metadata.Version;
-        
-        props.Created = metadata.Created ?? DateTime.UtcNow;
-        props.Modified = DateTime.UtcNow;
+        // docProps/core.xml pisane wprost. `document.PackageProperties` tworzyło OPC-ową
+        // część `package/services/metadata/core-properties/*.psmdcp` — technicznie legalną,
+        // ale nietypową dla DOCX i flagowaną przez narzędzia/wersje Worda jako podejrzana.
+        WriteCoreProperties(document, metadata);
 
         // Extended Properties (app.xml — Company, Manager)
         var extPropsPart = document.AddExtendedFilePropertiesPart();
@@ -5157,6 +5136,46 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         extPropsPart.Properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application("Qutas D2Tools");
         extPropsPart.Properties.Save();
+    }
+
+    private static void WriteCoreProperties(WordprocessingDocument document, DocumentMetadata metadata)
+    {
+        XNamespace cp = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties";
+        XNamespace dc = "http://purl.org/dc/elements/1.1/";
+        XNamespace dcterms = "http://purl.org/dc/terms/";
+        XNamespace xsi = "http://www.w3.org/2001/XMLSchema-instance";
+
+        var root = new XElement(cp + "coreProperties",
+            new XAttribute(XNamespace.Xmlns + "cp", cp),
+            new XAttribute(XNamespace.Xmlns + "dc", dc),
+            new XAttribute(XNamespace.Xmlns + "dcterms", dcterms),
+            new XAttribute(XNamespace.Xmlns + "xsi", xsi));
+
+        void Add(XName name, string? value)
+        {
+            if (!string.IsNullOrEmpty(value)) root.Add(new XElement(name, value));
+        }
+        XElement DateElement(XName name, DateTime value) => new(name,
+            new XAttribute(xsi + "type", "dcterms:W3CDTF"),
+            value.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"));
+
+        // Kolejność wg sekwencji schematu OPC core-properties.
+        Add(cp + "category", metadata.Category);
+        Add(cp + "contentStatus", metadata.ContentStatus);
+        root.Add(DateElement(dcterms + "created", metadata.Created ?? DateTime.UtcNow));
+        Add(dc + "creator", metadata.Author);
+        Add(dc + "description", metadata.Description);
+        Add(cp + "keywords", metadata.Keywords);
+        Add(cp + "lastModifiedBy", metadata.LastModifiedBy);
+        root.Add(DateElement(dcterms + "modified", DateTime.UtcNow));
+        Add(cp + "revision", metadata.Revision);
+        Add(dc + "subject", metadata.Subject);
+        Add(dc + "title", metadata.Title);
+        Add(cp + "version", metadata.Version);
+
+        var corePart = document.CoreFilePropertiesPart ?? document.AddCoreFilePropertiesPart();
+        using var stream = corePart.GetStream(FileMode.Create, FileAccess.Write);
+        new XDocument(root).Save(stream);
     }
 
     /// <summary>
@@ -5496,6 +5515,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 var restored = new SdtProperties(xml);
                 // w:id musi być unikalne w dokumencie — usuń, Word nada nowe (kolizje = uszkodzony plik).
                 restored.Elements<SdtId>().ToList().ForEach(e => e.Remove());
+                // w:placeholder (docPart z GLOSARIUSZA oryginału) i w:dataBinding (customXml/
+                // storeItemID) wskazują części pakietu, których regenerowany DOCX nie zawiera —
+                // wiszące odwołania wyzwalają w Wordzie „znaleziono zawartość, której nie może
+                // odczytać" i tryb naprawy. LocalName łapie też wariant w15:dataBinding.
+                restored.ChildElements
+                    .Where(e => e.LocalName is "placeholder" or "dataBinding")
+                    .ToList().ForEach(e => e.Remove());
                 return restored;
             }
             catch
