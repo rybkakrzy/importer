@@ -256,6 +256,11 @@ public class SaveDocumentRequest
     public List<Footnote>? Footnotes { get; set; }
     /// <summary>Przypisy końcowe (jedno źródło prawdy dla treści; odwołania w Html niosą tylko id).</summary>
     public List<Endnote>? Endnotes { get; set; }
+    /// <summary>Efektywny format numeracji przypisów dolnych POKAZYWANY w edytorze (token
+    /// w:numFmt, np. "decimal") — writer emituje go jawnie, żeby plik = ekran (WYSIWYG).</summary>
+    public string? FootnoteNumberFormat { get; set; }
+    /// <summary>Jak wyżej dla przypisów końcowych (np. "lowerRoman").</summary>
+    public string? EndnoteNumberFormat { get; set; }
     /// <summary>Opcjonalne: gdy podane, zapis idzie przez pass-through oryginalnego pakietu
     /// (zachowuje styles.xml/theme/fontTable/numbering). Brak → pełna regeneracja jak dotąd.</summary>
     public Guid? MasterId { get; set; }

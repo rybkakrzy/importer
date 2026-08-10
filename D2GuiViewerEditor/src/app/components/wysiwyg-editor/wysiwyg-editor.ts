@@ -1251,6 +1251,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   documentDefaultLineHeight = signal<string | null>(null);
   /** Domyślny odstęp PO akapicie (data-default-after-tw kontenera) — CSS var --doc-par-margin. */
   documentDefaultParagraphSpacing = signal<string | null>(null);
+  /** Domyślny odstęp PRZED akapitem (data-default-before-tw kontenera) — CSS var
+   *  --doc-par-margin-top. Word renderuje odstęp „przed" każdego akapitu (także na górze
+   *  strony), a wcześniej wartość jechała tylko w round-tripie atrybutów i nie była widoczna. */
+  documentDefaultParagraphSpacingBefore = signal<string | null>(null);
   /** Domyślna interlinia auto w 240-tych (data-default-line kontenera) — marker --w-line-tw
    *  na .editor-content; dziedziczy na akapity, więc dialog akapitu czyta mnożnik Worda,
    *  a nie skalibrowaną wartość renderową (PG-09). */
@@ -5196,6 +5200,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Nowy dokument bez wrappera w pełni nadpisuje stan — kolumny poprzedniego pliku
       // nie mogą wyciekać na jednokolumnowy dokument (analogicznie do resetu nagłówka/stopki).
       this._baseColumns.set(null);
+      // Defaulty poprzedniego dokumentu też nie mogą wyciekać (null = CSS edytora) —
+      // bez resetu treść bez wrappera renderowała się z fontem/odstępami POPRZEDNIEGO pliku.
+      this.documentDefaultFontSize.set(null);
+      this.documentDefaultFontFamily.set(null);
+      this.documentDefaultLineHeight.set(null);
+      this.documentDefaultParagraphSpacing.set(null);
+      this.documentDefaultParagraphSpacingBefore.set(null);
+      this.documentDefaultLineTw.set(null);
       return null;
     }
     if (container.style.fontSize) this.documentDefaultFontSize.set(container.style.fontSize);
@@ -5204,6 +5216,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const afterTw = parseInt(container.getAttribute('data-default-after-tw') ?? '', 10);
     this.documentDefaultParagraphSpacing.set(
       Number.isFinite(afterTw) && afterTw >= 0 ? `${afterTw / 20}pt` : null
+    );
+    const beforeTw = parseInt(container.getAttribute('data-default-before-tw') ?? '', 10);
+    this.documentDefaultParagraphSpacingBefore.set(
+      Number.isFinite(beforeTw) && beforeTw >= 0 ? `${beforeTw / 20}pt` : null
     );
     // Marker mnożnika Worda tylko dla reguły auto — exact/atLeast idzie w pt przez
     // line-height kontenera i nie jest mnożnikiem.

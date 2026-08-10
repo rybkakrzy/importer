@@ -21,7 +21,11 @@ public record SaveDocumentCommand(
     // Gdy podane i dokument to DOCX z wersją bazową — konwersja idzie przez
     // ConvertPreservingPackage (zachowuje styles.xml/theme/fontTable/numbering oryginału),
     // więc definicje stylów tabel/motywu przeżywają zapis. Brak → pełna regeneracja (jak dotąd).
-    Guid? MasterId = null
+    Guid? MasterId = null,
+    // Efektywny format numeracji przypisów POKAZYWANY w edytorze (token w:numFmt) —
+    // writer emituje go jawnie w settings.xml, żeby plik = ekran.
+    string? FootnoteNumberFormat = null,
+    string? EndnoteNumberFormat = null
 ) : IRequest<Result<SaveDocumentResult>>;
 
 public record SaveDocumentResult(byte[] DocxBytes, string FileName);

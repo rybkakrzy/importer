@@ -190,9 +190,17 @@ internal static class EndnoteTestDocuments
             endnotesPart.Endnotes = endnotesRoot;
             endnotesPart.Endnotes.Save();
 
+            // Kształt jak w realnych plikach Worda: footnotePr/endnotePr niosą też odwołania
+            // do przypisów-separatorów w częściach pakietu (w:footnote/w:endnote id=-1/0).
             var settingsPart = main.AddNewPart<DocumentSettingsPart>();
             settingsPart.Settings = new Settings(
-                new EndnoteDocumentWideProperties(new NumberingFormat { Val = numFmt }));
+                new FootnoteDocumentWideProperties(
+                    new FootnoteSpecialReference { Id = -1 },
+                    new FootnoteSpecialReference { Id = 0 }),
+                new EndnoteDocumentWideProperties(
+                    new NumberingFormat { Val = numFmt },
+                    new EndnoteSpecialReference { Id = -1 },
+                    new EndnoteSpecialReference { Id = 0 }));
             settingsPart.Settings.Save();
 
             main.Document.Save();

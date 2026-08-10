@@ -89,6 +89,68 @@ public class EndnoteFidelityTests
     }
 
     [Test]
+    public void Export_ModelNoteFormats_AreEmittedInSettings()
+    {
+        // Format POKAZYWANY w edytorze jedzie z modelem — plik ma wyglądać jak ekran,
+        // niezależnie od tego co niósł (lub czego nie niósł) oryginalny pakiet.
+        var content = Import(EndnoteTestDocuments.SingleEndnote());
+
+        var bytes = _writer.Convert(content.Html, content.Metadata, content.Header, content.Footer,
+            content.Margins, content.PageSize, content.SectionHeadersFooters, content.Footnotes,
+            content.Endnotes, footnoteNumberFormat: "decimal", endnoteNumberFormat: "decimal");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var settings = doc.MainDocumentPart!.DocumentSettingsPart!.Settings!;
+        settings.GetFirstChild<FootnoteDocumentWideProperties>()!
+            .GetFirstChild<NumberingFormat>()!.Val!.Value.Should().Be(NumberFormatValues.Decimal);
+        settings.GetFirstChild<EndnoteDocumentWideProperties>()!
+            .GetFirstChild<NumberingFormat>()!.Val!.Value.Should().Be(NumberFormatValues.Decimal);
+    }
+
+    [Test]
+    public void PreservingExport_ModelFormat_WinsOverOriginalSettings()
+    {
+        var original = EndnoteTestDocuments.EndnoteWithNumberFormat(NumberFormatValues.LowerRoman);
+        var content = Import(original);
+
+        var result = _writer.ConvertPreservingPackage(content.Html, new MemoryStream(original),
+            content.Metadata, content.Header, content.Footer, content.Margins, content.PageSize,
+            content.SectionHeadersFooters, content.Footnotes, content.Endnotes,
+            footnoteNumberFormat: null, endnoteNumberFormat: "decimal");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(result), false);
+        doc.MainDocumentPart!.DocumentSettingsPart!.Settings!
+            .GetFirstChild<EndnoteDocumentWideProperties>()!
+            .GetFirstChild<NumberingFormat>()!.Val!.Value
+            .Should().Be(NumberFormatValues.Decimal,
+                "format z edytora (to co widział użytkownik) wygrywa z v1");
+    }
+
+    [Test]
+    public void PreservingExport_DoesNotEmitDanglingSeparatorReferences()
+    {
+        // Regresja „dokument uszkodzony / Pokazywanie napraw: Przypisy dolne 1": odwołania
+        // <w:footnote w:id=…/> skopiowane z oryginalnego settings.xml wskazywały część
+        // footnotes.xml, której regenerowany pakiet nie ma (dokument bez przypisów dolnych).
+        var original = EndnoteTestDocuments.EndnoteWithNumberFormat(NumberFormatValues.Decimal);
+        var content = Import(original);
+
+        var result = _writer.ConvertPreservingPackage(content.Html, new MemoryStream(original),
+            content.Metadata, content.Header, content.Footer, content.Margins, content.PageSize,
+            content.SectionHeadersFooters, content.Footnotes, content.Endnotes);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(result), false);
+        var settings = doc.MainDocumentPart!.DocumentSettingsPart!.Settings!;
+        settings.Descendants<FootnoteSpecialReference>().Should().BeEmpty(
+            "odwołanie do separatorów bez części footnotes.xml = uszkodzony dokument w Wordzie");
+        settings.Descendants<EndnoteSpecialReference>().Should().BeEmpty();
+        settings.GetFirstChild<FootnoteDocumentWideProperties>().Should().BeNull(
+            "footnotePr z samymi odwołaniami do separatorów nie niesie żadnej treści");
+        settings.GetFirstChild<EndnoteDocumentWideProperties>()!
+            .GetFirstChild<NumberingFormat>()!.Val!.Value.Should().Be(NumberFormatValues.Decimal);
+    }
+
+    [Test]
     public void PreservingExport_SectionLevelFormat_SurvivesAsDocumentWide()
     {
         var original = EndnoteTestDocuments.EndnoteWithSectionNumberFormat(NumberFormatValues.UpperLetter);

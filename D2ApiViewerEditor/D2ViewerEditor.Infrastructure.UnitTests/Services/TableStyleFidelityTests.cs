@@ -688,8 +688,9 @@ public class TableStyleFidelityTests
         var cell = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First();
         var borders = cell.TableCellProperties?.TableCellBorders;
         borders.Should().NotBeNull();
+        // Nil, nie None — val="none" przegrywa konflikt wag z widoczną linią ze stylu tabeli.
         borders!.Elements<BorderType>().Should().HaveCount(4)
-            .And.OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.None);
+            .And.OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.Nil);
     }
 
     [Test]
@@ -787,6 +788,88 @@ public class TableStyleFidelityTests
             "szerokość podwójnej linii nie może puchnąć w round-tripie");
     }
 
+    // Zgłoszenie „niewidoczne/białe strony komórek czarnieją po zapisie": strona, której writer
+    // nie umiał sparsować, NIE trafiała do w:tcBorders i Word malował ją czarną siatką ze stylu
+    // tabeli. Trzy realne formy: zbiorcze longhandy z listą wartości (CSSOM tak serializuje
+    // MIESZANE strony po każdej edycji), skrót bez koloru/currentcolor, szerokość 0px.
+
+    [Test]
+    public void Write_MixedMultiValueLonghands_ResolvePerSide()
+    {
+        // Chrome: top=none, pozostałe 0.7px solid szare → 3-wartościowe listy (left = right).
+        var html =
+            "<table data-tbl-style=\"TableGrid\" style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border-width: medium 0.7px 0.7px; border-style: none solid solid; " +
+            "border-color: currentcolor rgb(217, 217, 217) rgb(217, 217, 217);\">A</td></tr></table>";
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Nil,
+            "strona bez linii musi wrócić jako jawny nil, nie zniknąć (czarna siatka ze stylu)");
+        borders.RightBorder!.Val!.Value.Should().Be(BorderValues.Single);
+        borders.RightBorder!.Color!.Value.Should().Be("D9D9D9");
+        borders.BottomBorder!.Val!.Value.Should().Be(BorderValues.Single);
+        borders.LeftBorder!.Val!.Value.Should().Be(BorderValues.Single,
+            "3 wartości CSS: left dziedziczy z right");
+    }
+
+    [Test]
+    public void Write_ZeroWidthBorder_BecomesExplicitNone()
+    {
+        var html =
+            "<table style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border-top: 0px solid #000000; border-bottom: 0.7px solid #000000;\">A</td></tr></table>";
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Nil,
+            "0px jest w edytorze niewidoczne — min. 2/8 pt robiło z tego widoczną linię");
+        borders.BottomBorder!.Val!.Value.Should().Be(BorderValues.Single);
+    }
+
+    [Test]
+    public void Write_ShorthandWithoutColor_KeepsSideWithAutoColor()
+    {
+        var html =
+            "<table data-tbl-style=\"TableGrid\" style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border-top: 0.7px solid; border-bottom: 0.7px solid currentcolor;\">A</td></tr></table>";
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Single,
+            "brak tokenu koloru nie może wyrzucić strony z tcBorders");
+        borders.TopBorder!.Color!.Value.Should().Be("auto");
+        borders.BottomBorder!.Val!.Value.Should().Be(BorderValues.Single);
+        borders.BottomBorder!.Color!.Value.Should().Be("auto");
+    }
+
+    [Test]
+    public void Write_TransparentBorder_BecomesExplicitNone()
+    {
+        var html =
+            "<table style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border-top: 0.7px solid transparent; border-bottom: 0.7px solid rgba(0, 0, 0, 0);\">A</td></tr></table>";
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Nil);
+        borders.BottomBorder!.Val!.Value.Should().Be(BorderValues.Nil);
+    }
+
+    [Test]
+    public void Write_WhiteBorder_StaysWhite()
+    {
+        var html =
+            "<table style=\"border-collapse:collapse;\"><tr><td style=\"" +
+            "border: 0.7px solid rgb(255, 255, 255);\">A</td></tr></table>";
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Single,
+            "biała linia to jawna linia (niewidoczna na białym tle), nie None i nie czarna");
+        borders.TopBorder!.Color!.Value.Should().Be("FFFFFF");
+    }
+
     [Test]
     public void RoundTrip_TableWithoutAnyBorders_ExportsExplicitNoneEverywhere()
     {
@@ -804,6 +887,6 @@ public class TableStyleFidelityTests
         var cellBorders = table.Descendants<TableCell>().First().TableCellProperties?.TableCellBorders;
         if (cellBorders != null)
             cellBorders.Elements<BorderType>().Should()
-                .OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.None);
+                .OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.Nil);
     }
 }

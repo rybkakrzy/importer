@@ -366,9 +366,11 @@ public class Doc2ImportFidelityTests
         var bytes = _writer.Convert(html);
 
         var borders = FirstCellBorders(bytes);
-        borders.Should().NotBeNull("jawny None musi nadpisać obramowanie ze stylu tabeli");
+        borders.Should().NotBeNull("jawny brak linii musi nadpisać obramowanie ze stylu tabeli");
+        // Nil, nie None: val="none" ma w rozstrzyganiu konfliktów wagę 0 i przegrywa
+        // z widoczną linią ze stylu tabeli — Word przy „Brak krawędzi" też pisze nil.
         borders!.Elements<BorderType>().Should().HaveCount(4)
-            .And.OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.None);
+            .And.OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.Nil);
     }
 
     [Test]
@@ -396,7 +398,7 @@ public class Doc2ImportFidelityTests
         borders.Should().NotBeNull();
         borders!.GetFirstChild<TopBorder>()!.Val!.Value.Should().Be(BorderValues.Single);
         borders.GetFirstChild<TopBorder>()!.Color!.Value.Should().Be("D9D9D9");
-        borders.GetFirstChild<BottomBorder>()!.Val!.Value.Should().Be(BorderValues.None);
+        borders.GetFirstChild<BottomBorder>()!.Val!.Value.Should().Be(BorderValues.Nil);
     }
 
     private static TableCellBorders? FirstCellBorders(byte[] docxBytes)

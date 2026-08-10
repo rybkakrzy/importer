@@ -161,7 +161,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Konwertuje HTML na plik DOCX
     /// </summary>
-    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null, IReadOnlyList<DomainFootnote>? footnotes = null, IReadOnlyList<DomainEndnote>? endnotes = null)
+    public byte[] Convert(string html, DocumentMetadata? metadata = null, HeaderFooterContent? header = null, HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null, IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null, IReadOnlyList<DomainFootnote>? footnotes = null, IReadOnlyList<DomainEndnote>? endnotes = null, string? footnoteNumberFormat = null, string? endnoteNumberFormat = null)
     {
         using var memoryStream = new MemoryStream();
         using (var document = WordprocessingDocument.Create(memoryStream, WordprocessingDocumentType.Document))
@@ -261,6 +261,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Część przypisów końcowych (endnotes.xml + relacja + content type) — analogicznie.
             AddEndnotes(endnotes);
 
+            // Format numeracji przypisów POKAZYWANY w edytorze → jawny w:numFmt w settings.xml
+            // (plik musi wyglądać jak ekran; bez tego Word wracał do swoich domyślnych).
+            ApplyNoteNumberFormats(document, footnoteNumberFormat, endnoteNumberFormat);
+
             document.Save();
         }
 
@@ -272,9 +276,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         HeaderFooterContent? footer = null, PageMargins? margins = null, Domain.Models.PageSize? pageSize = null,
         IReadOnlyList<SectionHeaderFooter>? sectionHeadersFooters = null,
         IReadOnlyList<DomainFootnote>? footnotes = null,
-        IReadOnlyList<DomainEndnote>? endnotes = null)
+        IReadOnlyList<DomainEndnote>? endnotes = null,
+        string? footnoteNumberFormat = null,
+        string? endnoteNumberFormat = null)
     {
-        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters, footnotes, endnotes);
+        var generated = Convert(html, metadata, header, footer, margins, pageSize, sectionHeadersFooters,
+            footnotes, endnotes, footnoteNumberFormat, endnoteNumberFormat);
 
         if (originalPackage == null || !originalPackage.CanRead)
             return generated;
@@ -348,12 +355,47 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         return ms.ToArray();
     }
 
+    /// <summary>Token w:numFmt przypisów (podzbiór wspierany przez GUI) → wartość OOXML.</summary>
+    private static NumberFormatValues? MapNoteNumberFormat(string? token) => token switch
+    {
+        "decimal" => NumberFormatValues.Decimal,
+        "lowerRoman" => NumberFormatValues.LowerRoman,
+        "upperRoman" => NumberFormatValues.UpperRoman,
+        "lowerLetter" => NumberFormatValues.LowerLetter,
+        "upperLetter" => NumberFormatValues.UpperLetter,
+        _ => null
+    };
+
+    private static void ApplyNoteNumberFormats(WordprocessingDocument document,
+        string? footnoteNumberFormat, string? endnoteNumberFormat)
+    {
+        var footnoteFmt = MapNoteNumberFormat(footnoteNumberFormat);
+        var endnoteFmt = MapNoteNumberFormat(endnoteNumberFormat);
+        if (footnoteFmt == null && endnoteFmt == null) return;
+
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return;
+        var settingsPart = mainPart.DocumentSettingsPart ?? mainPart.AddNewPart<DocumentSettingsPart>();
+        settingsPart.Settings ??= new Settings();
+        var settings = settingsPart.Settings;
+
+        // Sekwencja CT_Settings: footnotePr przed endnotePr, oba za evenAndOddHeaders.
+        settings.RemoveAllChildren<FootnoteDocumentWideProperties>();
+        settings.RemoveAllChildren<EndnoteDocumentWideProperties>();
+        if (footnoteFmt != null)
+            settings.AppendChild(new FootnoteDocumentWideProperties(new NumberingFormat { Val = footnoteFmt }));
+        if (endnoteFmt != null)
+            settings.AppendChild(new EndnoteDocumentWideProperties(new NumberingFormat { Val = endnoteFmt }));
+        settings.Save();
+    }
+
     /// <summary>
-    /// Przenosi w:footnotePr / w:endnotePr (m.in. w:numFmt — format numeracji przypisów)
-    /// z oryginalnego settings.xml do wygenerowanego pakietu. Regeneracja gubiła te elementy
-    /// i Word wracał do domyślnej numeracji endnotes (lowerRoman) niezależnie od oryginału.
-    /// Kopiujemy wybiórczo (nie cały settings.xml): pełna kopia przywracałaby też
-    /// documentProtection i nadpisywała evenAndOddHeaders ustawiane przez writer.
+    /// FALLBACK dla klientów niewysyłających formatu z modelu: przenosi w:footnotePr /
+    /// w:endnotePr (m.in. w:numFmt) z oryginalnego settings.xml do wygenerowanego pakietu —
+    /// regeneracja gubiła te elementy i Word wracał do domyślnej numeracji endnotes
+    /// (lowerRoman). Element już obecny w celu (ApplyNoteNumberFormats — format z edytora)
+    /// WYGRYWA i nie jest nadpisywany. Kopiujemy wybiórczo (nie cały settings.xml): pełna
+    /// kopia przywracałaby documentProtection i nadpisywała evenAndOddHeaders.
     /// </summary>
     private static void PreserveNoteProperties(MainDocumentPart origMain, MainDocumentPart targetMain)
     {
@@ -374,19 +416,33 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var endnotePr = sectEndnotePr != null
             ? new EndnoteDocumentWideProperties(sectEndnotePr.ChildElements.Select(c => c.CloneNode(true)))
             : (EndnoteDocumentWideProperties?)origEndnotePr?.CloneNode(true);
+
+        // Odwołania do przypisów-separatorów (<w:footnote w:id="-1"/> itd.) wskazują ID
+        // w CZĘŚCIACH pakietu oryginału — w regenerowanym pakiecie część może nie istnieć
+        // (dokument bez przypisów dolnych) i Word zgłasza uszkodzenie „Przypisy dolne".
+        // Separatory Word odtwarza z domyślnych, więc odwołania są zbędne.
+        footnotePr?.RemoveAllChildren<FootnoteSpecialReference>();
+        endnotePr?.RemoveAllChildren<EndnoteSpecialReference>();
+        if (footnotePr is { HasChildren: false }) footnotePr = null;
+        if (endnotePr is { HasChildren: false }) endnotePr = null;
         if (footnotePr == null && endnotePr == null) return;
 
         var settingsPart = targetMain.DocumentSettingsPart ?? targetMain.AddNewPart<DocumentSettingsPart>();
         settingsPart.Settings ??= new Settings();
         var settings = settingsPart.Settings;
 
-        settings.RemoveAllChildren<FootnoteDocumentWideProperties>();
-        settings.RemoveAllChildren<EndnoteDocumentWideProperties>();
-        // Sekwencja CT_Settings: footnotePr przed endnotePr, oba za evenAndOddHeaders —
-        // wygenerowany settings.xml zawiera co najwyżej evenAndOddHeaders, więc Append wystarcza.
-        if (footnotePr != null)
-            settings.AppendChild(footnotePr);
-        if (endnotePr != null)
+        // Format z modelu edytora (ApplyNoteNumberFormats) ma pierwszeństwo — dopełniamy
+        // tylko brakujące elementy. Sekwencja CT_Settings: footnotePr przed endnotePr,
+        // oba za evenAndOddHeaders; endnotePr dopinany na końcu jest zawsze poprawny,
+        // footnotePr wstawiamy przed istniejącym endnotePr.
+        if (footnotePr != null && settings.GetFirstChild<FootnoteDocumentWideProperties>() == null)
+        {
+            if (settings.GetFirstChild<EndnoteDocumentWideProperties>() is { } existingEndnotePr)
+                settings.InsertBefore(footnotePr, existingEndnotePr);
+            else
+                settings.AppendChild(footnotePr);
+        }
+        if (endnotePr != null && settings.GetFirstChild<EndnoteDocumentWideProperties>() == null)
             settings.AppendChild(endnotePr);
         settings.Save();
     }
@@ -2830,108 +2886,152 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private void ApplyCellBorders(TableCellProperties cellProps, string style)
     {
         if (string.IsNullOrEmpty(style)) return;
-        
-        // Parsuj poszczególne strony — kolejność wg schematu CT_TcBorders:
-        // top → left → bottom → right (inna kolejność = błąd walidacji OOXML).
+
+        var sides = ResolveCssBorderSides(style);
+        if (sides == null) return;
+
+        // Kolejność wg schematu CT_TcBorders: top → left → bottom → right
+        // (inna kolejność = błąd walidacji OOXML).
         var borders = new TableCellBorders();
-        bool hasBorders = false;
-
-        var sides = new[] { ("border-top", typeof(TopBorder)), ("border-left", typeof(LeftBorder)),
-                            ("border-bottom", typeof(BottomBorder)), ("border-right", typeof(RightBorder)) };
-
-        foreach (var (prefix, borderType) in sides)
-        {
-            if (TryParseBorderShorthand(style, prefix, out var size, out var bStyle, out var color))
-            {
-                var border = (BorderType)Activator.CreateInstance(borderType)!;
-                border.Val = bStyle;
-                border.Size = size;
-                border.Color = color;
-                borders.Append(border);
-                hasBorders = true;
-            }
-            else if (IsCssBorderNone(style, prefix))
-            {
-                // Jawnie „brak linii" MUSI trafić do w:tcBorders jako None — bez tego Word
-                // stosuje obramowanie ze stylu tabeli (czarna siatka po zapisie). Przeglądarka
-                // serializuje none w kilku formach: „none", „medium none", „medium none currentcolor".
-                var border = (BorderType)Activator.CreateInstance(borderType)!;
-                border.Val = BorderValues.None;
-                border.Size = 0;
-                borders.Append(border);
-                hasBorders = true;
-            }
-        }
-
-        // Parsuj border shorthand (border: 0.7px solid #000 / rgb(...))
-        if (!hasBorders && TryParseBorderShorthand(style, "border", out var aSize, out var aStyle, out var aColor))
-        {
-            borders.Append(new TopBorder { Val = aStyle, Size = aSize, Color = aColor });
-            borders.Append(new LeftBorder { Val = aStyle, Size = aSize, Color = aColor });
-            borders.Append(new BottomBorder { Val = aStyle, Size = aSize, Color = aColor });
-            borders.Append(new RightBorder { Val = aStyle, Size = aSize, Color = aColor });
-            hasBorders = true;
-        }
-
-        // Jednolite „brak obramowania": CSSOM zwija cztery identyczne strony none do
-        // `border: none` / `border-style: none` — jak wyżej, jawny None do wszystkich stron.
-        if (!hasBorders && (IsCssBorderNone(style, "border") || IsCssBorderNone(style, "border-style")))
-        {
-            borders.Append(new TopBorder { Val = BorderValues.None, Size = 0 });
-            borders.Append(new LeftBorder { Val = BorderValues.None, Size = 0 });
-            borders.Append(new BottomBorder { Val = BorderValues.None, Size = 0 });
-            borders.Append(new RightBorder { Val = BorderValues.None, Size = 0 });
-            hasBorders = true;
-        }
-
-        // Forma rozbita na osobne właściwości: `border-width` + `border-style` + `border-color`.
-        // Tak przeglądarka SERIALIZUJE jednolite obramowanie komórki przy zapisie edytora
-        // (getContent/outerHTML zwija cztery identyczne border-top/left/bottom/right do tej trójki),
-        // a kolor normalizuje do rgb(). Bez tej gałęzi writer nie rozpoznawał obramowania po
-        // pierwszym zapisie → komórki traciły linie, a tabela „rozpadała się" wizualnie.
-        if (!hasBorders)
-        {
-            var uniformStyle = GetCssDeclarationValue(style, "border-style");
-            if (uniformStyle != null)
-            {
-                var bStyle = ParseBorderStyle(uniformStyle);
-                if (bStyle != BorderValues.None)
-                {
-                    var widthDecl = GetCssDeclarationValue(style, "border-width");
-                    var widthMatch = widthDecl != null ? Regex.Match(widthDecl, @"([\d.]+)px") : Match.Empty;
-                    var size = widthMatch.Success ? CssBorderWidthToEighthPoints(widthMatch.Groups[1].Value, bStyle) : 6u;
-                    var color = NormalizeCssColorToken(GetCssDeclarationValue(style, "border-color")) ?? "auto";
-
-                    borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
-                    borders.Append(new LeftBorder { Val = bStyle, Size = size, Color = color });
-                    borders.Append(new BottomBorder { Val = bStyle, Size = size, Color = color });
-                    borders.Append(new RightBorder { Val = bStyle, Size = size, Color = color });
-                    hasBorders = true;
-                }
-            }
-        }
-
-        if (hasBorders)
+        AppendCellBorderSide(borders, sides[0], () => new TopBorder());
+        AppendCellBorderSide(borders, sides[3], () => new LeftBorder());
+        AppendCellBorderSide(borders, sides[2], () => new BottomBorder());
+        AppendCellBorderSide(borders, sides[1], () => new RightBorder());
+        if (borders.HasChildren)
             cellProps.Append(borders);
     }
 
-    /// <summary>
-    /// Parsuje deklarację obramowania w formie skróconej „width style color" (np.
-    /// <c>border-top: 0.7px solid #000</c> lub <c>border: 1px solid rgb(0,0,0)</c>). Akceptuje kolor
-    /// hex ORAZ rgb()/rgba() — przeglądarka po edycji często normalizuje kolor do rgb, a poprzednia
-    /// wersja rozpoznawała tylko hex, przez co obramowania ginęły przy zapisie.
-    /// </summary>
-    private bool TryParseBorderShorthand(string style, string prefix, out uint size, out BorderValues bStyle, out string color)
+    private static void AppendCellBorderSide(TableCellBorders borders, CssBorderSide? side, Func<BorderType> create)
     {
-        size = 0; bStyle = BorderValues.Single; color = "auto";
-        var match = Regex.Match(style,
-            $@"(?<![a-z-]){Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+(#?[0-9a-fA-F]{{3,6}}|rgba?\([^)]*\))");
-        if (!match.Success)
-            return false;
-        bStyle = ParseBorderStyle(match.Groups[2].Value);
-        size = CssBorderWidthToEighthPoints(match.Groups[1].Value, bStyle);
-        color = NormalizeCssColorToken(match.Groups[3].Value) ?? "auto";
+        if (side is not { } s) return;
+        var border = create();
+        if (s.Val == BorderValues.None)
+        {
+            // Word rozstrzyga konflikt krawędzi WAGAMI: val="none" ma wagę 0 i PRZEGRYWA
+            // z widoczną linią ze stylu tabeli (czarna siatka wracała na „pustych" stronach).
+            // val="nil" = absolutny brak linii, poza rozstrzyganiem konfliktów — tego samego
+            // używa Word przy „Brak krawędzi".
+            border.Val = BorderValues.Nil;
+        }
+        else
+        {
+            border.Val = s.Val;
+            border.Size = s.Size;
+            if (s.Color != null) border.Color = s.Color;
+        }
+        borders.Append(border);
+    }
+
+    private readonly record struct CssBorderSide(BorderValues Val, uint Size, string? Color);
+
+    /// <summary>
+    /// Rozwiązuje obramowania komórki z inline CSS PER STRONA: [top, right, bottom, left];
+    /// element null = brak informacji o stronie (nie emitować — o linii zdecyduje styl tabeli).
+    /// Obsługiwane formy serializacji (przeglądarka przepisuje style po każdej edycji!):
+    ///  - per-strona: <c>border-top: 0.7px solid #000</c> / <c>medium none</c>,
+    ///  - skrót: <c>border: …</c> (także bez koloru / z currentcolor),
+    ///  - zbiorcze longhandy z 1–4 wartościami: <c>border-style: none solid solid;
+    ///    border-width: medium 0.7px 0.7px; border-color: currentcolor rgb(…) rgb(…)</c> —
+    ///    tak CSSOM serializuje MIESZANE strony; wcześniej „none" w takiej liście zerowało
+    ///    wszystkie strony albo strona ginęła całkiem i Word malował czarną siatkę ze stylu.
+    /// Strona niewidoczna w edytorze (szerokość 0 / transparent / rgba z alpha=0) = jawny None.
+    /// </summary>
+    private CssBorderSide?[]? ResolveCssBorderSides(string style)
+    {
+        var sides = new CssBorderSide?[4];
+
+        if (TryParseBorderSideValue(GetCssDeclarationValue(style, "border"), out var uniform))
+        {
+            for (var i = 0; i < 4; i++) sides[i] = uniform;
+        }
+
+        var styleTokens = ExpandCssBoxValues(GetCssDeclarationValue(style, "border-style"));
+        if (styleTokens != null)
+        {
+            var widthTokens = ExpandCssBoxValues(GetCssDeclarationValue(style, "border-width"));
+            var colorTokens = ExpandCssBoxValues(GetCssDeclarationValue(style, "border-color"));
+            for (var i = 0; i < 4; i++)
+                sides[i] = BuildCssBorderSide(styleTokens[i], widthTokens?[i], colorTokens?[i]) ?? sides[i];
+        }
+
+        string[] prefixes = ["border-top", "border-right", "border-bottom", "border-left"];
+        for (var i = 0; i < 4; i++)
+        {
+            if (TryParseBorderSideValue(GetCssDeclarationValue(style, prefixes[i]), out var side))
+                sides[i] = side;
+        }
+
+        return sides.Any(s => s != null) ? sides : null;
+    }
+
+    private bool TryParseBorderSideValue(string? value, out CssBorderSide side)
+    {
+        side = default;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+
+        // „none" / „medium none" / „medium none currentcolor" / „hidden" — formy serializacji braku linii.
+        if (Regex.IsMatch(value, @"\b(none|hidden)\b", RegexOptions.IgnoreCase))
+        {
+            side = new CssBorderSide(BorderValues.None, 0, null);
+            return true;
+        }
+
+        var m = Regex.Match(value, @"([\d.]+)px\s+(\w+)(?:\s+(.+))?");
+        if (!m.Success) return false;
+
+        var val = ParseBorderStyle(m.Groups[2].Value);
+        var px = double.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+        if (px <= 0 || IsInvisibleCssColor(m.Groups[3].Value))
+        {
+            side = new CssBorderSide(BorderValues.None, 0, null);
+            return true;
+        }
+
+        side = new CssBorderSide(val, CssBorderWidthToEighthPoints(m.Groups[1].Value, val),
+            NormalizeCssColorToken(m.Groups[3].Value) ?? "auto");
         return true;
+    }
+
+    private CssBorderSide? BuildCssBorderSide(string styleToken, string? widthToken, string? colorToken)
+    {
+        if (styleToken.Equals("none", StringComparison.OrdinalIgnoreCase)
+            || styleToken.Equals("hidden", StringComparison.OrdinalIgnoreCase))
+            return new CssBorderSide(BorderValues.None, 0, null);
+
+        var val = ParseBorderStyle(styleToken);
+        var widthMatch = widthToken != null ? Regex.Match(widthToken, @"([\d.]+)px") : Match.Empty;
+        if (widthMatch.Success
+            && double.Parse(widthMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) <= 0)
+            return new CssBorderSide(BorderValues.None, 0, null);
+        if (IsInvisibleCssColor(colorToken))
+            return new CssBorderSide(BorderValues.None, 0, null);
+
+        var size = widthMatch.Success ? CssBorderWidthToEighthPoints(widthMatch.Groups[1].Value, val) : 6u;
+        return new CssBorderSide(val, size, NormalizeCssColorToken(colorToken) ?? "auto");
+    }
+
+    /// <summary>Kolor, przy którym linia jest w edytorze niewidoczna — semantycznie brak linii.</summary>
+    private static bool IsInvisibleCssColor(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return false;
+        token = token.Trim();
+        if (token.Equals("transparent", StringComparison.OrdinalIgnoreCase)) return true;
+        return Regex.IsMatch(token, @"^rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0(\.0+)?\s*\)$");
+    }
+
+    /// <summary>Wartości box-model CSS (1–4 tokeny) rozwinięte do [top, right, bottom, left].</summary>
+    private static string[]? ExpandCssBoxValues(string? decl)
+    {
+        if (string.IsNullOrWhiteSpace(decl)) return null;
+        var tokens = Regex.Matches(decl, @"rgba?\([^)]*\)|\S+").Select(m => m.Value).ToList();
+        return tokens.Count switch
+        {
+            1 => [tokens[0], tokens[0], tokens[0], tokens[0]],
+            2 => [tokens[0], tokens[1], tokens[0], tokens[1]],
+            3 => [tokens[0], tokens[1], tokens[2], tokens[1]],
+            4 => [tokens[0], tokens[1], tokens[2], tokens[3]],
+            _ => null
+        };
     }
 
     /// <summary>Wartość pojedynczej deklaracji CSS (np. „border-color") lub null, gdy jej brak.</summary>
@@ -2939,17 +3039,6 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var match = Regex.Match(style, $@"(?<![a-z-]){Regex.Escape(property)}\s*:\s*([^;]+)");
         return match.Success ? match.Groups[1].Value.Trim() : null;
-    }
-
-    /// <summary>
-    /// Czy deklaracja CSS o danym prefiksie oznacza „brak linii" — w dowolnej formie serializacji
-    /// przeglądarki: „none", „medium none", „medium none currentcolor", „hidden".
-    /// </summary>
-    private static bool IsCssBorderNone(string style, string prefix)
-    {
-        var value = GetCssDeclarationValue(style, prefix);
-        if (value == null) return false;
-        return Regex.IsMatch(value, @"\b(none|hidden)\b", RegexOptions.IgnoreCase);
     }
 
     /// <summary>Normalizuje token koloru CSS (hex #rgb/#rrggbb, rgb(), rgba()) do 6-znakowego hex; null gdy nie kolor.</summary>

@@ -263,7 +263,9 @@ public class DocumentStorageController : BaseApiController
             PageSize: request?.PageSize,
             SectionHeadersFooters: request?.SectionHeadersFooters,
             Footnotes: request?.Footnotes,
-            Endnotes: request?.Endnotes);
+            Endnotes: request?.Endnotes,
+            FootnoteNumberFormat: request?.FootnoteNumberFormat,
+            EndnoteNumberFormat: request?.EndnoteNumberFormat);
 
         var result = await Mediator.Send(command, cancellationToken);
 

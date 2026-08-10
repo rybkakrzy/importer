@@ -228,6 +228,10 @@ export interface SaveDocumentRequest {
   /** Gdy podane, backend zapisuje przez pass-through oryginalnego pakietu (zachowuje
    *  style tabel/motyw/numerację). Brak → pełna regeneracja pakietu. */
   masterId?: string;
+  /** Efektywny format numeracji przypisów POKAZYWANY w edytorze (token w:numFmt) —
+   *  writer emituje go jawnie, żeby zapisany plik wyglądał jak ekran. */
+  footnoteNumberFormat?: string;
+  endnoteNumberFormat?: string;
 }
 
 /** Szablon dokumentu */

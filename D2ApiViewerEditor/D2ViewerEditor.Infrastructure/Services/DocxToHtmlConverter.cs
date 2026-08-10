@@ -1182,10 +1182,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // pakietu. Bez tego pierwszy zapis podmieniał odstępy/interlinię/rozmiar dokumentu
         // na hardkodowane wartości edytora (11pt / after=160 / line=259).
         var containerAttrs = new StringBuilder();
-        if (_defaultSpacingBeforeTw != null)
-            containerAttrs.Append($" data-default-before-tw=\"{_defaultSpacingBeforeTw}\"");
-        if (_defaultSpacingAfterTw != null)
-            containerAttrs.Append($" data-default-after-tw=\"{_defaultSpacingAfterTw}\"");
+        // before/after ZAWSZE jawnie (także "0"): brak atrybutu znaczył "nie wiadomo" i uruchamiał
+        // fallbacki niszczące wierność — GUI dodawało 10px po każdym akapicie, a writer przy zapisie
+        // wstrzykiwał hardkod after=160/line=259 do docDefaults. Dokument bez domyślnych odstępów
+        // (starsze szablony, Normal bez w:spacing) renderował się i zapisywał "rozstrzelony".
+        containerAttrs.Append($" data-default-before-tw=\"{_defaultSpacingBeforeTw ?? "0"}\"");
+        containerAttrs.Append($" data-default-after-tw=\"{_defaultSpacingAfterTw ?? "0"}\"");
         if (_defaultSpacingLine != null)
             containerAttrs.Append($" data-default-line=\"{_defaultSpacingLine}\"" +
                 $" data-default-line-rule=\"{_defaultSpacingLineRule}\"");
@@ -1818,6 +1820,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 css.Append(WordLineSpacing.AutoCss(lineTw, _defaultFontFamily));
             }
         }
+        else
+        {
+            // Dokument bez domyślnej interlinii = pojedynczy odstęp Worda (line=240 auto).
+            // Bez jawnej emisji kontener spadał na line-height edytora (1.15), które dla
+            // np. Calibri (single ≈ 1.221) renderowało tekst ~6% ciaśniej niż Word — rozjazd
+            // wysokości rósł z każdą linią. Marker --w-line-tw:240 round-tripuje bezstratnie
+            // (line=240 auto renderuje w Wordzie identycznie jak brak w:line).
+            css.Append(WordLineSpacing.AutoCss((int)WordLineSpacing.LineUnitsPerSingle, _defaultFontFamily));
+        }
         return css.ToString();
     }
 
@@ -1855,7 +1866,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var paraProps = style.StyleParagraphProperties;
         if (paraProps != null)
         {
-            css.Append(ConvertParagraphPropertiesToCss(paraProps));
+            // Interlinia auto zdefiniowana w stylu kalibruje się po foncie TEGO stylu
+            // (łańcuch basedOn), nie po foncie domyślnym dokumentu.
+            css.Append(ConvertParagraphPropertiesToCss(paraProps, GetStyleFontFamily(style)));
         }
 
         // Deduplikuj właściwości CSS: jeśli ta sama właściwość pojawia się wielokrotnie
@@ -2334,8 +2347,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             cssBuilder.Append(styleCss);
         }
-        cssBuilder.Append(GetParagraphStyle(paraProps));
-        
+        cssBuilder.Append(GetParagraphStyle(paraProps, ResolveParagraphLineFont(paragraph)));
+
         // Obramowanie paragrafu
         var borderCss = GetParagraphBorderCss(paraProps);
         if (!string.IsNullOrEmpty(borderCss))
@@ -3759,16 +3772,59 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>
     /// Pobiera styl CSS dla paragrafu (tylko właściwości inline)
     /// </summary>
-    private string GetParagraphStyle(ParagraphProperties? props)
+    private string GetParagraphStyle(ParagraphProperties? props, string? lineFontFamily = null)
     {
         if (props == null) return string.Empty;
-        return ConvertParagraphPropertiesToCss(props);
+        return ConvertParagraphPropertiesToCss(props, lineFontFamily);
     }
 
     /// <summary>
-    /// Konwertuje właściwości paragrafu na CSS z dokładnymi jednostkami
+    /// Efektywny krój akapitu do kalibracji interlinii auto: font pierwszego runu z jawnym
+    /// rFonts, inaczej font znacznika akapitu (pPr/rPr), inaczej font z łańcucha stylu
+    /// akapitowego. Null = krój domyślny dokumentu. Przybliżenie — Word liczy wysokość każdej
+    /// linii po najwyższym runie tej linii; dominujący font akapitu to najbliższy odpowiednik.
     /// </summary>
-    private string ConvertParagraphPropertiesToCss(OpenXmlElement props)
+    private string? ResolveParagraphLineFont(Paragraph paragraph)
+    {
+        foreach (var run in paragraph.Elements<Run>())
+        {
+            var runFont = GetFontName(run.RunProperties?.GetFirstChild<RunFonts>());
+            if (!string.IsNullOrEmpty(runFont)) return runFont;
+            if (run.Elements<Text>().Any(t => !string.IsNullOrWhiteSpace(t.Text))) break;
+        }
+
+        var markFont = GetFontName(
+            paragraph.ParagraphProperties?.ParagraphMarkRunProperties?.GetFirstChild<RunFonts>());
+        if (!string.IsNullOrEmpty(markFont)) return markFont;
+
+        var styleId = EffectiveParagraphStyleId(paragraph);
+        if (styleId != null && _rawStyles.TryGetValue(styleId, out var style))
+            return GetStyleFontFamily(style);
+        return null;
+    }
+
+    /// <summary>Font runów stylu z łańcucha basedOn (najbliższy zdefiniowany), null gdy brak.</summary>
+    private string? GetStyleFontFamily(Style style, HashSet<string>? visited = null)
+    {
+        visited ??= new HashSet<string>();
+        var id = style.StyleId?.Value;
+        if (id != null && !visited.Add(id)) return null;
+
+        var name = GetFontName(style.StyleRunProperties?.GetFirstChild<RunFonts>());
+        if (!string.IsNullOrEmpty(name)) return name;
+
+        var basedOn = style.BasedOn?.Val?.Value;
+        return basedOn != null && _rawStyles.TryGetValue(basedOn, out var parent)
+            ? GetStyleFontFamily(parent, visited)
+            : null;
+    }
+
+    /// <summary>
+    /// Konwertuje właściwości paragrafu na CSS z dokładnymi jednostkami.
+    /// <paramref name="lineFontFamily"/> — krój do kalibracji interlinii auto (PG-09);
+    /// null = krój domyślny dokumentu (zachowanie historyczne, poprawne dla docDefaults).
+    /// </summary>
+    private string ConvertParagraphPropertiesToCss(OpenXmlElement props, string? lineFontFamily = null)
     {
         var css = new StringBuilder();
 
@@ -3850,7 +3906,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 {
                     // Auto (domyślne gdy brak w:lineRule) — mnożnik pojedynczego odstępu
                     // w 240-tych; emisja skalibrowana metrykami fontu + marker (PG-09).
-                    css.Append(WordLineSpacing.AutoCss(lineVal, _defaultFontFamily));
+                    // Kalibracja po foncie AKAPITU (gdy znany) — akapit w innym kroju niż
+                    // domyślny dokumentu (np. Times 1.149 vs Calibri 1.221) miał interlinię
+                    // przeliczoną złym współczynnikiem i rozjeżdżał wysokość strony.
+                    css.Append(WordLineSpacing.AutoCss(lineVal, lineFontFamily ?? _defaultFontFamily));
                 }
             }
         }

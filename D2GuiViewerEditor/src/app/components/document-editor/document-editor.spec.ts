@@ -733,6 +733,23 @@ describe('DocumentEditorComponent — rozmiar strony (PageSize round-trip)', () 
 
     expect(req.masterId).toBeUndefined();
   });
+
+  it('buildSaveRequest niesie EFEKTYWNY format numeracji przypisów (plik = ekran)', () => {
+    // Dokument z jawnym formatem — jedzie 1:1.
+    component.footnoteNumberFormat.set('upperRoman');
+    component.endnoteNumberFormat.set('decimal');
+    let req = (component as any).buildSaveRequest();
+    expect(req.footnoteNumberFormat).toBe('upperRoman');
+    expect(req.endnoteNumberFormat).toBe('decimal');
+
+    // Brak formatu w dokumencie → defaulty WYŚWIETLANE przez edytor
+    // (dolne = cyfry, końcowe = małe rzymskie — jak _formatNoteLabel).
+    component.footnoteNumberFormat.set(null);
+    component.endnoteNumberFormat.set(null);
+    req = (component as any).buildSaveRequest();
+    expect(req.footnoteNumberFormat).toBe('decimal');
+    expect(req.endnoteNumberFormat).toBe('lowerRoman');
+  });
 });
 
 /**

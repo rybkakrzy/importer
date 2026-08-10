@@ -65,7 +65,8 @@ public class SaveDocumentCommandHandler : IRequestHandler<SaveDocumentCommand, R
                         using var originalStream = new MemoryStream(original);
                         return _converter.ConvertPreservingPackage(
                             request.Html, originalStream, request.Metadata, request.Header, request.Footer,
-                            request.Margins, request.PageSize, request.SectionHeadersFooters, request.Footnotes, request.Endnotes);
+                            request.Margins, request.PageSize, request.SectionHeadersFooters, request.Footnotes, request.Endnotes,
+                            request.FootnoteNumberFormat, request.EndnoteNumberFormat);
                     }
                 }
             }
@@ -79,6 +80,7 @@ public class SaveDocumentCommandHandler : IRequestHandler<SaveDocumentCommand, R
 
         return _converter.Convert(
             request.Html, request.Metadata, request.Header, request.Footer,
-            request.Margins, request.PageSize, request.SectionHeadersFooters, request.Footnotes, request.Endnotes);
+            request.Margins, request.PageSize, request.SectionHeadersFooters, request.Footnotes, request.Endnotes,
+            request.FootnoteNumberFormat, request.EndnoteNumberFormat);
     }
 }

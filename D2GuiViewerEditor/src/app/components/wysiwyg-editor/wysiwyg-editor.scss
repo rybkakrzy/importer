@@ -321,6 +321,12 @@
    mniejszy z odstępów. Padding nie kolapsuje; reader emituje w:after tak samo. */
 .editor-content p {
   margin: 0;
+  /* Domyślny odstęp PRZED akapitem (data-default-before-tw → --doc-par-margin-top).
+     Word renderuje go przy każdym akapicie, także na górze strony (por. flaga kompatybilności
+     „Suppress Space Before…" — domyślnie wyłączona). Fallback 0 = dotychczasowe zachowanie.
+     Odstęp „przed" zostaje MARGINESEM (nie paddingiem): gap = padding-bottom(A) + margin-top(B),
+     czyli suma jak w Wordzie (ADR-0053). Inline margin-top z readera wygrywa nad tą regułą. */
+  margin-top: var(--doc-par-margin-top, 0px);
   padding-bottom: var(--doc-par-margin, 10px);
   /* NIE dodawać tu `text-box-trim: trim-start`. Ta reguła przesuwa TUSZ pierwszej linii
      akapitu w górę o połowę interlinii (half-leading), poza box akapitu. Dla PIERWSZEGO

@@ -818,7 +818,11 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       endnotes: this.endnotes() ?? undefined,
       // Pass-through: backend zachowa style tabel/motyw/numerację oryginału (definicje,
       // nie tylko formatowanie bezpośrednie). Brak masterId (np. nowy dokument) → regeneracja.
-      masterId: this.documentMasterId() ?? undefined
+      masterId: this.documentMasterId() ?? undefined,
+      // Efektywny format POKAZYWANY w edytorze (defaulty jak _formatNoteLabel wysiwyg:
+      // dolne = cyfry, końcowe = małe rzymskie) — zapisany plik ma wyglądać jak ekran.
+      footnoteNumberFormat: this.footnoteNumberFormat() ?? 'decimal',
+      endnoteNumberFormat: this.endnoteNumberFormat() ?? 'lowerRoman'
     };
   }
 

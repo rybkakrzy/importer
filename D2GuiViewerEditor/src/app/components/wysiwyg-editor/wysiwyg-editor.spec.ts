@@ -258,6 +258,24 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
     expect(component.documentDefaultFontFamily()).toBeNull();
   });
 
+  // Wyciek stanu między dokumentami (znaleziony weryfikacją CDP): po dokumencie z defaultami
+  // treść bez wrappera (nowy dokument) dziedziczyła font/odstępy POPRZEDNIEGO pliku.
+  it('_captureDocumentDefaults bez wrappera RESETUJE defaulty poprzedniego dokumentu', () => {
+    (component as any)._captureDocumentDefaults(
+      '<div class="document-content" data-default-before-tw="120" data-default-after-tw="160"'
+      + ' data-default-line="278" data-default-line-rule="auto" style="font-size:12pt;line-height:1.414;">'
+      + '<p>Stary dokument</p></div>');
+    expect(component.documentDefaultParagraphSpacing()).toBe('8pt');
+
+    (component as any)._captureDocumentDefaults('<p>Nowy dokument bez wrappera</p>');
+
+    expect(component.documentDefaultFontSize()).toBeNull();
+    expect(component.documentDefaultLineHeight()).toBeNull();
+    expect(component.documentDefaultParagraphSpacing()).toBeNull();
+    expect(component.documentDefaultParagraphSpacingBefore()).toBeNull();
+    expect(component.documentDefaultLineTw()).toBeNull();
+  });
+
   it('_captureDocumentDefaults czyta interlinię i odstęp akapitu (data-default-after-tw)', () => {
     const html = '<div class="document-content" data-default-after-tw="160" data-default-line="278"'
       + ' data-default-line-rule="auto" style="font-size:12pt;line-height:1.158;">'
@@ -267,6 +285,30 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
 
     expect(component.documentDefaultLineHeight()).toBe('1.158');
     expect(component.documentDefaultParagraphSpacing()).toBe('8pt'); // 160tw / 20
+  });
+
+  // Dokument bez domyślnych odstępów: reader emituje JAWNE zera — GUI musi je uszanować
+  // (0pt), a nie traktować jak brak wartości i dodawać fallback 10px po każdym akapicie
+  // („rozstrzelony" dokument zaraz po otwarciu, niezgodny z Wordem).
+  it('_captureDocumentDefaults honoruje jawne zera data-default-before/after-tw', () => {
+    const html = '<div class="document-content" data-default-before-tw="0" data-default-after-tw="0">'
+      + '<p>Ciasny dokument</p></div>';
+
+    (component as any)._captureDocumentDefaults(html);
+
+    expect(component.documentDefaultParagraphSpacing()).toBe('0pt');
+    expect(component.documentDefaultParagraphSpacingBefore()).toBe('0pt');
+  });
+
+  // Odstęp „przed" akapitem (data-default-before-tw) musi być RENDEROWANY (--doc-par-margin-top),
+  // nie tylko round-tripowany w atrybutach — Word dodaje go przy każdym akapicie.
+  it('_captureDocumentDefaults czyta odstęp przed akapitem (data-default-before-tw)', () => {
+    const html = '<div class="document-content" data-default-before-tw="120" data-default-after-tw="160">'
+      + '<p>Treść</p></div>';
+
+    (component as any)._captureDocumentDefaults(html);
+
+    expect(component.documentDefaultParagraphSpacingBefore()).toBe('6pt'); // 120tw / 20
   });
 
   // Wrapper .document-content niesie domyślne wartości dokumentu (font, data-default-*)

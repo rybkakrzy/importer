@@ -86,7 +86,9 @@ public class DocumentController : BaseApiController
             request.SectionHeadersFooters,
             request.Footnotes,
             request.Endnotes,
-            request.MasterId
+            request.MasterId,
+            request.FootnoteNumberFormat,
+            request.EndnoteNumberFormat
         );
 
         var result = await Mediator.Send(command);
