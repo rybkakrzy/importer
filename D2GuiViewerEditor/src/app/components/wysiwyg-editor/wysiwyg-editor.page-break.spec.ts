@@ -52,3 +52,47 @@ describe('WysiwygEditorComponent — page break is a semantic marker (item 8)', 
     expect(component.showFormattingMarks()).toBe(false);
   });
 });
+
+/**
+ * „Pokaż wszystko" (¶, Ctrl+Shift+8) — przełącznik WIDOKU znaczników formatowania.
+ * Gwarancje:
+ *  - komenda toolbara `toggleFormattingMarks` przełącza tryb bez dotykania treści
+ *    (żadnego onContentChange → brak wpisu undo, brak dirty/autosave),
+ *  - stan trafia do EditorState.formattingMarks i jest emitowany (stateChange),
+ *    żeby toolbar podświetlał przycisk także po użyciu skrótu klawiaturowego.
+ */
+describe('WysiwygEditorComponent — „Pokaż wszystko" (formatting marks)', () => {
+  let fixture: ComponentFixture<WysiwygEditorComponent>;
+  let component: WysiwygEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [WysiwygEditorComponent],
+    }).compileComponents();
+    fixture = TestBed.createComponent(WysiwygEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  it('executeCommand(toggleFormattingMarks) przełącza tryb bez zmiany treści', () => {
+    const contentSpy = vi.spyOn(component as any, 'onContentChange');
+
+    component.executeCommand('toggleFormattingMarks');
+    expect(component.showFormattingMarks()).toBe(true);
+
+    component.executeCommand('toggleFormattingMarks');
+    expect(component.showFormattingMarks()).toBe(false);
+
+    // Przełącznik widoku nie może brudzić dokumentu ani tworzyć wpisów undo.
+    expect(contentSpy).not.toHaveBeenCalled();
+  });
+
+  it('odbija stan w EditorState.formattingMarks i emituje stateChange', () => {
+    const emitted: boolean[] = [];
+    component.stateChange.subscribe(s => emitted.push(s.formattingMarks === true));
+
+    component.toggleFormattingMarks();
+    component.toggleFormattingMarks();
+
+    expect(emitted).toEqual([true, false]);
+  });
+});

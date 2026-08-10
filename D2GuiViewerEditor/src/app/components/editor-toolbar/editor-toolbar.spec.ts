@@ -157,3 +157,47 @@ describe('EditorToolbarComponent — ENTER w polu rozmiaru czcionki', () => {
     expect(emitted).toBe(24);
   });
 });
+
+/**
+ * „Pokaż wszystko" (¶) — przycisk TYMCZASOWO ukryty w toolbarze (decyzja 2026-08-10);
+ * funkcja pozostaje dostępna skrótem Ctrl+Shift+8 (komenda toggleFormattingMarks
+ * i podświetlanie z EditorState.formattingMarks czekają gotowe w komponencie).
+ * Ten test pinuje stan tymczasowy — po przywróceniu przycisku (zdjęcie @if (false)
+ * w szablonie) przywrócić testy wiringu z historii gita.
+ */
+describe('EditorToolbarComponent — przycisk „Pokaż wszystko" (tymczasowo ukryty)', () => {
+  let fixture: ComponentFixture<EditorToolbarComponent>;
+  let component: EditorToolbarComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [EditorToolbarComponent] }).compileComponents();
+    fixture = TestBed.createComponent(EditorToolbarComponent);
+    component = fixture.componentInstance;
+  });
+
+  function marksBtn(): HTMLButtonElement | undefined {
+    return Array.from(fixture.nativeElement.querySelectorAll('button'))
+      .find((b) => (b as HTMLElement).getAttribute('title')?.startsWith('Pokaż wszystko')) as
+      HTMLButtonElement | undefined;
+  }
+
+  it('przycisk NIE jest renderowany (ukryty do odwołania), także w trybie edycji', () => {
+    component.readOnly = false;
+    fixture.detectChanges();
+    expect(marksBtn()).toBeFalsy();
+  });
+
+  it('stan z EditorState.formattingMarks jest nadal czytany (gotowość na przywrócenie)', () => {
+    expect(component.isFormattingMarksActive()).toBe(false);
+    component.editorState = {
+      isModified: false, canUndo: false, canRedo: false, wordCount: 0,
+      formattingMarks: true,
+      currentFormatting: {
+        bold: false, italic: false, underline: false,
+        strikethrough: false, subscript: false, superscript: false,
+      },
+      currentStyle: {},
+    };
+    expect(component.isFormattingMarksActive()).toBe(true);
+  });
+});

@@ -259,9 +259,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Format numeracji przypisów (w:numFmt w footnotePr/endnotePr, settings.xml document-wide) —
         // GUI używa go zamiast domyślnego (dolne=cyfry, końcowe=rzymskie). null = brak → domyślna Worda.
-        var settingsPart = document.MainDocumentPart?.DocumentSettingsPart;
-        content.FootnoteNumberFormat = ReadNoteNumberFormat(settingsPart, endnote: false);
-        content.EndnoteNumberFormat = ReadNoteNumberFormat(settingsPart, endnote: true);
+        content.FootnoteNumberFormat = ReadNoteNumberFormat(document, endnote: false);
+        content.EndnoteNumberFormat = ReadNoteNumberFormat(document, endnote: true);
 
         // Kolumny sekcji bazowej — ustalone przez ConvertBodyToHtml (Html), tam też trafiają
         // na kontener .document-content. Null/1 kolumna = układ jednokolumnowy (ADR-0039).
@@ -1392,34 +1391,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private (int leftPx, int hangingPx) GetNumberingLevelIndentation(NumberingProperties? numPr, int levelOverride = -1)
     {
         if (numPr == null || _numberingPart?.Numbering == null) return (0, 0);
-        
+
         var numId = numPr.NumberingId?.Val?.Value;
         if (numId == null) return (0, 0);
-        
+
         var level = levelOverride >= 0 ? levelOverride : (numPr.NumberingLevelReference?.Val?.Value ?? 0);
-        
-        var numInstance = _numberingPart.Numbering.Elements<NumberingInstance>()
-            .FirstOrDefault(n => n.NumberID?.Value == numId);
-        if (numInstance == null) return (0, 0);
-        
-        var abstractNumId = numInstance.AbstractNumId?.Val?.Value;
-        if (abstractNumId == null) return (0, 0);
-        
-        var abstractNum = _numberingPart.Numbering.Elements<AbstractNum>()
-            .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
-        if (abstractNum == null) return (0, 0);
-        
-        var levelDef = abstractNum.Elements<Level>()
-            .FirstOrDefault(l => l.LevelIndex?.Value == level);
-        if (levelDef == null) return (0, 0);
-        
-        var prevParaProps = levelDef.GetFirstChild<PreviousParagraphProperties>();
-        var indent = prevParaProps?.GetFirstChild<Indentation>();
-        
+
+        // Wspólny resolver (lvlOverride instancji + numStyleLink) — naiwna ścieżka
+        // instancja→abstrakt nie widziała nadpisań i wcięcie spadało do fallbacku 36px,
+        // rozjeżdżając render z data-ind-*-tw emitowanym przez GetListLevelInfo.
+        var (levelDef, _, _) = FindLevelDefinition(numId.Value, level);
+        var indent = levelDef?.PreviousParagraphProperties?.GetFirstChild<Indentation>();
+
         int leftTwips = 0, hangingTwips = 0;
         if (indent?.Left?.Value != null) int.TryParse(indent.Left.Value, out leftTwips);
         if (indent?.Hanging?.Value != null) int.TryParse(indent.Hanging.Value, out hangingTwips);
-        
+
         return (TwipsToPx(leftTwips), TwipsToPx(hangingTwips));
     }
 
@@ -1452,11 +1439,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var firstInfo = GetListLevelInfo(firstNumProps, firstLevel);
         var listType = firstInfo.Tag;
 
-        // Pobierz wcięcie z definicji numeracji i wylicz padding dla kontenera listy
+        // Pobierz wcięcie z definicji numeracji i wylicz padding dla kontenera listy.
+        // Poziom o wcięciu ≤ rodzica nie może cofnąć paddingu (byłby ujemny) — dostaje 0,
+        // a nie pełne levelIndentPx (to dublowało wcięcie przy niemonotonicznych poziomach).
         var (levelIndentPx, _) = GetNumberingLevelIndentation(firstNumProps, firstLevel);
-        var listPadding = levelIndentPx > parentIndentPx
-            ? levelIndentPx - parentIndentPx
-            : (levelIndentPx > 0 ? levelIndentPx : 36);
+        var listPadding = levelIndentPx > parentIndentPx ? levelIndentPx - parentIndentPx
+            : levelIndentPx > 0 ? 0
+            : 36;
 
         // Wysunięcie Worda (w:ind hanging): tekst punktu stoi na lewym wcięciu (padding-left
         // kontenera), a znacznik wisi `hanging` na LEWO od niego; zawinięte linie wracają do
@@ -1467,7 +1456,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? (int?)TwipsToPx(indHangTw)
             : null;
         var hangingCss = hangingPx is { } hp ? $"--ind-hanging:{hp}px;" : string.Empty;
-        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};{hangingCss}";
+        // Kolor znacznika z w:lvl/w:rPr/w:color — CSS var konsumują ::before etykiet (SCSS)
+        // i span.list-marker; tekst punktu ma własne kolory na runach, więc var nie przecieka.
+        var markerColorVarCss = firstInfo.MarkerColorCss != null
+            ? $"--marker-color:{firstInfo.MarkerColorCss};"
+            : string.Empty;
+        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};{hangingCss}{markerColorVarCss}";
 
         // `start` = FAKTYCZNY numer pierwszego elementu wg liczników Worda (kontynuacja po przerwaniu
         // akapitem / współdzielony abstrakt), nie sama definicja w:start. Konsumpcja w pętli niżej.
@@ -1508,6 +1502,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             identityAttrs.Append($" data-ind-first-line-tw=\"{firstInfo.IndFirstLineTw}\"");
         if (firstInfo.FromInstanceOverride)
             identityAttrs.Append(" data-lvl-override=\"1\"");
+        if (firstInfo.MarkerColorHex != null)
+            identityAttrs.Append($" data-marker-color=\"{firstInfo.MarkerColorHex}\"");
 
         html.Append($"<{listType}{startAttr}{identityAttrs} style=\"{listStyleCss}\">");
 
@@ -1560,16 +1556,72 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     cssStyle = _tableParagraphDefaultCss + cssStyle;
                 }
                 cssStyle = DeduplicateCss(StripIndentationCss(cssStyle));
-                
-                html.Append($"<li style=\"{cssStyle}\">");
-                
+
+                // w:contextualSpacing działa też dla elementów list (ADR-0053) — bez tego
+                // każdy punkt listy w komórce dostawał pełne w:after z docDefaults i komórka
+                // rosła o n×after względem Worda.
+                if (cssStyle.Contains("--w-contextual-spacing"))
+                {
+                    var myStyleId = EffectiveParagraphStyleId(p);
+                    if (p.PreviousSibling() is Paragraph prevPara
+                        && EffectiveParagraphStyleId(prevPara) == myStyleId)
+                    {
+                        cssStyle = SetCssProperty(cssStyle, "margin-top", "0");
+                    }
+                    if (p.NextSibling() is Paragraph nextPara
+                        && EffectiveParagraphStyleId(nextPara) == myStyleId)
+                    {
+                        cssStyle = SetCssProperty(cssStyle, "margin-bottom", "0");
+                        cssStyle = SetCssProperty(cssStyle, "padding-bottom", "0");
+                    }
+                }
+
+                // Direct w:ind akapitu NADPISUJE wcięcie z definicji poziomu numeracji
+                // (semantyka Worda). Wizualnie: margin-left = delta względem pozycji tekstu
+                // wynikającej z paddingu kontenera; --ind-hanging per element konsumuje SCSS.
+                // Round-trip: surowe twipsy w data-ind-*-tw na <li> (writer odtwarza w:ind).
+                var itemHangingPx = hangingPx;
+                var itemAttrs = string.Empty;
+                var directInd = p.ParagraphProperties?.GetFirstChild<Indentation>();
+                if (directInd != null)
+                {
+                    var indCss = new StringBuilder();
+                    var indAttrs = new StringBuilder();
+                    var directLeftRaw = directInd.Left?.Value ?? directInd.Start?.Value;
+                    if (int.TryParse(directLeftRaw, out var directLeftTw))
+                    {
+                        var deltaPx = TwipsToPx(directLeftTw) - (parentIndentPx + listPadding);
+                        if (deltaPx != 0) indCss.Append($"margin-left:{deltaPx}px;");
+                        indAttrs.Append($" data-ind-left-tw=\"{directLeftTw}\"");
+                    }
+                    if (int.TryParse(directInd.Hanging?.Value, out var directHangTw))
+                    {
+                        itemHangingPx = directHangTw > 0 ? TwipsToPx(directHangTw) : null;
+                        if (itemHangingPx != hangingPx)
+                            indCss.Append($"--ind-hanging:{itemHangingPx ?? 0}px;");
+                        indAttrs.Append($" data-ind-hanging-tw=\"{directHangTw}\"");
+                    }
+                    else if (int.TryParse(directInd.FirstLine?.Value, out var directFirstTw))
+                    {
+                        if (directFirstTw > 0)
+                            indCss.Append($"text-indent:{TwipsToPx(directFirstTw)}px;");
+                        indAttrs.Append($" data-ind-first-line-tw=\"{directFirstTw}\"");
+                    }
+                    cssStyle += indCss.ToString();
+                    itemAttrs = indAttrs.ToString();
+                }
+
+                html.Append($"<li{itemAttrs} style=\"{cssStyle}\">");
+
                 // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker.
                 // Ze znanym wysunięciem (w:ind hanging) marker ma DOKŁADNIE jego szerokość:
                 // pierwsza linia li startuje o hanging w lewo (SCSS text-indent z --ind-hanging),
                 // marker wypełnia wysunięcie, tekst wraca na wcięcie — 1:1 układ Worda.
-                var markerBoxCss = hangingPx is { } markerHang
+                var markerBoxCss = itemHangingPx is { } markerHang
                     ? $"display:inline-block;min-width:{markerHang}px;margin-right:0;"
                     : "display:inline-block;min-width:1.2em;margin-right:0.4em;";
+                if (firstInfo.MarkerColorCss != null)
+                    markerBoxCss += $"color:{firstInfo.MarkerColorCss};";
                 if (firstInfo.BulletImageDataUri != null)
                 {
                     html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
@@ -1909,17 +1961,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     docStyle.FontSize = OoxmlUnits.HalfPointsToPoints(fontSize);
                 }
 
-                var color = runProps.Color?.Val?.Value;
-                if (!string.IsNullOrEmpty(color) && color != "auto")
-                {
-                    docStyle.Color = "#" + color;
-                }
-                else if (runProps.Color?.ThemeColor?.Value != null)
-                {
-                    var themeColor = ResolveThemeColor(runProps.Color.ThemeColor.Value);
-                    if (themeColor != null)
-                        docStyle.Color = themeColor;
-                }
+                var styleColor = ResolveRunColorCss(runProps.Color);
+                if (styleColor != null)
+                    docStyle.Color = styleColor;
 
                 docStyle.IsBold = runProps.Bold != null && 
                                   (runProps.Bold.Val == null || runProps.Bold.Val.Value);
@@ -2329,8 +2373,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // and paints over the neighbouring column (and the cell's text-align stops applying).
         // Word resolves tabs in cells against the cell's own text column, so fall back to the
         // inline/flex rendering there; data-tab-stops still round-trips the stops unchanged.
+        // Akapit z tabami BEZ jawnych stopów też idzie pozycyjnie: NextRealStop syntetyzuje
+        // stopy na siatce w:defaultTabStop (ADR-0070) — jak Word; stały nośnik 2em rozjeżdżał
+        // układy formularzy budowanych serią tabów.
         var usePositionedTabs = !useLeaderTabs
-            && ((effectiveTabStops.Count > 0 && hasTabChar) || hasPositionalTab)
+            && (hasTabChar || hasPositionalTab)
             && !isInTableCell;
 
         // Fallback flex row only when there are tab characters but no resolvable stop positions
@@ -2680,6 +2727,60 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 }
                 FlushSubRun();
             }
+            else if (child is Hyperlink hyperlink
+                && hyperlink.Descendants().Any(d => d is TabChar or PositionalTab))
+            {
+                // Tab schowany w w:hyperlink (typowe dla wpisów TOC) musi rozcinać segmenty
+                // tak samo jak tab w gołym runie — powłoka linku jest klonowana per segment,
+                // żeby nawigacja kotwicy przeżyła podział.
+                var currentLink = (Hyperlink)hyperlink.CloneNode(false);
+                void FlushLink()
+                {
+                    if (currentLink.HasChildren) segmentElements[^1].Add(currentLink);
+                    currentLink = (Hyperlink)hyperlink.CloneNode(false);
+                }
+                foreach (var linkChild in hyperlink.Elements())
+                {
+                    if (linkChild is Run linkRun && linkRun.Elements().Any(rc => rc is TabChar or PositionalTab))
+                    {
+                        var subRun = CloneRunShell(linkRun);
+                        void FlushLinkSubRun()
+                        {
+                            if (subRun.ChildElements.Count > (linkRun.RunProperties != null ? 1 : 0))
+                                currentLink.AppendChild(subRun);
+                            subRun = CloneRunShell(linkRun);
+                        }
+                        foreach (var rc in linkRun.Elements())
+                        {
+                            if (rc is RunProperties) continue;
+                            if (rc is TabChar)
+                            {
+                                FlushLinkSubRun();
+                                FlushLink();
+                                segmentElements.Add(new List<OpenXmlElement>());
+                                segmentStops.Add(NextRealStop());
+                            }
+                            else if (rc is PositionalTab linkPtab)
+                            {
+                                FlushLinkSubRun();
+                                FlushLink();
+                                segmentElements.Add(new List<OpenXmlElement>());
+                                segmentStops.Add(SyntheticStopForPositionalTab(linkPtab));
+                            }
+                            else
+                            {
+                                subRun.AppendChild(rc.CloneNode(true));
+                            }
+                        }
+                        FlushLinkSubRun();
+                    }
+                    else
+                    {
+                        currentLink.AppendChild(linkChild.CloneNode(true));
+                    }
+                }
+                FlushLink();
+            }
             else
             {
                 segmentElements[^1].Add(child);
@@ -2876,16 +2977,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string BuildAnchorOpenTag(Hyperlink hyperlink, WordprocessingDocument document)
     {
+        // Kotwica wewnętrzna PRZED r:id: część generatorów zapisuje cel "#_Toc…" jako relację
+        // zamiast w:anchor — Word renderuje takie linki jak zwykły tekst (kolory niosą runy),
+        // a gałąź r:id malowała je twardym niebieskim (spis treści jak lista linków).
         var relationshipId = hyperlink.Id?.Value;
-        if (relationshipId != null)
-        {
-            var url = document.MainDocumentPart?.HyperlinkRelationships
-                .FirstOrDefault(r => r.Id == relationshipId)?.Uri?.ToString();
-            if (!string.IsNullOrEmpty(url))
-                return $"<a href=\"{EscapeHtml(url)}\" target=\"_blank\" style=\"color:#0563C1;text-decoration:underline;\">";
-        }
+        var relationshipUrl = relationshipId != null
+            ? document.MainDocumentPart?.HyperlinkRelationships
+                .FirstOrDefault(r => r.Id == relationshipId)?.Uri?.OriginalString
+            : null;
 
         var anchor = hyperlink.Anchor?.Value;
+        if (string.IsNullOrEmpty(anchor) && relationshipUrl?.StartsWith('#') == true)
+            anchor = relationshipUrl.TrimStart('#');
+
+        if (string.IsNullOrEmpty(anchor) && !string.IsNullOrEmpty(relationshipUrl))
+            return $"<a href=\"{EscapeHtml(relationshipUrl)}\" target=\"_blank\" style=\"color:#0563C1;text-decoration:underline;\">";
+
         if (!string.IsNullOrEmpty(anchor))
         {
             // color/text-decoration:inherit INLINE — bez tego przeglądarka maluje kotwicę
@@ -3188,7 +3295,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else if (borderVal == BorderValues.Thick) style = "solid";
         else if (borderVal == BorderValues.ThickThinSmallGap) style = "double";
         else if (borderVal == BorderValues.ThinThickSmallGap) style = "double";
-        
+
+        // w:sz opisuje szerokość JEDNEJ linii, a CSS border-width dla `double` musi
+        // pomieścić trzy pasma (linia/przerwa/linia); poniżej 3px przeglądarka renderuje
+        // `double` jak pojedynczą kreskę. Writer symetrycznie dzieli przez 3 przy zapisie.
+        if (style == "double")
+            sizePx = Math.Max(3.0, sizePx * 3.0);
+
         return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.#}px {1} #{2}", sizePx, style, color);
     }
 
@@ -3425,6 +3538,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         /// <summary>Definicja pochodzi z PEŁNEGO w:lvlOverride/w:lvl instancji — wygląd tej
         /// instancji różni się od abstraktu; writer musi to odwzorować na instancji.</summary>
         public bool FromInstanceOverride { get; init; }
+        /// <summary>Surowy w:lvl/w:rPr/w:color@val do round-tripu (data-marker-color).</summary>
+        public string? MarkerColorHex { get; init; }
+        /// <summary>Rozwiązany kolor CSS markera (hex/theme/auto → #rrggbb) do renderu.</summary>
+        public string? MarkerColorCss { get; init; }
     }
 
     private ListLevelInfo GetListLevelInfo(NumberingProperties? numPr, int levelOverride = -1)
@@ -3453,6 +3570,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                          ?? bulletFontRun?.HighAnsi?.Value
                          ?? bulletFontRun?.ComplexScript?.Value
                          ?? bulletFontRun?.EastAsia?.Value;
+        var markerColor = levelDef.NumberingSymbolRunProperties?.GetFirstChild<Color>();
+        var markerColorCss = ResolveRunColorCss(markerColor);
+        var markerColorHex = markerColor?.Val?.Value ?? markerColorCss?.TrimStart('#');
         // w:start definicji i w:startOverride instancji round-tripują OSOBNO — writer odtwarza
         // start w abstrakcie, a override jako w:lvlOverride na instancji (FR-EXPORT-004).
         var start = levelDef.StartNumberingValue?.Val?.Value ?? 1;
@@ -3588,7 +3708,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             IndLeftTw = lvlInd?.Left?.Value,
             IndHangingTw = lvlInd?.Hanging?.Value,
             IndFirstLineTw = lvlInd?.FirstLine?.Value,
-            FromInstanceOverride = fromInstanceOverride
+            FromInstanceOverride = fromInstanceOverride,
+            MarkerColorHex = markerColorHex,
+            MarkerColorCss = markerColorCss
         };
     }
 
@@ -3667,8 +3789,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 css.Append($"text-indent:{TwipsToPx(firstLineVal)}px;");
             if (indentation.Hanging?.Value != null && int.TryParse(indentation.Hanging.Value, out var hangingVal))
             {
-                var hangingPx = TwipsToPx(hangingVal);
-                css.Append($"text-indent:-{hangingPx}px;padding-left:{hangingPx}px;");
+                // w:left dotyczy linii zawijanych, hanging cofa PIERWSZĄ linię — sam ujemny
+                // text-indent przy margin-left odwzorowuje to 1:1; wcześniejszy dodatkowy
+                // padding-left przesuwał cały akapit w prawo o hanging.
+                css.Append($"text-indent:-{TwipsToPx(hangingVal)}px;");
             }
         }
 
@@ -4249,10 +4373,49 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        // a:bodyPr: wyrównanie pionowe treści (anchor) + marginesy wewnętrzne (lIns/tIns/
+        // rIns/bIns; domyślne Worda 91440/45720 EMU). Wcześniej stały padding 4px 6px
+        // i brak centrowania — treść ramki przyklejona do góry i przesunięta względem Worda.
+        var bodyPr = container.Descendants<Wps.TextBodyProperties>().FirstOrDefault();
+        var (paddingCss, anchorCss) = BuildTextBoxBodyCss(bodyPr, attrs);
+
         return $"<div class=\"docx-textbox\" data-textbox=\"1\"{attrs} style=\"{layout}"
              + borderCss
-             + "padding:4px 6px;box-sizing:border-box;\">"
+             + paddingCss + anchorCss
+             + "box-sizing:border-box;\">"
              + inner + "</div>";
+    }
+
+    private const long WordDefaultTextBoxHorizontalInsetEmu = 91440;
+    private const long WordDefaultTextBoxVerticalInsetEmu = 45720;
+
+    private static (string PaddingCss, string AnchorCss) BuildTextBoxBodyCss(
+        Wps.TextBodyProperties? bodyPr, StringBuilder attrs)
+    {
+        var lIns = (long?)bodyPr?.LeftInset?.Value ?? WordDefaultTextBoxHorizontalInsetEmu;
+        var rIns = (long?)bodyPr?.RightInset?.Value ?? WordDefaultTextBoxHorizontalInsetEmu;
+        var tIns = (long?)bodyPr?.TopInset?.Value ?? WordDefaultTextBoxVerticalInsetEmu;
+        var bIns = (long?)bodyPr?.BottomInset?.Value ?? WordDefaultTextBoxVerticalInsetEmu;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var paddingCss = string.Format(inv, "padding:{0:0.#}px {1:0.#}px {2:0.#}px {3:0.#}px;",
+            OoxmlUnits.EmuToPixels(tIns), OoxmlUnits.EmuToPixels(rIns),
+            OoxmlUnits.EmuToPixels(bIns), OoxmlUnits.EmuToPixels(lIns));
+        if (bodyPr?.LeftInset?.Value != null || bodyPr?.TopInset?.Value != null
+            || bodyPr?.RightInset?.Value != null || bodyPr?.BottomInset?.Value != null)
+        {
+            attrs.Append($" data-tb-ins=\"{lIns} {tIns} {rIns} {bIns}\"");
+        }
+
+        var anchorCss = string.Empty;
+        var anchorVal = bodyPr?.Anchor?.Value;
+        if (anchorVal != null && anchorVal != A.TextAnchoringTypeValues.Top)
+        {
+            var justify = anchorVal == A.TextAnchoringTypeValues.Bottom ? "flex-end" : "center";
+            anchorCss = $"display:flex;flex-direction:column;justify-content:{justify};";
+            attrs.Append($" data-tb-anchor=\"{(anchorVal == A.TextAnchoringTypeValues.Bottom ? "b" : "ctr")}\"");
+        }
+
+        return (paddingCss, anchorCss);
     }
 
     /// <summary>
@@ -4299,20 +4462,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private static string FootnoteHtmlId(long ooxmlId) => $"fn-{ooxmlId}";
 
     /// <summary>
-    /// Odczytuje format numeracji przypisów z settings.xml (<c>w:footnotePr/w:numFmt</c> lub
-    /// <c>w:endnotePr/w:numFmt</c>, document-wide). Zwraca token rozumiany przez GUI albo <c>null</c>,
-    /// gdy formatu brak lub jest spoza wspieranego zbioru (GUI zdegraduje do domyślnej Worda:
-    /// dolne = cyfry, końcowe = małe rzymskie). Sekcyjne override (<c>sectPr</c>) nie są czytane.
+    /// Odczytuje format numeracji przypisów: sekcyjny override (<c>w:sectPr/w:footnotePr|w:endnotePr</c>,
+    /// pierwsza sekcja — Word daje mu pierwszeństwo) → settings.xml (document-wide). Zwraca token
+    /// rozumiany przez GUI albo <c>null</c>, gdy formatu brak lub jest spoza wspieranego zbioru
+    /// (GUI zdegraduje do domyślnej Worda: dolne = cyfry, końcowe = małe rzymskie).
     /// </summary>
-    private static string? ReadNoteNumberFormat(DocumentSettingsPart? settingsPart, bool endnote)
+    private static string? ReadNoteNumberFormat(WordprocessingDocument document, bool endnote)
     {
-        var settings = settingsPart?.Settings;
-        if (settings == null)
-            return null;
+        var firstSect = GetSectionPropertiesInDocumentOrder(document.MainDocumentPart?.Document?.Body)
+            .FirstOrDefault();
+        var sectionNumFmt = endnote
+            ? firstSect?.GetFirstChild<EndnoteProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value
+            : firstSect?.GetFirstChild<FootnoteProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value;
 
-        var numFmt = endnote
-            ? settings.GetFirstChild<EndnoteDocumentWideProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value
-            : settings.GetFirstChild<FootnoteDocumentWideProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value;
+        var settings = document.MainDocumentPart?.DocumentSettingsPart?.Settings;
+        var settingsNumFmt = endnote
+            ? settings?.GetFirstChild<EndnoteDocumentWideProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value
+            : settings?.GetFirstChild<FootnoteDocumentWideProperties>()?.GetFirstChild<NumberingFormat>()?.Val?.Value;
+
+        var numFmt = sectionNumFmt ?? settingsNumFmt;
         if (numFmt == null)
             return null;
 
@@ -5689,17 +5857,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (fontName != null)
             css.Append(FontFamilyCss(fontName));
 
-        // Kolor tekstu (z obsługą kolorów motywu)
-        var color = props.Descendants<Color>().FirstOrDefault();
-        if (color?.Val != null && color.Val.Value != "auto")
-        {
-            css.Append($"color:#{color.Val.Value};");
-        }
-        else if (color?.ThemeColor?.Value != null)
-        {
-            var themeColor = ResolveThemeColor(color.ThemeColor.Value);
-            if (themeColor != null) css.Append($"color:{themeColor};");
-        }
+        // Kolor tekstu (z obsługą kolorów motywu i "auto")
+        var colorCss = ResolveRunColorCss(props.Descendants<Color>().FirstOrDefault());
+        if (colorCss != null)
+            css.Append($"color:{colorCss};");
 
         // Podświetlenie
         var highlight = props.Descendants<Highlight>().FirstOrDefault();
@@ -5771,14 +5932,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (fontName != null)
             css.Append(FontFamilyCss(fontName));
 
-        var color = props.Descendants<Color>().FirstOrDefault();
-        if (color?.Val != null && color.Val.Value != "auto")
-            css.Append($"color:#{color.Val.Value};");
-        else if (color?.ThemeColor?.Value != null)
-        {
-            var themeColor = ResolveThemeColor(color.ThemeColor.Value);
-            if (themeColor != null) css.Append($"color:{themeColor};");
-        }
+        var styleColorCss = ResolveRunColorCss(props.Descendants<Color>().FirstOrDefault());
+        if (styleColorCss != null)
+            css.Append($"color:{styleColorCss};");
 
         var highlight = props.Descendants<Highlight>().FirstOrDefault();
         if (highlight?.Val != null)
@@ -5911,6 +6067,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     }
 
     /// <summary>
+    /// Rozwiązuje w:color na wartość CSS. "auto" w Wordzie oznacza kolor automatyczny
+    /// (czarny na jasnym tle) — musi wrócić jako #000000, bo run z jawnym "auto"
+    /// resetuje kolor odziedziczony ze stylu akapitu (inaczej dziedziczy np. szary).
+    /// </summary>
+    private string? ResolveRunColorCss(Color? color)
+    {
+        if (color == null) return null;
+
+        var val = color.Val?.Value;
+        if (!string.IsNullOrEmpty(val) && val != "auto")
+            return "#" + val;
+
+        if (color.ThemeColor?.Value != null)
+        {
+            var themeHex = ResolveThemeColor(color.ThemeColor.Value)?.TrimStart('#');
+            if (themeHex != null)
+                return "#" + ApplyTintShade(themeHex, color.ThemeTint?.Value, color.ThemeShade?.Value);
+        }
+
+        return val == "auto" ? "#000000" : null;
+    }
+
+    /// <summary>
     /// Rozwiązuje kolor motywu na wartość hex
     /// </summary>
     private string? ResolveThemeColor(ThemeColorValues themeColor)
@@ -5932,7 +6111,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else if (themeColor == ThemeColorValues.Accent6) c2 = cs.Accent6Color;
         else if (themeColor == ThemeColorValues.Hyperlink) c2 = cs.Hyperlink;
         else if (themeColor == ThemeColorValues.FollowedHyperlink) c2 = cs.FollowedHyperlinkColor;
-        
+        // Domyślne clrSchemeMapping Worda: t1→dark1, t2→dark2, bg1→light1, bg2→light2.
+        else if (themeColor == ThemeColorValues.Text1) c2 = cs.Dark1Color;
+        else if (themeColor == ThemeColorValues.Text2) c2 = cs.Dark2Color;
+        else if (themeColor == ThemeColorValues.Background1) c2 = cs.Light1Color;
+        else if (themeColor == ThemeColorValues.Background2) c2 = cs.Light2Color;
+
         if (c2 == null) return null;
         
         var srgb = c2.GetFirstChild<DocumentFormat.OpenXml.Drawing.RgbColorModelHex>();
@@ -6622,7 +6806,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // sizing columns to content (the usual cause of "table looks nothing like Word").
         var gridColumnsPx = ReadTableGridColumnsPx(table);
         var isFixedLayout = tableProps?.TableLayout?.Type?.Value == TableLayoutValues.Fixed;
-        var useFixedLayout = isFixedLayout || hasExplicitWidth;
+
+        // tblW=auto z pełną siatką tblGrid: Word układa tabelę wg zapisanej siatki, a inline
+        // `width:auto` kazał przeglądarce robić shrink-to-fit (tabela wyraźnie za wąska).
+        // Renderujemy geometrię siatki (fixed + colgroup); oryginalne tblW/tblLayout niosą
+        // markery data-tbl-w / data-tbl-layout, więc zapis nie utrwala dxa/fixed.
+        var gridHasAllWidths = gridColumnsPx.Count > 0 && gridColumnsPx.All(c => c.Px > 0);
+        var useFixedLayout = isFixedLayout || hasExplicitWidth || gridHasAllWidths;
 
         // Word DOSKALOWUJE tabelę szerszą niż szpalta (sekcja wielokolumnowa!) do jej
         // szerokości — siatka w pliku zostaje oryginalna, kompresja jest tylko renderowa.
@@ -6686,6 +6876,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // teraz liczone z EFEKTYWNYCH borderów (bezpośrednie tblBorders LUB styl tabeli).
         var tblBordersMarker = styleCtx.Borders.IsEmpty ? " data-no-borders=\"1\"" : "";
 
+        // Round-trip semantyki szerokości/układu: px i table-layout:fixed w CSS są tylko
+        // renderowe — writer z markerów odtwarza oryginalne tblW=auto / tblLayout=autofit.
+        var widthSemanticsAttrs = string.Empty;
+        if (!hasExplicitWidth && tableWidth != "auto")
+            widthSemanticsAttrs += " data-tbl-w=\"auto\"";
+        if (!isFixedLayout && useFixedLayout)
+            widthSemanticsAttrs += " data-tbl-layout=\"autofit\"";
+
         // Referencja stylu tabeli — zachowywana w data-*, by eksport mógł ponownie
         // wyemitować w:tblStyle/w:tblLook (rozwiązane wartości i tak są w inline CSS).
         var styleAttrs = string.Empty;
@@ -6703,7 +6901,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             rows.Count,
             CountGridColumns(table, rows));
 
-        html.Append($"<table{tblBordersMarker}{styleAttrs}{cellSpacingAttr} style=\"{collapseCss}width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
+        html.Append($"<table{tblBordersMarker}{styleAttrs}{cellSpacingAttr}{widthSemanticsAttrs} style=\"{collapseCss}width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
         html.Append(colgroupHtml);
 
         // Akapity w komórkach dostają INLINE rozwiązane domyślne odstępy (docDefaults + w:pPr
@@ -7033,16 +7231,18 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         css.Append($"border-left:{ResolveCellBorderSide(cb?.LeftBorder, regions, TableCellEdge.Left, isFirstCol ? ctx.Style.Borders.Left : ctx.Style.Borders.InsideV, ctx)};");
         css.Append($"border-right:{ResolveCellBorderSide(cb?.RightBorder, regions, TableCellEdge.Right, isLastCol ? ctx.Style.Borders.Right : ctx.Style.Borders.InsideV, ctx)};");
 
-        // Padding
+        // Padding: w:tcMar nadpisuje TYLKO zadeklarowane strony — pozostałe dziedziczą
+        // z tblCellMar/defaultu Worda (wcześniej częściowy tcMar zerował brakujące strony,
+        // np. sam top/bottom przyklejał treść do lewej krawędzi komórki).
         var cm = props?.TableCellMargin;
         if (cm != null)
         {
-            var top = GetTwipsValue(cm.TopMargin) ?? 0;
-            var bottom = GetTwipsValue(cm.BottomMargin) ?? 0;
-            var left = cm.LeftMargin != null && cm.LeftMargin.Width?.Value != null
-                ? int.Parse(cm.LeftMargin.Width.Value) : 0;
-            var right = cm.RightMargin != null && cm.RightMargin.Width?.Value != null
-                ? int.Parse(cm.RightMargin.Width.Value) : 0;
+            var top = GetTwipsValue(cm.TopMargin) ?? ctx.Style.DefaultCellPadTopTw;
+            var bottom = GetTwipsValue(cm.BottomMargin) ?? ctx.Style.DefaultCellPadBottomTw;
+            var left = cm.LeftMargin?.Width?.Value != null
+                ? int.Parse(cm.LeftMargin.Width.Value) : ctx.Style.DefaultCellPadLeftTw;
+            var right = cm.RightMargin?.Width?.Value != null
+                ? int.Parse(cm.RightMargin.Width.Value) : ctx.Style.DefaultCellPadRightTw;
             css.Append($"padding:{TwipsToPx(top)}px {TwipsToPx(right)}px {TwipsToPx(bottom)}px {TwipsToPx(left)}px;");
         }
         else
@@ -7242,6 +7442,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public TableCellBorders? WholeTableCellBorders; // w:tcPr/w:tcBorders stylu
         public TableVerticalAlignmentValues? WholeTableCellVerticalAlignment; // w:tcPr/w:vAlign stylu
         public string DefaultCellPaddingCss = "";
+        // Domyślne marginesy komórek per strona (twips) — fallback dla CZĘŚCIOWEGO w:tcMar.
+        public int DefaultCellPadTopTw, DefaultCellPadBottomTw, DefaultCellPadLeftTw, DefaultCellPadRightTw;
         // Domyślne odstępy akapitów w komórkach: docDefaults dokumentu nadpisane przez
         // w:pPr łańcucha stylu tabeli (np. „Tabela – Siatka" zeruje after i interlinię).
         // Emitowane INLINE na akapitach komórek — dzięki temu zapis (regeneracja pakietu
@@ -7371,6 +7573,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var bottomPad = PadSide(m => GetTwipsValue(m.BottomMargin), 0);
         var leftPad = PadSide(m => GetDxaValue(m.TableCellLeftMargin), wordDefaultCellMarginTwips);
         var rightPad = PadSide(m => GetDxaValue(m.TableCellRightMargin), wordDefaultCellMarginTwips);
+        ctx.DefaultCellPadTopTw = topPad;
+        ctx.DefaultCellPadBottomTw = bottomPad;
+        ctx.DefaultCellPadLeftTw = leftPad;
+        ctx.DefaultCellPadRightTw = rightPad;
         ctx.DefaultCellPaddingCss = $"{TwipsToPx(topPad)}px {TwipsToPx(rightPad)}px {TwipsToPx(bottomPad)}px {TwipsToPx(leftPad)}px";
 
         // Odstępy akapitów w komórkach: baza = docDefaults dokumentu, nadpisana per właściwość

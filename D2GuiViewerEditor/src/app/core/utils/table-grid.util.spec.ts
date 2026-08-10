@@ -257,4 +257,44 @@ describe('writeColgroupWidths', () => {
     expect(cols.length).toBe(2);
     expect(widthPx(cols[0])).toBe(120);
   });
+
+  it('ręczny resize zdejmuje markery data-tbl-w / data-tbl-layout (użytkownik przejmuje geometrię)', () => {
+    // Markery każą writerowi przywrócić tblW=auto / autofit (px tylko renderowe) —
+    // po świadomym resize szerokość MUSI utrwalić się jako jawna.
+    const table = makeTable(
+      '<table data-tbl-w="auto" data-tbl-layout="autofit">' +
+        '<colgroup><col style="width:100px;"><col style="width:200px;"></colgroup>' +
+        '<tr><td>a</td><td>b</td></tr></table>'
+    );
+    const grid = buildTableGrid(table);
+    writeColgroupWidths(table, grid, [100, 200], [150, 200]);
+    expect(table.hasAttribute('data-tbl-w')).toBe(false);
+    expect(table.hasAttribute('data-tbl-layout')).toBe(false);
+  });
+
+  it('brak zmiany szerokości zachowuje markery semantyki szerokości', () => {
+    const table = makeTable(
+      '<table data-tbl-w="auto" data-tbl-layout="autofit">' +
+        '<colgroup><col style="width:100px;"><col style="width:200px;"></colgroup>' +
+        '<tr><td>a</td><td>b</td></tr></table>'
+    );
+    const grid = buildTableGrid(table);
+    writeColgroupWidths(table, grid, [100, 200], [100, 200]);
+    expect(table.getAttribute('data-tbl-w')).toBe('auto');
+    expect(table.getAttribute('data-tbl-layout')).toBe('autofit');
+  });
+});
+
+describe('applyColumnWidths — markery semantyki szerokości', () => {
+  it('resize całej tabeli zdejmuje data-tbl-w / data-tbl-layout', () => {
+    const table = makeTable(
+      '<table data-tbl-w="auto" data-tbl-layout="autofit">' +
+        '<tr><td>a</td><td>b</td></tr></table>'
+    );
+    const grid = buildTableGrid(table);
+    applyColumnWidths(table, grid, [120, 180]);
+    expect(table.style.width).toBe('300px');
+    expect(table.hasAttribute('data-tbl-w')).toBe(false);
+    expect(table.hasAttribute('data-tbl-layout')).toBe(false);
+  });
 });

@@ -200,6 +200,34 @@ internal static class EndnoteTestDocuments
         return ms.ToArray();
     }
 
+    /// <summary>Format numeracji w SEKCYJNYM w:sectPr/w:endnotePr (bez settings.xml) —
+    /// Word daje takiemu override'owi pierwszeństwo nad document-wide.</summary>
+    internal static byte[] EndnoteWithSectionNumberFormat(NumberFormatValues numFmt)
+    {
+        using var ms = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+            body.Append(new Paragraph(TextRun("Zdanie"), EndnoteReferenceRun(1), TextRun(".")));
+            body.Append(new SectionProperties(
+                new EndnoteProperties(new NumberingFormat { Val = numFmt }),
+                new PageSize { Width = 11906, Height = 16838 }));
+
+            var endnotesPart = main.AddNewPart<EndnotesPart>();
+            var endnotesRoot = new Endnotes();
+            AppendTechnicalSeparators(endnotesRoot);
+            endnotesRoot.Append(UserEndnote(1, new Paragraph(AutoNumberMarkRun(), TextRun("Przypis końcowy."))));
+            endnotesPart.Endnotes = endnotesRoot;
+            endnotesPart.Endnotes.Save();
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     private static byte[] Build(Action<Endnotes> buildEndnotes, Action<Body> buildBody)
     {
         using var ms = new MemoryStream();

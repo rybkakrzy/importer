@@ -340,10 +340,55 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 fonts.FeedData(s);
             }
 
+            PreserveNoteProperties(origMain, targetMain);
+
             target.Save();
         }
 
         return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Przenosi w:footnotePr / w:endnotePr (m.in. w:numFmt — format numeracji przypisów)
+    /// z oryginalnego settings.xml do wygenerowanego pakietu. Regeneracja gubiła te elementy
+    /// i Word wracał do domyślnej numeracji endnotes (lowerRoman) niezależnie od oryginału.
+    /// Kopiujemy wybiórczo (nie cały settings.xml): pełna kopia przywracałaby też
+    /// documentProtection i nadpisywała evenAndOddHeaders ustawiane przez writer.
+    /// </summary>
+    private static void PreserveNoteProperties(MainDocumentPart origMain, MainDocumentPart targetMain)
+    {
+        var origSettings = origMain.DocumentSettingsPart?.Settings;
+        var origFootnotePr = origSettings?.GetFirstChild<FootnoteDocumentWideProperties>();
+        var origEndnotePr = origSettings?.GetFirstChild<EndnoteDocumentWideProperties>();
+
+        // Sekcyjny override (w:sectPr/w:footnotePr|w:endnotePr) ma w Wordzie pierwszeństwo,
+        // a regenerowany sectPr go nie niesie — przenosimy go na poziom document-wide
+        // (ten sam efekt wizualny dla dokumentów o jednym formacie przypisów).
+        var origFirstSect = origMain.Document?.Body?.Descendants<SectionProperties>().FirstOrDefault();
+        var sectFootnotePr = origFirstSect?.GetFirstChild<FootnoteProperties>();
+        var sectEndnotePr = origFirstSect?.GetFirstChild<EndnoteProperties>();
+
+        var footnotePr = sectFootnotePr != null
+            ? new FootnoteDocumentWideProperties(sectFootnotePr.ChildElements.Select(c => c.CloneNode(true)))
+            : (FootnoteDocumentWideProperties?)origFootnotePr?.CloneNode(true);
+        var endnotePr = sectEndnotePr != null
+            ? new EndnoteDocumentWideProperties(sectEndnotePr.ChildElements.Select(c => c.CloneNode(true)))
+            : (EndnoteDocumentWideProperties?)origEndnotePr?.CloneNode(true);
+        if (footnotePr == null && endnotePr == null) return;
+
+        var settingsPart = targetMain.DocumentSettingsPart ?? targetMain.AddNewPart<DocumentSettingsPart>();
+        settingsPart.Settings ??= new Settings();
+        var settings = settingsPart.Settings;
+
+        settings.RemoveAllChildren<FootnoteDocumentWideProperties>();
+        settings.RemoveAllChildren<EndnoteDocumentWideProperties>();
+        // Sekwencja CT_Settings: footnotePr przed endnotePr, oba za evenAndOddHeaders —
+        // wygenerowany settings.xml zawiera co najwyżej evenAndOddHeaders, więc Append wystarcza.
+        if (footnotePr != null)
+            settings.AppendChild(footnotePr);
+        if (endnotePr != null)
+            settings.AppendChild(endnotePr);
+        settings.Save();
     }
 
     /// <summary>
@@ -1513,7 +1558,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 ApplyParagraphStyleExtras(props, liStyle);
             }
-            
+
+            // Direct w:ind elementu listy (kontrakt data-ind-*-tw z readera) — bez tego
+            // wcięcie nadpisane na akapicie wracałoby po zapisie do definicji poziomu.
+            AppendListItemIndentation(props, child);
+
             para.Append(props);
 
             // Buduj base RunProperties ze stylu <li> (dziedziczenie do span/text wewnątrz)
@@ -1582,6 +1631,30 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         return elements;
     }
 
+    private static void AppendListItemIndentation(ParagraphProperties props, HtmlNode li)
+    {
+        var ind = new Indentation();
+        var hasInd = false;
+        if (int.TryParse(li.GetAttributeValue("data-ind-left-tw", ""), out var leftTw))
+        {
+            ind.Left = leftTw.ToString();
+            hasInd = true;
+        }
+        if (int.TryParse(li.GetAttributeValue("data-ind-hanging-tw", ""), out var hangingTw))
+        {
+            ind.Hanging = hangingTw.ToString();
+            hasInd = true;
+        }
+        else if (int.TryParse(li.GetAttributeValue("data-ind-first-line-tw", ""), out var firstLineTw))
+        {
+            ind.FirstLine = firstLineTw.ToString();
+            hasInd = true;
+        }
+        if (!hasInd) return;
+        props.Append(ind);
+        NormalizeParagraphPropertiesOrder(props);
+    }
+
     /// <summary>
     /// Definicja poziomu listy odczytana z data-* kontenera (round-trip z DocxToHtmlConverter).
     /// </summary>
@@ -1589,7 +1662,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         string? Fmt, string? LvlText, int Start, string? BulletFont,
         int StartOverride, string? Suffix, bool IsLegal, int LvlRestart,
         string? IndLeftTw, string? IndHangingTw, string? IndFirstLineTw,
-        bool IsLvlOverride);
+        bool IsLvlOverride, string? MarkerColor = null);
 
     /// <summary>
     /// Zbiera definicje poziomów z atrybutów data-* na kontenerach ul/ol (każdy zagnieżdżony
@@ -1613,9 +1686,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var indHanging = node.GetAttributeValue("data-ind-hanging-tw", "");
             var indFirstLine = node.GetAttributeValue("data-ind-first-line-tw", "");
             var isLvlOverride = node.GetAttributeValue("data-lvl-override", "") == "1";
+            var markerColorRaw = node.GetAttributeValue("data-marker-color", "");
+            var markerColor = Regex.IsMatch(markerColorRaw, "^([0-9A-Fa-f]{6}|auto)$") ? markerColorRaw : null;
             if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0
                 || startOverrideRaw.Length > 0 || suffix.Length > 0 || isLegal
-                || lvlRestartRaw.Length > 0 || indLeft.Length > 0)
+                || lvlRestartRaw.Length > 0 || indLeft.Length > 0 || markerColor != null)
             {
                 _ = int.TryParse(startRaw, out var start);
                 var startOverride = int.TryParse(startOverrideRaw, out var so) && so > 0 ? so : -1;
@@ -1632,7 +1707,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     indLeft.Length > 0 ? indLeft : null,
                     indHanging.Length > 0 ? indHanging : null,
                     indFirstLine.Length > 0 ? indFirstLine : null,
-                    isLvlOverride);
+                    isLvlOverride,
+                    markerColor);
             }
         }
 
@@ -1965,6 +2041,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var markerRunProps = levelDef.GetFirstChild<NumberingSymbolRunProperties>();
             markerRunProps?.Remove();
 
+            if (spec is { MarkerColor: not null } specWithColor)
+            {
+                markerRunProps ??= new NumberingSymbolRunProperties();
+                // Kolejność EG_RPrBase: rFonts przed color.
+                markerRunProps.Append(new Color { Val = specWithColor.MarkerColor });
+            }
+
             levelDef.Append(new LevelJustification { Val = LevelJustificationValues.Left });
 
             // Wcięcia: dokładne twips z definicji poziomu oryginału (data-ind-*-tw); bez nich
@@ -2177,9 +2260,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (!string.IsNullOrEmpty(tblStyleId))
             tableProps.Append(new TableStyle { Val = System.Net.WebUtility.HtmlDecode(tblStyleId) });
 
-        // Szerokość (reader emituje też ułamkowe %: 66.66%)
+        // Szerokość (reader emituje też ułamkowe %: 66.66%). Marker data-tbl-w="auto" oznacza,
+        // że px w CSS jest tylko renderowe (geometria z tblGrid), a oryginał miał tblW=auto —
+        // wtedy nie wolno utrwalić dxa.
+        var tableWidthIsAuto = node.GetAttributeValue("data-tbl-w", "") == "auto";
         var tableWidthMatch = Regex.Match(tableStyle, @"width:\s*([\d.]+)(px|%)?");
-        if (tableWidthMatch.Success)
+        if (tableWidthIsAuto)
+        {
+            tableProps.Append(new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto });
+        }
+        else if (tableWidthMatch.Success)
         {
             var widthValue = double.Parse(tableWidthMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
             var unit = tableWidthMatch.Groups[2].Value;
@@ -2241,8 +2331,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var borderMatch = Regex.Match(tableStyle, @"(?<![a-z-])border:\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
         if (borderMatch.Success)
         {
-            var bSize = CssPxToBorderEighthPoints(borderMatch.Groups[1].Value);
             var bStyle = ParseBorderStyle(borderMatch.Groups[2].Value);
+            var bSize = CssBorderWidthToEighthPoints(borderMatch.Groups[1].Value, bStyle);
             var bColor = NormalizeColor(borderMatch.Groups[3].Value);
 
             defaultBorders = new TableBorders(
@@ -2266,7 +2356,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
         // Reader emituje table-layout:fixed dla tabel z geometrią kolumn z tblGrid —
         // wymuszanie Autofit gubiło układ Worda przy każdym zapisie (autosave!).
-        var isFixedLayout = tableStyle.Contains("table-layout:fixed");
+        // Marker data-tbl-layout="autofit" = fixed w CSS jest tylko renderowe.
+        var isFixedLayout = tableStyle.Contains("table-layout:fixed")
+            && node.GetAttributeValue("data-tbl-layout", "") != "autofit";
         tableProps.Append(new TableLayout { Type = isFixedLayout ? TableLayoutValues.Fixed : TableLayoutValues.Autofit });
         
         // Domyślne marginesy komórek = domyślne Worda (TableNormal): top/bottom=0, left/right=108
@@ -2807,7 +2899,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 {
                     var widthDecl = GetCssDeclarationValue(style, "border-width");
                     var widthMatch = widthDecl != null ? Regex.Match(widthDecl, @"([\d.]+)px") : Match.Empty;
-                    var size = widthMatch.Success ? CssPxToBorderEighthPoints(widthMatch.Groups[1].Value) : 6u;
+                    var size = widthMatch.Success ? CssBorderWidthToEighthPoints(widthMatch.Groups[1].Value, bStyle) : 6u;
                     var color = NormalizeCssColorToken(GetCssDeclarationValue(style, "border-color")) ?? "auto";
 
                     borders.Append(new TopBorder { Val = bStyle, Size = size, Color = color });
@@ -2836,8 +2928,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             $@"(?<![a-z-]){Regex.Escape(prefix)}:\s*([\d.]+)px\s+(\w+)\s+(#?[0-9a-fA-F]{{3,6}}|rgba?\([^)]*\))");
         if (!match.Success)
             return false;
-        size = CssPxToBorderEighthPoints(match.Groups[1].Value);
         bStyle = ParseBorderStyle(match.Groups[2].Value);
+        size = CssBorderWidthToEighthPoints(match.Groups[1].Value, bStyle);
         color = NormalizeCssColorToken(match.Groups[3].Value) ?? "auto";
         return true;
     }
@@ -2886,6 +2978,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private static uint CssPxToBorderEighthPoints(string px)
     {
         var v = double.Parse(px, System.Globalization.CultureInfo.InvariantCulture);
+        return (uint)Math.Max(2, Math.Round(v * 6));
+    }
+
+    /// <summary>
+    /// Jak <see cref="CssPxToBorderEighthPoints"/>, ale świadome stylu: CSS `double` mieści
+    /// w border-width TRZY pasma (linia/przerwa/linia), a w:sz opisuje szerokość jednej linii —
+    /// bez dzielenia przez 3 każdy round-trip potraja grubość podwójnej ramki.
+    /// </summary>
+    private static uint CssBorderWidthToEighthPoints(string px, BorderValues style)
+    {
+        var v = double.Parse(px, System.Globalization.CultureInfo.InvariantCulture);
+        if (style == BorderValues.Double) v /= 3.0;
         return (uint)Math.Max(2, Math.Round(v * 6));
     }
 
@@ -3352,10 +3456,29 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             new Wps.NonVisualDrawingShapeProperties { TextBox = true },
             spPr,
             new Wps.TextBoxInfo2(content),
-            new Wps.TextBodyProperties());
+            BuildTextBodyProperties(node));
 
         var graphic = new A.Graphic(new A.GraphicData(wsp)
         { Uri = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape" });
+
+        static Wps.TextBodyProperties BuildTextBodyProperties(HtmlNode textBoxNode)
+        {
+            var bodyPr = new Wps.TextBodyProperties();
+            var insets = textBoxNode.GetAttributeValue("data-tb-ins", "").Split(' ');
+            if (insets.Length == 4
+                && int.TryParse(insets[0], out var lIns) && int.TryParse(insets[1], out var tIns)
+                && int.TryParse(insets[2], out var rIns) && int.TryParse(insets[3], out var bIns))
+            {
+                bodyPr.LeftInset = lIns;
+                bodyPr.TopInset = tIns;
+                bodyPr.RightInset = rIns;
+                bodyPr.BottomInset = bIns;
+            }
+            var anchorToken = textBoxNode.GetAttributeValue("data-tb-anchor", "");
+            if (anchorToken == "ctr") bodyPr.Anchor = A.TextAnchoringTypeValues.Center;
+            else if (anchorToken == "b") bodyPr.Anchor = A.TextAnchoringTypeValues.Bottom;
+            return bodyPr;
+        }
 
         var posMode = node.GetAttributeValue("data-pos-mode", "");
         var isFloating = posMode == "front" || posMode == "behind"
@@ -3520,24 +3643,32 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     {
         var para = new Paragraph();
         var href = node.GetAttributeValue("href", "#");
+        var internalAnchor = node.GetAttributeValue("data-anchor", "");
+        if (internalAnchor.Length == 0 && href.StartsWith('#') && href.Length > 1)
+            internalAnchor = href.TrimStart('#');
 
         try
         {
-            var relationshipId = _mainPart!.AddHyperlinkRelationship(new Uri(href, UriKind.RelativeOrAbsolute), true).Id;
-            
-            var hyperlink = new Hyperlink { Id = relationshipId };
-            
+            // Kotwica wewnętrzna (wpisy TOC): w:anchor bez wymuszania stylizacji —
+            // Word renderuje takie linki formatowaniem runów, nie stylem Hyperlink.
+            var hyperlink = internalAnchor.Length > 0
+                ? new Hyperlink { Anchor = System.Net.WebUtility.HtmlDecode(internalAnchor) }
+                : new Hyperlink { Id = _mainPart!.AddHyperlinkRelationship(new Uri(href, UriKind.RelativeOrAbsolute), true).Id };
+
             foreach (var child in node.ChildNodes)
             {
                 var runs = CreateRunsFromNode(child);
                 foreach (var run in runs)
                 {
-                    run.RunProperties ??= new RunProperties();
-                    if (!run.RunProperties.Elements<Color>().Any())
-                        run.RunProperties.Append(new Color { Val = "0563C1" });
-                    if (!run.RunProperties.Elements<Underline>().Any())
-                        run.RunProperties.Append(new Underline { Val = UnderlineValues.Single });
-                    run.RunProperties.Append(new RunStyle { Val = "Hyperlink" });
+                    if (internalAnchor.Length == 0)
+                    {
+                        run.RunProperties ??= new RunProperties();
+                        if (!run.RunProperties.Elements<Color>().Any())
+                            run.RunProperties.Append(new Color { Val = "0563C1" });
+                        if (!run.RunProperties.Elements<Underline>().Any())
+                            run.RunProperties.Append(new Underline { Val = UnderlineValues.Single });
+                        run.RunProperties.Append(new RunStyle { Val = "Hyperlink" });
+                    }
                     hyperlink.Append(run);
                 }
             }
@@ -3549,7 +3680,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Jeśli URI jest nieprawidłowy, dodaj jako zwykły tekst
             AppendInlineContent(para, node);
         }
-        
+
         return para;
     }
 
@@ -4586,7 +4717,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             {
                 var border = createBorder();
                 border.Val = ParseBorderStyle(match.Groups[2].Value);
-                border.Size = CssPxToBorderEighthPoints(match.Groups[1].Value);
+                border.Size = CssBorderWidthToEighthPoints(match.Groups[1].Value, border.Val.Value);
                 border.Color = NormalizeColor(match.Groups[3].Value);
                 border.Space = 4;
                 borders.Append(border);

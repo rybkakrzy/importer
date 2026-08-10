@@ -280,6 +280,8 @@ export interface EditorState {
   fontFamily?: string;
   /** True when the current selection spans more than one font family (item 6). */
   fontMixed?: boolean;
+  /** Tryb „Pokaż wszystko" (¶) — widoczność znaczników formatowania. */
+  formattingMarks?: boolean;
   currentFormatting: TextFormatting;
   currentStyle: Partial<ParagraphStyle>;
 }
@@ -306,5 +308,6 @@ export type EditorCommand =
   | 'undo' | 'redo'
   | 'selectAll'
   | 'removeFormat'
+  | 'toggleFormattingMarks'
   | 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'heading5' | 'heading6'
   | 'paragraph';

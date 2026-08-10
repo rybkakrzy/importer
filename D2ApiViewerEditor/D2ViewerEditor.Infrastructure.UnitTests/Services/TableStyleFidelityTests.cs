@@ -750,4 +750,60 @@ public class TableStyleFidelityTests
         var cellBorders = table.Descendants<TableCell>().First().TableCellProperties!.TableCellBorders!;
         cellBorders.TopBorder!.Val!.Value.Should().Be(BorderValues.Single);
     }
+
+    private static TableBorders UniformBorders(BorderValues val, uint size) => new(
+        new TopBorder { Val = val, Size = size },
+        new LeftBorder { Val = val, Size = size },
+        new BottomBorder { Val = val, Size = size },
+        new RightBorder { Val = val, Size = size },
+        new InsideHorizontalBorder { Val = val, Size = size },
+        new InsideVerticalBorder { Val = val, Size = size });
+
+    [Test]
+    public void Read_DoubleBorder_EmitsCssDoubleWideEnoughForTwoLines()
+    {
+        // CSS `double` poniżej 3px renderuje się jak pojedyncza kreska — sz=4 (0.5 pt na linię)
+        // musi dać min. 3px, żeby edytor faktycznie pokazał podwójną linię.
+        var tblPr = new TableProperties(UniformBorders(BorderValues.Double, 4));
+        var html = _reader.Convert(BuildDocx(null, tblPr, rows: 2, cols: 2)).Html;
+
+        var cells = CellStyles(html);
+        cells.Should().NotBeEmpty();
+        cells.Should().OnlyContain(s => s.Contains("border-top:3px double #000000"));
+    }
+
+    [Test]
+    public void RoundTrip_DoubleBorder_StaysDoubleWithoutInflation()
+    {
+        // sz=6 → 3px double → sz=6 (writer dzieli szerokość CSS przez 3 pasma).
+        var tblPr = new TableProperties(UniformBorders(BorderValues.Double, 6));
+        var html = _reader.Convert(BuildDocx(null, tblPr, rows: 2, cols: 2)).Html;
+
+        var borders = FirstTable(_writer.Convert(html)).Descendants<TableCell>().First()
+            .TableCellProperties!.TableCellBorders!;
+        borders.TopBorder!.Val!.Value.Should().Be(BorderValues.Double,
+            "styl double nie może degradować do single przy zapisie");
+        borders.TopBorder!.Size!.Value.Should().BeInRange(5u, 7u,
+            "szerokość podwójnej linii nie może puchnąć w round-tripie");
+    }
+
+    [Test]
+    public void RoundTrip_TableWithoutAnyBorders_ExportsExplicitNoneEverywhere()
+    {
+        // Brak obramowań w oryginale (bez stylu, bez tblBorders) → eksport MUSI nieść jawny
+        // None (tabela i komórki); pominięcie elementu pozwoliłoby Wordowi dorysować siatkę.
+        var tblPr = new TableProperties();
+        var html = _reader.Convert(BuildDocx(null, tblPr, rows: 2, cols: 2)).Html;
+        FirstTableTag(html).Should().Contain("data-no-borders=\"1\"");
+
+        var table = FirstTable(_writer.Convert(html));
+        var tblBorders = table.GetFirstChild<TableProperties>()!.GetFirstChild<TableBorders>()!;
+        tblBorders.TopBorder!.Val!.Value.Should().Be(BorderValues.None);
+        tblBorders.InsideHorizontalBorder!.Val!.Value.Should().Be(BorderValues.None);
+
+        var cellBorders = table.Descendants<TableCell>().First().TableCellProperties?.TableCellBorders;
+        if (cellBorders != null)
+            cellBorders.Elements<BorderType>().Should()
+                .OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.None);
+    }
 }

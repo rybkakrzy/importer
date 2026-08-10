@@ -158,6 +158,9 @@
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
+  // Word nie kolapsuje ciągów spacji z w:t — pre-wrap zachowuje je wizualnie
+  // (zawijanie linii bez zmian; reader nie emituje formatującego whitespace między tagami).
+  white-space: pre-wrap;
   // Kolumny (ADR-0039): gdy column-count > 1 (binding), wypełniaj kolumnę do pełna od góry,
   // potem następną — jak Word (nie balansuj). Dla 1 kolumny bez efektu. Wymaga stałej wysokości
   // strony (.page height + flex), którą już mamy (ADR-0038).
@@ -178,6 +181,15 @@
   box-sizing: border-box;
   position: relative;
   overflow: hidden;
+  white-space: pre-wrap;
+}
+
+/* Nośnik tabulatora (reader: span z literalnym \t, min-width:2em) — pod odziedziczonym
+   pre-wrap literalny tab renderowałby się jako skok do stopu i zmieniał szerokość boksu;
+   normal przywraca dotychczasowe 2em (znak \t w DOM zostaje — round-trip nietknięty). */
+.editor-content span[style*='min-width:2em'],
+.page-overflow-content span[style*='min-width:2em'] {
+  white-space: normal;
 }
 
 /* Rozkład interlinii jak w Wordzie: Word dokleja dodatkowy odstęp (leading ponad pojedynczy
@@ -366,8 +378,10 @@ img[data-legacy-graphic='blank'] {
   margin: 0;
 }
 
+/* Word nie dodaje własnego odstępu do elementów listy — odstępy niesie inline spacing
+   akapitu z readera; edytorowe 2px rozdymało listy (zwłaszcza w komórkach tabel). */
 .editor-content li {
-  margin: 2px 0;
+  margin: 0;
 }
 
 /* Wysunięcie Worda (w:ind hanging) dla punktorów in-flow (span.list-marker): reader emituje
@@ -405,12 +419,15 @@ img[data-legacy-graphic='blank'] {
   top: 0;
   padding-right: 0.4em;
   white-space: nowrap;
+  /* Kolor znacznika z w:lvl/w:rPr (var inline z readera na kontenerze listy). */
+  color: var(--marker-color, inherit);
 }
 
 /* Ze znanym wysunięciem (w:ind hanging, var z readera) etykieta stoi jak w Wordzie:
    LEWA krawędź na (wcięcie tekstu − hanging), a nie prawą krawędzią przy tekście
    (lvlJc=left — domyślne wyrównanie znacznika Worda). */
-.editor-content :is(ul, ol)[style*='--ind-hanging'] > li[data-list-label]::before {
+.editor-content :is(ul, ol)[style*='--ind-hanging'] > li[data-list-label]::before,
+.editor-content li[data-list-label][style*='--ind-hanging']::before {
   right: auto;
   left: calc(-1 * var(--ind-hanging));
 }
@@ -624,6 +641,19 @@ span.docx-tab-leader[data-leader='heavy']::after {
 .footer-display {
   position: relative;
   z-index: 0;
+}
+
+/* Pasma dzielą z body zachowanie białych znaków (Word nie kolapsuje spacji). */
+.header-editor-content,
+.footer-editor-content,
+.header-display,
+.footer-display {
+  white-space: pre-wrap;
+}
+
+:is(.header-editor-content, .footer-editor-content, .header-display, .footer-display)
+  span[style*='min-width:2em'] {
+  white-space: normal;
 }
 
 :is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper:hover {
@@ -846,6 +876,105 @@ body.image-moving * {
   color: #4472c4;
 }
 
+/* ===== „Pokaż wszystko" (¶, Ctrl+Shift+8) — pozostałe znaczniki formatowania =====
+   Wszystkie znaczniki to pseudo-elementy o ZEROWYM wpływie na układ: paginacja mierzy
+   bloki w kontenerze BEZ klasy show-formatting-marks, więc widoczne znaczniki nie mogą
+   zmieniać łamania linii ani wysokości bloków (inaczej treść wystawałaby poza stronę
+   i ginęła pod overflow:hidden). Pseudo-elementy nie istnieją w DOM → nie wchodzą do
+   getContent/autosave. Ograniczenie CSS-only: kropek spacji i strzałki ↵ (br) nie da
+   się narysować bez mutacji DOM — świadomie pomijamy. */
+
+/* Znacznik końca akapitu ¶ — inline-block o szerokości 0 (glif „wystaje" za ostatni
+   znak przez overflow, bez wpływu na zawijanie). Dotyczy też nagłówków i punktów list,
+   jak w Wordzie. */
+.editor-content.show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after {
+  content: '¶';
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+  color: #4472c4;
+  opacity: 0.6;
+  font-family: Calibri, 'Segoe UI', sans-serif;
+  font-weight: 400;
+  font-style: normal;
+  font-size: 0.9em;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Strzałka tabulatora → dla trzech nośników tabów z readera:
+   1) span.docx-tab-seg — segment pozycjonowany absolutnie na stopie; strzałka W LUCE
+      przed segmentem (right:100%), poza box-modelem — zero wpływu na układ; */
+.editor-content.show-formatting-marks .docx-tab-seg::before {
+  content: '→';
+  position: absolute;
+  right: 100%;
+  padding-right: 2px;
+  color: #4472c4;
+  opacity: 0.6;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* 2) span.docx-tab-leader — luka flex z wypełniaczem (position:relative inline
+      z readera; kropki maluje ::after — ::before jest wolny); */
+.editor-content.show-formatting-marks .docx-tab-leader::before {
+  content: '→';
+  position: absolute;
+  left: 0;
+  z-index: 1;
+  color: #4472c4;
+  opacity: 0.6;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* 3) bezklasowy span z literalnym \t (reader: display:inline-block;min-width:2em;
+      white-space:pre) — glif o zerowej szerokości nakłada się na odstęp tabu. */
+.editor-content.show-formatting-marks span[style*='min-width:2em']::before {
+  content: '→';
+  display: inline-block;
+  width: 0;
+  overflow: visible;
+  color: #4472c4;
+  opacity: 0.6;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Podział sekcji: nośnik danych (poza trybem znaczników display:none — patrz niżej).
+   Pokazujemy linię i etykietę bez zajmowania miejsca (height:0 + absolute). */
+.editor-content.show-formatting-marks .docx-section-break {
+  display: block;
+  height: 0;
+  position: relative;
+  overflow: visible;
+}
+.editor-content.show-formatting-marks .docx-section-break::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  border-top: 1px dashed #9aa7b4;
+  pointer-events: none;
+}
+.editor-content.show-formatting-marks .docx-section-break::after {
+  content: 'Podział sekcji';
+  position: absolute;
+  top: -0.75em;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #fff;
+  padding: 0 8px;
+  color: #9aa7b4;
+  font-size: 8pt;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Pole tekstowe Worda (div.docx-textbox). Obramowanie EDYCYJNE = outline (poza box-modelem,
    zero wpływu na wymiary) — widoczne tylko przy hover / zaznaczeniu / fokusie w środku /
    przeciąganiu. Obramowanie DOKUMENTOWE (a:ln z pliku) przychodzi jako inline `border:` z
@@ -948,6 +1077,26 @@ body.image-moving * {
 
   .editor-content.show-formatting-marks .page-break::after {
     display: none;
+  }
+
+  /* Znaczniki „Pokaż wszystko" są nie-drukowalne (jak w Wordzie). */
+  .editor-content.show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after,
+  .editor-content.show-formatting-marks .docx-tab-seg::before,
+  .editor-content.show-formatting-marks .docx-tab-leader::before,
+  .editor-content.show-formatting-marks span[style*='min-width:2em']::before,
+  .editor-content.show-formatting-marks .docx-section-break::before,
+  .editor-content.show-formatting-marks .docx-section-break::after,
+  .editor-content.show-formatting-marks .docx-column-break::after {
+    content: none;
+  }
+
+  .editor-content.show-formatting-marks .docx-section-break {
+    display: none;
+  }
+
+  .editor-content.show-formatting-marks .docx-column-break {
+    height: 0;
+    border: none;
   }
 }
 
@@ -1346,8 +1495,9 @@ body.image-moving * {
 .footnote-item {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 4px 0;
+  /* Word oddziela znacznik od treści pojedynczą spacją, nie stałą kolumną. */
+  gap: 0.3em;
+  padding: 1px 0;
   border-top: 1px solid #f1f3f4;
   font-size: 10pt;
   line-height: 1.15;
@@ -1359,12 +1509,13 @@ body.image-moving * {
 
 .footnote-item-number {
   flex: 0 0 auto;
-  min-width: 18px;
-  font-weight: 600;
-  /* Czarny jak treść przypisu (jak w MS Word) — bez kolorowego akcentu. */
+  /* Word: znacznik wpisu = indeks górny bez pogrubienia. `vertical-align:super`
+     nie działa na flex item — podniesienie robi relative/top, rozmiar jak <sup>. */
+  font-weight: normal;
   color: #000;
-  vertical-align: super;
-  font-size: 9pt;
+  font-size: 0.65em;
+  position: relative;
+  top: -0.35em;
   /* Klik w numer wraca do odwołania w treści (scrollToNoteReference). */
   cursor: pointer;
   user-select: none;

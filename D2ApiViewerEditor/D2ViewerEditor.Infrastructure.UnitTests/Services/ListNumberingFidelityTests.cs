@@ -1011,4 +1011,55 @@ public class ListNumberingFidelityTests
         numbering.Elements<AbstractNum>().Should().HaveCount(1);
         AssertNoValidationErrors(docx);
     }
+
+    // ── Kolor znacznika z w:lvl/w:rPr/w:color ────────────────────────────────────
+
+    private static Level LvlWithMarkerColor(int index, string colorHex)
+    {
+        var level = new Level { LevelIndex = index };
+        level.Append(new StartNumberingValue { Val = 1 });
+        level.Append(new NumberingFormat { Val = NumberFormatValues.Decimal });
+        level.Append(new LevelText { Val = $"%{index + 1}." });
+        level.Append(new LevelJustification { Val = LevelJustificationValues.Left });
+        level.Append(new NumberingSymbolRunProperties(
+            new RunFonts { Hint = FontTypeHintValues.Default },
+            new Color { Val = colorHex }));
+        return level;
+    }
+
+    [Test]
+    public void Reader_MarkerColorFromLevelRunProperties_IsEmittedOnContainer()
+    {
+        using var docx = BuildDocx(
+            [Abstract(1, LvlWithMarkerColor(0, "ED7D31"))],
+            [Num(1, 1)],
+            [ListItem("Pomarańczowy numer", 1, 0)]);
+
+        var html = _reader.Convert(docx).Html;
+
+        var olTag = ListOpenTags(html).First(t => t.StartsWith("<ol"));
+        olTag.Should().Contain("data-marker-color=\"ED7D31\"",
+            "surowy kolor z w:lvl/w:rPr musi round-tripować");
+        olTag.Should().Contain("--marker-color:#ED7D31",
+            "CSS var konsumują etykiety ::before i span.list-marker");
+    }
+
+    [Test]
+    public void RoundTrip_MarkerColor_SurvivesInLevelRunProperties()
+    {
+        using var docx = BuildDocx(
+            [Abstract(1, LvlWithMarkerColor(0, "ED7D31"))],
+            [Num(1, 1)],
+            [ListItem("Jeden", 1, 0), ListItem("Dwa", 1, 0)]);
+
+        var regenerated = _writer.Convert(_reader.Convert(docx).Html);
+        var (_, numbering) = ReadListParagraphs(regenerated);
+
+        var lvl0 = numbering.Elements<AbstractNum>().Single().Elements<Level>()
+            .First(l => l.LevelIndex?.Value == 0);
+        var markerColor = lvl0.NumberingSymbolRunProperties?.GetFirstChild<Color>();
+        markerColor.Should().NotBeNull("kolor znacznika nie może ginąć przy zapisie");
+        markerColor!.Val!.Value.Should().Be("ED7D31");
+        AssertNoValidationErrors(regenerated);
+    }
 }

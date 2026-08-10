@@ -3446,6 +3446,19 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     return this.contextMenuTargetCell() || this.activeTableCell();
   }
 
+  /**
+   * Nowa komórka przejmuje inline style komórki-wzorca (padding/border z DOCX) —
+   * goły <td> spadał na domyślne CSS edytora i wiersz miał inne wcięcia niż reszta
+   * tabeli w edytorze oraz inne tcMar po zapisie.
+   */
+  private createCellLike(reference: HTMLTableCellElement | undefined): HTMLTableCellElement {
+    const td = document.createElement('td');
+    const style = reference?.getAttribute('style');
+    if (style) td.setAttribute('style', style);
+    td.innerHTML = '<br>';
+    return td;
+  }
+
   contextMenuInsertRowAbove(): void {
     const cell = this.getContextCell();
     if (!cell) { this.closeContextMenu(); return; }
@@ -3455,9 +3468,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const colspan = row.querySelectorAll('td, th').length;
     const newRow = row.cloneNode(false) as HTMLTableRowElement;
     for (let i = 0; i < colspan; i++) {
-      const td = document.createElement('td');
-      td.innerHTML = '<br>';
-      newRow.appendChild(td);
+      newRow.appendChild(this.createCellLike(row.cells[i]));
     }
     table.querySelector('tbody')?.insertBefore(newRow, row) || row.parentNode?.insertBefore(newRow, row);
     this.notifyEditorChange();
@@ -3473,9 +3484,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const colspan = row.querySelectorAll('td, th').length;
     const newRow = row.cloneNode(false) as HTMLTableRowElement;
     for (let i = 0; i < colspan; i++) {
-      const td = document.createElement('td');
-      td.innerHTML = '<br>';
-      newRow.appendChild(td);
+      newRow.appendChild(this.createCellLike(row.cells[i]));
     }
     const nextSibling = row.nextSibling;
     nextSibling ? row.parentNode?.insertBefore(newRow, nextSibling) : row.parentNode?.appendChild(newRow);
@@ -3491,8 +3500,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const colIndex = (cell as HTMLTableCellElement).cellIndex;
     table.querySelectorAll('tr').forEach(row => {
       const ref = row.cells[colIndex];
-      const newTd = document.createElement('td');
-      newTd.innerHTML = '<br>';
+      const newTd = this.createCellLike(ref);
       if (ref) row.insertBefore(newTd, ref);
       else row.appendChild(newTd);
     });
@@ -3508,8 +3516,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     const colIndex = (cell as HTMLTableCellElement).cellIndex;
     table.querySelectorAll('tr').forEach(row => {
       const ref = row.cells[colIndex];
-      const newTd = document.createElement('td');
-      newTd.innerHTML = '<br>';
+      const newTd = this.createCellLike(ref);
       if (ref?.nextSibling) row.insertBefore(newTd, ref.nextSibling);
       else row.appendChild(newTd);
     });

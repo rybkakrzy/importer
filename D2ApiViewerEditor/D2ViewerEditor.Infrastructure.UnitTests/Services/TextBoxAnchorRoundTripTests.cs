@@ -122,6 +122,68 @@ public class TextBoxAnchorRoundTripTests
         html.Should().Contain("data-border-color=\"#FF0000\"");
     }
 
+    [Test]
+    public void Reader_TextBoxBodyPr_AnchorAndInsets_AreRendered()
+    {
+        const string body = @"<w:p><w:r>
+  <w:drawing><wp:inline><wp:extent cx=""1828800"" cy=""457200""/>
+    <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
+      <wps:wsp>
+        <wps:txbx><w:txbxContent><w:p><w:r><w:t>Miejsce na barcode</w:t></w:r></w:p></w:txbxContent></wps:txbx>
+        <wps:bodyPr anchor=""ctr"" lIns=""182880"" tIns=""91440"" rIns=""182880"" bIns=""91440""/>
+      </wps:wsp>
+    </a:graphicData></a:graphic>
+  </wp:inline></w:drawing>
+</w:r></w:p>";
+        using var ms = DocxFromRawBody(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("data-tb-anchor=\"ctr\"");
+        html.Should().Contain("justify-content:center",
+            "a:bodyPr@anchor=ctr = treść wyśrodkowana w pionie");
+        // Insety w EMU → px (91440 EMU = 9.6 px, 182880 EMU = 19.2 px), kolejność t r b l.
+        html.Should().Contain("padding:9.6px 19.2px 9.6px 19.2px");
+        html.Should().Contain("data-tb-ins=\"182880 91440 182880 91440\"");
+    }
+
+    [Test]
+    public void Reader_TextBoxWithoutBodyPr_UsesWordDefaultInsets()
+    {
+        using var ms = DocxFromRawBody(AnchoredTextBoxBody);
+
+        var html = _reader.Convert(ms).Html;
+
+        // Domyślne insety Worda: lIns/rIns 91440 EMU = 9.6 px, tIns/bIns 45720 EMU = 4.8 px.
+        html.Should().Contain("padding:4.8px 9.6px 4.8px 9.6px");
+        html.Should().NotContain("data-tb-anchor", "brak anchor = domyślne top, bez flexa");
+    }
+
+    [Test]
+    public void Writer_TextBoxBodyPr_RoundTripsAnchorAndInsets()
+    {
+        var html =
+            "<div class=\"docx-textbox\" data-textbox=\"1\" data-width-emu=\"1828800\" data-height-emu=\"457200\""
+            + " data-tb-anchor=\"ctr\" data-tb-ins=\"182880 91440 182880 91440\""
+            + " style=\"display:inline-block;width:192px;min-height:48px;\">"
+            + "<p>Miejsce na barcode</p></div>"
+            + "<p>Akapit</p>";
+
+        var docx = _writer.Convert(html);
+
+        using var ms = new MemoryStream(docx);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var bodyPr = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<DocumentFormat.OpenXml.Office2010.Word.DrawingShape.TextBodyProperties>()
+            .Single();
+        bodyPr.Anchor!.Value.Should().Be(DocumentFormat.OpenXml.Drawing.TextAnchoringTypeValues.Center,
+            "wyśrodkowanie pionowe nie może ginąć przy zapisie");
+        bodyPr.LeftInset!.Value.Should().Be(182880);
+        bodyPr.TopInset!.Value.Should().Be(91440);
+        bodyPr.RightInset!.Value.Should().Be(182880);
+        bodyPr.BottomInset!.Value.Should().Be(91440);
+    }
+
     // ---- Writer: wps:wsp + kotwica do następnego akapitu ------------------------------
 
     [Test]

@@ -533,6 +533,20 @@ describe('WysiwygEditorComponent — nagłówki/stopki per sekcja', () => {
     expect(footer).toBe('Strona 2');
   });
 
+  it('nagłówek: pole PAGE/NUMPAGES jest podstawiane jak w stopce', () => {
+    // Regresja: podmiana {page}/{pages} istniała tylko w _computeFooterContent —
+    // nagłówek pokazywał literalne "Strona {page} z {pages}".
+    component.headerContent = {
+      html: 'Strona <span class="field-page">{page}</span> z <span class="field-numpages">{pages}</span>',
+      height: 1.27
+    };
+
+    const header = (component as any)._computeHeaderContent(0) as string;
+    expect(header).toContain('Strona <span class="field-page">1</span>');
+    expect(header).not.toContain('{page}');
+    expect(header).not.toContain('{pages}');
+  });
+
   it('stopka: tekst obok numeru strony (w tym formanty sdt-inline) trafia do treści strony', () => {
     // Kształt HTML z readera: tytuł w formancie + dynamiczny numer + klauzula w formancie.
     component.footerContent = {

@@ -767,6 +767,14 @@ export class EditorToolbarComponent {
   }
 
   /**
+   * Stan przycisku „Pokaż wszystko" (¶) — źródłem prawdy jest edytor
+   * (EditorState.formattingMarks), więc skrót Ctrl+Shift+8 też podświetla przycisk.
+   */
+  isFormattingMarksActive(): boolean {
+    return this.editorState?.formattingMarks === true;
+  }
+
+  /**
    * Stan przycisków wyrównania — jak w Wordzie dokładnie jeden jest aktywny,
    * domyślnie „do lewej" (brak jawnego text-align = lewa).
    */

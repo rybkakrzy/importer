@@ -654,27 +654,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const { leftPx, topPx } = contractToBand(xPx, yPx, geo);
       el.style.left = `${Math.round(leftPx)}px`;
       el.style.top = `${Math.round(topPx)}px`;
-      // Kotwica pionowa paragraph-relative: znacznik z offsetem (px) — po renderze
-      // _alignBandParagraphAnchors dopina top do realnego akapitu-gospodarza (jak Word).
-      const voff = this._paragraphRelativeVOffsetPx(el);
-      if (voff !== null) el.setAttribute('data-band-para-voff', String(voff));
     });
     return tpl.innerHTML;
-  }
-
-  /**
-   * Offset pionowy (px) kotwicy relative-to-paragraph z data-docx-xml kształtu;
-   * null, gdy kotwica nie jest paragraph/line-relative (wtedy kontrakt wystarcza).
-   */
-  private _paragraphRelativeVOffsetPx(el: HTMLElement): number | null {
-    const b64 = el.getAttribute('data-docx-xml');
-    const doc = b64 ? decodeShapeXml(b64) : null;
-    if (!doc) return null;
-    const posV = doc.getElementsByTagName('wp:positionV')[0];
-    const relFrom = posV?.getAttribute('relativeFrom');
-    if (relFrom !== 'paragraph' && relFrom !== 'line') return null;
-    const offset = Number(posV.getElementsByTagName('wp:posOffset')[0]?.textContent ?? NaN);
-    return Number.isFinite(offset) ? Math.round(offset / EMU_PER_PX) : 0;
   }
 
   /** Inwalidacja cache nagłówka/stopki — wołać po każdej edycji */
@@ -3028,6 +3009,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         return;
       }
 
+      // Ctrl+Shift+8 — „Pokaż wszystko" (znaczniki formatowania), jak w Wordzie.
+      // e.code zamiast e.key: z Shiftem '8' staje się '*' (układ US/PL programisty).
+      if (e.shiftKey && e.code === 'Digit8') {
+        e.preventDefault();
+        this.toggleFormattingMarks();
+        return;
+      }
+
       switch (e.key.toLowerCase()) {
         case 'b':
           e.preventDefault();
@@ -3238,6 +3227,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wykonuje komendę edytora
    */
   executeCommand(command: EditorCommand, value?: string): void {
+    // Przełącznik WIDOKU, nie edycja treści: bez fokusu, bez onContentChange
+    // (nie brudzi dokumentu, nie tworzy wpisu undo, nie rusza autosave).
+    if (command === 'toggleFormattingMarks') {
+      this.toggleFormattingMarks();
+      return;
+    }
+
     const editor = this.getActiveEditor();
     if (!editor) return;
 
@@ -4643,11 +4639,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * When on, page-break markers show a subtle non-printing hint (Word-like
    * "formatting marks"). Off by default so breaks render as a real page
    * boundary rather than a graphic in the content flow.
+   *
+   * Word's "Pokaż wszystko" (Ctrl+Shift+8). All marks are CSS pseudo-elements
+   * keyed off the `show-formatting-marks` class (see SCSS) — nothing is added
+   * to the DOM, so saved content and pagination measurements stay identical.
    */
   readonly showFormattingMarks = signal(false);
 
   toggleFormattingMarks(force?: boolean): void {
     this.showFormattingMarks.update(v => (force === undefined ? !v : force));
+    // Odbij stan w EditorState — toolbar podświetla ¶ na tej podstawie.
+    this.editorState.update(s => ({ ...s, formattingMarks: this.showFormattingMarks() }));
+    this.stateChange.emit(this.editorState());
   }
 
   /**
@@ -5915,7 +5918,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           item.className = 'footnote-item endnote-entry';
           const num = document.createElement('span');
           num.className = 'footnote-item-number';
-          num.textContent = String(i + 1);
+          num.textContent = this._formatNoteLabel(i + 1, this._endnoteNumberFormat(), true);
           const content = document.createElement('div');
           content.className = 'footnote-item-content';
           content.innerHTML = en.html || '<p></p>';
@@ -6081,48 +6084,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Repaginacja przenosi bloki między stronami — znacznik kotwicy musi pojechać
       // za akapitem-kotwicą (albo zniknąć, jeśli element wypadł z DOM).
       this._scheduleAnchorBadgeRefresh();
-      this._alignBandParagraphAnchors();
     } finally {
       this._isRepaginating = false;
     }
-  }
-
-  /**
-   * Kotwice pionowe paragraph-relative w pasmach nagłówka/stopki: Word liczy pozycję od
-   * AKAPITU-gospodarza kotwicy, a przeliczenie kontrakt→pasmo przybliża akapit górą pasma —
-   * logo zakotwiczone w dalszym akapicie stopki lądowało za wysoko (nachodziło na body).
-   * Po renderze znamy realny offset akapitu w pasmie, więc dopinamy top do gospodarza.
-   */
-  private _alignBandParagraphAnchors(): void {
-    const container = this.pageEditorRefs?.first?.nativeElement.closest('.pages-container');
-    if (!container) return;
-    container.querySelectorAll<HTMLElement>(
-      '.page-header [data-band-para-voff], .page-footer [data-band-para-voff]',
-    ).forEach((shape) => {
-      const host = this._bandAnchorHostParagraph(shape);
-      const ref = shape.offsetParent as HTMLElement | null;
-      if (!host || !ref) return;
-      // offsetTop akapitu w układzie, w którym rozwiązuje się style.top kształtu
-      // (offsetTop ignoruje transform zoomu — spójnie z resztą pomiarów paginacji).
-      let top = 0;
-      let n: HTMLElement | null = host;
-      while (n && n !== ref && ref.contains(n)) {
-        top += n.offsetTop;
-        n = n.offsetParent as HTMLElement | null;
-      }
-      const off = Number(shape.getAttribute('data-band-para-voff')) || 0;
-      shape.style.top = `${Math.round(top + off)}px`;
-    });
-  }
-
-  /** Akapit-gospodarz kotwicy pasma: rodzic <p> (obraz w akapicie) albo następny akapit
-   *  (kształty hoistowane PRZED akapit-gospodarza — ADR-0030). */
-  private _bandAnchorHostParagraph(shape: HTMLElement): HTMLElement | null {
-    const inPara = shape.closest('p');
-    if (inPara) return inPara as HTMLElement;
-    let sib: Element | null = shape.nextElementSibling;
-    while (sib && sib.tagName !== 'P') sib = sib.nextElementSibling;
-    return sib as HTMLElement | null;
   }
 
   /**
@@ -7928,7 +7892,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Wylicza zawartość nagłówka dla danej strony (używane wewnętrznie przez computed)
    */
   private _computeHeaderContent(pageIndex: number): string {
-    return this._resolveHfVariant(pageIndex, 'header').html;
+    return this._substitutePageFields(this._resolveHfVariant(pageIndex, 'header').html, pageIndex);
+  }
+
+  private _substitutePageFields(html: string, pageIndex: number): string {
+    return html
+      .replace(/\{page\}/gi, String(pageIndex + 1))
+      .replace(/\{pages\}/gi, String(this.pageContents().length));
   }
 
   /**

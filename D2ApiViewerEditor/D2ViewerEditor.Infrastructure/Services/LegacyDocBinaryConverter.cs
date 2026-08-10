@@ -28,6 +28,10 @@ public static class LegacyDocBinaryConverter
     private const int LcbClxOffset = 0x01A6;             // lcbClx
     private const int FcPlcfBteChpxOffset = 0x00FA;      // fcPlcfBteChpx w FibRgFcLcb97 (para 12)
     private const int LcbPlcfBteChpxOffset = 0x00FE;     // lcbPlcfBteChpx
+    private const int FcSttbfFfnOffset = 0x0112;         // fcSttbfFfn w FibRgFcLcb97 (para 15) — tablica fontów
+    private const int LcbSttbfFfnOffset = 0x0116;        // lcbSttbfFfn
+    private const int FfnNameOffset = 40;                // xszFfn: 1(cbFfnM1)+1(flags)+2(wWeight)+1(chs)+1(ixchSzAlt)+10(panose)+24(fs)
+    private const int MaxFonts = 4096;                   // sanity limit wpisów SttbfFfn
     private const ushort FWhichTblStmBit = 0x0200;
     private const uint FcCompressedFlag = 0x40000000;    // PCD.fc: 1 bajt/znak (CP1252) zamiast UTF-16
     private const uint FcValueMask = 0x3FFFFFFF;
@@ -186,15 +190,19 @@ public static class LegacyDocBinaryConverter
         return ms.ToArray();
     }
 
-    /// <summary>Buduje w:rPr w kolejności schematu CT_RPr (b, i, strike, color, u); null gdy brak formatowania.</summary>
+    /// <summary>Buduje w:rPr w kolejności schematu CT_RPr (rFonts, b, i, strike, color, sz, u); null gdy brak formatowania.</summary>
     private static RunProperties? BuildRunProperties(CharFormat f)
     {
         if (!f.HasAny) return null;
         var rpr = new RunProperties();
+        if (f.FontName != null)
+            rpr.AppendChild(new RunFonts { Ascii = f.FontName, HighAnsi = f.FontName });
         if (f.Bold) rpr.AppendChild(new Bold());
         if (f.Italic) rpr.AppendChild(new Italic());
         if (f.Strike) rpr.AppendChild(new Strike());
         if (f.ColorHex != null) rpr.AppendChild(new Color { Val = f.ColorHex });
+        if (f.SizeHalfPoints is > 0)
+            rpr.AppendChild(new FontSize { Val = f.SizeHalfPoints.Value.ToString() });
         if (f.Underline) rpr.AppendChild(new Underline { Val = UnderlineValues.Single });
         return rpr;
     }
@@ -202,9 +210,13 @@ public static class LegacyDocBinaryConverter
     // ---- warstwa formatowania znaków (CHPX) --------------------------------------
 
     /// <summary>Bezpośrednie formatowanie run-a wyciągnięte z CHPX (podzbiór wspierany w podglądzie).</summary>
-    private readonly record struct CharFormat(bool Bold, bool Italic, bool Underline, bool Strike, string? ColorHex)
+    private readonly record struct CharFormat(
+        bool Bold, bool Italic, bool Underline, bool Strike, string? ColorHex,
+        ushort? SizeHalfPoints, string? FontName)
     {
-        public bool HasAny => Bold || Italic || Underline || Strike || ColorHex != null;
+        public bool HasAny =>
+            Bold || Italic || Underline || Strike || ColorHex != null
+            || SizeHalfPoints != null || FontName != null;
     }
 
     private sealed class TextRun
@@ -295,11 +307,59 @@ public static class LegacyDocBinaryConverter
                 pages[i] = (int)(pnRaw & PnFkpMask);
             }
 
-            return new ChpxIndex(wd, boundaries, pages);
+            return new ChpxIndex(wd, boundaries, pages, ParseSttbfFfn(wd, table));
         }
         catch
         {
             return null; // dowolna niespójność → samodegradacja (tekst bez formatowania)
+        }
+    }
+
+    /// <summary>
+    /// Parsuje tablicę fontów SttbfFfn (strumień tablicy): cData, cbExtra, potem wpisy FFN —
+    /// nazwa fontu to UTF-16 xszFfn od bajtu 40 wpisu. Indeks listy = ftc z sprmCRgFtc0.
+    /// Dowolna niespójność → null (run-y zostają bez w:rFonts, reszta formatowania przeżywa).
+    /// </summary>
+    private static IReadOnlyList<string>? ParseSttbfFfn(byte[] wd, byte[] table)
+    {
+        try
+        {
+            if (wd.Length < LcbSttbfFfnOffset + 4) return null;
+            int fc = BinaryPrimitives.ReadInt32LittleEndian(wd.AsSpan(FcSttbfFfnOffset));
+            uint lcb = BinaryPrimitives.ReadUInt32LittleEndian(wd.AsSpan(LcbSttbfFfnOffset));
+            if (fc < 0 || lcb < 4 || (long)fc + lcb > table.Length) return null;
+
+            var span = table.AsSpan(fc, (int)lcb);
+            int cData = BinaryPrimitives.ReadUInt16LittleEndian(span);
+            int cbExtra = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(2));
+            if (cData <= 0 || cData > MaxFonts) return null;
+
+            var fonts = new List<string>(cData);
+            int pos = 4;
+            for (int i = 0; i < cData && pos < span.Length; i++)
+            {
+                int entryLen = span[pos] + 1; // cbFfnM1 + 1
+                if (entryLen <= 1 || pos + entryLen > span.Length) break;
+                string name = "";
+                int nameStart = pos + FfnNameOffset;
+                int nameBytes = pos + entryLen - nameStart;
+                if (nameBytes >= 2)
+                {
+                    var raw = span.Slice(nameStart, nameBytes);
+                    int end = 0;
+                    while (end + 1 < raw.Length
+                           && BinaryPrimitives.ReadUInt16LittleEndian(raw.Slice(end)) != 0)
+                        end += 2;
+                    name = Encoding.Unicode.GetString(raw.Slice(0, end)).Trim();
+                }
+                fonts.Add(name);
+                pos += entryLen + cbExtra;
+            }
+            return fonts.Count > 0 ? fonts : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -312,13 +372,15 @@ public static class LegacyDocBinaryConverter
         private readonly byte[] _wd;
         private readonly long[] _boundaries;       // n+1 granic FC (rosnące)
         private readonly int[] _pages;             // n numerów stron FKP
+        private readonly IReadOnlyList<string>? _fonts; // SttbfFfn: ftc → nazwa fontu
         private readonly Dictionary<int, Fkp> _fkpCache = new();
 
-        public ChpxIndex(byte[] wd, long[] boundaries, int[] pages)
+        public ChpxIndex(byte[] wd, long[] boundaries, int[] pages, IReadOnlyList<string>? fonts)
         {
             _wd = wd;
             _boundaries = boundaries;
             _pages = pages;
+            _fonts = fonts;
         }
 
         public CharFormat GetFormat(long fc)
@@ -332,7 +394,7 @@ public static class LegacyDocBinaryConverter
         private Fkp GetFkp(int page)
         {
             if (_fkpCache.TryGetValue(page, out var cached)) return cached;
-            var fkp = Fkp.Parse(_wd, page);
+            var fkp = Fkp.Parse(_wd, page, _fonts);
             _fkpCache[page] = fkp;
             return fkp;
         }
@@ -358,7 +420,7 @@ public static class LegacyDocBinaryConverter
             return bucket < 0 ? default : _formats[bucket];
         }
 
-        public static Fkp Parse(byte[] wd, int page)
+        public static Fkp Parse(byte[] wd, int page, IReadOnlyList<string>? fonts)
         {
             try
             {
@@ -386,7 +448,7 @@ public static class LegacyDocBinaryConverter
                     int cb = wd[chpxOff];
                     int grpprlStart = chpxOff + 1;
                     if (cb <= 0 || grpprlStart + cb > baseOff + FkpSize) { formats[i] = default; continue; }
-                    formats[i] = ParseChpxGrpprl(wd.AsSpan(grpprlStart, cb));
+                    formats[i] = ParseChpxGrpprl(wd.AsSpan(grpprlStart, cb), fonts);
                 }
 
                 return new Fkp(boundaries, formats);
@@ -423,12 +485,16 @@ public static class LegacyDocBinaryConverter
     private const ushort SprmCKul = 0x2A3E;      // Kul (1 B): 0=brak, ≠0=podkreślenie
     private const ushort SprmCIco = 0x2A42;      // Ico (1 B): indeks w 16-kolorowej palecie
     private const ushort SprmCCv = 0x6870;       // COLORREF (4 B): R,G,B,fAuto
+    private const ushort SprmCHps = 0x4A43;      // rozmiar czcionki (2 B, half-points)
+    private const ushort SprmCRgFtc0 = 0x4A4F;   // ftc ASCII (2 B): indeks w SttbfFfn
 
     /// <summary>Interpretuje grpprl (ciąg SPRM-ów) CHPX i składa z niego wspierane formatowanie znaku.</summary>
-    private static CharFormat ParseChpxGrpprl(ReadOnlySpan<byte> grpprl)
+    private static CharFormat ParseChpxGrpprl(ReadOnlySpan<byte> grpprl, IReadOnlyList<string>? fonts)
     {
         bool bold = false, italic = false, underline = false, strike = false;
         string? color = null;
+        ushort? sizeHalfPoints = null;
+        string? fontName = null;
 
         int p = 0;
         while (p + 2 <= grpprl.Length)
@@ -465,10 +531,19 @@ public static class LegacyDocBinaryConverter
                 case SprmCCv when operand.Length >= 3:
                     color = $"{operand[0]:X2}{operand[1]:X2}{operand[2]:X2}";
                     break;
+                case SprmCHps when operand.Length >= 2:
+                    var hps = BinaryPrimitives.ReadUInt16LittleEndian(operand);
+                    if (hps is > 0 and <= 3276) sizeHalfPoints = hps; // limit Worda: 1638 pt
+                    break;
+                case SprmCRgFtc0 when operand.Length >= 2:
+                    int ftc = BinaryPrimitives.ReadUInt16LittleEndian(operand);
+                    if (fonts != null && ftc < fonts.Count && !string.IsNullOrEmpty(fonts[ftc]))
+                        fontName = fonts[ftc];
+                    break;
             }
         }
 
-        return new CharFormat(bold, italic, underline, strike, color);
+        return new CharFormat(bold, italic, underline, strike, color, sizeHalfPoints, fontName);
     }
 
     /// <summary>

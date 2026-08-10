@@ -159,7 +159,19 @@ export function applyColumnWidths(table: HTMLTableElement, grid: TableGrid, widt
   }
 
   const total = widths.reduce((s, w) => s + (w > 0 ? w : 0), 0);
-  if (total > 0) table.style.width = `${Math.round(total)}px`;
+  if (total > 0) {
+    table.style.width = `${Math.round(total)}px`;
+    dropRenderOnlyWidthMarkers(table);
+  }
+}
+
+/**
+ * User-driven geometry takes over: the imported "width/layout are render-only,
+ * restore tblW=auto / autofit on export" markers must not survive a manual resize.
+ */
+function dropRenderOnlyWidthMarkers(table: HTMLTableElement): void {
+  table.removeAttribute('data-tbl-w');
+  table.removeAttribute('data-tbl-layout');
 }
 
 function ensureColgroup(table: HTMLTableElement, columnCount: number): HTMLElement {
@@ -187,6 +199,7 @@ export function writeColgroupWidths(
   newWidths: number[]
 ): void {
   const cols = Array.from(ensureColgroup(table, grid.columnCount).children) as HTMLElement[];
+  let anyChanged = false;
   for (let i = 0; i < grid.columnCount; i++) {
     const col = cols[i];
     if (!col) continue;
@@ -196,10 +209,12 @@ export function writeColgroupWidths(
     if (changed) {
       col.style.width = `${nw}px`;
       col.removeAttribute('data-w-tw');
+      anyChanged = true;
     } else if (parsePx(col.style.width) <= 0) {
       col.style.width = `${nw}px`;
     }
   }
+  if (anyChanged) dropRenderOnlyWidthMarkers(table);
 }
 
 /**

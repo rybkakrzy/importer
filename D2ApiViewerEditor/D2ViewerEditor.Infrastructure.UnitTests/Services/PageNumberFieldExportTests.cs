@@ -74,6 +74,24 @@ public class PageNumberFieldExportTests
         footerPart.Footer.InnerText.Should().NotContain("{page}");
     }
 
+    [Test]
+    public void HeaderPageField_ExportsAsField()
+    {
+        var header = new HeaderFooterContent
+        {
+            Html = "Strona <span class=\"field-page\">{page}</span> z "
+                   + "<span class=\"field-numpages\">{pages}</span>"
+        };
+
+        var bytes = _writer.Convert("<p>Body</p>", header: header);
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var headerPart = doc.MainDocumentPart!.HeaderParts.First();
+
+        headerPart.Header!.Descendants<SimpleField>().Select(f => f.Instruction!.Value!.Trim())
+            .Should().Contain("PAGE").And.Contain("NUMPAGES");
+        headerPart.Header.InnerText.Should().NotContain("{page}");
+    }
+
     private Body ExportBody(string html)
     {
         var bytes = _writer.Convert(html);

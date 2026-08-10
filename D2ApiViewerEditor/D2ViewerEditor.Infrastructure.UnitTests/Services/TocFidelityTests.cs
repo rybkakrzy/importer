@@ -390,4 +390,78 @@ public class TocFidelityTests
         }
         return count;
     }
+
+    // ── Kolor wpisów: kotwice wewnętrzne nie mogą być niebieskimi linkami ─────────
+
+    [Test]
+    public void Read_HyperlinkRelationshipTargetingInternalAnchor_RendersAsInternal()
+    {
+        // Część generatorów zapisuje cel "#_Toc…" jako RELACJĘ (r:id) zamiast w:anchor —
+        // Word renderuje takie wpisy formatowaniem runów (czarne), nie stylem Hyperlink.
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var rel = mainPart.AddHyperlinkRelationship(new Uri("#_Toc900", UriKind.Relative), true);
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new Hyperlink(new Run(new Text("Rozdział I"))) { Id = rel.Id })));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        var aTag = System.Text.RegularExpressions.Regex.Match(html, "<a[^>]*>").Value;
+        aTag.Should().Contain("data-anchor=\"_Toc900\"");
+        aTag.Should().Contain("color:inherit");
+        aTag.Should().NotContain("#0563C1");
+    }
+
+    [Test]
+    public void Write_BlockLevelInternalAnchor_DoesNotForceHyperlinkStyling()
+    {
+        var html = "<a href=\"#_Toc1\" data-anchor=\"_Toc1\" style=\"color:inherit;\">Rozdział I</a>";
+
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var hyperlink = doc.MainDocumentPart!.Document!.Body!.Descendants<Hyperlink>().Single();
+        hyperlink.Anchor!.Value.Should().Be("_Toc1");
+        var runProps = hyperlink.Descendants<RunProperties>().ToList();
+        runProps.SelectMany(rp => rp.Elements<Color>()).Should().BeEmpty(
+            "kotwica wewnętrzna nie może dostawać wymuszonego niebieskiego");
+        runProps.SelectMany(rp => rp.Elements<RunStyle>()).Should().BeEmpty(
+            "styl znaku Hyperlink zapiekałby niebieski w dokumencie po pierwszym zapisie");
+    }
+
+    [Test]
+    public void Read_TabInsideHyperlink_WithoutLeader_IsSplitIntoPositionedSegments()
+    {
+        // Wpis TOC bez leadera: tab żyje WEWNĄTRZ w:hyperlink — ścieżka pozycyjna musi go
+        // rozcinać jak tab w gołym runie (wcześniej cały hyperlink lądował w jednym segmencie
+        // i tab degradował do stałych 2em).
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(new Tabs(
+                    new TabStop { Val = TabStopValues.Right, Position = 9000 })),
+                new Hyperlink(
+                    new Run(new Text("Rozdział I")),
+                    new Run(new TabChar()),
+                    new Run(new Text("3")))
+                { Anchor = "_Toc1" })));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-tab-seg");
+        html.Should().Contain("left:600px", "prawy stop 9000 tw = 600 px");
+        // Obie połowy wpisu zachowują nawigowalną kotwicę.
+        CountOf(html, "data-anchor=\"_Toc1\"").Should().Be(2,
+            "powłoka hyperlinku jest klonowana per segment");
+    }
 }

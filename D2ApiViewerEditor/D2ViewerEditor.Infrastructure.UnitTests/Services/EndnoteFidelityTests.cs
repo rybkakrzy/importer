@@ -62,6 +62,51 @@ public class EndnoteFidelityTests
     }
 
     [Test]
+    public void Import_SectionLevelEndnoteNumberFormat_IsRead()
+    {
+        // Word daje sekcyjnemu w:sectPr/w:endnotePr pierwszeństwo nad document-wide.
+        Import(EndnoteTestDocuments.EndnoteWithSectionNumberFormat(NumberFormatValues.UpperLetter))
+            .EndnoteNumberFormat.Should().Be("upperLetter");
+    }
+
+    [Test]
+    public void PreservingExport_KeepsEndnoteNumberFormatInSettings()
+    {
+        // Regeneracja pakietu gubiła w:endnotePr (settings.xml nie było zachowywane) —
+        // Word wracał do domyślnej numeracji lowerRoman niezależnie od oryginału.
+        var original = EndnoteTestDocuments.EndnoteWithNumberFormat(NumberFormatValues.Decimal);
+        var content = Import(original);
+
+        var result = _writer.ConvertPreservingPackage(content.Html, new MemoryStream(original),
+            content.Metadata, content.Header, content.Footer, content.Margins, content.PageSize,
+            content.SectionHeadersFooters, content.Footnotes, content.Endnotes);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(result), false);
+        var endnotePr = doc.MainDocumentPart!.DocumentSettingsPart?.Settings?
+            .GetFirstChild<EndnoteDocumentWideProperties>();
+        endnotePr.Should().NotBeNull("eksport nie może zmieniać typu numeracji endnotes");
+        endnotePr!.GetFirstChild<NumberingFormat>()!.Val!.Value.Should().Be(NumberFormatValues.Decimal);
+    }
+
+    [Test]
+    public void PreservingExport_SectionLevelFormat_SurvivesAsDocumentWide()
+    {
+        var original = EndnoteTestDocuments.EndnoteWithSectionNumberFormat(NumberFormatValues.UpperLetter);
+        var content = Import(original);
+
+        var result = _writer.ConvertPreservingPackage(content.Html, new MemoryStream(original),
+            content.Metadata, content.Header, content.Footer, content.Margins, content.PageSize,
+            content.SectionHeadersFooters, content.Footnotes, content.Endnotes);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(result), false);
+        doc.MainDocumentPart!.DocumentSettingsPart?.Settings?
+            .GetFirstChild<EndnoteDocumentWideProperties>()?
+            .GetFirstChild<NumberingFormat>()?.Val?.Value
+            .Should().Be(NumberFormatValues.UpperLetter,
+                "sekcyjny override (regenerowany sectPr go nie niesie) wraca jako document-wide");
+    }
+
+    [Test]
     public void Import_SingleEndnote_ProducesModelWithReferenceAndContent()
     {
         var content = Import(EndnoteTestDocuments.SingleEndnote());

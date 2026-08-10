@@ -122,6 +122,79 @@ public class LegacyDocBinaryConverterTests
         runs.Single(r => r.InnerText == "Plain").RunProperties.Should().BeNull();
     }
 
+    /// <summary>
+    /// Rozmiar czcionki (sprmCHps, half-points) i nazwa fontu (sprmCRgFtc0 → SttbfFfn) muszą
+    /// przechodzić do w:sz / w:rFonts — pisma 9pt renderowały się domyślnym fontem 11pt.
+    /// </summary>
+    [Test]
+    public void TryConvert_WithFontSizeAndFontName_EmitsSzAndRFonts()
+    {
+        var segments = new (string text, byte[]? grpprl)[]
+        {
+            ("Size", Sprm(0x4A43, 18, 0)),                        // sprmCHps = 18 hp = 9 pt
+            ("Font", Sprm(0x4A4F, 1, 0)),                         // sprmCRgFtc0 = ftc 1
+            ("BadF", Sprm(0x4A4F, 9, 0)),                         // ftc poza tablicą → bez rFonts
+            ("Both", Combine(Sprm(0x4A43, 24, 0), Sprm(0x4A4F, 0, 0))),
+        };
+
+        var (wd, table) = BuildFormattedDoc(segments);
+        AppendSttbfFfn(wd, ref table, "Arial", "Verdana");
+
+        var docx = LegacyDocBinaryConverter.TryConvert(wd, table, null);
+        docx.Should().NotBeNull();
+        var runs = ReadRuns(docx!);
+
+        RunProps(runs, "Size").GetFirstChild<FontSize>()!.Val!.Value.Should().Be("18");
+        RunProps(runs, "Font").GetFirstChild<RunFonts>()!.Ascii!.Value.Should().Be("Verdana");
+        RunProps(runs, "BadF").Should().BeNull();     // pojedynczy zły sprm → brak rPr wcale
+        var both = RunProps(runs, "Both");
+        both.GetFirstChild<FontSize>()!.Val!.Value.Should().Be("24");
+        both.GetFirstChild<RunFonts>()!.Ascii!.Value.Should().Be("Arial");
+    }
+
+    /// <summary>Uszkodzona SttbfFfn nie wywala importu — rozmiar przeżywa, font po prostu znika.</summary>
+    [Test]
+    public void TryConvert_CorruptSttbfFfn_KeepsSizeDropsFont()
+    {
+        var segments = new (string text, byte[]? grpprl)[]
+        {
+            ("Text", Combine(Sprm(0x4A43, 20, 0), Sprm(0x4A4F, 0, 0))),
+        };
+        var (wd, table) = BuildFormattedDoc(segments);
+        AppendSttbfFfn(wd, ref table, "Arial");
+        // Zepsuj długość tablicy fontów (lcb wystaje poza strumień).
+        BinaryPrimitives.WriteUInt32LittleEndian(wd.AsSpan(0x0116), (uint)table.Length + 100);
+
+        var docx = LegacyDocBinaryConverter.TryConvert(wd, table, null);
+        docx.Should().NotBeNull();
+        var props = RunProps(ReadRuns(docx!), "Text");
+        props.GetFirstChild<FontSize>()!.Val!.Value.Should().Be("20");
+        props.GetFirstChild<RunFonts>().Should().BeNull();
+    }
+
+    /// <summary>Dokleja SttbfFfn (cData, cbExtra=0, wpisy FFN: cbFfnM1 + 39 B nagłówka + nazwa UTF-16) do tablicy.</summary>
+    private static void AppendSttbfFfn(byte[] wd, ref byte[] table, params string[] fontNames)
+    {
+        var entries = new List<byte>();
+        foreach (var name in fontNames)
+        {
+            var nameBytes = Encoding.Unicode.GetBytes(name + "\0");
+            var entry = new byte[1 + 39 + nameBytes.Length];
+            entry[0] = (byte)(entry.Length - 1); // cbFfnM1
+            nameBytes.CopyTo(entry, 40);
+            entries.AddRange(entry);
+        }
+        var sttb = new byte[4 + entries.Count];
+        BinaryPrimitives.WriteUInt16LittleEndian(sttb, (ushort)fontNames.Length); // cData
+        BinaryPrimitives.WriteUInt16LittleEndian(sttb.AsSpan(2), 0);              // cbExtra
+        entries.CopyTo(sttb, 4);
+
+        int fc = table.Length;
+        table = table.Concat(sttb).ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(wd.AsSpan(0x0112), fc);            // fcSttbfFfn
+        BinaryPrimitives.WriteUInt32LittleEndian(wd.AsSpan(0x0116), (uint)sttb.Length); // lcbSttbfFfn
+    }
+
     /// <summary>Uszkodzona warstwa CHPX nie może wywalać importu — degradacja do samego tekstu.</summary>
     [Test]
     public void TryConvert_CorruptChpxLayer_StillExtractsTextWithoutFormatting()

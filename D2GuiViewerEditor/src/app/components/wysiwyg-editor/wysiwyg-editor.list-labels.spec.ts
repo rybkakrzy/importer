@@ -103,4 +103,27 @@ describe('WysiwygEditorComponent — etykiety list liczone silnikiem', () => {
 
     expect(editor.querySelectorAll('[data-list-label]').length).toBe(0);
   });
+
+  it('skompilowany CSS maluje etykietę kolorem z --marker-color (w:lvl/w:rPr/w:color)', () => {
+    // Reader emituje --marker-color inline na kontenerze listy; etykieta ::before musi
+    // ją konsumować — inaczej pomarańczowa numeracja z Worda renderuje się na czarno.
+    fixture.detectChanges();
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+    expect(css).toMatch(
+      /li\[data-list-label\]::before\s*\{[^}]*color:\s*var\(--marker-color,\s*inherit\)/
+    );
+  });
+
+  it('data-marker-color przeżywa serializację zapisu (getContent nie zdejmuje)', () => {
+    editor.innerHTML =
+      '<ol data-num-id="1" data-ilvl="0" data-num-fmt="decimal" data-lvl-text="%1." ' +
+      'data-marker-color="ED7D31" style="--marker-color:#ED7D31;"><li>jeden</li></ol>';
+
+    component.refreshListLabels();
+    const html = component.getContent();
+
+    expect(html).toContain('data-marker-color="ED7D31"');
+  });
 });
