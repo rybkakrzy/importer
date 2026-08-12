@@ -108,4 +108,149 @@ describe('WysiwygEditorComponent — toolbar action guards', () => {
 
     expect(spy).toHaveBeenCalled();
   });
+
+  // --- Pole daty aktualizowane automatycznie (ADR-0084) --------------------
+
+  it('insertDateField wstawia atomowe pole W AKAPICIE kursora (Range, nie insertHTML)', () => {
+    // execCommand('insertHTML') przy karetce na końcu bloku wyrzucał nieedytowalny span
+    // ZA akapit (quirk Chrome) — wstawka idzie przez Range.insertNode.
+    const editor = document.createElement('div');
+    const p = document.createElement('p');
+    p.textContent = 'Katowice, ';
+    editor.appendChild(p);
+    document.body.appendChild(editor);
+    try {
+      (component as any).getActiveEditor = () => editor;
+      (component as any).isSelectionInEditor = () => true;
+      (component as any).onContentChange = () => {}; // izolacja od repaginacji/emisji
+
+      const range = document.createRange();
+      range.selectNodeContents(p);
+      range.collapse(false); // karetka na KOŃCU akapitu — dokładnie zgłoszony przypadek
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      component.insertDateField();
+
+      const span = p.querySelector('span.field-date') as HTMLElement;
+      expect(span, 'pole musi wylądować WEWNĄTRZ akapitu kursora').not.toBeNull();
+
+      const now = new Date();
+      const pad = (v: number) => String(v).padStart(2, '0');
+      const today = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+      expect(span.textContent).toBe(today);
+      // Instrukcja pola Worda — writer odtwarza z niej żywe w:fldSimple.
+      expect(span.getAttribute('data-fld-instr')).toBe('TIME \\@ "dd-MM-yyyy"');
+      expect(span.getAttribute('contenteditable')).toBe('false');
+    } finally {
+      editor.remove();
+    }
+  });
+
+  // --- Tab w tabeli = nawigacja po komórkach jak w Wordzie (13259982) -------
+
+  describe('Tab w tabeli (13259982)', () => {
+    let editor: HTMLDivElement;
+    let table: HTMLTableElement;
+
+    function setCaret(cell: HTMLTableCellElement): void {
+      const range = document.createRange();
+      range.setStart(cell, 0);
+      range.collapse(true);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    function caretCell(): HTMLTableCellElement | null {
+      const sel = window.getSelection();
+      const node = sel?.anchorNode;
+      const el = node?.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement | null);
+      return (el?.closest?.('td') ?? null) as HTMLTableCellElement | null;
+    }
+
+    beforeEach(() => {
+      editor = document.createElement('div');
+      editor.setAttribute('contenteditable', 'true');
+      table = document.createElement('table');
+      table.innerHTML =
+        '<tr><td class="docx-borderless-cell" style="border:none;padding:4px;">A1</td><td>B1</td></tr>' +
+        '<tr><td>A2</td><td>B2</td></tr>';
+      editor.appendChild(table);
+      document.body.appendChild(editor);
+      (component as any).getActiveEditor = () => editor;
+      (component as any).onContentChange = () => {};
+    });
+
+    afterEach(() => editor.remove());
+
+    it('Tab przechodzi do następnej komórki, na końcu wiersza do pierwszej w kolejnym', () => {
+      setCaret(table.rows[0].cells[0]);
+      expect((component as any)._handleTableTab(false)).toBe(true);
+      expect(caretCell()?.textContent).toBe('B1');
+
+      expect((component as any)._handleTableTab(false)).toBe(true);
+      expect(caretCell()?.textContent).toBe('A2');
+    });
+
+    it('Shift+Tab wraca do poprzedniej komórki i do ostatniej w poprzednim wierszu', () => {
+      setCaret(table.rows[1].cells[0]);
+      expect((component as any)._handleTableTab(true)).toBe(true);
+      expect(caretCell()?.textContent).toBe('B1');
+
+      expect((component as any)._handleTableTab(true)).toBe(true);
+      expect(caretCell()?.textContent).toBe('A1');
+      // Pierwsza komórka: jak Word — nic, ale Tab skonsumowany (bez outdentu).
+      expect((component as any)._handleTableTab(true)).toBe(true);
+      expect(caretCell()?.textContent).toBe('A1');
+    });
+
+    it('Tab w OSTATNIEJ komórce dokłada wiersz dziedziczący atrybuty wzorca', () => {
+      setCaret(table.rows[1].cells[1]);
+      expect((component as any)._handleTableTab(false)).toBe(true);
+
+      expect(table.rows).toHaveLength(3);
+      expect(caretCell()).toBe(table.rows[2].cells[0]);
+      expect(table.rows[2].cells).toHaveLength(2);
+    });
+
+    it('poza tabelą Tab NIE jest konsumowany (zostaje wcięcie)', () => {
+      const p = document.createElement('p');
+      p.textContent = 'zwykly akapit';
+      editor.appendChild(p);
+      const range = document.createRange();
+      range.setStart(p.firstChild!, 0);
+      range.collapse(true);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      expect((component as any)._handleTableTab(false)).toBe(false);
+    });
+  });
+
+  // --- Fokus w pierwszej komórce po wstawieniu tabeli (13568651) ------------
+
+  it('insertTable ustawia karetkę w PIERWSZEJ komórce nowej tabeli', () => {
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    document.body.appendChild(editor);
+    try {
+      (component as any).getActiveEditor = () => editor;
+      (component as any).onContentChange = () => {};
+      window.getSelection()?.removeAllRanges();
+
+      component.insertTable('2x2');
+
+      const firstCell = editor.querySelector('td')!;
+      const sel = window.getSelection()!;
+      expect(sel.rangeCount).toBe(1);
+      const anchor = sel.anchorNode!;
+      const anchorEl = anchor.nodeType === Node.TEXT_NODE ? anchor.parentElement : (anchor as HTMLElement);
+      expect(anchorEl === firstCell || firstCell.contains(anchorEl)).toBe(true);
+    } finally {
+      editor.remove();
+    }
+  });
 });

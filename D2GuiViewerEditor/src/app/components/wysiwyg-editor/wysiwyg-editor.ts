@@ -587,14 +587,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Ostatni pomiar realnych wysokości pasm z paginacji (_measureBandHeightsPx w _repaginateNow).
+   * Kotwice pasm muszą używać TEJ SAMEJ wysokości stopki co paginacja: treść stopki wyższa niż
+   * min-height (np. baner firmowy) podnosi górę kontenera pasma, a statyczny wzór zostawiał
+   * kotwice o tę różnicę ZA WYSOKO (logo malowało się nad banerem, w obszarze treści).
+   * null = jeszcze bez pomiaru (start, jsdom w testach) → statyczny wzór jak dotąd.
+   */
+  private _measuredBandHeights:
+    { headerFirst: number; headerRest: number; footerFirst: number; footerRest: number } | null = null;
+
+  /**
    * Geometria pasma nagłówka/stopki dla przeliczeń kotwic (kontrakt ↔ pasmo).
-   * bandTopPx stopki = góra kontenera pasma od góry strony liczona z min-height pasma
-   * (przybliżenie: stopka z treścią wyższą niż pasmo przesunie realny kontener).
+   * bandTopPx stopki = góra kontenera pasma od góry strony: max(min-height pasma, realny pomiar
+   * z paginacji) — kontener flex rośnie treścią W GÓRĘ strony. Nagłówka pomiar nie dotyczy
+   * (góra pasma = dystans nagłówka, niezależnie od wysokości treści). Zero odczytów DOM tutaj
+   * (gettery pasm lecą w każdym cyklu CD — pułapka ADR-0075).
    */
   private _bandGeoFor(pageIndex: number, band: 'header' | 'footer'): HfBandGeometry {
+    const measured = this._measuredBandHeights;
+    const footerBandActualPx = Math.max(
+      this.footerBandPx(pageIndex),
+      (pageIndex === 0 ? measured?.footerFirst : measured?.footerRest) ?? 0);
     const bandTopPx = band === 'header'
       ? this.headerOffsetPx(pageIndex)
-      : this.pageHeightPx(pageIndex) - this.footerOffsetPx(pageIndex) - this.footerBandPx(pageIndex);
+      : this.pageHeightPx(pageIndex) - this.footerOffsetPx(pageIndex) - footerBandActualPx;
     return {
       band,
       marginLeftPx: this.pageMarginPx(pageIndex, 'left'),
@@ -3086,9 +3102,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       }
     }
 
-    // Tab - wcięcie
+    // Tab: w tabeli nawigacja po komórkach jak w MS Word (13259982) — indent robił
+    // „nieoczekiwany efekt wizualny" i nie ruszał kursora. Poza tabelą — wcięcie jak dotąd.
     if (e.key === 'Tab') {
       e.preventDefault();
+      if (this._handleTableTab(e.shiftKey)) return;
       if (e.shiftKey) {
         this.executeCommand('outdent');
       } else {
@@ -3115,6 +3133,104 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         );
       }
     }
+  }
+
+  /**
+   * Tab w tabeli = nawigacja po komórkach jak w MS Word (13259982): następna/poprzednia
+   * komórka, z końca wiersza do pierwszej komórki kolejnego wiersza, a w OSTATNIEJ komórce
+   * tabeli Tab DOKŁADA nowy wiersz (jak Word). Shift+Tab w pierwszej komórce nie robi nic.
+   * Tabele dzielone między strony (paginacja): fragmenty łączy data-split-table-id — z końca
+   * fragmentu przechodzimy do kolejnego fragmentu zamiast dokładać wiersz w środku logicznej
+   * tabeli. Zwraca true, gdy Tab został skonsumowany przez tabelę (bez indent/outdent).
+   */
+  private _handleTableTab(backwards: boolean): boolean {
+    const editor = this.getActiveEditor();
+    const sel = window.getSelection();
+    if (!editor || !sel || sel.rangeCount === 0) return false;
+    const start = sel.getRangeAt(0).startContainer;
+    const node = start.nodeType === Node.TEXT_NODE ? start.parentElement : (start as HTMLElement);
+    const cell = (node?.closest?.('td, th') ?? null) as HTMLTableCellElement | null;
+    if (!cell || !editor.contains(cell)) return false;
+    const row = cell.parentElement as HTMLTableRowElement | null;
+    const table = cell.closest('table');
+    if (!row || !table) return false;
+
+    const cells = Array.from(row.cells);
+    const idx = cells.indexOf(cell);
+
+    if (!backwards) {
+      if (idx < cells.length - 1) { this._focusTableCell(cells[idx + 1]); return true; }
+      const nextRow = table.rows[row.rowIndex + 1];
+      if (nextRow?.cells.length) { this._focusTableCell(nextRow.cells[0]); return true; }
+      const nextFragment = this._siblingTableFragment(table, +1);
+      if (nextFragment?.rows[0]?.cells.length) {
+        this._focusTableCell(nextFragment.rows[0].cells[0]);
+        return true;
+      }
+      const newRow = this._appendTableRowLike(table);
+      this._focusTableCell(newRow.cells[0]);
+      this.onContentChange();
+      return true;
+    }
+
+    if (idx > 0) { this._focusTableCell(cells[idx - 1]); return true; }
+    const prevRow = table.rows[row.rowIndex - 1];
+    if (prevRow?.cells.length) { this._focusTableCell(prevRow.cells[prevRow.cells.length - 1]); return true; }
+    const prevFragment = this._siblingTableFragment(table, -1);
+    const lastRow = prevFragment?.rows[prevFragment.rows.length - 1];
+    if (lastRow?.cells.length) { this._focusTableCell(lastRow.cells[lastRow.cells.length - 1]); return true; }
+    return true; // pierwsza komórka tabeli: jak Word — nic, ale bez outdentu
+  }
+
+  /** Sąsiedni fragment tej samej logicznej tabeli (podział między strony), ±1 w kolejności DOM. */
+  private _siblingTableFragment(table: HTMLTableElement, direction: 1 | -1): HTMLTableElement | null {
+    const id = table.getAttribute('data-split-table-id');
+    if (!id) return null;
+    const fragments = Array.from(document.querySelectorAll<HTMLTableElement>(
+      `table[data-split-table-id="${CSS.escape(id)}"]`));
+    const i = fragments.indexOf(table);
+    if (i < 0) return null;
+    return fragments[i + direction] ?? null;
+  }
+
+  /**
+   * Word: Tab w ostatniej komórce dokłada wiersz. Nowe komórki dziedziczą atrybuty wzorca
+   * (inline border/padding, klasa markera siatki, colspan, data-grid-spacer) — goły <td>
+   * spadałby na domyślne CSS i wiersz różniłby się od reszty tabeli (por. createCellLike).
+   */
+  private _appendTableRowLike(table: HTMLTableElement): HTMLTableRowElement {
+    const last = table.rows[table.rows.length - 1];
+    const newRow = last.cloneNode(false) as HTMLTableRowElement;
+    for (const ref of Array.from(last.cells)) {
+      const td = ref.cloneNode(false) as HTMLTableCellElement;
+      td.removeAttribute('rowspan');
+      td.removeAttribute('data-split-row-id');
+      td.removeAttribute('data-split-row-cont');
+      td.innerHTML = '<br>';
+      newRow.appendChild(td);
+    }
+    last.parentElement!.appendChild(newRow);
+    return newRow;
+  }
+
+  /**
+   * Karetka w komórce jak w Wordzie: zawartość zaznaczona (pisanie nadpisuje), pusta komórka
+   * (sam <br>) — karetka na początku. Fokusuje contenteditable celu, bo docelowa komórka może
+   * leżeć na innej stronie (fragmenty tabel z paginacji mają osobne contenteditable).
+   */
+  private _focusTableCell(cell: HTMLTableCellElement): void {
+    (cell.closest('[contenteditable="true"]') as HTMLElement | null)?.focus();
+    const range = document.createRange();
+    if ((cell.textContent ?? '').trim().length === 0) {
+      range.setStart(cell, 0);
+      range.collapse(true);
+    } else {
+      range.selectNodeContents(cell);
+    }
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+    this.savedSelection = range.cloneRange();
   }
 
   /**
@@ -4275,6 +4391,54 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Wstawia pole daty AUTO-aktualizowane (ADR-0084) w miejscu kursora — jak wordowe
+   * „Wstaw datę i godzinę" z zaznaczonym „Aktualizuj automatycznie" (pole TIME).
+   * Span jest atomowy (contenteditable=false — wartości pola nie edytuje się inline);
+   * writer odtwarza z niego żywe pole DOCX (w:fldSimple `TIME \@ "dd-MM-yyyy"`),
+   * a reader przy każdym kolejnym otwarciu odświeża datę wg tego obrazu.
+   */
+  insertDateField(): void {
+    const editor = this.getActiveEditor();
+    if (!editor) return;
+
+    // Selekcja: żywa w edytorze, inaczej zapisana (klik w toolbar zwija selekcję).
+    // Wstawka przez Range, NIE execCommand('insertHTML'): Chrome przy karetce na KOŃCU
+    // bloku wyrzuca nieedytowalny element ZA akapit (span lądował jako brat <p>,
+    // a writer gubiłby go poza akapitem). Range.insertNode wstawia zawsze w miejscu kursora.
+    let range: Range | null = null;
+    const live = window.getSelection();
+    if (live && live.rangeCount > 0 && this.isSelectionInEditor(live)) {
+      range = live.getRangeAt(0);
+    } else if (this.savedSelection && editor.contains(this.savedSelection.startContainer)) {
+      range = this.savedSelection.cloneRange();
+    }
+    if (!range) return;
+
+    const now = new Date();
+    const pad = (v: number) => String(v).padStart(2, '0');
+    const span = document.createElement('span');
+    span.className = 'field-date';
+    span.setAttribute('data-fld-instr', 'TIME \\@ "dd-MM-yyyy"');
+    span.setAttribute('contenteditable', 'false');
+    span.textContent = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+
+    range.deleteContents();
+    range.insertNode(span);
+
+    // Karetka ZA polem (insertNode nie przesuwa selekcji).
+    const caret = document.createRange();
+    caret.setStartAfter(span);
+    caret.collapse(true);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(caret);
+    this.savedSelection = caret.cloneRange();
+
+    editor.focus();
+    this.onContentChange();
+  }
+
+  /**
    * Wstawia podział kolumny (div.docx-column-break) w pozycji kursora — dalsza treść przechodzi
    * do następnej kolumny (writer odtwarza w:br type=column). Sensowne tylko w sekcji wielokolumnowej,
    * ale wstawienie w jednokolumnowej jest nieszkodliwe (ADR-0039).
@@ -4590,6 +4754,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     this.savedSelection = null;
+    // Word: po wstawieniu tabeli kursor ląduje od razu w PIERWSZEJ komórce (13568651) —
+    // użytkownik może natychmiast pisać, bez klikania w tabelę.
+    const firstCell = table.rows[0]?.cells[0];
+    if (firstCell) this._focusTableCell(firstCell);
     this.onContentChange();
   }
 
@@ -5604,6 +5772,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // (margines − dystans) SPYCHA body jak w Wordzie, więc body dostaje mniej miejsca
       // i treść spływa na kolejną stronę zamiast rozciągać format strony.
       const measuredBands = this._measureBandHeightsPx(refs);
+      // Ten sam pomiar zasila geometrię kotwic pasm (_bandGeoFor) — realna stopka wyższa niż
+      // min-height przesuwa górę kontenera. Zmiana wysokości stopki wymusza przeliczenie
+      // pozycji kotwic w następnym CD (cache getterów pasm kluczuje po HTML PO transformacji,
+      // więc unieważnia się sam); markForCheck domyka cykl. Zero nowych odczytów DOM.
+      const prevBands = this._measuredBandHeights;
+      this._measuredBandHeights = measuredBands;
+      if ((prevBands?.footerFirst ?? 0) !== measuredBands.footerFirst
+        || (prevBands?.footerRest ?? 0) !== measuredBands.footerRest) {
+        this._cdr.markForCheck();
+      }
       const availableFor = (geo: PageGeometry, pageIdx: number): number => {
         const headerBand = Math.max(this._bandCmFor(geo, 'header') * CSS_PX_PER_CM,
           pageIdx === 0 ? measuredBands.headerFirst : measuredBands.headerRest);

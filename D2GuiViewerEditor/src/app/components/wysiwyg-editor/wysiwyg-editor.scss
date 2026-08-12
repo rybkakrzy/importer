@@ -192,26 +192,32 @@
   white-space: normal;
 }
 
-/* Rozkład interlinii jak w Wordzie: Word dokleja dodatkowy odstęp (leading ponad pojedynczy
-   odstęp fontu) POD linią — tekst siedzi u góry swojego slotu. CSS rozkłada pół nad / pół pod,
-   więc np. „Wielokrotność 3" renderowała tekst WYŚRODKOWANY w ~3-liniowym slocie (i za mały
-   odstęp do następnego akapitu). Przesuwamy TUSZ o pół leadingu w górę relative/top:
+/* Rozkład interlinii jak w Wordzie (ADR-0085, koryguje ADR-0079): Word kotwiczy zawartość
+   linii przy DOLE jej slotu — nadmiarowy odstęp (leading ponad pojedynczy odstęp fontu)
+   renderuje się NAD tekstem. Dowód modelu: „Dokładnie" mniejsze niż font obcina w Wordzie
+   GÓRĘ liter (tusz trzyma się dołu slotu). CSS rozkłada pół nad / pół pod, więc
+   „Wielokrotność 3" renderowała tekst wyśrodkowany w slocie, a pierwszy akapit strony
+   siedział za wysoko względem Worda. Przesuwamy TUSZ o pół leadingu W DÓŁ relative/top
+   (ADR-0079 przesuwał w górę — premisa była odwrócona, zgłoszenie „Interlinia 3"):
    - layout boxów NIETKNIĘTY (paginacja, wysokości stron i odstępy między boxami bez zmian),
-   - tusz nigdy nie wychodzi ponad box (unshifted tusz leży pół leadingu POD górą boxu),
-     więc brak regresu przycinania z ADR/title-clip (text-box-trim wycofany),
+   - tusz nie wychodzi POD box (po przesunięciu dół tuszu = dół ostatniego slotu linii),
+     góra tym bardziej bezpieczna — brak regresu przycinania z ADR/title-clip,
+   - dla interlinii MNIEJSZEJ niż pojedyncza (Dokładnie < font) wyrażenie jest ujemne:
+     tusz idzie w górę, dół tuszu dalej trzyma dół slotu — góra może być przycięta
+     krawędzią strony dokładnie jak w Wordzie,
    - `--w-line-single` = pojedynczy odstęp fontu dokumentu w em ([style] na .page z tabeli
      PG-09); token w em rozwiązuje się względem font-size AKAPITU,
    - measurer paginacji jest poza .page → pomiary bloków bez przesunięć,
    - wykluczone akapity z elementami pływającymi ([data-pos-mode] — abspos względem .page
      nie może dostać spozycjonowanego przodka) — zachowują dotychczasowy rendering,
    - wykluczone akapity z tłem/obramowaniem: relative/top przesuwa CAŁY malowany box,
-     więc cieniowanie wyjeżdżało ponad slot akapitu i nachodziło na poprzedni blok
-     (repro QA: „To jest test interlinii 3" z cieniowaniem przy w:line=720). W Wordzie
-     tło pokrywa pełny slot linii, a tekst siedzi u jego góry — bez przesunięcia tekst
-     jest wyśrodkowany w slocie (kompromis: pół leadingu różnicy, zero artefaktów). */
+     więc cieniowanie wyjeżdżałoby poza slot akapitu na sąsiedni blok
+     (repro QA: „To jest test interlinii 3" z cieniowaniem przy w:line=720) —
+     bez przesunięcia tekst jest wyśrodkowany w slocie (kompromis: pół leadingu różnicy,
+     zero artefaktów). */
 .page :is(p, h1, h2, h3, h4, h5, h6, li):not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']) {
   position: relative;
-  top: calc((1lh - var(--w-line-single, 1.221em)) / -2);
+  top: calc((1lh - var(--w-line-single, 1.221em)) / 2);
 }
 
 .editor-content:empty::before {
@@ -425,8 +431,14 @@ img[data-legacy-graphic='blank'] {
   top: 0;
   padding-right: 0.4em;
   white-space: nowrap;
-  /* Kolor znacznika z w:lvl/w:rPr (var inline z readera na kontenerze listy). */
+  /* Kolor znacznika z w:lvl/w:rPr (var na kontenerze) LUB z rPr znaku końca akapitu
+     (var per <li>, 14104878) — własna wartość elementu wygrywa z odziedziczoną. */
   color: var(--marker-color, inherit);
+}
+
+/* Natywne znaczniki list (bez silnika etykiet) — ten sam kontrakt koloru (14104878). */
+.editor-content li::marker {
+  color: var(--marker-color, currentColor);
 }
 
 /* Ze znanym wysunięciem (w:ind hanging, var z readera) etykieta stoi jak w Wordzie:
@@ -1619,5 +1631,18 @@ body.image-moving * {
 /* Nośnik tabulatora w przypisie — jak w body: pod pre-wrap literalny \t skakałby do stopu. */
 .footnote-item-content span[style*='min-width:2em'] {
   white-space: normal;
+}
+
+/* Pole daty AUTO-aktualizowane (ADR-0084): atomowy inline (contenteditable=false z readera/
+   wstawki). Szare tło przy najechaniu = cieniowanie pól Worda („to pole, nie zwykły tekst").
+   Tylko hover — na wydruku/eksporcie pola i tak nie mają tła. */
+:is(.editor-content, .page-overflow-content, .header-editor-content, .footer-editor-content,
+    .header-display, .footer-display) span.field-date {
+  cursor: default;
+
+  &:hover {
+    background: #e6e6e6;
+    border-radius: 2px;
+  }
 }
 

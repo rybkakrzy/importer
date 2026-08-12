@@ -1062,4 +1062,77 @@ public class ListNumberingFidelityTests
         markerColor!.Val!.Value.Should().Be("ED7D31");
         AssertNoValidationErrors(regenerated);
     }
+
+    // ── Kolor znacznika per POZYCJA z rPr znaku końca akapitu (14104878) ─────────
+
+    private static Paragraph ColoredMarkItem(string text, int numId, int ilvl, string markHex, string? runHex = null)
+    {
+        var run = new Run(new Text(text));
+        if (runHex != null)
+            run.PrependChild(new RunProperties(new Color { Val = runHex }));
+        return new Paragraph(
+            new ParagraphProperties(
+                new NumberingProperties(
+                    new NumberingLevelReference { Val = ilvl },
+                    new NumberingId { Val = numId }),
+                new ParagraphMarkRunProperties(new Color { Val = markHex })),
+            run);
+    }
+
+    [Test]
+    public void Reader_MarkerColorFromParagraphMark_IsEmittedPerItem()
+    {
+        // Word koloruje numer/punktator rPr-em ZNAKU KOŃCA AKAPITU, gdy poziom numeracji
+        // nie definiuje własnego koloru — użytkownik kolorujący całą linię koloruje też ¶.
+        using var docx = BuildDocx(
+            [Abstract(1)],
+            [Num(1, 1)],
+            [ColoredMarkItem("Czerwony", 1, 0, "FF0000", "FF0000"),
+             ColoredMarkItem("Niebieski", 1, 0, "0000FF", "0000FF")]);
+
+        var html = _reader.Convert(docx).Html;
+
+        html.Should().Contain("data-mark-color=\"FF0000\"");
+        html.Should().Contain("data-mark-color=\"0000FF\"");
+        html.Should().Contain("--marker-color:#FF0000", "CSS var na <li> nadpisuje wariant z kontenera");
+        html.Should().Contain("--marker-color:#0000FF");
+    }
+
+    [Test]
+    public void Reader_MarkerColorFromLevel_WinsOverParagraphMark()
+    {
+        // Precedencja Worda: kolor z definicji poziomu (lvl rPr) wygrywa z ¶-mark rPr.
+        using var docx = BuildDocx(
+            [Abstract(1, LvlWithMarkerColor(0, "ED7D31"))],
+            [Num(1, 1)],
+            [ColoredMarkItem("Pozycja", 1, 0, "FF0000")]);
+
+        var html = _reader.Convert(docx).Html;
+
+        html.Should().Contain("--marker-color:#ED7D31");
+        html.Should().NotContain("data-mark-color=");
+    }
+
+    [Test]
+    public void RoundTrip_ParagraphMarkColor_SurvivesInParagraphMarkRunProperties()
+    {
+        using var docx = BuildDocx(
+            [Abstract(1)],
+            [Num(1, 1)],
+            [ColoredMarkItem("Czerwony", 1, 0, "FF0000")]);
+
+        var regenerated = _writer.Convert(_reader.Convert(docx).Html);
+
+        using var ms = new MemoryStream(regenerated);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var listPara = doc.MainDocumentPart!.Document.Body!
+            .Descendants<Paragraph>()
+            .First(p => p.ParagraphProperties?.NumberingProperties?.NumberingId?.Val?.Value is > 0);
+        var markColor = listPara.ParagraphProperties
+            ?.GetFirstChild<ParagraphMarkRunProperties>()
+            ?.GetFirstChild<Color>();
+        markColor.Should().NotBeNull("kolor znacznika z ¶-mark nie może ginąć przy zapisie");
+        markColor!.Val!.Value.Should().Be("FF0000");
+        AssertNoValidationErrors(regenerated);
+    }
 }

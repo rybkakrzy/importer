@@ -1424,6 +1424,13 @@ $autosave-accent: #f57c00; // orange accent — matches the app's active-state h
   }
 }
 
+/* Komunikat informacyjny (13865553): stan dokumentu (np. tylko do odczytu) — nie błąd. */
+.info-message {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+
 .error-message {
   background: #fee;
   color: #c00;

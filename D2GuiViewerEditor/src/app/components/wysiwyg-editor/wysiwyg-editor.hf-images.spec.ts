@@ -113,6 +113,28 @@ describe('WysiwygEditorComponent — obrazy kotwiczone w nagłówku/stopce', () 
     expect(header.marginTopPx).toBe(component.pageMarginPx(0, 'top'));
   });
 
+  it('geometria pasm: stopka wyższa niż min-height (realny pomiar paginacji) podnosi górę pasma', () => {
+    // Zgłoszenie: baner firmowy rozpychał stopkę (np. 93px vs min-height ~51px), a statyczny
+    // wzór liczył górę pasma z min-height — kotwica page-relative (logo) malowała się
+    // o różnicę ZA WYSOKO, nad banerem w obszarze treści.
+    const measured = { headerFirst: 0, headerRest: 0, footerFirst: 93, footerRest: 93 };
+    (component as unknown as { _measuredBandHeights: typeof measured })._measuredBandHeights = measured;
+
+    const footer = bandGeoFor('footer');
+    expect(footer.bandTopPx).toBeCloseTo(
+      component.pageHeightPx(0) - component.footerOffsetPx(0) - 93, 3);
+    // Nagłówek nieczuły na pomiar — jego góra to zawsze dystans nagłówka.
+    expect(bandGeoFor('header').bandTopPx).toBe(component.headerOffsetPx(0));
+  });
+
+  it('geometria pasm: pomiar NIŻSZY niż min-height nie zwęża pasma (max, jak availableFor paginacji)', () => {
+    const measured = { headerFirst: 0, headerRest: 0, footerFirst: 1, footerRest: 1 };
+    (component as unknown as { _measuredBandHeights: typeof measured })._measuredBandHeights = measured;
+
+    expect(bandGeoFor('footer').bandTopPx).toBeCloseTo(
+      component.pageHeightPx(0) - component.footerOffsetPx(0) - component.footerBandPx(0), 3);
+  });
+
   it('edycja: wrapExistingImages w paśmie ustawia styl w układzie pasma, a data-emu zostają kontraktem', () => {
     const bandEl = document.createElement('div');
     bandEl.className = 'header-editor-content';

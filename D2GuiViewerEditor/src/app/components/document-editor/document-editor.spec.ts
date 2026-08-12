@@ -6,6 +6,7 @@ import { DocumentEditorComponent } from './document-editor';
 import { DocumentService, OpenDocumentError } from '../../services/document.service';
 import { DocumentStorageService } from '../../services/document-storage.service';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { DocumentNavigationService } from '../../core/services/document-navigation.service';
 import { LastHttpErrorService } from '../../core/services/last-http-error.service';
 import { MsalService } from '@azure/msal-angular';
 
@@ -1095,6 +1096,7 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
     it('_applyLoadedContent ustawia stan blokady, ale sam nie emituje komunikatu', () => {
       const showError = vi.spyOn(component as any, 'showError');
       const showSuccess = vi.spyOn(component as any, 'showSuccess');
+      const showInfo = vi.spyOn(component as any, 'showInfo');
 
       (component as any)._applyLoadedContent(content(true), 'chroniony.docx');
 
@@ -1103,17 +1105,32 @@ describe('DocumentEditorComponent — flow „Zakończ" (synchroniczna wysyłka)
       // Komunikat wyniku otwarcia należy do _convertAndLoad — stan nie toastuje sam.
       expect(showError).not.toHaveBeenCalled();
       expect(showSuccess).not.toHaveBeenCalled();
+      expect(showInfo).not.toHaveBeenCalled();
     });
 
     // Problem 2 ze zgłoszenia: dokument chroniony NIE może pokazać jednocześnie sukcesu i read-only.
-    it('otwarcie chronionego dokumentu pokazuje JEDEN komunikat read-only, bez sukcesu', () => {
+    // 13865553: komunikat jest INFORMACJĄ (dokument otwarto, tylko bez edycji) — nie błędem;
+    // czerwony toast przy każdym (także ponownym) wczytaniu sugerował nieudaną operację.
+    it('otwarcie chronionego dokumentu pokazuje JEDEN komunikat read-only jako INFO, bez sukcesu i błędu', () => {
       openResult = of(content(true));
 
       (component as any)._convertAndLoad(new File(['x'], 'chroniony.docx'), 'chroniony.docx', undefined, true);
 
       expect(component.documentEditProtected()).toBe(true);
-      expect(component.errorMessage()).toContain('tylko do odczytu');
+      expect(component.infoMessage()).toContain('tylko do odczytu');
+      expect(component.errorMessage()).toBeNull();
       expect(component.successMessage()).toBeNull();
+    });
+
+    it('ponowne wczytanie tego samego chronionego dokumentu znów daje INFO, nie błąd (13865553)', () => {
+      openResult = of(content(true));
+      const file = new File(['x'], 'chroniony.docx');
+
+      (component as any)._convertAndLoad(file, 'chroniony.docx', undefined, true);
+      (component as any)._convertAndLoad(file, 'chroniony.docx', undefined, true);
+
+      expect(component.infoMessage()).toContain('tylko do odczytu');
+      expect(component.errorMessage()).toBeNull();
     });
 
     it('otwarcie zwykłego dokumentu pokazuje sukces bez komunikatu read-only', () => {
@@ -1545,5 +1562,67 @@ describe('DocumentEditorComponent — globalne skróty edycji (Ctrl+Z/Y/X/C/V)',
     } finally {
       input.remove();
     }
+  });
+});
+
+/**
+ * „Plik → Otwórz" z plikiem PDF: zamiast strony prac serwisowych (/pdf-maintenance)
+ * plik jest wgrywany do bazy i otwierany w podglądzie PDF (/viewer) — ta sama ścieżka,
+ * którą przechodzi otwarcie PDF ze strony startowej (bug 13190953).
+ */
+describe('DocumentEditorComponent — otwarcie PDF z edytora → podgląd (/viewer)', () => {
+  let component: DocumentEditorComponent;
+  let navigateToDocument: ReturnType<typeof vi.fn>;
+  let uploadDocument: ReturnType<typeof vi.fn>;
+  let router: { navigate: ReturnType<typeof vi.fn> };
+
+  async function setup(uploadResult: unknown): Promise<void> {
+    navigateToDocument = vi.fn();
+    uploadDocument = vi.fn().mockReturnValue(uploadResult);
+    router = { navigate: vi.fn() };
+
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        {
+          provide: DocumentStorageService,
+          useValue: {
+            fileToBase64: vi.fn().mockResolvedValue('cGRm'),
+            uploadDocument,
+          },
+        },
+        { provide: DocumentNavigationService, useValue: { navigateToDocument } },
+        { provide: Router, useValue: router },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
+      ],
+    }).compileComponents();
+    component = TestBed.createComponent(DocumentEditorComponent).componentInstance;
+  }
+
+  it('wgrywa PDF i nawiguje do podglądu przez DocumentNavigationService (nie /pdf-maintenance)', async () => {
+    await setup(of({ masterId: 'master-1', versionId: 'v-1' }));
+
+    await (component as any).openPdfInViewer(new File([], 'umowa.pdf'));
+
+    expect(uploadDocument).toHaveBeenCalledWith({
+      name: 'umowa.pdf',
+      mimeType: 'application/pdf',
+      content: 'cGRm',
+    });
+    expect(navigateToDocument).toHaveBeenCalledWith('master-1', 'application/pdf');
+    expect(router.navigate).not.toHaveBeenCalled();
+  });
+
+  it('błąd uploadu → komunikat błędu, bez nawigacji, spinner zdjęty', async () => {
+    await setup(throwError(() => new Error('boom')));
+
+    await (component as any).openPdfInViewer(new File([], 'umowa.pdf'));
+
+    expect(navigateToDocument).not.toHaveBeenCalled();
+    expect(component.isLoading()).toBe(false);
+    expect(component.errorMessage()).toContain('PDF');
   });
 });

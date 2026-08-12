@@ -51,7 +51,7 @@ public static class HtmlSnapshot
             m => $"{m.Groups[1].Value}[base64]");
 
         // Date fields render with DateTime.Now — replace their text content.
-        html = Regex.Replace(html, "(<span class=\"field-date\">)[^<]*", "$1[date]");
+        html = Regex.Replace(html, "(<span class=\"field-date\"[^>]*>)[^<]*", "$1[date]");
 
         // Image relationship ids (data-image-id) are randomized per OOXML build.
         html = Regex.Replace(html, "(data-image-id=\")[^\"]*", "$1[id]");

@@ -697,6 +697,10 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     {
                         pendingTextParagraph.Append(BuildFieldRun(" NUMPAGES ", child));
                     }
+                    else if (child.HasClass("field-date"))
+                    {
+                        pendingTextParagraph.Append(BuildDateFieldRun(child));
+                    }
                     else if (name == "a")
                     {
                         pendingTextParagraph.Append(ConvertAnchorElement(child));
@@ -1469,11 +1473,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         var props = new ParagraphProperties();
         props.Append(new ParagraphStyleId { Val = $"Heading{level}" });
 
-        // Dodaj dodatkowe style inline
+        // PEŁNE właściwości akapitu z inline CSS (gap-analysis pkt 1): dotąd nagłówki szły
+        // przez ApplyParagraphStyleExtras (sam text-align) — spacing/wcięcia/tło/ramki/
+        // pageBreakBefore GINĘŁY przy każdym zapisie.
         var style = node.GetAttributeValue("style", "");
         if (!string.IsNullOrEmpty(style))
         {
-            ApplyParagraphStyleExtras(props, style);
+            ApplyParagraphStyle(props, style);
         }
 
         paragraph.Append(props);
@@ -1609,16 +1615,28 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 new NumberingId { Val = numId }
             ));
             
-            // Parsuj style inline z li
+            // PEŁNE właściwości akapitu z inline CSS li (gap-analysis pkt 1): dotąd tylko
+            // text-align — spacing/tło/ramki punktu listy GINĘŁY przy każdym zapisie.
+            // BEZ sekcji wcięć: wcięcia list niesie kontrakt data-ind-*-tw
+            // (AppendListItemIndentation), a margin-left na li to delta prezentacyjna.
             var liStyle = child.GetAttributeValue("style", "");
             if (!string.IsNullOrEmpty(liStyle))
             {
-                ApplyParagraphStyleExtras(props, liStyle);
+                ApplyParagraphStyle(props, liStyle, includeIndentation: false);
             }
 
             // Direct w:ind elementu listy (kontrakt data-ind-*-tw z readera) — bez tego
             // wcięcie nadpisane na akapicie wracałoby po zapisie do definicji poziomu.
             AppendListItemIndentation(props, child);
+
+            // Kolor znacznika per pozycja (14104878): rPr ZNAKU KOŃCA AKAPITU — Word koloruje
+            // nim numer/punktator. Bez odtworzenia kolor znacznika ginął przy pierwszym zapisie.
+            var markColorRaw = child.GetAttributeValue("data-mark-color", "");
+            if (Regex.IsMatch(markColorRaw, "^[0-9A-Fa-f]{6}$"))
+            {
+                props.Append(new ParagraphMarkRunProperties(new Color { Val = markColorRaw }));
+                NormalizeParagraphPropertiesOrder(props);
+            }
 
             para.Append(props);
 
@@ -3912,6 +3930,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     paragraph.Append(BuildFieldRun(" NUMPAGES ", child));
                     continue;
                 }
+                if (child.HasClass("field-date"))
+                {
+                    paragraph.Append(BuildDateFieldRun(child));
+                    continue;
+                }
             }
 
             if (child.NodeType == HtmlNodeType.Element
@@ -4558,7 +4581,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Aplikuje styl CSS do ParagraphProperties z pełnym parsowaniem
     /// </summary>
-    private void ApplyParagraphStyle(ParagraphProperties props, string style)
+    /// <param name="props">Właściwości akapitu (mutowane).</param>
+    /// <param name="style">Inline CSS akapitu.</param>
+    /// <param name="includeIndentation">
+    /// false dla elementów LIST: ich wcięcia autorytatywnie niesie kontrakt data-ind-*-tw
+    /// (AppendListItemIndentation), a margin-left na li to DELTA względem paddingu kontenera —
+    /// zmapowana wprost na w:ind podwajałaby wcięcie.
+    /// </param>
+    private void ApplyParagraphStyle(ParagraphProperties props, string style, bool includeIndentation = true)
     {
         if (string.IsNullOrEmpty(style)) return;
 
@@ -4587,41 +4617,50 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             props.Append(new Justification { Val = align });
         }
 
-        // Wcięcia
-        var indentation = new Indentation();
-        bool hasIndent = false;
-        
-        var marginLeftMatch = Regex.Match(style, @"margin-left:\s*(\d+)px");
-        if (marginLeftMatch.Success)
+        // Wcięcia. Regexy łapią px i pt oraz wartości ujemne/ułamkowe (gap-analysis pkt 2:
+        // dialog akapitu pisze pt, a `(\d+)px` gubił wszystko poza całkowitymi px).
+        if (includeIndentation)
         {
-            indentation.Left = PxToTwips(int.Parse(marginLeftMatch.Groups[1].Value)).ToString();
-            hasIndent = true;
-        }
-        
-        var marginRightMatch = Regex.Match(style, @"margin-right:\s*(\d+)px");
-        if (marginRightMatch.Success)
-        {
-            indentation.Right = PxToTwips(int.Parse(marginRightMatch.Groups[1].Value)).ToString();
-            hasIndent = true;
-        }
-        
-        var textIndentMatch = Regex.Match(style, @"text-indent:\s*(-?\d+)px");
-        if (textIndentMatch.Success)
-        {
-            var indent = int.Parse(textIndentMatch.Groups[1].Value);
-            if (indent < 0)
+            var indentation = new Indentation();
+            bool hasIndent = false;
+            var invInd = System.Globalization.CultureInfo.InvariantCulture;
+
+            int? LengthToTwips(string prop)
             {
-                indentation.Hanging = PxToTwips(Math.Abs(indent)).ToString();
+                var m = Regex.Match(style, $@"(?<![\w-]){Regex.Escape(prop)}:\s*(-?[\d.,]+)(px|pt)");
+                if (!m.Success) return null;
+                var val = double.Parse(m.Groups[1].Value.Replace(',', '.'), invInd);
+                if (m.Groups[2].Value == "px") val = OoxmlUnits.PixelsToPoints(val);
+                return (int)Math.Round(OoxmlUnits.PointsToTwips(val));
             }
-            else
+
+            var leftTw = LengthToTwips("margin-left");
+            if (leftTw.HasValue)
             {
-                indentation.FirstLine = PxToTwips(indent).ToString();
+                indentation.Left = leftTw.Value.ToString();
+                hasIndent = true;
             }
-            hasIndent = true;
+
+            var rightTw = LengthToTwips("margin-right");
+            if (rightTw.HasValue)
+            {
+                indentation.Right = rightTw.Value.ToString();
+                hasIndent = true;
+            }
+
+            var indentTw = LengthToTwips("text-indent");
+            if (indentTw.HasValue)
+            {
+                if (indentTw.Value < 0)
+                    indentation.Hanging = Math.Abs(indentTw.Value).ToString();
+                else
+                    indentation.FirstLine = indentTw.Value.ToString();
+                hasIndent = true;
+            }
+
+            if (hasIndent)
+                props.Append(indentation);
         }
-        
-        if (hasIndent)
-            props.Append(indentation);
 
         // Odstępy
         var spacing = new SpacingBetweenLines();
@@ -5357,6 +5396,36 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             inner = "1";
         run.Append(new Text(inner) { Space = SpaceProcessingModeValues.Preserve });
         return new SimpleField(run) { Instruction = instruction };
+    }
+
+    /// <summary>
+    /// span.field-date → żywe pole daty (w:fldSimple) z instrukcją z data-fld-instr (ADR-0084).
+    /// Wartość zbuforowana = tekst wyświetlany w edytorze; Word dalej umie pole zaktualizować.
+    /// Bez instrukcji (starszy zapis) — pole DATE z domyślnym polskim obrazem daty.
+    /// </summary>
+    private SimpleField BuildDateFieldRun(HtmlNode fieldNode)
+    {
+        var instruction = System.Net.WebUtility.HtmlDecode(
+            fieldNode.GetAttributeValue("data-fld-instr", "")).Trim();
+        if (instruction.Length == 0)
+            instruction = "DATE \\@ \"dd.MM.yyyy\"";
+
+        var run = new Run();
+        var style = fieldNode.GetAttributeValue("style", "");
+        if (string.IsNullOrEmpty(style))
+            style = fieldNode.ParentNode?.GetAttributeValue("style", "") ?? string.Empty;
+        if (!string.IsNullOrEmpty(style))
+        {
+            var rPr = new RunProperties();
+            ApplyRunStyle(rPr, style);
+            if (rPr.HasChildren) run.Append(rPr);
+        }
+
+        var inner = fieldNode.InnerText?.Trim() ?? string.Empty;
+        if (inner.Length == 0)
+            inner = DateTime.Now.ToString("dd.MM.yyyy");
+        run.Append(new Text(inner) { Space = SpaceProcessingModeValues.Preserve });
+        return new SimpleField(run) { Instruction = $" {instruction} " };
     }
 
     private int PxToTwips(int px) => (int)OoxmlUnits.PixelsToTwips(px);

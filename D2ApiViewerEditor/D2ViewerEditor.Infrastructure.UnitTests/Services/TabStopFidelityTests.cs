@@ -143,7 +143,10 @@ public class TabStopFidelityTests
         html.Should().Contain("docx-tab-seg", "pole złożone nie może wyłączać pozycjonowania tabów");
         html.Should().Contain("data-tab-align=\"left\"");
         html.Should().Contain("left:349px");
-        html.Should().Contain("Warszawa, ").And.Contain("3.07.2026").And.Contain(" r.");
+        // ADR-0084: pole DATE jest auto-aktualizowane — bieżąca data zamiast zbuforowanej.
+        html.Should().Contain("Warszawa, ")
+            .And.Contain(System.DateTime.Now.ToString("dd.MM.yyyy"))
+            .And.Contain(" r.");
         html.Should().NotContain("min-width:2em", "tab nie może degradować do wcięcia przy marginesie");
     }
 
@@ -607,6 +610,63 @@ public class TabStopFidelityTests
 
         content.Html.Should().Contain("docx-tab-seg");
         content.Html.Should().Contain("data-tab-stops=\"6013:left\"");
+    }
+
+    [Test]
+    public void Read_LongTextBeforeTab_FallsBackToInlineCarrier()
+    {
+        // Repro zgłoszenia: długi tytuł 16pt zakończony tabem, BEZ jawnych stopów — tab
+        // dostawał pierwszy DOMYŚLNY stop (708 tw ≈ 47 px) i segment absolutny malował
+        // „poprzez tab" NA tekście pierwszej linii. Word układa treść za tabulatorem
+        // w kolejnej linii — ma płynąć inline (nośnik 2em zawija się jak tekst).
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new Run(
+                    new RunProperties(new FontSize { Val = "32" }),
+                    new Text("To jest test długiego tytułu gdzie przechodzę do kolejnej linii")),
+                new Run(
+                    new RunProperties(new FontSize { Val = "32" }),
+                    new TabChar(),
+                    new Text("poprzez tab")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().NotContain("docx-tab-seg",
+            "segment absolutny nie łamie wiersza — tekst szerszy niż stop nachodziłby na pierwszą linię");
+        html.Should().Contain("min-width:2em", "tab renderuje się jako płynący nośnik");
+        html.Should().Contain("poprzez tab");
+    }
+
+    [Test]
+    public void Read_ModerateTextBeforeFarStop_StaysOnPositionedPath()
+    {
+        // Pin estymatora guardu: tekst mieszczący się z zapasem przed jawnym stopem
+        // (~220 px szacunku vs stop 6013 tw ≈ 400 px) NIE może wypadać ze ścieżki
+        // pozycyjnej — formularze i pisma z datą na stopie muszą renderować się jak dotąd.
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(new Tabs(
+                    new TabStop { Val = TabStopValues.Left, Position = 6013 })),
+                new Run(new Text("Nazwa pola formularza dłuższa")),
+                new Run(new TabChar()),
+                new Run(new Text("wartość")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().Contain("docx-tab-seg");
+        html.Should().Contain("left:400px");
     }
 
     [Test]

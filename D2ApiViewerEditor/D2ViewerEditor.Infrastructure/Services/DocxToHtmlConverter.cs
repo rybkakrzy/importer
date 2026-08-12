@@ -226,6 +226,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         using var document = WordprocessingDocument.Open(docxStream, false);
 
+        // KR-04 (ADR-0088): AKCEPTACJA śledzonych zmian przy imporcie — patrz AcceptTrackedRevisions.
+        AcceptTrackedRevisions(document);
+
         // Załaduj części pomocnicze
         _numberingPart = document.MainDocumentPart?.NumberingDefinitionsPart;
         _themePart = document.MainDocumentPart?.ThemePart;
@@ -1613,6 +1616,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     itemAttrs = indAttrs.ToString();
                 }
 
+                // Kolor znacznika per POZYCJA (14104878): Word formatuje numer/punktator rPr-em
+                // ZNAKU KOŃCA AKAPITU (w:pPr/w:rPr), o ile poziom numeracji nie definiuje
+                // własnego koloru (lvl rPr wygrywa). CSS var na <li> nadpisuje wariant
+                // z kontenera (konsumują ją ::before etykiet i span.list-marker);
+                // data-mark-color round-tripuje do w:pPr/w:rPr/w:color w writerze.
+                string? itemMarkerColorCss = null;
+                if (firstInfo.MarkerColorCss == null)
+                {
+                    var markColor = p.ParagraphProperties
+                        ?.GetFirstChild<ParagraphMarkRunProperties>()
+                        ?.GetFirstChild<Color>();
+                    itemMarkerColorCss = ResolveRunColorCss(markColor);
+                    if (itemMarkerColorCss != null)
+                    {
+                        cssStyle += $"--marker-color:{itemMarkerColorCss};";
+                        itemAttrs += $" data-mark-color=\"{itemMarkerColorCss.TrimStart('#')}\"";
+                    }
+                }
+
                 html.Append($"<li{itemAttrs} style=\"{cssStyle}\">");
 
                 // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker.
@@ -1624,6 +1646,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     : "display:inline-block;min-width:1.2em;margin-right:0.4em;";
                 if (firstInfo.MarkerColorCss != null)
                     markerBoxCss += $"color:{firstInfo.MarkerColorCss};";
+                else if (itemMarkerColorCss != null)
+                    markerBoxCss += $"color:{itemMarkerColorCss};";
                 if (firstInfo.BulletImageDataUri != null)
                 {
                     html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
@@ -2401,10 +2425,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             .Select(m => m.Groups[1].Value).LastOrDefault();
         var centeredWithTabChar = hasTabChar && lastTextAlign is "center" or "right";
 
+        // WYJĄTEK 2 — tekst segmentu SZERSZY niż odległość do stopu następnego taba (np. długi
+        // tytuł 16pt zakończony tabem bez jawnych stopów: pierwszy domyślny stop = 708 tw ≈ 47 px,
+        // a tekst ma ~600 px): segment absolutny malował się NA tekście pierwszej linii, podczas
+        // gdy Word przenosi treść za tabulatorem do kolejnej linii. Fallback jak wyżej: płynący
+        // nośnik 2em (zawijanie jak w Wordzie), stopy round-tripują przez data-tab-stops.
+        // Akapity z w:ptab zostają pozycyjne (własna geometria — stopki „Strona X z Y").
+        var tabTextOverflowsStops = hasTabChar && !hasPositionalTab
+            && PositionedTabTextOverflowsStops(paragraph, effectiveTabStops);
+
         var usePositionedTabs = !useLeaderTabs
             && (hasTabChar || hasPositionalTab)
             && !isInTableCell
-            && !centeredWithTabChar;
+            && !centeredWithTabChar
+            && !tabTextOverflowsStops;
 
         // Fallback flex row only when there are tab characters but no resolvable stop positions
         // (e.g. a center/right alignment tab with no w:tabs geometry). Tab characters are preserved
@@ -2849,6 +2883,107 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return html.ToString();
     }
 
+    /// <summary>
+    /// Guard ścieżki pozycyjnej tabów: szacuje, czy tekst któregoś segmentu jest SZERSZY niż
+    /// odległość do stopu przypisanego następnemu tabulatorowi. Segment absolutny
+    /// (position:absolute + white-space:pre) nie łamie wiersza i nie dodaje wysokości —
+    /// Word w tej sytuacji układa treść za tabulatorem w KOLEJNEJ linii, a edytor malował
+    /// ją na tekście pierwszej. Szacunek zgrubny: ~0.5 firetu na znak (Aptos/Calibri
+    /// ~0.48–0.52 em) — formularze („Pole:⇥wartość") mają duży zapas do stopu, więc nie
+    /// ryzykują fałszywego fallbacku. Sprawdzane tylko stopy LEWE (syntetyczne stopy siatki
+    /// w:defaultTabStop zawsze są lewe); po stopie center/right i po w:ptab start segmentu
+    /// jest nieznany — kolejnych granic nie sprawdzamy (zachowanie bez zmian). Taby wewnątrz
+    /// SdtRun/pól nie rozcinają segmentów w renderze, więc tu też liczą się tylko do szerokości.
+    /// </summary>
+    private bool PositionedTabTextOverflowsStops(Paragraph paragraph, List<TabStopInfo> stops)
+    {
+        const double CharWidthEm = 0.5;
+        var defaultPt = _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : 11);
+        double PxPerChar(Run? run)
+        {
+            var pt = defaultPt;
+            var sz = run?.RunProperties?.FontSize?.Val?.Value;
+            if (sz != null && double.TryParse(sz, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var half) && half > 0)
+                pt = half / 2.0;
+            return pt * 96.0 / 72.0 * CharWidthEm;
+        }
+
+        // Lustro NextRealStop z BuildPositionedTabContent — przypisanie stopów tabom musi być
+        // identyczne w guardzie i w renderze.
+        var nextRealStop = 0;
+        var lastStopTw = 0;
+        TabStopInfo NextStop()
+        {
+            if (nextRealStop < stops.Count)
+            {
+                var s = stops[nextRealStop++];
+                lastStopTw = Math.Max(lastStopTw, s.PositionTwips);
+                return s;
+            }
+            lastStopTw = (lastStopTw / _defaultTabStopTwips + 1) * _defaultTabStopTwips;
+            return new TabStopInfo(lastStopTw, "left", null);
+        }
+
+        double? segStartPx = 0; // null = start segmentu nieznany (za stopem center/right lub w:ptab)
+        double segWidthPx = 0;
+        var overflow = false;
+
+        void OnRunContent(OpenXmlElement rc, Run run)
+        {
+            switch (rc)
+            {
+                case TabChar:
+                    var stop = NextStop();
+                    if (stop.Alignment == "left")
+                    {
+                        if (segStartPx.HasValue && segStartPx.Value + segWidthPx > TwipsToPx(stop.PositionTwips))
+                            overflow = true;
+                        segStartPx = TwipsToPx(stop.PositionTwips);
+                    }
+                    else
+                    {
+                        segStartPx = null;
+                    }
+                    segWidthPx = 0;
+                    break;
+                case PositionalTab:
+                    segStartPx = null;
+                    segWidthPx = 0;
+                    break;
+                case Text t:
+                    segWidthPx += (t.Text?.Length ?? 0) * PxPerChar(run);
+                    break;
+            }
+        }
+
+        foreach (var child in paragraph.Elements())
+        {
+            switch (child)
+            {
+                case ParagraphProperties:
+                    continue;
+                case Run run:
+                    foreach (var rc in run.Elements()) OnRunContent(rc, run);
+                    break;
+                case Hyperlink link:
+                    foreach (var lc in link.Elements())
+                    {
+                        if (lc is Run linkRun)
+                            foreach (var rc in linkRun.Elements()) OnRunContent(rc, linkRun);
+                        else
+                            segWidthPx += lc.InnerText.Length * PxPerChar(null);
+                    }
+                    break;
+                default:
+                    segWidthPx += child.InnerText.Length * PxPerChar(null);
+                    break;
+            }
+            if (overflow) return true;
+        }
+        return overflow;
+    }
+
     private static Run CloneRunShell(Run run)
     {
         var shell = new Run();
@@ -3071,6 +3206,58 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             || instr.StartsWith("PAGEREF", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Pierwszy token instrukcji pola (nazwa funkcji), np. "DATE" z " DATE \@ … ".</summary>
+    private static string FieldInstructionName(string instruction) =>
+        instruction.TrimStart().Split(' ', '\t').FirstOrDefault() ?? string.Empty;
+
+    /// <summary>
+    /// Pola daty AUTO-aktualizowane jak w Wordzie: wyłącznie DATE i TIME (ADR-0084).
+    /// CREATEDATE/SAVEDATE/PRINTDATE niosą daty HISTORYCZNE — te zachowują wartość
+    /// zbuforowaną (KR-08 pozostaje dla nich w mocy). Przełącznik \! blokuje aktualizację.
+    /// </summary>
+    private static bool IsAutoDateFieldInstruction(string instruction)
+    {
+        var name = FieldInstructionName(instruction).ToUpperInvariant();
+        if (name != "DATE" && name != "TIME") return false;
+        return !instruction.Contains("\\!");
+    }
+
+    /// <summary>
+    /// Format .NET z przełącznika <c>\@ "obraz daty"</c> Worda. Tokeny d/M/y/H/h/m/s są
+    /// wspólne; AM/PM → tt. Brak obrazu → dd.MM.yyyy (szablony klienta są polskie).
+    /// </summary>
+    private static string DateFormatFromInstruction(string instruction)
+    {
+        var m = Regex.Match(instruction, "\\\\@\\s+\"([^\"]+)\"");
+        if (!m.Success) m = Regex.Match(instruction, "\\\\@\\s+([^\\s\\\\]+)");
+        if (!m.Success) return "dd.MM.yyyy";
+        return m.Groups[1].Value.Replace("AM/PM", "tt").Replace("am/pm", "tt");
+    }
+
+    /// <summary>
+    /// Pole daty AUTO-aktualizowane (ADR-0084): jak Word, edytor pokazuje BIEŻĄCĄ datę wg
+    /// obrazu z \@, a instrukcja jedzie w data-fld-instr — writer odtwarza z tego pełne pole
+    /// (w:fldSimple), więc dokument po zapisie nadal ma żywe pole, nie martwy tekst.
+    /// Span jest atomowy (contenteditable=false) — wartości pola nie edytuje się inline.
+    /// </summary>
+    private string FieldDateSpan(string instruction, Run? run)
+    {
+        string text;
+        try
+        {
+            text = DateTime.Now.ToString(
+                DateFormatFromInstruction(instruction),
+                System.Globalization.CultureInfo.GetCultureInfo("pl-PL"));
+        }
+        catch (FormatException)
+        {
+            text = DateTime.Now.ToString("dd.MM.yyyy");
+        }
+        var style = run?.RunProperties != null ? GetRunStyleClean(run.RunProperties) : string.Empty;
+        return $"<span class=\"field-date\" data-fld-instr=\"{System.Net.WebUtility.HtmlEncode(instruction.Trim())}\" " +
+               $"contenteditable=\"false\" style=\"{style}\">{EscapeHtml(text)}</span>";
+    }
+
     /// <summary>Niewidoczny marker początku pola złożonego (instrukcja w data-fld-instr).</summary>
     private static string FieldMarkerBegin(string instruction) =>
         $"<span class=\"docx-fld-marker\" data-fld=\"begin\" data-fld-instr=\"{System.Net.WebUtility.HtmlEncode(instruction.Trim())}\" style=\"display:none;\"></span>";
@@ -3101,6 +3288,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // for every other field the cached value runs must render as text so the
         // document's value survives import + autosave (KR-05/KR-08).
         public bool ValueHandled;
+        // w:fldLock na fldChar Begin — pole zablokowane zachowuje wartość z pliku
+        // (auto-data go nie odświeża, ADR-0084).
+        public bool Locked;
     }
 
     private void AppendComplexFieldContent(IEnumerable<OpenXmlElement> elements, StringBuilder html,
@@ -3164,6 +3354,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 state.Instruction = string.Empty;
                 state.Separated = false;
                 state.ValueHandled = false;
+                state.Locked = fieldChar.FieldLock?.Value == true;
                 // Ramka otwartego pola — na poziomie KONWERTERA, nie stanu akapitu: pole TOC
                 // otwiera się w pierwszym wpisie spisu, a domyka w ostatnim (inne akapity).
                 _openFieldFrames.Add(false);
@@ -3191,6 +3382,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     html.Append(FieldSpan("field-numpages", "{pages}", run));
                     state.ValueHandled = true;
                 }
+                else if (!state.Locked && IsAutoDateFieldInstruction(state.Instruction))
+                {
+                    // DATE/TIME (ADR-0084): jak Word — bieżąca data wg obrazu \@ zamiast
+                    // wartości zamrożonej w pliku; instrukcja round-tripuje w data-fld-instr.
+                    html.Append(FieldDateSpan(state.Instruction, run));
+                    state.ValueHandled = true;
+                }
                 else if (IsRoundTrippedFieldInstruction(state.Instruction))
                 {
                     // TOC/PAGEREF: instrukcja pola round-tripuje markerem — writer odtwarza
@@ -3214,6 +3412,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     else if (instrEnd.Contains("NUMPAGES") || instrEnd.Contains("SECTIONPAGES"))
                     {
                         html.Append(FieldSpan("field-numpages", "{pages}", run));
+                    }
+                    else if (!state.Locked && IsAutoDateFieldInstruction(state.Instruction))
+                    {
+                        // Pole daty bez separatora (bez wartości zbuforowanej) — bieżąca data.
+                        html.Append(FieldDateSpan(state.Instruction, run));
                     }
                     else if (IsRoundTrippedFieldInstruction(state.Instruction))
                     {
@@ -6200,6 +6403,70 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return null;
     }
 
+    /// <summary>
+    /// KR-04 (ADR-0088): AKCEPTACJA śledzonych zmian przy imporcie — jak Word po „Zaakceptuj
+    /// wszystkie zmiany". Edytor nie modeluje rewizji, a cichy drop nieznanych elementów
+    /// + regeneracja pakietu przy zapisie oznaczały TRWAŁĄ utratę wstawionego tekstu (w:ins)
+    /// po pierwszym autosave. Reguły akceptacji:
+    ///   - w:ins / w:moveTo (run-level) — treść ZOSTAJE (wrapper odpakowany),
+    ///   - w:del / w:moveFrom — usuwane w całości (w:delText nie jest treścią dokumentu),
+    ///   - wiersz tabeli z w:trPr/w:del — usuwany; znacznik w:trPr/w:ins — zdejmowany,
+    ///   - znaczniki rewizji właściwości (w:ins/w:del na znaku akapitu, w:pPrChange,
+    ///     w:rPrChange) — zdejmowane (bieżące wartości są już „po zmianie").
+    /// Świadome uproszczenie: akceptacja w:del na ZNAKU AKAPITU nie scala akapitów (rzadkie;
+    /// treść pozostaje kompletna). Mutacja wyłącznie DOM w pamięci — pakiet jest otwarty
+    /// read-only i nigdy nie zapisywany, źródłowy strumień pozostaje nietknięty.
+    /// </summary>
+    private static void AcceptTrackedRevisions(WordprocessingDocument document)
+    {
+        var main = document.MainDocumentPart;
+        if (main == null) return;
+
+        var roots = new List<OpenXmlElement?> { main.Document?.Body };
+        foreach (var headerPart in main.HeaderParts) roots.Add(headerPart.Header);
+        foreach (var footerPart in main.FooterParts) roots.Add(footerPart.Footer);
+        roots.Add(main.FootnotesPart?.Footnotes);
+        roots.Add(main.EndnotesPart?.Endnotes);
+
+        foreach (var root in roots)
+        {
+            if (root == null) continue;
+
+            // Wiersze tabel: w:del w trPr = wiersz skasowany w rewizji.
+            foreach (var row in root.Descendants<TableRow>().ToList())
+            {
+                var trPr = row.TableRowProperties;
+                if (trPr?.GetFirstChild<Deleted>() != null) row.Remove();
+                else trPr?.GetFirstChild<Inserted>()?.Remove();
+            }
+
+            foreach (var deleted in root.Descendants<DeletedRun>().ToList()) deleted.Remove();
+            foreach (var moveFrom in root.Descendants<MoveFromRun>().ToList()) moveFrom.Remove();
+            foreach (var inserted in root.Descendants<InsertedRun>().ToList()) UnwrapRevisionContainer(inserted);
+            foreach (var moveTo in root.Descendants<MoveToRun>().ToList()) UnwrapRevisionContainer(moveTo);
+
+            foreach (var mark in root.Descendants<Inserted>().ToList()) mark.Remove();
+            foreach (var mark in root.Descendants<Deleted>().ToList()) mark.Remove();
+            foreach (var change in root.Descendants<ParagraphPropertiesChange>().ToList()) change.Remove();
+            foreach (var change in root.Descendants<RunPropertiesChange>().ToList()) change.Remove();
+        }
+    }
+
+    /// <summary>Wyciąga dzieci wrappera rewizji w jego miejsce (kolejność zachowana) i usuwa wrapper.</summary>
+    private static void UnwrapRevisionContainer(OpenXmlElement wrapper)
+    {
+        var parent = wrapper.Parent;
+        if (parent == null) return;
+        OpenXmlElement anchor = wrapper;
+        foreach (var child in wrapper.ChildElements.ToList())
+        {
+            child.Remove();
+            parent.InsertAfter(child, anchor);
+            anchor = child;
+        }
+        wrapper.Remove();
+    }
+
     private string GetHighlightColor(HighlightColorValues value)
     {
         if (value == HighlightColorValues.Yellow) return "#ffff00";
@@ -6250,9 +6517,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (instruction.Contains("NUMPAGES") || instruction.Contains("SECTIONPAGES"))
             return FieldSpan("field-numpages", "{pages}", fieldRun);
 
+        // DATE/TIME (ADR-0084): pola AUTO-aktualizowane renderują BIEŻĄCĄ datę wg obrazu \@
+        // (jak Word) i niosą instrukcję do round-tripu. fldLock/\! zachowuje wartość z pliku.
+        var rawInstruction = simpleField.Instruction?.Value ?? string.Empty;
+        if (simpleField.FieldLock?.Value != true && IsAutoDateFieldInstruction(rawInstruction))
+            return FieldDateSpan(rawInstruction, fieldRun);
+
         // Prefer the value cached in the document (Word shows the last computed
-        // result). Only DATE/TIME with an empty cache falls back to today's date
-        // so the field is not blank — never overwrite a stored date (KR-08).
+        // result). Only date-like fields with an empty cache fall back to today's
+        // date so the field is not blank — historyczne daty (CREATEDATE/…) nigdy
+        // nie są nadpisywane (KR-08).
         var text = string.Join("", simpleField.Descendants<Text>().Select(t => t.Text));
         if (!string.IsNullOrEmpty(text))
             return EscapeHtml(text);

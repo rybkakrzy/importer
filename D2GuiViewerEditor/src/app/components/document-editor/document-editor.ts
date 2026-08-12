@@ -42,6 +42,7 @@ import {
   Endnote
 } from '../../models/document.model';
 import { BuildInfoService } from '../../core/services/build-info.service';
+import { DocumentNavigationService } from '../../core/services/document-navigation.service';
 import { LastHttpErrorService } from '../../core/services/last-http-error.service';
 import { NotificationService } from '../../core/services/notification.service';
 import { FontProviderService } from '../../services/font-provider.service';
@@ -111,6 +112,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   private documentStorageService = inject(DocumentStorageService);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
+  private documentNavigation = inject(DocumentNavigationService);
   readonly buildInfo = inject(BuildInfoService);
   private readonly lastHttpError = inject(LastHttpErrorService);
   private readonly notification = inject(NotificationService);
@@ -267,6 +269,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   showBarcodeDialog = signal(false);
   errorMessage = signal<string | null>(null);
   successMessage = signal<string | null>(null);
+  /** Komunikat INFORMACYJNY (np. dokument tylko do odczytu) — stan, nie błąd (13865553). */
+  infoMessage = signal<string | null>(null);
   documentNotFound = signal(false);
 
   // Menu kontekstowe
@@ -1041,7 +1045,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Otwiera dokument z pliku — DOCX: upload do bazy, nawiguje z nowym masterId; PDF: strona konserwacji
+   * Otwiera dokument z pliku — DOCX: upload do bazy, nawiguje z nowym masterId; PDF: upload i podgląd (/viewer)
    */
   openDocument(): void {
     const input = document.createElement('input');
@@ -1057,7 +1061,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.showMenu.set(false);
 
       if (file.name.toLowerCase().endsWith('.pdf')) {
-        this.router.navigate(['/pdf-maintenance']);
+        this.openPdfInViewer(file);
         return;
       }
 
@@ -1067,6 +1071,35 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     };
 
     input.click();
+  }
+
+  /**
+   * PDF wybrany w „Plik → Otwórz": upload do bazy i przejście do podglądu (/viewer) —
+   * ta sama ścieżka co na stronie startowej.
+   */
+  private async openPdfInViewer(file: File): Promise<void> {
+    this.isLoading.set(true);
+    this.errorMessage.set(null);
+    try {
+      const base64 = await this.documentStorageService.fileToBase64(file);
+      this.documentStorageService.uploadDocument({
+        name: file.name,
+        mimeType: 'application/pdf',
+        content: base64,
+      }).subscribe({
+        next: (result) => {
+          this.documentNavigation.navigateToDocument(result.masterId, 'application/pdf');
+        },
+        error: (err) => {
+          this.isLoading.set(false);
+          this.showError(documentDefectMessage(err)
+            ?? 'Błąd podczas wczytywania pliku PDF. Spróbuj ponownie.');
+        },
+      });
+    } catch {
+      this.isLoading.set(false);
+      this.showError('Błąd podczas odczytu pliku PDF.');
+    }
   }
 
   private blobToBase64(blob: Blob): Promise<string> {
@@ -1106,7 +1139,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         // Jeden autorytatywny komunikat wyniku otwarcia — read-only wyklucza „sukces".
         // Dokument chroniony NIGDY nie jest prezentowany jako otwarty w trybie edycji.
         if (content.isReadOnlyProtected === true) {
-          this.showError(READ_ONLY_PROTECTED_MESSAGE);
+          // INFORMACJA, nie błąd (13865553): dokument OTWORZYŁ się poprawnie, tylko bez
+          // możliwości edycji — czerwony toast sugerował nieudaną operację przy każdym
+          // (także ponownym) wczytaniu tego samego pliku.
+          this.showInfo(READ_ONLY_PROTECTED_MESSAGE);
         } else if (announce) {
           this.showSuccess(`Otwarto dokument: ${fileName}`);
         }
@@ -1886,8 +1922,20 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     // Sukces i błąd są wzajemnie wykluczające się — nigdy nie pokazujemy obu banerów naraz
     // (chroniony dokument nie może jednocześnie „otworzyć się poprawnie" i być read-only).
     this.errorMessage.set(null);
+    this.infoMessage.set(null);
     this.successMessage.set(message);
     setTimeout(() => this.successMessage.set(null), 3000);
+  }
+
+  /**
+   * Komunikat INFORMACYJNY (13865553): stan dokumentu (np. tylko do odczytu) to nie błąd —
+   * czerwony toast błędu sugerował, że operacja się nie powiodła, choć dokument otwarto.
+   */
+  private showInfo(message: string): void {
+    this.errorMessage.set(null);
+    this.successMessage.set(null);
+    this.infoMessage.set(message);
+    setTimeout(() => this.infoMessage.set(null), 5000);
   }
 
   /**
@@ -1895,6 +1943,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   private showError(message: string): void {
     this.successMessage.set(null);
+    this.infoMessage.set(null);
     this.errorMessage.set(message);
     setTimeout(() => this.errorMessage.set(null), 5000);
   }
@@ -2130,7 +2179,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     this.showMenu.set(false);
 
     if (this.readOnly()) {
-      this.showError('Tryb podglądu — dokument jest tylko do odczytu.');
+      this.showInfo('Tryb podglądu — dokument jest tylko do odczytu.');
       return;
     }
 
@@ -4003,10 +4052,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       else if (textAlign === 'justify') this.paragraphData.alignment = 'justify';
       else this.paragraphData.alignment = 'left';
 
-      // Indents (px -> cm), rounded to 0.1 cm.
+      // Indents (px -> cm), rounded to 0.1 cm. KONTRAKT = margin-left/right (gap-analysis
+      // pkt 2): reader emituje w:ind jako margin-*, writer czyta margin-* — dialog czytał
+      // padding-left, więc wcięcia z Worda pokazywały się jako 0.
       const pxToCm = (px: number) => Math.round((px / CSS_PX_PER_CM) * 10) / 10;
-      this.paragraphData.indentLeft = pxToCm(parseFloat(style.paddingLeft) || 0);
-      this.paragraphData.indentRight = pxToCm(parseFloat(style.paddingRight) || 0);
+      this.paragraphData.indentLeft = pxToCm(parseFloat(style.marginLeft) || 0);
+      this.paragraphData.indentRight = pxToCm(parseFloat(style.marginRight) || 0);
 
       // Text-indent (wcięcie specjalne)
       const textIndent = parseFloat(style.textIndent) || 0;
@@ -4080,16 +4131,22 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       // Wyrównanie
       el.style.textAlign = this.paragraphData.alignment;
 
-      // Wcięcia
-      el.style.paddingLeft = cmToPx(this.paragraphData.indentLeft) + 'px';
-      el.style.paddingRight = cmToPx(this.paragraphData.indentRight) + 'px';
+      // Wcięcia — KONTRAKT writera (gap-analysis pkt 2): margin-left/right → w:ind left/right,
+      // ujemny text-indent → w:ind hanging (semantyka Worda: „Z lewej" = pozycja tekstu,
+      // pierwsza linia wysunięta o `hanging` W LEWO od niej). Dialog pisał padding-left,
+      // którego writer nie czyta — wcięcia z dialogu nie trafiały do DOCX.
+      el.style.marginLeft = cmToPx(this.paragraphData.indentLeft) + 'px';
+      el.style.marginRight = cmToPx(this.paragraphData.indentRight) + 'px';
+      // Sprzątanie po starym kontrakcie (padding-* z poprzednich wersji dialogu) — inaczej
+      // wcięcie liczyłoby się podwójnie wizualnie.
+      el.style.removeProperty('padding-left');
+      el.style.removeProperty('padding-right');
 
       // Wcięcie specjalne
       if (this.paragraphData.specialIndent === 'firstLine') {
         el.style.textIndent = cmToPx(this.paragraphData.specialIndentBy) + 'px';
       } else if (this.paragraphData.specialIndent === 'hanging') {
         el.style.textIndent = '-' + cmToPx(this.paragraphData.specialIndentBy) + 'px';
-        el.style.paddingLeft = cmToPx(this.paragraphData.indentLeft + this.paragraphData.specialIndentBy) + 'px';
       } else {
         el.style.textIndent = '0';
       }

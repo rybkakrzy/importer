@@ -35,16 +35,78 @@ public class FieldValuePreservationTests
     }
 
     [Test]
-    public void ComplexDateField_KeepsStoredDate_NotServerToday()
+    public void ComplexDateField_RendersCurrentDatePerPicture_AndCarriesInstruction()
     {
+        // ADR-0084 (koryguje KR-08 dla pól AUTO-daty): DATE/TIME to w Wordzie pola
+        // aktualizowane — edytor pokazuje BIEŻĄCĄ datę wg obrazu \@, a instrukcja jedzie
+        // w data-fld-instr, żeby zapis odtworzył żywe pole zamiast martwego tekstu.
         var storedDate = "5 stycznia 2024";
         var docx = BuildBody(
-            Field(" DATE \\@ \"d MMMM yyyy\" ", storedDate));
+            Field(" TIME \\@ \"dd-MM-yyyy\" ", storedDate));
+
+        var html = _reader.Convert(new MemoryStream(docx)).Html;
+
+        html.Should().Contain(System.DateTime.Now.ToString("dd-MM-yyyy"));
+        html.Should().NotContain(storedDate);
+        html.Should().Contain("class=\"field-date\"");
+        html.Should().Contain("data-fld-instr=\"TIME \\@ &quot;dd-MM-yyyy&quot;\"");
+    }
+
+    [Test]
+    public void ComplexDateField_PolishMonthPicture_UsesPolishCulture()
+    {
+        var docx = BuildBody(Field(" DATE \\@ \"d MMMM yyyy\" ", "stara wartość"));
+
+        var html = _reader.Convert(new MemoryStream(docx)).Html;
+
+        var expected = System.DateTime.Now.ToString(
+            "d MMMM yyyy", System.Globalization.CultureInfo.GetCultureInfo("pl-PL"));
+        html.Should().Contain(expected);
+    }
+
+    [Test]
+    public void ComplexCreateDateField_KeepsStoredDate_HistoricalDatesAreNotRefreshed()
+    {
+        // CREATEDATE/SAVEDATE/PRINTDATE niosą daty HISTORYCZNE — KR-08 pozostaje w mocy.
+        var storedDate = "5 stycznia 2024";
+        var docx = BuildBody(Field(" CREATEDATE \\@ \"d MMMM yyyy\" ", storedDate));
 
         var html = _reader.Convert(new MemoryStream(docx)).Html;
 
         html.Should().Contain(storedDate);
-        html.Should().NotContain(System.DateTime.Now.ToString("dd.MM.yyyy"));
+        html.Should().NotContain("data-fld-instr=\"CREATEDATE");
+    }
+
+    [Test]
+    public void ComplexDateField_WithLockSwitch_KeepsStoredDate()
+    {
+        // \! = zablokowana aktualizacja pola — wartość z pliku zostaje.
+        var storedDate = "11-05-2022";
+        var docx = BuildBody(Field(" TIME \\@ \"dd-MM-yyyy\" \\! ", storedDate));
+
+        var html = _reader.Convert(new MemoryStream(docx)).Html;
+
+        html.Should().Contain(storedDate);
+    }
+
+    [Test]
+    public void DateFieldSpan_RoundTripsToLiveSimpleField()
+    {
+        // Pełny round-trip: DOCX z polem TIME → HTML (span.field-date) → DOCX.
+        // Wynik musi mieć ŻYWE pole (fldSimple z instrukcją), nie martwy tekst.
+        var docx = BuildBody(Field(" TIME \\@ \"dd-MM-yyyy\" ", "11-05-2022"));
+        var html = _reader.Convert(new MemoryStream(docx)).Html;
+
+        var writer = new HtmlToDocxConverter();
+        var bytes = writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var field = doc.MainDocumentPart!.Document.Body!.Descendants<SimpleField>().FirstOrDefault();
+        field.Should().NotBeNull("pole daty musi wrócić jako żywe pole, nie tekst");
+        field!.Instruction!.Value.Should().Contain("TIME");
+        field.Instruction.Value.Should().Contain("dd-MM-yyyy");
+        field.InnerText.Trim().Should().Be(System.DateTime.Now.ToString("dd-MM-yyyy"),
+            "wartość zbuforowana = data pokazana w edytorze");
     }
 
     [Test]

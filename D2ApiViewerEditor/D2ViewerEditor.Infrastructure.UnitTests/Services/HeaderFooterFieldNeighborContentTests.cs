@@ -124,11 +124,29 @@ public class HeaderFooterFieldNeighborContentTests
     }
 
     [Test]
-    public void CachedValueField_InsideSdtRun_KeepsCachedValue()
+    public void AutoDateField_InsideSdtRun_RendersCurrentDate_AndCarriesInstruction()
     {
-        // Pole inne niż PAGE/NUMPAGES (np. DATE) w formancie: wartość zbuforowana musi przetrwać (KR-05).
+        // ADR-0084: DATE/TIME w formancie to pole AUTO-aktualizowane — bieżąca data wg \@,
+        // instrukcja w data-fld-instr (round-trip). Maszyna pól działa przez granicę SdtRun.
         var sdtContent = new List<OpenXmlElement>();
         sdtContent.AddRange(ComplexField(" DATE \\@ \"dd.MM.yyyy\" ", "06.07.2026"));
+
+        using var stream = DocxWithFooterParagraph(InlineSdt("Data", sdtContent.ToArray()));
+        var html = _reader.Convert(stream).Footer!.Html;
+
+        html.Should().Contain(DateTime.Now.ToString("dd.MM.yyyy"));
+        html.Should().Contain("class=\"field-date\"");
+        html.Should().Contain("data-fld-instr=\"DATE");
+        html.Should().NotContain("{page}");
+    }
+
+    [Test]
+    public void CachedValueField_InsideSdtRun_KeepsCachedValue_ForHistoricalDates()
+    {
+        // Pole inne niż PAGE/NUMPAGES/auto-data (np. CREATEDATE) w formancie:
+        // wartość zbuforowana musi przetrwać (KR-05/KR-08).
+        var sdtContent = new List<OpenXmlElement>();
+        sdtContent.AddRange(ComplexField(" CREATEDATE \\@ \"dd.MM.yyyy\" ", "06.07.2026"));
 
         using var stream = DocxWithFooterParagraph(InlineSdt("Data", sdtContent.ToArray()));
         var html = _reader.Convert(stream).Footer!.Html;
