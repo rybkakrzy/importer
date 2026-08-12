@@ -19,6 +19,11 @@ public class DocumentInputNormalizerTests
 {
     private DocumentInputNormalizer _normalizer = null!;
 
+    // Hasło-fikstura losowane per uruchomienie testów — w źródłach nie ma literału hasła
+    // (SAST: „hard-coded password"); round-trip szyfrowania i tak używa tej samej wartości.
+    private static readonly string TestPassword = "test-" + Guid.NewGuid().ToString("N");
+    private static readonly string WrongPassword = TestPassword + "-zle";
+
     [SetUp]
     public void SetUp() => _normalizer = new DocumentInputNormalizer();
 
@@ -45,7 +50,7 @@ public class DocumentInputNormalizerTests
     public void EncryptedDocx_WithoutPassword_RequiresPassword()
     {
         // Realny zaszyfrowany DOCX (EncryptionInfo + EncryptedPackage); bez hasła → trzeba poprosić.
-        var encrypted = EncryptDocx(BuildMinimalDocx(), "sezam");
+        var encrypted = EncryptDocx(BuildMinimalDocx(), TestPassword);
 
         _normalizer.Normalize(encrypted, password: null)
             .Status.Should().Be(DocumentInputStatus.PasswordRequired);
@@ -65,9 +70,9 @@ public class DocumentInputNormalizerTests
     public void EncryptedDocx_WithCorrectPassword_IsDecryptedToValidDocx()
     {
         var docx = BuildMinimalDocx();
-        var encrypted = EncryptDocx(docx, "sezam");
+        var encrypted = EncryptDocx(docx, TestPassword);
 
-        var result = _normalizer.Normalize(encrypted, "sezam");
+        var result = _normalizer.Normalize(encrypted, TestPassword);
 
         result.Status.Should().Be(DocumentInputStatus.Ok, because: "poprawne hasło musi odszyfrować dokument");
         result.Docx.Should().NotBeNull();
@@ -82,9 +87,9 @@ public class DocumentInputNormalizerTests
     [Test]
     public void EncryptedDocx_WithWrongPassword_ReturnsWrongPassword()
     {
-        var encrypted = EncryptDocx(BuildMinimalDocx(), "sezam");
+        var encrypted = EncryptDocx(BuildMinimalDocx(), TestPassword);
 
-        _normalizer.Normalize(encrypted, "ZŁE-haslo")
+        _normalizer.Normalize(encrypted, WrongPassword)
             .Status.Should().Be(DocumentInputStatus.WrongPassword);
     }
 

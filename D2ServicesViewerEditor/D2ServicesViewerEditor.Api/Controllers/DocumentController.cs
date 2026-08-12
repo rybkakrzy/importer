@@ -14,16 +14,10 @@ namespace D2ServicesViewerEditor.Api.Controllers;
 [Produces("application/json")]
 public class DocumentController : ControllerBase
 {
-    // Allowlist rozszerzeń przyjmowanych na granicy zaufania. Rozszerzenie jest źródłem prawdy,
-    // deklarowany Content-Type musi się z nim zgadzać (klient może go dowolnie podać).
+    // Allowlist rozszerzeń przyjmowanych na granicy zaufania żyje jako JAWNY switch na
+    // literałach w CreateDocument (wymóg czytelności dla SAST). Rozszerzenie jest źródłem
+    // prawdy, deklarowany Content-Type musi się z nim zgadzać (klient może go dowolnie podać).
     private static readonly char[] PathSeparators = { '/', '\\', ':' };
-
-    private static readonly IReadOnlyDictionary<string, string> AllowedDocumentMimeByExtension =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            [".docx"] = IngestExternalDocumentCommandHandler.DocxMimeType,
-            [".pdf"] = IngestExternalDocumentCommandHandler.PdfMimeType
-        };
 
     private readonly ILogger<DocumentController> _logger;
     private readonly IMediator _mediator;
@@ -63,11 +57,30 @@ public class DocumentController : ControllerBase
 
         // Nazwa pliku pochodzi od klienta — bierzemy wyłącznie segment nazwy (bez ścieżki),
         // a rozszerzenie musi należeć do allowlisty ZANIM cokolwiek wczytamy z formularza.
-        var fileName = SanitizeFileName(request.File.FileName);
-        var extension = Path.GetExtension(fileName);
+        // Walidacja JAWNYM switchem na literałach (nie słownikiem): to wzorzec, który silniki
+        // SAST rozpoznają jako sanityzację rozszerzenia (finding „Dangerous File Extension").
+        var sanitizedBaseName = Path.GetFileNameWithoutExtension(SanitizeFileName(request.File.FileName));
 
-        if (!AllowedDocumentMimeByExtension.TryGetValue(extension, out var mimeType))
-            return BadRequest(new { error = "Wspierane są tylko pliki DOCX i PDF" });
+        string canonicalExtension;
+        string mimeType;
+        switch (Path.GetExtension(SanitizeFileName(request.File.FileName)).ToLowerInvariant())
+        {
+            case ".docx":
+                canonicalExtension = ".docx";
+                mimeType = IngestExternalDocumentCommandHandler.DocxMimeType;
+                break;
+            case ".pdf":
+                canonicalExtension = ".pdf";
+                mimeType = IngestExternalDocumentCommandHandler.PdfMimeType;
+                break;
+            default:
+                return BadRequest(new { error = "Wspierane są tylko pliki DOCX i PDF" });
+        }
+
+        // Nazwa przekazywana dalej jest SKŁADANA NA SERWERZE: baza po sanityzacji + kanoniczne
+        // rozszerzenie z literału powyżej — rozszerzenie klienta nigdy nie płynie do zapisu.
+        // (Sam zapis i tak idzie pod GUID-em wersji; nazwa jest wyłącznie metadaną wyświetlania.)
+        var fileName = sanitizedBaseName + canonicalExtension;
 
         if (!IsDeclaredContentTypeAcceptable(request.File.ContentType, mimeType))
             return BadRequest(new { error = "Deklarowany typ MIME nie zgadza się z rozszerzeniem pliku" });

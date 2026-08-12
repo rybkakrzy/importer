@@ -201,12 +201,15 @@ public class OpenDocumentQueryHandlerTests
     [Test]
     public async Task Handle_PassesPasswordToNormalizer()
     {
+        // Hasło-fikstura losowane per uruchomienie — w źródłach nie ma literału hasła
+        // (SAST: „hard-coded password"), a asercja pass-through pozostaje ścisła.
+        var testPassword = "test-" + Guid.NewGuid().ToString("N");
         using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
         _converter.Convert(Arg.Any<Stream>())
             .Returns(new DocumentContent { Html = "", Metadata = new DocumentMetadata() });
 
-        await _handler.Handle(new OpenDocumentQuery(stream, "f.docx", "sezam"), CancellationToken.None);
+        await _handler.Handle(new OpenDocumentQuery(stream, "f.docx", testPassword), CancellationToken.None);
 
-        _normalizer.Received(1).Normalize(Arg.Any<byte[]>(), "sezam");
+        _normalizer.Received(1).Normalize(Arg.Any<byte[]>(), testPassword);
     }
 }

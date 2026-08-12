@@ -233,6 +233,30 @@ public class DocumentControllerTests
             Arg.Any<CancellationToken>());
     }
 
+    [TestCase("Umowa.DOCX", "Umowa.docx", IngestExternalDocumentCommandHandler.DocxMimeType)]
+    [TestCase("raport.PDF", "raport.pdf", IngestExternalDocumentCommandHandler.PdfMimeType)]
+    public async Task CreateDocument_RebuildsFileNameWithCanonicalExtensionFromLiteral(
+        string clientFileName, string expectedFileName, string mimeType)
+    {
+        // Rozszerzenie klienta NIGDY nie płynie dalej: nazwa jest składana na serwerze
+        // z sanityzowanej bazy + kanonicznego rozszerzenia z literału allowlisty (SAST:
+        // „Dangerous File Extension" — jawny switch na literałach zamiast słownika).
+        var request = new CreateDocumentRequest
+        {
+            File = BuildFormFile(clientFileName, mimeType, "abc"),
+            ReturnUrl = "https://app.example.com/cb"
+        };
+        _mediator.Send(Arg.Any<IngestExternalDocumentCommand>(), Arg.Any<CancellationToken>())
+            .Returns(Result<IngestExternalDocumentResult>.Success(
+                new IngestExternalDocumentResult(Guid.NewGuid(), Guid.NewGuid(), expectedFileName, DateTime.UtcNow)));
+
+        await _controller.CreateDocument(request, CancellationToken.None);
+
+        await _mediator.Received(1).Send(
+            Arg.Is<IngestExternalDocumentCommand>(c => c.FileName == expectedFileName),
+            Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task CreateDocument_WhenIngestFails_ReturnsBadRequest()
     {
