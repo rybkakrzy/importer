@@ -179,8 +179,9 @@ public class Doc2ImportFidelityTests
         using var ms = Docx(table, new Paragraph());
         var html = _reader.Convert(ms).Html;
 
-        // Pierwsza komórka normalna, druga (treść) pochłania brakujące 2 kolumny.
-        html.Should().Contain("<td style=").And.Contain("Lp");
+        // Pierwsza komórka normalna (bez colspan; tabela bez linii → marker siatki edytora),
+        // druga (treść) pochłania brakujące 2 kolumny.
+        html.Should().Contain("<td class=\"docx-borderless-cell\" style=").And.Contain("Lp");
         html.Should().Contain("<td colspan=\"2\"");
         html.Should().Contain("WIDE");
         html.Should().NotContain("colspan=\"3\"");

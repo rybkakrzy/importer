@@ -889,4 +889,57 @@ public class TableStyleFidelityTests
             cellBorders.Elements<BorderType>().Should()
                 .OnlyContain(b => b.Val != null && b.Val.Value == BorderValues.Nil);
     }
+
+    // ---------- reader: marker symulowanej siatki edytora (komórki bez żadnej linii) ----------
+
+    [Test]
+    public void Read_TableWithoutAnyBorders_MarksCellsForEditorGridlines()
+    {
+        // Edytor rysuje po tej klasie siatkę jak Word „Wyświetl linie siatki" (kanał box-shadow,
+        // bez dotykania inline'owych border:*none — patrz wysiwyg-editor.scss).
+        var html = _reader.Convert(BuildDocx(null, new TableProperties(), rows: 2, cols: 2)).Html;
+
+        var tags = System.Text.RegularExpressions.Regex.Matches(html, "<td[^>]*>")
+            .Select(m => m.Value).ToList();
+        tags.Should().NotBeEmpty();
+        tags.Should().OnlyContain(t => t.Contains("docx-borderless-cell"));
+    }
+
+    [Test]
+    public void Read_TableGridStyle_DoesNotMarkCellsAsBorderless()
+    {
+        var tblPr = new TableProperties(new TableStyle { Val = "TableGrid" });
+        var html = _reader.Convert(BuildDocx(GridTableStyle(), tblPr)).Html;
+
+        html.Should().NotContain("docx-borderless-cell");
+    }
+
+    [Test]
+    public void Read_CellWithSingleVisibleEdge_IsNotMarkedAsBorderless()
+    {
+        // Marker jest per-komórka: sama dolna linia tabeli zdejmuje go TYLKO z ostatniego wiersza.
+        var tblPr = new TableProperties(new TableBorders(
+            new BottomBorder { Val = BorderValues.Single, Size = 4 }));
+        var html = _reader.Convert(BuildDocx(null, tblPr, rows: 2, cols: 1)).Html;
+
+        var tags = System.Text.RegularExpressions.Regex.Matches(html, "<td[^>]*>")
+            .Select(m => m.Value).ToList();
+        tags.Should().HaveCount(2);
+        tags[0].Should().Contain("docx-borderless-cell");
+        tags[1].Should().NotContain("docx-borderless-cell");
+    }
+
+    [Test]
+    public void RoundTrip_BorderlessMarkerClass_DoesNotCreateBordersOnExport()
+    {
+        // Klasa jest wyłącznie edytorowa — writer czyta style inline, więc eksport dalej niesie
+        // jawny brak linii (None/Nil), dokładnie jak przed wprowadzeniem markera.
+        var html = _reader.Convert(BuildDocx(null, new TableProperties(), rows: 2, cols: 2)).Html;
+        html.Should().Contain("docx-borderless-cell");
+
+        var table = FirstTable(_writer.Convert(html));
+        var tblBorders = table.GetFirstChild<TableProperties>()!.GetFirstChild<TableBorders>()!;
+        tblBorders.TopBorder!.Val!.Value.Should().Be(BorderValues.None);
+        tblBorders.InsideHorizontalBorder!.Val!.Value.Should().Be(BorderValues.None);
+    }
 }

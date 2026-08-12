@@ -477,8 +477,50 @@ img[data-legacy-graphic='blank'] {
   font-weight: bold;
 }
 
+/* Symulowane linie siatki jak Word „Wyświetl linie siatki": komórki bez ŻADNEJ widocznej
+   krawędzi (klasa-marker z readera; util obramowań utrzymuje ją przy edycji) dostają szare
+   PRZERYWANE linie kanałem background-image (repeating-linear-gradient). CELOWO nie property
+   border: inline'owe border:*none z readera zostaje nienaruszone, więc zapis dalej emituje
+   w:val="nil" i w wyeksportowanym pliku linii nie ma — siatka istnieje wyłącznie w edytorze.
+   background-image nie wpływa na layout (paginacja i measurer bez zmian) i maluje się NAD
+   inline'owym background-color (cieniowanie komórek zostaje widoczne pod kreskami).
+   Rysujemy top+left per komórka (współdzielona krawędź = jedna kreska, nie dwie); prawą
+   i dolną domalowują reguły :last-child / tr:last-child na brzegu tabeli.
+   Zakres: body, przelew, pasma i wpisy przypisów. */
+:is(.editor-content, .page-overflow-content, .header-editor-content, .footer-editor-content,
+    .header-display, .footer-display, .footnote-item-content) {
+  :is(td, th).docx-borderless-cell {
+    --docx-grid-h: repeating-linear-gradient(90deg, #c8c8c8 0 3px, transparent 3px 6px);
+    --docx-grid-v: repeating-linear-gradient(0deg, #c8c8c8 0 3px, transparent 3px 6px);
+    background-image: var(--docx-grid-h), var(--docx-grid-v);
+    background-size: 100% 1px, 1px 100%;
+    background-position: 0 0, 0 0;
+    background-repeat: no-repeat;
+  }
+
+  :is(td, th).docx-borderless-cell:last-child {
+    background-image: var(--docx-grid-h), var(--docx-grid-v), var(--docx-grid-v);
+    background-size: 100% 1px, 1px 100%, 1px 100%;
+    background-position: 0 0, 0 0, 100% 0;
+  }
+
+  tr:last-child :is(td, th).docx-borderless-cell {
+    background-image: var(--docx-grid-h), var(--docx-grid-v), var(--docx-grid-h);
+    background-size: 100% 1px, 1px 100%, 100% 1px;
+    background-position: 0 0, 0 0, 0 100%;
+  }
+
+  tr:last-child :is(td, th).docx-borderless-cell:last-child {
+    background-image: var(--docx-grid-h), var(--docx-grid-v), var(--docx-grid-v), var(--docx-grid-h);
+    background-size: 100% 1px, 1px 100%, 1px 100%, 100% 1px;
+    background-position: 0 0, 0 0, 100% 0, 0 100%;
+  }
+}
+
+/* background-COLOR, nie skrót background: skrót zerowałby background-image
+   symulowanej siatki (wyższa specyficzność przez tr:hover). */
 .editor-content table tr:hover td {
-  background: #fafafa;
+  background-color: #fafafa;
 }
 
 /* Narożnik tabeli - uchwyt resize całej tabeli */
@@ -1110,21 +1152,38 @@ body.image-moving * {
 /* Nagłówek i Stopka    */
 /* ==================== */
 
+/* Model warstw Worda: CAŁA warstwa nagłówka/stopki leży POD warstwą główną dokumentu.
+   Pasmo (z-index:1) tworzy stacking context, więc jego zawartość — także textboxy/obrazy
+   wystające poza pasek w obszar treści — nigdy nie przykryje body. Odwrotnie: obiekty body
+   z ujemnym offsetem wchodzące w obszar pasma malują się NAD nim (jak w Wordzie), bo
+   .editor-content ma z-index:2. Paski nie nakładają się geometrycznie (flex-kolumna .page),
+   więc klik/hover wejścia w edycję pasma działa bez zmian. Poprzedni układ (pasmo z=5 nad
+   contentem z=0) przykrywał obiekty body niezależnie od ich z-index — dzieci są uwięzione
+   w stacking context rodzica, więc podbijanie im z-index nic nie dawało. */
 .page-header,
 .page-footer {
   flex-shrink: 0;
   display: block;
   cursor: pointer;
   transition: background-color 0.15s;
-  z-index: 5;
+  z-index: 1;
   position: relative;
   box-sizing: border-box;
   overflow: visible; /* Pozwala na wyświetlanie pasków narzędzi */
 }
 
-/* Word maluje obiekty rysunkowe BODY (textboxy/kształty zakotwiczone w treści) NAD obszarem
-   nagłówka/stopki — pasmo (z-index:5) nie może ich przykrywać, gdy kotwica leży przy jego
-   granicy. Obrazy data-pos-mode="front" mają już z-index:10 — wyrównujemy kształty/textboxy. */
+/* Warstwa główna dokumentu — ponad pasmami nagłówka/stopki (nadpisuje z-index:0
+   ze wspólnej reguły stacking-contextów wyżej). Tło musi być przezroczyste: kartkę maluje
+   .page (białe), a nieprzezroczyste tło contentu zasłoniłoby treść pasma całkowicie —
+   Word pokazuje treść nagłówka/stopki POD tekstem body (jak znak wodny), widoczną tam,
+   gdzie body nie ma tuszu. */
+.editor-content {
+  z-index: 2;
+  background: transparent;
+}
+
+/* Porządek WEWNĄTRZ warstwy głównej: kształty/textboxy body bez własnego (inline)
+   z-index stają nad tekstem, tak jak obrazy data-pos-mode="front" (z-index:10). */
 .editor-content .docx-shape[data-docx-xml],
 .editor-content .docx-textbox {
   z-index: 6;
@@ -1541,6 +1600,10 @@ body.image-moving * {
   flex: 1 1 auto;
   min-height: 1.4em;
   outline: none;
+  /* Jak body i pasma (ADR-0077): bez pre-wrap Chrome przy pisaniu w contenteditable wstawia
+     &nbsp; zamiast zwykłych spacji (żeby nie skolapsowały) — twarde spacje szły do w:t
+     i Word nie łamał wierszy przypisu (tekst wychodził poza prawy margines strony). */
+  white-space: pre-wrap;
 
   &:focus {
     background: #f8f9ff;
@@ -1551,5 +1614,10 @@ body.image-moving * {
   p {
     margin: 0 0 4px;
   }
+}
+
+/* Nośnik tabulatora w przypisie — jak w body: pod pre-wrap literalny \t skakałby do stopu. */
+.footnote-item-content span[style*='min-width:2em'] {
+  white-space: normal;
 }
 

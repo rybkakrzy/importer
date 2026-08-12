@@ -2,7 +2,9 @@ import {
   applyBorderScope,
   applyBorderToCells,
   classifyBorderTarget,
+  refreshBorderlessMarker,
   restoreDefaultTableBorders,
+  BORDERLESS_CELL_CLASS,
   DEFAULT_CELL_BORDER_COLOR
 } from './table-style.util';
 import { DEFAULT_TABLE_BORDER, TableBorderSettings } from '../../models/table-style.model';
@@ -180,5 +182,62 @@ describe('table-style.util — restore default', () => {
     expect(c.style.borderTopColor.replace(/\s/g, '')).toMatch(/rgb\(204,204,204\)|#cccccc/i);
     expect(c.textContent).toBe('r0c0');
     expect(DEFAULT_CELL_BORDER_COLOR).toBe('#cccccc');
+  });
+});
+
+describe('table-style.util — marker symulowanej siatki (docx-borderless-cell)', () => {
+  // Edytor rysuje po tej klasie linie siatki jak Word „Wyświetl linie siatki" (box-shadow).
+  // Util musi utrzymywać ją w spójności z inline'owym obramowaniem po każdej edycji.
+
+  it('applyBorderScope("none") oznacza wszystkie komórki markerem siatki', () => {
+    const table = buildTable(2, 2);
+    applyBorderScope(table, 'none', border);
+    Array.from(table.querySelectorAll('td')).forEach(c =>
+      expect(c.classList.contains(BORDERLESS_CELL_CLASS)).toBe(true)
+    );
+  });
+
+  it('nadanie widocznej linii zdejmuje marker', () => {
+    const table = buildTable(2, 2);
+    applyBorderScope(table, 'none', border);
+    applyBorderScope(table, 'all', { color: '#000000', width: 1, style: 'solid' });
+    Array.from(table.querySelectorAll('td')).forEach(c =>
+      expect(c.classList.contains(BORDERLESS_CELL_CLASS)).toBe(false)
+    );
+  });
+
+  it('częściowe obramowanie (jedna widoczna krawędź) nie dostaje markera', () => {
+    const table = buildTable(2, 2);
+    applyBorderScope(table, 'none', border);
+    applyBorderScope(table, 'bottom', { color: '#000000', width: 1, style: 'solid' });
+    // Dolny wiersz ma widoczną dolną krawędź → bez markera; górny nadal bez żadnej linii.
+    expect(cellAt(table, 1, 0).classList.contains(BORDERLESS_CELL_CLASS)).toBe(false);
+    expect(cellAt(table, 0, 0).classList.contains(BORDERLESS_CELL_CLASS)).toBe(true);
+  });
+
+  it('komórka bez inline (domyślna linia z arkusza) nie jest oznaczana', () => {
+    const cell = buildTable(1, 1).rows[0].cells[0];
+    refreshBorderlessMarker(cell);
+    expect(cell.classList.contains(BORDERLESS_CELL_CLASS)).toBe(false);
+  });
+
+  it('szerokość 0 i kolor transparent liczą się jako brak linii', () => {
+    const cell = buildTable(1, 1).rows[0].cells[0];
+    cell.style.border = '0px solid #000000';
+    refreshBorderlessMarker(cell);
+    expect(cell.classList.contains(BORDERLESS_CELL_CLASS)).toBe(true);
+
+    cell.style.border = '1px solid transparent';
+    refreshBorderlessMarker(cell);
+    expect(cell.classList.contains(BORDERLESS_CELL_CLASS)).toBe(true);
+  });
+
+  it('restoreDefaultTableBorders zdejmuje marker (wraca pełna siatka)', () => {
+    const table = buildTable(2, 2);
+    applyBorderScope(table, 'none', border);
+    restoreDefaultTableBorders(table);
+    Array.from(table.querySelectorAll('td')).forEach(c =>
+      expect(c.classList.contains(BORDERLESS_CELL_CLASS)).toBe(false)
+    );
   });
 });

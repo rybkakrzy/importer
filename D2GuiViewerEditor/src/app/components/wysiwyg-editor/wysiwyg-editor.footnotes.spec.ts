@@ -122,6 +122,53 @@ describe('WysiwygEditorComponent — przypisy dolne', () => {
     expect(model.find(f => f.id === 'fn-2')?.html).toContain('Drugi przypis.');
   });
 
+  it('commit edytowanego przypisu zamienia międzywyrazowe twarde spacje na zwykłe', () => {
+    // Chrome w contenteditable bez pre-wrap wstawia &nbsp; zamiast spacji; takie U+00A0
+    // szło 1:1 do w:t i Word nie łamał wiersza — treść przypisu wychodziła poza margines.
+    const host = load();
+    let emitted: Footnote[] | null = null;
+    component.footnotesChange.subscribe(v => (emitted = v));
+
+    const content = host.querySelector('[data-testid="footnote-content-fn-1"]') as HTMLElement;
+    content.innerHTML = '<p>Opcja\u00A0właściwa\u00A0dla\u00A0zabezpieczenia.</p>';
+    content.dispatchEvent(new Event('blur'));
+
+    const model = emitted as unknown as Footnote[];
+    expect(model.find(f => f.id === 'fn-1')?.html).toBe('<p>Opcja właściwa dla zabezpieczenia.</p>');
+  });
+
+  it('samotna twarda spacja (placeholder pustego bloku) przeżywa commit przypisu', () => {
+    const host = load();
+    let emitted: Footnote[] | null = null;
+    component.footnotesChange.subscribe(v => (emitted = v));
+
+    const content = host.querySelector('[data-testid="footnote-content-fn-1"]') as HTMLElement;
+    content.innerHTML = '<p>Nowa treść.</p><p>\u00A0</p>';
+    content.dispatchEvent(new Event('blur'));
+
+    const model = emitted as unknown as Footnote[];
+    // Serializacja innerHTML koduje U+00A0 jako &nbsp; — placeholder ma zostać nietknięty.
+    expect(model.find(f => f.id === 'fn-1')?.html).toBe('<p>Nowa treść.</p><p>&nbsp;</p>');
+  });
+
+  it('nieedytowany przypis zachowuje oryginalne twarde spacje z importu', () => {
+    // Wierność 1:1: normalizacja dotyka wyłącznie realnie edytowanych wpisów — świadome
+    // twarde spacje autora szablonu (np. po jednoliterowych spójnikach) nie mogą zniknąć.
+    const withNbsp: Footnote[] = [
+      { id: 'fn-1', html: '<p>Kwota w\u00A0PLN.</p>' },
+      { id: 'fn-2', html: '<p>Drugi przypis.</p>' }
+    ];
+    const host = load(BODY, withNbsp);
+    let emitted: Footnote[] | null = null;
+    component.footnotesChange.subscribe(v => (emitted = v));
+
+    const untouched = host.querySelector('[data-testid="footnote-content-fn-1"]') as HTMLElement;
+    untouched.dispatchEvent(new Event('blur'));
+
+    expect(emitted).toBeNull();
+    expect(component.getFootnotes().find(f => f.id === 'fn-1')?.html).toBe('<p>Kwota w\u00A0PLN.</p>');
+  });
+
   it('usunięcie przypisu kasuje odwołanie i treść oraz przelicza numerację', () => {
     const host = load();
     let emitted: Footnote[] | null = null;

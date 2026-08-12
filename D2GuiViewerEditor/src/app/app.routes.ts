@@ -53,6 +53,13 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./pages/admin/admin-deliveries/admin-deliveries').then((m) => m.AdminDeliveriesComponent),
       },
+      {
+        path: 'walidator-struktury',
+        loadComponent: () =>
+          import('./pages/admin/admin-structure-validator/admin-structure-validator').then(
+            (m) => m.AdminStructureValidatorComponent,
+          ),
+      },
     ],
   },
   { path: '**', redirectTo: '' },

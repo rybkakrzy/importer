@@ -2,6 +2,7 @@
 using FluentValidation;
 using D2ViewerEditor.Application.Common.Behaviours;
 using D2ViewerEditor.Application.Common.Security;
+using D2ViewerEditor.Application.Features.StructureInspection.Common;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +27,9 @@ public static class DependencyInjection
         // Document view-access guard (CorporateKey allow-list). ICurrentUserProvider is
         // supplied by the host (Api) — see HttpHeaderCurrentUserProvider.
         services.AddScoped<IDocumentAccessGuard, DocumentAccessGuard>();
+
+        // Retencja analiz walidatora struktury (ta sama sekcja konfiguracji co limity odczytu).
+        services.AddOptions<StructureInspectionRetentionOptions>();
 
         // Centralized security policies used by upload and callback-url flows.
         services.AddOptions<UploadSecurityOptions>();

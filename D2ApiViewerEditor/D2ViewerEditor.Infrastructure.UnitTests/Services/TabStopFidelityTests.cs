@@ -553,4 +553,89 @@ public class TabStopFidelityTests
         content.Html.Should().Contain("data-tab-stops=\"4536:center;9072:right\"",
             "stopy nadal round-tripują — zmienia się tylko renderowanie");
     }
+
+    [Test]
+    public void Read_CenteredParagraphWithTab_FlowsInlineInsteadOfAbsoluteSegment()
+    {
+        // Wyśrodkowany, dwulinijkowy tytuł z tabem w środku zdania: segment absolutny jest
+        // kotwiczony do lewej krawędzi boksu akapitu, a Word układa linię z treści
+        // WYCENTROWANEJ — abs+pre nie łamał wiersza i tekst nachodził na siebie.
+        // Ma płynąć inline (nośnik 2em), stopy round-tripują przez data-tab-stops.
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(
+                    new Justification { Val = JustificationValues.Center },
+                    new Tabs(new TabStop { Val = TabStopValues.Left, Position = 6013 })),
+                new Run(new Text("Umowa w sprawie obsługi wpłat i wypłat gotówkowych w formie zamkniętej")),
+                new Run(new TabChar()),
+                new Run(new Text("i świadczenia usługi inkasa samochodowego")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var content = _reader.Convert(ms);
+
+        content.Html.Should().NotContain("docx-tab-seg",
+            "segment absolutny nie modeluje linii wycentrowanej (nachodzący tekst, brak zawijania)");
+        content.Html.Should().Contain("data-tab-stops=\"6013:left\"");
+        content.Html.Should().Contain("min-width:2em", "tab renderuje się jako płynący nośnik");
+        content.Html.Should().Contain("text-align:center");
+    }
+
+    [Test]
+    public void Read_LeftAlignedParagraphWithTab_StaysOnPositionedPath()
+    {
+        // Kontrola regresji ADR-0070: formularze (wyrównanie domyślne/lewe) nadal pozycyjnie.
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(new Tabs(
+                    new TabStop { Val = TabStopValues.Left, Position = 6013 })),
+                new Run(new Text("Pole:")),
+                new Run(new TabChar()),
+                new Run(new Text("wartość")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var content = _reader.Convert(ms);
+
+        content.Html.Should().Contain("docx-tab-seg");
+        content.Html.Should().Contain("data-tab-stops=\"6013:left\"");
+    }
+
+    [Test]
+    public void RoundTrip_CenteredParagraphWithTab_PreservesStopsAndTabChar()
+    {
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new ParagraphProperties(
+                    new Justification { Val = JustificationValues.Center },
+                    new Tabs(new TabStop { Val = TabStopValues.Left, Position = 6013 })),
+                new Run(new Text("Tytuł część pierwsza")),
+                new Run(new TabChar()),
+                new Run(new Text("i część druga")))));
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+        var bytes = _writer.Convert(html);
+
+        using var doc2 = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var para = doc2.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+            .First(p => p.InnerText.Contains("Tytuł część pierwsza"));
+        var stops = para.ParagraphProperties!.GetFirstChild<Tabs>()!.Elements<TabStop>().ToList();
+        stops.Should().ContainSingle(s => s.Position!.Value == 6013 && s.Val!.Value == TabStopValues.Left);
+        para.Descendants<TabChar>().Should().HaveCount(1, "znak tabulatora round-tripuje z nośnika 2em");
+        para.InnerText.Should().Contain("i część druga");
+    }
 }

@@ -763,16 +763,48 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return this._footnotes().map(f => ({ ...f }));
   }
 
+  /**
+   * Zamienia „szumowe" twarde spacje z contenteditable na zwykłe — TYLKO te przylegające
+   * do znaku nie-białego (międzywyrazowe). Chrome przy edycji wstawia &nbsp; zamiast spacji;
+   * takie U+00A0 szło do w:t i Word nie łamał wierszy (tekst przypisu wychodził poza margines).
+   * Samotne &nbsp; (placeholder pustych bloków) zostaje; działa na text node'ach, więc
+   * atrybuty (np. data-docx-xml) są nietknięte. Wołane wyłącznie dla realnie edytowanych
+   * wpisów — nieedytowane zachowują oryginalne twarde spacje z importu 1:1.
+   */
+  private _normalizeEditedNbsp(root: HTMLElement): void {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const value = node.nodeValue ?? '';
+      if (!value.includes('\u00A0')) continue;
+      const cleaned = value.replace(/(?<=\S)\u00A0|\u00A0(?=\S)/g, ' ');
+      if (cleaned !== value) node.nodeValue = cleaned;
+    }
+  }
+
+  /**
+   * Czy przechowywany HTML wpisu jest treściowo tożsamy z żywym DOM-em. Proste porównanie
+   * stringów pada na serializacji (np. U+00A0 w modelu vs &nbsp; z innerHTML), przez co blur
+   * BEZ edycji commitował wpis — a commit niesie normalizację twardych spacji, więc fałszywy
+   * commit naruszałby wierność nieedytowanych przypisów. Kanonizacja: oba przez innerHTML.
+   */
+  private _isSameRenderedHtml(stored: string, live: HTMLElement): boolean {
+    if (stored === live.innerHTML) return true;
+    const probe = document.createElement('div');
+    probe.innerHTML = stored;
+    return probe.innerHTML === live.innerHTML;
+  }
+
   /** Commit treści przypisu po edycji w panelu (blur) → aktualizacja modelu + emisja. */
   commitFootnoteContent(id: string, event: Event): void {
     if (this.readOnly) return;
     const el = event.target as HTMLElement | null;
     if (!el) return;
-    const html = el.innerHTML;
     const current = this._footnotes();
     const idx = current.findIndex(f => f.id === id);
-    if (idx < 0 || current[idx].html === html) return;
+    if (idx < 0 || this._isSameRenderedHtml(current[idx].html, el)) return;
 
+    this._normalizeEditedNbsp(el);
+    const html = el.innerHTML;
     const updated = current.map(f => (f.id === id ? { ...f, html } : f));
     this._footnotes.set(updated);
     this.footnotesChange.emit(this.getFootnotes());
@@ -978,11 +1010,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this.readOnly) return;
     const el = event.target as HTMLElement | null;
     if (!el) return;
-    const html = el.innerHTML;
     const current = this._endnotes();
     const idx = current.findIndex(e => e.id === id);
-    if (idx < 0 || current[idx].html === html) return;
+    if (idx < 0 || this._isSameRenderedHtml(current[idx].html, el)) return;
 
+    this._normalizeEditedNbsp(el);
+    const html = el.innerHTML;
     const updated = current.map(e => (e.id === id ? { ...e, html } : e));
     this._endnotes.set(updated);
     this.endnotesChange.emit(this.getEndnotes());

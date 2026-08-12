@@ -2389,9 +2389,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Akapit z tabami BEZ jawnych stopów też idzie pozycyjnie: NextRealStop syntetyzuje
         // stopy na siatce w:defaultTabStop (ADR-0070) — jak Word; stały nośnik 2em rozjeżdżał
         // układy formularzy budowanych serią tabów.
+        // WYJĄTEK — akapit WYŚRODKOWANY/do prawej ze zwykłym tabulatorem: segment absolutny
+        // jest kotwiczony do lewej krawędzi boksu akapitu, a Word układa linię z treści
+        // wycentrowanej — geometria stopu nie opisuje pozycji w takiej linii. Dwulinijkowy
+        // tytuł z tabem renderował się jako JEDNA linia z nachodzącym tekstem (position:absolute
+        // + white-space:pre nie łamie wiersza i nie dodaje wysokości). Fallback: płynący nośnik
+        // tabulatora (2em) — tekst zawija się jak w Wordzie; taby i stopy round-tripują przez
+        // data-tab-stops bez zmian. w:ptab (jawnie „absolutny” tab, typowy dla stopek) zostaje
+        // na ścieżce pozycyjnej niezależnie od wyrównania.
+        var lastTextAlign = Regex.Matches(cssBuilder.ToString(), @"text-align\s*:\s*([a-z]+)")
+            .Select(m => m.Groups[1].Value).LastOrDefault();
+        var centeredWithTabChar = hasTabChar && lastTextAlign is "center" or "right";
+
         var usePositionedTabs = !useLeaderTabs
             && (hasTabChar || hasPositionalTab)
-            && !isInTableCell;
+            && !isInTableCell
+            && !centeredWithTabChar;
 
         // Fallback flex row only when there are tab characters but no resolvable stop positions
         // (e.g. a center/right alignment tab with no w:tabs geometry). Tab characters are preserved
@@ -7371,6 +7384,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return css.ToString();
     }
 
+    /// <summary>
+    /// Czy styl komórki z <see cref="GetTableCellStyleDetailed"/> nie zawiera żadnej widocznej
+    /// krawędzi. Deklaracje border-* są emitowane zawsze i deterministycznie, a niewidoczna
+    /// krawędź to literalne "none" z <see cref="ResolveCellBorderSide"/>.
+    /// </summary>
+    private static bool HasNoVisibleBorders(string cellStyle) =>
+        cellStyle.Contains("border-top:none;") &&
+        cellStyle.Contains("border-bottom:none;") &&
+        cellStyle.Contains("border-left:none;") &&
+        cellStyle.Contains("border-right:none;");
+
     private enum TableCellEdge { Top, Bottom, Left, Right }
 
     /// <summary>
@@ -7977,7 +8001,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         var cellStyle = GetTableCellStyleDetailed(cell, ctx, rowIndex, gridColStart, gridSpan, rowSpanCount);
 
-        html.Append($"<td{colspan}{rowspan} style=\"{cellStyle}\">");
+        // Komórka bez ŻADNEJ widocznej krawędzi dostaje klasę-marker: edytor rysuje po niej
+        // symulowane linie siatki (jak Word „Wyświetl linie siatki") kanałem box-shadow.
+        // Inline'owe border:*none zostaje nietknięte, więc zapis dalej emituje w:val="nil" —
+        // siatka istnieje wyłącznie w edytorze, w wyeksportowanym pliku linii nie ma.
+        var borderlessClass = HasNoVisibleBorders(cellStyle) ? " class=\"docx-borderless-cell\"" : "";
+
+        html.Append($"<td{colspan}{rowspan}{borderlessClass} style=\"{cellStyle}\">");
 
         // Iteruj wszystkie dzieci komórki, by obsłużyć też SdtBlock i Table osadzone bezpośrednio.
         // Akapity LISTOWE grupujemy w ol/ul jak w body — bez tego lista w komórce renderowała

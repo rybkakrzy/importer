@@ -3,6 +3,7 @@ using D2ViewerEditor.Infrastructure.Persistence;
 using D2ViewerEditor.Infrastructure.Persistence.Repositories;
 using D2ViewerEditor.Infrastructure.Services;
 using D2ViewerEditor.Infrastructure.Services.Delivery;
+using D2ViewerEditor.Infrastructure.Services.StructureInspection;
 using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Storage.V1;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +30,8 @@ public static class DependencyInjection
         services.AddScoped<IDocxToHtmlConverter, DocxToHtmlConverter>();
         services.AddScoped<IHtmlToDocxConverter, HtmlToDocxConverter>();
         services.AddScoped<IDigitalSignatureService, DigitalSignatureService>();
+
+        services.AddStructureInspection(configuration);
 
         // Database
         var connectionString = configuration.GetConnectionString("DefaultConnection");

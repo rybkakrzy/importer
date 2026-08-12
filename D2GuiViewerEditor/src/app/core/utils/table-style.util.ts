@@ -25,6 +25,34 @@ function borderCss(border: TableBorderSettings): string {
   return `${border.width}px ${border.style} ${border.color}`;
 }
 
+/** Klasa-marker komórek bez żadnej widocznej krawędzi — edytor rysuje po niej symulowaną
+ *  siatkę (box-shadow, patrz wysiwyg-editor.scss). Nadaje ją reader; tu utrzymujemy ją
+ *  w spójności z inline'owymi border* po każdej edycji obramowań. */
+export const BORDERLESS_CELL_CLASS = 'docx-borderless-cell';
+
+const EDGES = ['Top', 'Right', 'Bottom', 'Left'] as const;
+
+function isEdgeHidden(style: CSSStyleDeclaration, edge: (typeof EDGES)[number]): boolean {
+  const lineStyle = style.getPropertyValue(`border-${edge.toLowerCase()}-style`);
+  const width = style.getPropertyValue(`border-${edge.toLowerCase()}-width`);
+  const color = style.getPropertyValue(`border-${edge.toLowerCase()}-color`);
+  return lineStyle === 'none' || lineStyle === 'hidden'
+    || width === '0px' || width === '0'
+    || color === 'transparent';
+}
+
+/**
+ * Uzgadnia klasę-marker siatki z aktualnym inline'owym obramowaniem komórki. Komórka bez
+ * ŻADNEGO inline'a (arkusz daje domyślną linię 1px) jest traktowana jako obramowana —
+ * markera nie dostaje. Czyta wyłącznie style inline (bez getComputedStyle → bez reflow).
+ */
+export function refreshBorderlessMarker(cell: HTMLTableCellElement): void {
+  cell.classList.toggle(
+    BORDERLESS_CELL_CLASS,
+    EDGES.every(edge => isEdgeHidden(cell.style, edge))
+  );
+}
+
 /**
  * Stosuje linię w wybranym zakresie do **dowolnego zbioru komórek** (cel: cała
  * tabela / pojedyncza komórka / zaznaczony fragment). Krawędzie „outer/inner/top…"
@@ -89,6 +117,7 @@ export function applyBorderToCells(
         if (c === maxC) cell.style.borderRight = css;
         break;
     }
+    refreshBorderlessMarker(cell);
   });
 }
 
@@ -156,5 +185,6 @@ export function restoreDefaultTableBorders(table: HTMLTableElement): void {
   cellsOf(table).forEach(cell => {
     ensureCellBox(cell);
     cell.style.border = `1px solid ${DEFAULT_CELL_BORDER_COLOR}`;
+    refreshBorderlessMarker(cell);
   });
 }
