@@ -11,6 +11,11 @@ import { MsalService } from '@azure/msal-angular';
 
 const msalStub = { instance: { getActiveAccount: () => null, getAllAccounts: () => [] } };
 
+/** Hasło-fikstura dialogu hasła: LOSOWANE per uruchomienie testów, żeby w źródłach nie było
+ *  żadnego literału hasła (SAST: „hard-coded password"). Asercje pass-through porównują się
+ *  do tej samej stałej, więc test pozostaje ścisły. To NIE jest sekret. */
+const TEST_DIALOG_PASSWORD = `test-${Math.random().toString(36).slice(2)}`;
+
 /**
  * Testy reguły: ESC zamyka aktywny boczny panel (Wyszukiwanie / właściwości tabeli)
  * tą samą logiką co przycisk × — bez regresji dla edytora i bez skutków ubocznych,
@@ -1302,7 +1307,7 @@ describe('DocumentEditorComponent — dialog hasła', () => {
 
   it('cancel zamyka dialog i czyści stan', () => {
     component.showPasswordDialog.set(true);
-    component.passwordDialogValue = 'x';
+    component.passwordDialogValue = TEST_DIALOG_PASSWORD;
     component.passwordDialogError.set('err');
 
     component.cancelPasswordDialog();
@@ -1314,7 +1319,7 @@ describe('DocumentEditorComponent — dialog hasła', () => {
 
   it('confirm z hasłem zamyka dialog', () => {
     component.showPasswordDialog.set(true);
-    component.passwordDialogValue = 'sezam'; // brak pliku oczekującego → tylko zamknięcie
+    component.passwordDialogValue = TEST_DIALOG_PASSWORD; // brak pliku oczekującego → tylko zamknięcie
 
     component.confirmPasswordDialog();
 
@@ -1366,11 +1371,11 @@ describe('DocumentEditorComponent — dialog hasła wyzwalany przy konwersji', (
     (component as any)._convertAndLoad(new File([], 'tajne.docx'), 'tajne.docx');
 
     openResult = of({ html: '<p>ok</p>', metadata: {}, styles: [] }); // poprawne hasło → sukces
-    component.passwordDialogValue = 'sezam';
+    component.passwordDialogValue = TEST_DIALOG_PASSWORD;
     component.confirmPasswordDialog();
 
     // Ostatnie wywołanie openDocument dostało hasło jako drugi argument.
-    expect(openCalls[openCalls.length - 1][1]).toBe('sezam');
+    expect(openCalls[openCalls.length - 1][1]).toBe(TEST_DIALOG_PASSWORD);
     expect(component.showPasswordDialog()).toBe(false);
   });
 
