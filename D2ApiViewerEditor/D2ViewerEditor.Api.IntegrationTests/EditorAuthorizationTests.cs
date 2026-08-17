@@ -136,4 +136,26 @@ public class EditorAuthorizationTests
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
+
+    [Test]
+    public async Task DeleteDocument_WithOperatorRole_Returns403()
+    {
+        // TRWAŁE usuwanie dokumentu (GCS + baza) jest wyłącznie administracyjne —
+        // Operator nie może go wykonać mimo klasowej polityki RequireAppOperator.
+        var client = CreateClient(roles: "Operator");
+
+        var response = await client.DeleteAsync($"{AdminEndpoint}/{Guid.NewGuid()}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task DeleteDocument_WithoutToken_Returns401()
+    {
+        var client = CreateClient(roles: null);
+
+        var response = await client.DeleteAsync($"{AdminEndpoint}/{Guid.NewGuid()}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
 }

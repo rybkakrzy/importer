@@ -414,7 +414,7 @@ public class TabStopFidelityTests
 
             var footerPart = mainPart.AddNewPart<FooterPart>();
             footerPart.Footer = new Footer(
-                new Paragraph(new Run(new Text("Qutas  — linia bez tabulatora"))),
+                new Paragraph(new Run(new Text("Doc2  — linia bez tabulatora"))),
                 new Paragraph(
                     new ParagraphProperties(new Tabs(
                         new TabStop { Val = TabStopValues.Right, Position = 9360 })),

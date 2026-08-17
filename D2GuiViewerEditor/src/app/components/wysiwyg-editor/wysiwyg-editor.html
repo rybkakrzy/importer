@@ -25,6 +25,7 @@
               <div
                 #headerContent
                 class="header-editor-content"
+                [class.show-formatting-marks]="showFormattingMarks()"
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
                 spellcheck="true"
                 [attr.placeholder]="''"
@@ -33,7 +34,7 @@
               ></div>
               <!-- Pasek nagłówka przeniesiony do d2-header-footer-panel (dock po lewej). -->
             } @else {
-              <div class="header-display" [innerHTML]="getHeaderContentSafe($index)"></div>
+              <div class="header-display" [class.show-formatting-marks]="showFormattingMarks()" [innerHTML]="getHeaderContentSafe($index)"></div>
             }
           </div>
 
@@ -113,6 +114,7 @@
               <div
                 #footerContent
                 class="footer-editor-content"
+                [class.show-formatting-marks]="showFormattingMarks()"
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
                 spellcheck="true"
                 [attr.placeholder]="''"
@@ -120,7 +122,7 @@
                 (input)="onFooterInput($event)"
               ></div>
             } @else {
-              <div class="footer-display" [innerHTML]="getFooterContentSafe($index)"></div>
+              <div class="footer-display" [class.show-formatting-marks]="showFormattingMarks()" [innerHTML]="getFooterContentSafe($index)"></div>
             }
           </div>
 
@@ -147,6 +149,7 @@
                         title="Przejdź do odwołania w treści"
                         (click)="scrollToNoteReference('endnote', entry.en.id)">{{ entry.label }}</span>
                   <div class="footnote-item-content"
+                       [class.show-formatting-marks]="showFormattingMarks()"
                        [attr.contenteditable]="readOnly ? 'false' : 'true'"
                        spellcheck="true"
                        [attr.aria-label]="'Treść przypisu końcowego ' + entry.label"
@@ -183,6 +186,7 @@
                         title="Przejdź do odwołania w treści"
                         (click)="scrollToNoteReference('footnote', entry.fn.id)">{{ entry.label }}</span>
                   <div class="footnote-item-content"
+                       [class.show-formatting-marks]="showFormattingMarks()"
                        [attr.contenteditable]="readOnly ? 'false' : 'true'"
                        spellcheck="true"
                        [attr.aria-label]="'Treść przypisu ' + entry.label"

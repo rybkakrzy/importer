@@ -6,6 +6,7 @@ using D2ViewerEditor.Application.Features.Documents.Commands.ContinueDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.CancelDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.RequeueDelivery;
 using D2ViewerEditor.Application.Features.Documents.Commands.UpdateDeliveryRecipientUrl;
+using D2ViewerEditor.Application.Features.Documents.Commands.DeleteDocument;
 using D2ViewerEditor.Application.Features.Documents.Commands.RestoreDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.SaveDocumentVersion;
 using D2ViewerEditor.Application.Features.Documents.Commands.UploadDocument;
@@ -48,6 +49,27 @@ public class DocumentStorageController : BaseApiController
         return result.IsSuccess
             ? Ok(result.Value)
             : BadRequest(result.Error);
+    }
+
+    /// <summary>
+    /// TRWAŁE usunięcie dokumentu przez administratora: bloby wszystkich wersji z magazynu (GCS)
+    /// + wpis z bazy (wersje i zadania wysyłki kaskadą). Zablokowane w stanach pipeline'u
+    /// wysyłki (Queued/Sending) — 409; najpierw przerwij/anuluj wysyłkę.
+    /// </summary>
+    [HttpDelete("{masterId:guid}")]
+    [Authorize(Policy = AuthorizationPolicies.RequireAppAdmin)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DeleteDocument(Guid masterId)
+    {
+        var result = await Mediator.Send(new DeleteDocumentCommand(masterId));
+
+        if (result.IsSuccess)
+            return NoContent();
+        if (result.IsNotFound)
+            return NotFound(new { error = "Dokument nie istnieje." });
+        return Conflict(new { error = result.Error });
     }
 
     /// <summary>

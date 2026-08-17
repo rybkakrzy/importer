@@ -14,7 +14,7 @@ import { AppAuthConfig } from '../config/runtime-config';
 
 /**
  * MSAL setup for Entra ID. Backend remains the source of truth for authorization; MSAL only
- * acquires tokens and gates navigation. Auth values come from the runtime config (Qutas
+ * acquires tokens and gates navigation. Auth values come from the runtime config (Doc2
  * `assets/configs/config.json`, injected as MSAL_CUSTOM_CONFIG) with build-time fallback.
  */
 export function msalInstanceFactory(auth: AppAuthConfig): IPublicClientApplication {

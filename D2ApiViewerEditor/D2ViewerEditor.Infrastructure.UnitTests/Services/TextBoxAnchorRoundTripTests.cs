@@ -43,7 +43,7 @@ public class TextBoxAnchorRoundTripTests
       <wp:wrapNone/>
       <a:graphic><a:graphicData uri=""http://schemas.microsoft.com/office/word/2010/wordprocessingShape"">
         <wps:wsp><wps:txbx><w:txbxContent>
-          <w:p><w:r><w:t>Tresc pola Qutasator</w:t></w:r></w:p>
+          <w:p><w:r><w:t>Tresc pola Doc2</w:t></w:r></w:p>
         </w:txbxContent></wps:txbx></wps:wsp>
       </a:graphicData></a:graphic>
     </wp:anchor>
@@ -194,7 +194,7 @@ public class TextBoxAnchorRoundTripTests
             + "<div class=\"docx-textbox\" data-textbox=\"1\" data-pos-mode=\"front\""
             + " data-x-emu=\"914400\" data-y-emu=\"457200\" data-width-emu=\"1828800\" data-height-emu=\"457200\""
             + " style=\"position:absolute;left:96px;top:48px;width:192px;min-height:48px;\">"
-            + "<p>Tresc pola Qutasator</p></div>"
+            + "<p>Tresc pola Doc2</p></div>"
             + "<p>Akapit kotwica</p>";
 
         var docx = _writer.Convert(html);
@@ -204,7 +204,7 @@ public class TextBoxAnchorRoundTripTests
         var body = doc.MainDocumentPart!.Document.Body!;
 
         var anchor = body.Descendants<Wp.Anchor>().Single();
-        anchor.Descendants<TextBoxContent>().Single().InnerText.Should().Contain("Tresc pola Qutasator");
+        anchor.Descendants<TextBoxContent>().Single().InnerText.Should().Contain("Tresc pola Doc2");
         anchor.Descendants<Wp.HorizontalPosition>().Single().PositionOffset!.Text.Should().Be("914400");
         anchor.Descendants<Wp.VerticalPosition>().Single().PositionOffset!.Text.Should().Be("457200");
         anchor.Descendants<Wp.Extent>().First().Cx!.Value.Should().Be(1828800);
@@ -246,8 +246,8 @@ public class TextBoxAnchorRoundTripTests
         var html2 = _reader.Convert(ms2).Html;
 
         html2.Should().Contain("docx-textbox");
-        html2.Should().Contain("Tresc pola Qutasator");
-        Regex.Matches(html2, "Tresc pola Qutasator").Count.Should().Be(1, "round-trip nie może dublować treści");
+        html2.Should().Contain("Tresc pola Doc2");
+        Regex.Matches(html2, "Tresc pola Doc2").Count.Should().Be(1, "round-trip nie może dublować treści");
         html2.Should().Contain("data-x-emu=\"914400\"");
         html2.Should().Contain("data-y-emu=\"457200\"");
 

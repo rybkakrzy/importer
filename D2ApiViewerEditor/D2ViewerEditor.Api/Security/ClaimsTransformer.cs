@@ -6,7 +6,7 @@ namespace D2ViewerEditor.Api.Security;
 
 /// <summary>
 /// Maps Entra ID group memberships (the <c>groups</c> claim) to application role claims
-/// (Qutas / D2WebCore pattern). Runs on every authenticated request and is idempotent.
+/// (Doc2 / D2WebCore pattern). Runs on every authenticated request and is idempotent.
 /// Native Entra <c>app role</c> claims (also surfaced as <c>roles</c>) are preserved, so
 /// App Roles and group→role mapping can coexist during migration.
 /// <para>

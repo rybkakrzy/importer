@@ -124,9 +124,26 @@ public class LineSpacingMappingTests
             .Should().Contain("line-height:12pt;");
 
     [Test]
-    public void AtLeastSpacing_MapsToPointLineHeight()
+    public void AtLeastSpacing_MapsToCssMax_MinimumNotExact()
+        // PG-10: atLeast = „co najmniej" — linia rośnie, gdy treść wyższa (Word nie przycina);
+        // render exactowy ściskał linie poniżej pojedynczego odstępu fontu.
         => ParagraphCss(new SpacingBetweenLines { Line = "360", LineRule = LineSpacingRuleValues.AtLeast })
-            .Should().Contain("line-height:18pt;");
+            .Should().Contain("line-height:max(18pt, var(--w-line-single, 1.2em));");
+
+    [Test]
+    public void AtLeastSpacing_MaxForm_RoundTripsBackToAtLeast()
+    {
+        var writer = new HtmlToDocxConverter();
+
+        var bytes = writer.Convert(
+            "<p style=\"line-height:max(18pt, var(--w-line-single, 1.2em));--w-line-rule:atLeast;\">Tekst</p>");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var spacing = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<SpacingBetweenLines>().Single();
+        spacing.LineRule!.Value.Should().Be(LineSpacingRuleValues.AtLeast);
+        spacing.Line!.Value.Should().Be("360");
+    }
 
     [Test]
     public void AtLeastSpacing_IsMarkedForRoundTrip_ExactIsNot()

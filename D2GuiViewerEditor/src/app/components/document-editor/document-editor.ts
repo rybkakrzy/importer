@@ -306,7 +306,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Options for the mini-toolbar font `<select>`. A native `<select>` cannot
    * display a value that has no matching `<option>`, so it silently falls back
    * to the first option (Calibri) whenever the selection uses a font outside the
-   * shared list — e.g. a corporate/document font like "Qutas Me". The main toolbar
+   * shared list — e.g. a corporate/document font like "Doc2 Me". The main toolbar
    * avoids this by using an `<input list=…>`; here we keep the `<select>` but make
    * the current font always selectable, so the control reflects the real
    * selection instead of misreporting Calibri.
@@ -700,7 +700,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
     // Imię ustalamy tak samo jak na Dashboardzie: `name` ma format „Nazwisko, X. (Imię)" —
     // najpierw bierzemy tekst z nawiasów; gdy go brak, claim `given_name`; w ostateczności fallback
-    // z pełnej nazwy (Qutasator `given_name` bywa samym inicjałem, dlatego nawias ma priorytet).
+    // z pełnej nazwy (Doc2 `given_name` bywa samym inicjałem, dlatego nawias ma priorytet).
     const parenthesized = fullName.match(/\(([^)]+)\)/)?.[1]?.trim();
     const givenName = (account?.idTokenClaims as Record<string, unknown> | undefined)?.['given_name'];
     const first = parenthesized
@@ -2369,7 +2369,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     // Triggered from the Pomoc dropdown — close it like the other menu actions do.
     this.closeAllMenus();
 
-    const subject = encodeURIComponent('[Qutas Editor] Zgłoszenie');
+    const subject = encodeURIComponent('[Doc2 Editor] Zgłoszenie');
     const body = encodeURIComponent(
       `Dzień dobry,\n\n` +
       `proszę o opis problemu poniżej:\n\n` +
@@ -4074,7 +4074,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       // Odstępy (px -> pt, 1pt ≈ 1.333px). Odstęp „po" = padding-bottom (ADR-0053:
       // sumuje się z margin-top następnego jak w Wordzie); margin-bottom doliczamy
       // dla akapitów z tłem/obramowaniem i treści sprzed zmiany (jedno z dwóch = 0).
-      const pxToPt = (px: number) => Math.round(px / 1.333);
+      // Dokładna relacja CSS: 1pt = 96/72 px (drift gap-analysis pkt 5 — 1.333 gubił ułamki).
+      const pxToPt = (px: number) => Math.round((px * 72) / 96);
       this.paragraphData.spaceBefore = pxToPt(parseFloat(style.marginTop) || 0);
       this.paragraphData.spaceAfter = pxToPt(
         (parseFloat(style.marginBottom) || 0) + (parseFloat(style.paddingBottom) || 0));
@@ -4083,7 +4084,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       // z domyślnych dokumentu), nie ze skalibrowanej wartości renderowej (PG-09);
       // inline w pt = atLeast/exactly (rozróżnienie markerem --w-line-rule).
       const inlineLineHeight = el.style.lineHeight;
-      if (inlineLineHeight.endsWith('pt')) {
+      const atLeastMax = /^max\(\s*([\d.]+)pt/.exec(inlineLineHeight);
+      if (atLeastMax) {
+        // Kontrakt PG-10: atLeast = max(Xpt, single) — wartość dialogu to pt z wnętrza max().
+        this.paragraphData.lineSpacingType = 'atLeast';
+        this.paragraphData.lineSpacingValue = parseFloat(atLeastMax[1]) || 12;
+      } else if (inlineLineHeight.endsWith('pt')) {
         this.paragraphData.lineSpacingType =
           el.style.getPropertyValue('--w-line-rule').trim() === 'atLeast' ? 'atLeast' : 'exactly';
         this.paragraphData.lineSpacingValue = parseFloat(inlineLineHeight) || 12;
@@ -4153,7 +4159,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
       // Odstępy — „po" idzie w padding-bottom (ADR-0053), ewentualny stary
       // margin-bottom czyścimy, żeby wartości się nie sumowały podwójnie.
-      const ptToPx = (pt: number) => pt * 1.333;
+      const ptToPx = (pt: number) => (pt * 96) / 72;
       el.style.marginTop = ptToPx(this.paragraphData.spaceBefore) + 'px';
       el.style.paddingBottom = ptToPx(this.paragraphData.spaceAfter) + 'px';
       el.style.marginBottom = '';
@@ -4204,7 +4210,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * „Ustaw jako domyślne" — zapisuje BIEŻĄCE ustawienia akapitu z dialogu jako domyślne
    * (per-sesja edytora) i od razu stosuje je do aktywnego akapitu.
    *
-   * Wcześniej ten przycisk wołał reset do wartości bazowych (Qutas-PAR-007: „ustaw jako
+   * Wcześniej ten przycisk wołał reset do wartości bazowych (Doc2-PAR-007: „ustaw jako
    * domyślne resetuje zamiast zapisywać"). Teraz zachowuje się zgodnie z nazwą:
    *  1. zapamiętuje snapshot ustawień jako default sesji (`_paragraphDefaults`),
    *  2. stosuje ustawienia do bieżącego akapitu (jak OK) — nowe akapity tworzone Enterem

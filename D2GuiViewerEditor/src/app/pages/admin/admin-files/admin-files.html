@@ -107,6 +107,16 @@
                       <div class="detail-item detail-wide detail-header-row">
                         <span class="detail-label">Szczegóły pozycji</span>
                         <div class="detail-actions-buttons">
+                          <button class="dl-btn dl-btn-sm dl-btn-danger"
+                                  title="Usuń trwale — pliki wersji z magazynu + wpis z bazy (nieodwracalne)"
+                                  [disabled]="deletingId() === doc.masterId"
+                                  (click)="deleteDocument(doc, $event)">
+                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+                              <path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14z"/>
+                              <path d="M10 11v6M14 11v6"/>
+                            </svg>
+                            {{ deletingId() === doc.masterId ? 'Usuwanie…' : 'Usuń' }}
+                          </button>
                           <button class="dl-btn dl-btn-sm"
                                   title="Kopiuj link do edycji (Master/Version ID) do schowka"
                                   (click)="copyEditLink(doc, $event)">

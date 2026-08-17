@@ -10,7 +10,7 @@ namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
 
 /// <summary>
 /// Regresja dla wady odwzorowania dokumentów Word zgłoszonych na dokumencie "Doc2"
-/// (wyciąg bankowy Qutasator): tabulatory lewe/prawe w treści, pionowe wyśrodkowanie komórek,
+/// (wyciąg bankowy Doc2): tabulatory lewe/prawe w treści, pionowe wyśrodkowanie komórek,
 /// scalone kolumny w wierszach nieregularnych oraz bezpieczne SVG jako data-URI.
 /// </summary>
 [TestFixture]
@@ -157,7 +157,7 @@ public class Doc2ImportFidelityTests
     public void ShortSingleCellRow_SpansFullGrid()
     {
         // 3-column grid; a row with ONE cell and no gridSpan must span all three columns
-        // (the Qutasator "Umowa wieloproduktowa…" defect where content was pinned to column 1).
+        // (the Doc2 "Umowa wieloproduktowa…" defect where content was pinned to column 1).
         var table = ThreeColTable(
             Row(Cell("H1"), Cell("H2"), Cell("H3")),
             Row(Cell("MERGED-ALL")));
@@ -434,7 +434,7 @@ public class Doc2ImportFidelityTests
     {
         // Absolutne segmenty tabów (left:{stop}px na position:relative akapicie) w wąskiej
         // komórce wyjeżdżają poza komórkę i nakładają się na sąsiednią kolumnę (nagłówki
-        // "Waluta"/"Termin spłaty" z dokumentu Qutasator). W komórce tab renderuje się inline,
+        // "Waluta"/"Termin spłaty" z dokumentu Doc2). W komórce tab renderuje się inline,
         // a stopy przeżywają w data-tab-stops (round-trip bez zmian).
         var cellPara = new Paragraph(
             new ParagraphProperties(new Tabs(new TabStop { Val = TabStopValues.Right, Position = 9000 })),
@@ -585,7 +585,7 @@ public class Doc2ImportFidelityTests
     [Test]
     public void CustomGeometryShape_WithoutImage_RendersAsInlineSvgPath()
     {
-        // Kształt DrawingML z własną ścieżką (a:custGeom) — np. wordmark „Qutasator" / ikona „!".
+        // Kształt DrawingML z własną ścieżką (a:custGeom) — np. wordmark „Doc2" / ikona „!".
         // Wcześniej dropowany w całości (RenderVectorShape zwracał ""), więc grafika z
         // oryginału NIE rysowała się w edytorze. Teraz → inline <svg><path> z kolorem kształtu.
         const string body = @"<w:p><w:r>

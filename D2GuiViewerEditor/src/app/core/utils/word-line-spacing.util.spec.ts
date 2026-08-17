@@ -30,7 +30,7 @@ describe('word-line-spacing.util — kalibracja interlinii Worda (PG-09)', () =>
     });
 
     it('nieznany/firmowy krój i brak fontu → fallback 1.2', () => {
-      expect(wordSingleFactor('Qutas Me')).toBe(DEFAULT_SINGLE_FACTOR);
+      expect(wordSingleFactor('Doc2 Me')).toBe(DEFAULT_SINGLE_FACTOR);
       expect(wordSingleFactor(null)).toBe(DEFAULT_SINGLE_FACTOR);
       expect(wordSingleFactor('')).toBe(DEFAULT_SINGLE_FACTOR);
     });
@@ -63,10 +63,10 @@ describe('word-line-spacing.util — kalibracja interlinii Worda (PG-09)', () =>
       expect(el.style.getPropertyValue('--w-line-rule')).toBe('');
     });
 
-    it('atLeast: dodaje marker reguły (bez niego writer zapisywał exact — przycinanie w Wordzie)', () => {
+    it('atLeast: max(pt, single) + marker reguły (PG-10 — linia ROŚNIE gdy treść wyższa)', () => {
       applyExactLineSpacing(el, 18, true);
 
-      expect(el.style.lineHeight).toBe('18pt');
+      expect(el.style.lineHeight).toBe('max(18pt, var(--w-line-single, 1.2em))');
       expect(el.style.getPropertyValue('--w-line-rule')).toBe('atLeast');
     });
 

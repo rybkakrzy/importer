@@ -28,7 +28,7 @@ builder.WebHost.ConfigureKestrel(options =>
 // (zamiast wszystkiego jako INFO). Lokalnie (Development) zostaje czytelny formatter.
 builder.AddGcpStructuredLogging();
 
-// GCP Secret Manager (Qutas): inject AzureAd:ClientSecret from a managed secret when enabled.
+// GCP Secret Manager (Doc2): inject AzureAd:ClientSecret from a managed secret when enabled.
 // No-op locally (disabled by default) — never fails startup.
 builder.AddEntraSecretFromGcp();
 
@@ -56,7 +56,7 @@ else
     builder.Services.AddEntraIdAuthentication(builder.Configuration, builder.Environment);
 }
 
-// Role→resource authorization map (Qutas ResourcesProvider). Reads role names from AzureAdOptions
+// Role→resource authorization map (Doc2 ResourcesProvider). Reads role names from AzureAdOptions
 // (defaults Operator/Administrator in dev where the section isn't bound). Backend = source of truth
 // for the Angular resource guard (GET /api/identity/resources).
 builder.Services.AddScoped<ResourcesProvider>();

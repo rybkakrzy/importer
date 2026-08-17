@@ -798,7 +798,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                         parent.Append(new Paragraph(new Run(preservedHfBlock)));
                         break;
                     }
-                    // Pole tekstowe (np. adres w stopce Qutasator) — do bufora, przypinane do
+                    // Pole tekstowe (np. adres w stopce Doc2) — do bufora, przypinane do
                     // następnego akapitu; pozostałe kontenery — zejdź w dzieci.
                     if (IsTextBoxNode(child))
                     {
@@ -1632,9 +1632,16 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Kolor znacznika per pozycja (14104878): rPr ZNAKU KOŃCA AKAPITU — Word koloruje
             // nim numer/punktator. Bez odtworzenia kolor znacznika ginął przy pierwszym zapisie.
             var markColorRaw = child.GetAttributeValue("data-mark-color", "");
-            if (Regex.IsMatch(markColorRaw, "^[0-9A-Fa-f]{6}$"))
+            var markSizeRaw = child.GetAttributeValue("data-mark-size", "");
+            var hasMarkColor = Regex.IsMatch(markColorRaw, "^[0-9A-Fa-f]{6}$");
+            var hasMarkSize = Regex.IsMatch(markSizeRaw, @"^\d{1,4}$");
+            if (hasMarkColor || hasMarkSize)
             {
-                props.Append(new ParagraphMarkRunProperties(new Color { Val = markColorRaw }));
+                // Jeden wspólny rPr znaku końca akapitu (kolejność EG_RPrBase: color przed sz).
+                var markProps = new ParagraphMarkRunProperties();
+                if (hasMarkColor) markProps.Append(new Color { Val = markColorRaw });
+                if (hasMarkSize) markProps.Append(new FontSize { Val = markSizeRaw });
+                props.Append(markProps);
                 NormalizeParagraphPropertiesOrder(props);
             }
 
@@ -1737,7 +1744,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         string? Fmt, string? LvlText, int Start, string? BulletFont,
         int StartOverride, string? Suffix, bool IsLegal, int LvlRestart,
         string? IndLeftTw, string? IndHangingTw, string? IndFirstLineTw,
-        bool IsLvlOverride, string? MarkerColor = null);
+        bool IsLvlOverride, string? MarkerColor = null, string? MarkerSizeHalfPoints = null);
 
     /// <summary>
     /// Zbiera definicje poziomów z atrybutów data-* na kontenerach ul/ol (każdy zagnieżdżony
@@ -1763,9 +1770,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             var isLvlOverride = node.GetAttributeValue("data-lvl-override", "") == "1";
             var markerColorRaw = node.GetAttributeValue("data-marker-color", "");
             var markerColor = Regex.IsMatch(markerColorRaw, "^([0-9A-Fa-f]{6}|auto)$") ? markerColorRaw : null;
+            var markerSizeRaw = node.GetAttributeValue("data-marker-size", "");
+            var markerSize = Regex.IsMatch(markerSizeRaw, @"^\d{1,4}$") ? markerSizeRaw : null;
             if (fmt.Length > 0 || lvlText.Length > 0 || startRaw.Length > 0
                 || startOverrideRaw.Length > 0 || suffix.Length > 0 || isLegal
-                || lvlRestartRaw.Length > 0 || indLeft.Length > 0 || markerColor != null)
+                || lvlRestartRaw.Length > 0 || indLeft.Length > 0 || markerColor != null
+                || markerSize != null)
             {
                 _ = int.TryParse(startRaw, out var start);
                 var startOverride = int.TryParse(startOverrideRaw, out var so) && so > 0 ? so : -1;
@@ -1783,7 +1793,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                     indHanging.Length > 0 ? indHanging : null,
                     indFirstLine.Length > 0 ? indFirstLine : null,
                     isLvlOverride,
-                    markerColor);
+                    markerColor,
+                    markerSize);
             }
         }
 
@@ -2121,6 +2132,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 markerRunProps ??= new NumberingSymbolRunProperties();
                 // Kolejność EG_RPrBase: rFonts przed color.
                 markerRunProps.Append(new Color { Val = specWithColor.MarkerColor });
+            }
+            if (spec is { MarkerSizeHalfPoints: not null } specWithSize)
+            {
+                // w:sz rozmiaru numeru/punktatora — bez odtworzenia rozmiar znacznika ginął
+                // przy pierwszym zapisie (marker wracał do rozmiaru tekstu/domyślnego).
+                markerRunProps ??= new NumberingSymbolRunProperties();
+                markerRunProps.Append(new FontSize { Val = specWithSize.MarkerSizeHalfPoints });
             }
 
             levelDef.Append(new LevelJustification { Val = LevelJustificationValues.Left });
@@ -4708,8 +4726,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             }
         }
 
+        // atLeast z readera (PG-10): line-height:max(Xpt, var(--w-line-single…)) — bierzemy pt.
+        var atLeastMatch = Regex.Match(style, @"line-height:\s*max\(\s*([\d.,]+)pt");
+        if (atLeastMatch.Success)
+        {
+            var val = double.Parse(atLeastMatch.Groups[1].Value.Replace(',', '.'), inv);
+            spacing.Line = ((int)Math.Round(OoxmlUnits.PointsToTwips(val))).ToString();
+            spacing.LineRule = LineSpacingRuleValues.AtLeast;
+            hasSpacing = true;
+        }
+
         var lineHeightMatch = Regex.Match(style, @"line-height:\s*([\d.,]+)(pt)?");
-        if (lineHeightMatch.Success)
+        if (!atLeastMatch.Success && lineHeightMatch.Success)
         {
             var val = double.Parse(lineHeightMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = lineHeightMatch.Groups[2].Value;
@@ -5173,7 +5201,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (!string.IsNullOrEmpty(metadata.Manager))
             extPropsPart.Properties.Manager = new Manager(metadata.Manager);
 
-        extPropsPart.Properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application("Qutas D2Tools");
+        extPropsPart.Properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application("Doc2 D2Tools");
         extPropsPart.Properties.Save();
     }
 

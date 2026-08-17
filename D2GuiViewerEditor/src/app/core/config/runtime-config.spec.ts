@@ -1,7 +1,7 @@
 import { mergeAuthConfig, DEFAULT_AUTH_CONFIG } from './runtime-config';
 
 /**
- * Runtime config merge: config.json (Qutas) is the source of auth values and overrides the
+ * Runtime config merge: config.json (Doc2) is the source of auth values and overrides the
  * structural DEFAULT_AUTH_CONFIG field-by-field; missing/invalid config falls back to those
  * defaults so the app still bootstraps without config.json.
  */

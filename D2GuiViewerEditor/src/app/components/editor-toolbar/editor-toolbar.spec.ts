@@ -159,13 +159,11 @@ describe('EditorToolbarComponent — ENTER w polu rozmiaru czcionki', () => {
 });
 
 /**
- * „Pokaż wszystko" (¶) — przycisk TYMCZASOWO ukryty w toolbarze (decyzja 2026-08-10);
- * funkcja pozostaje dostępna skrótem Ctrl+Shift+8 (komenda toggleFormattingMarks
- * i podświetlanie z EditorState.formattingMarks czekają gotowe w komponencie).
- * Ten test pinuje stan tymczasowy — po przywróceniu przycisku (zdjęcie @if (false)
- * w szablonie) przywrócić testy wiringu z historii gita.
+ * „Pokaż wszystko" (¶) — przycisk PRZYWRÓCONY (2026-08-14, pełna funkcja znaków
+ * formatowania: overlay spacji/tabów/br + CSS ¶). Wiring: klik emituje komendę
+ * toggleFormattingMarks, podświetlenie z EditorState.formattingMarks.
  */
-describe('EditorToolbarComponent — przycisk „Pokaż wszystko" (tymczasowo ukryty)', () => {
+describe('EditorToolbarComponent — przycisk „Pokaż wszystko"', () => {
   let fixture: ComponentFixture<EditorToolbarComponent>;
   let component: EditorToolbarComponent;
 
@@ -181,10 +179,32 @@ describe('EditorToolbarComponent — przycisk „Pokaż wszystko" (tymczasowo uk
       HTMLButtonElement | undefined;
   }
 
-  it('przycisk NIE jest renderowany (ukryty do odwołania), także w trybie edycji', () => {
+  it('przycisk jest renderowany i klik emituje toggleFormattingMarks', () => {
     component.readOnly = false;
     fixture.detectChanges();
-    expect(marksBtn()).toBeFalsy();
+    const emitted: string[] = [];
+    component.command.subscribe((c: { command: string }) => emitted.push(c.command));
+
+    const btn = marksBtn();
+    expect(btn).toBeTruthy();
+    btn!.click();
+
+    expect(emitted).toContain('toggleFormattingMarks');
+  });
+
+  it('przycisk podświetla się według EditorState.formattingMarks', () => {
+    component.editorState = {
+      isModified: false, canUndo: false, canRedo: false, wordCount: 0,
+      formattingMarks: true,
+      currentFormatting: {
+        bold: false, italic: false, underline: false,
+        strikethrough: false, subscript: false, superscript: false,
+      },
+      currentStyle: {},
+    };
+    fixture.detectChanges();
+
+    expect(marksBtn()!.classList.contains('active')).toBe(true);
   });
 
   it('stan z EditorState.formattingMarks jest nadal czytany (gotowość na przywrócenie)', () => {

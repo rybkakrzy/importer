@@ -38,7 +38,7 @@ export const appConfig: ApplicationConfig = {
     // apiToken (functional) attaches the ID token to API calls; httpError handles errors.
     provideHttpClient(withInterceptors([apiTokenInterceptor, httpErrorInterceptor])),
 
-    // MSAL (Entra ID) — auth config comes from MSAL_CUSTOM_CONFIG (Qutas runtime config.json),
+    // MSAL (Entra ID) — auth config comes from MSAL_CUSTOM_CONFIG (Doc2 runtime config.json),
     // provided at bootstrap in main.ts with build-time environment fallback.
     { provide: MSAL_INSTANCE, useFactory: msalInstanceFactory, deps: [MSAL_CUSTOM_CONFIG] },
     { provide: MSAL_GUARD_CONFIG, useFactory: msalGuardConfigFactory, deps: [MSAL_CUSTOM_CONFIG] },

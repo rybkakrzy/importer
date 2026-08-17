@@ -280,6 +280,15 @@
 
 .dl-btn-sm { padding: 2px 7px; font-size: 12px; }
 
+/* Akcja destrukcyjna (Usuń trwale) — czerwony wariant dl-btn. */
+.dl-btn-danger {
+  border-color: #fca5a5;
+  color: #b91c1c;
+
+  &:hover:not(:disabled) { background: #fef2f2; border-color: #dc2626; }
+  &:disabled { opacity: 0.6; cursor: default; }
+}
+
 /* ── Pagination ── */
 .pagination-bar {
   display: flex;

@@ -157,7 +157,15 @@
   text-rendering: geometricPrecision;
   box-sizing: border-box;
   position: relative;
-  overflow: hidden;
+  /* clip zamiast hidden + BUFOR RENDERU (zgłoszenie „treść znika pod stopką/nagłówkiem"):
+     twarde cięcie na krawędzi paska treści obcinało descendery ostatniej linii (po ADR-0085
+     tusz siedzi przy dole slotu) i obiekty pływające z małym ujemnym offsetem (textbox
+     top:-6px) — wyglądało to jak pasmo z wyższym z-indexem i białym tłem. clip daje te same
+     gwarancje paginacji co hidden (pasek się nie rozrasta, bez scroll-containera), a 16px
+     marginesu pozwala TUSZOWI wystawać odrobinę — jak w Wordzie, gdzie obiekt może wystawać
+     poza obszar treści. Duży przelew (np. w trakcie debounce repaginacji) nadal jest cięty. */
+  overflow: clip;
+  overflow-clip-margin: 16px;
   // Word nie kolapsuje ciągów spacji z w:t — pre-wrap zachowuje je wizualnie
   // (zawijanie linii bez zmian; reader nie emituje formatującego whitespace między tagami).
   white-space: pre-wrap;
@@ -434,11 +442,17 @@ img[data-legacy-graphic='blank'] {
   /* Kolor znacznika z w:lvl/w:rPr (var na kontenerze) LUB z rPr znaku końca akapitu
      (var per <li>, 14104878) — własna wartość elementu wygrywa z odziedziczoną. */
   color: var(--marker-color, inherit);
+  /* Rozmiar znacznika (14104xxx: punktator inny niż tekst): w:lvl/w:rPr/w:sz → var na
+     kontenerze; rPr znaku końca akapitu / rozmiar 1. runu → var per <li>. Bez var etykieta
+     dziedziczyła rozmiar KONTENERA (default dokumentu), nie tekstu punktu. */
+  font-size: var(--marker-font-size, inherit);
 }
 
-/* Natywne znaczniki list (bez silnika etykiet) — ten sam kontrakt koloru (14104878). */
+/* Natywne znaczniki list (bez silnika etykiet) — ten sam kontrakt koloru (14104878)
+   i rozmiaru znacznika. */
 .editor-content li::marker {
   color: var(--marker-color, currentColor);
+  font-size: var(--marker-font-size, inherit);
 }
 
 /* Ze znanym wysunięciem (w:ind hanging, var z readera) etykieta stoi jak w Wordzie:
@@ -878,14 +892,14 @@ body.image-moving * {
 
 /* Opt-in "formatting marks" mode: reveal a subtle, clearly non-content hint of
    where the manual break sits. Still hidden on print. */
-.editor-content.show-formatting-marks .page-break {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .page-break {
   height: auto;
   margin: 12px 0;
   border-top: 1px dashed #b8c4d0;
   position: relative;
 }
 
-.editor-content.show-formatting-marks .page-break::after {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .page-break::after {
   content: 'Podział strony';
   position: absolute;
   top: -0.7em;
@@ -926,11 +940,11 @@ body.image-moving * {
   line-height: 0;
 }
 
-.editor-content.show-formatting-marks .docx-column-break {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-column-break {
   height: auto;
   border-top: 1px dashed #4472c4;
 }
-.editor-content.show-formatting-marks .docx-column-break::after {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-column-break::after {
   content: 'Podział kolumny';
   font-size: 9px;
   color: #4472c4;
@@ -944,16 +958,46 @@ body.image-moving * {
    getContent/autosave. Ograniczenie CSS-only: kropek spacji i strzałki ↵ (br) nie da
    się narysować bez mutacji DOM — świadomie pomijamy. */
 
+/* Overlay znaków formatowania (spacje · / twarde spacje ° / taby → / br ↵) — warstwa
+   w .page POZA contenteditable, pozycjonowana pomiarami Range po każdej repaginacji
+   (tylko gdy tryb włączony). pointer-events:none = zero wpływu na klik/karetkę;
+   z-index 3 = nad warstwą główną (2), pod pasmem w edycji (15). */
+.fmt-marks-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  user-select: none;
+}
+
+.fmt-mark {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  /* Kolor per znacznik inline z overlay (kolor runu jak w Wordzie); fallback ciemny. */
+  color: #444444;
+  font-family: Calibri, 'Segoe UI', sans-serif;
+}
+
+/* ¤ końca wiersza/komórki i kotwica ⚓ — lekko mniejsze od tekstu (jak w Wordzie). */
+.fmt-mark.fmt-cell,
+.fmt-mark.fmt-anchor { font-size: 0.85em; }
+
+/* Kropka spacji siedzi u Worda w połowie wysokości x — lekko podnosimy glif środka. */
+.fmt-mark.fmt-space { align-items: center; }
+.fmt-mark.fmt-tab { justify-content: flex-start; }
+
 /* Znacznik końca akapitu ¶ — inline-block o szerokości 0 (glif „wystaje" za ostatni
    znak przez overflow, bez wpływu na zawijanie). Dotyczy też nagłówków i punktów list,
    jak w Wordzie. */
-.editor-content.show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after {
   content: '¶';
   display: inline-block;
   width: 0;
   overflow: visible;
-  color: #4472c4;
-  opacity: 0.6;
+  color: currentColor;
   font-family: Calibri, 'Segoe UI', sans-serif;
   font-weight: 400;
   font-style: normal;
@@ -965,20 +1009,19 @@ body.image-moving * {
 /* Strzałka tabulatora → dla trzech nośników tabów z readera:
    1) span.docx-tab-seg — segment pozycjonowany absolutnie na stopie; strzałka W LUCE
       przed segmentem (right:100%), poza box-modelem — zero wpływu na układ; */
-.editor-content.show-formatting-marks .docx-tab-seg::before {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-tab-seg::before {
   content: '→';
   position: absolute;
   right: 100%;
   padding-right: 2px;
-  color: #4472c4;
-  opacity: 0.6;
+  color: currentColor;
   user-select: none;
   pointer-events: none;
 }
 
 /* 2) span.docx-tab-leader — luka flex z wypełniaczem (position:relative inline
       z readera; kropki maluje ::after — ::before jest wolny); */
-.editor-content.show-formatting-marks .docx-tab-leader::before {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-tab-leader::before {
   content: '→';
   position: absolute;
   left: 0;
@@ -991,7 +1034,7 @@ body.image-moving * {
 
 /* 3) bezklasowy span z literalnym \t (reader: display:inline-block;min-width:2em;
       white-space:pre) — glif o zerowej szerokości nakłada się na odstęp tabu. */
-.editor-content.show-formatting-marks span[style*='min-width:2em']::before {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks span[style*='min-width:2em']::before {
   content: '→';
   display: inline-block;
   width: 0;
@@ -1004,13 +1047,13 @@ body.image-moving * {
 
 /* Podział sekcji: nośnik danych (poza trybem znaczników display:none — patrz niżej).
    Pokazujemy linię i etykietę bez zajmowania miejsca (height:0 + absolute). */
-.editor-content.show-formatting-marks .docx-section-break {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-section-break {
   display: block;
   height: 0;
   position: relative;
   overflow: visible;
 }
-.editor-content.show-formatting-marks .docx-section-break::before {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-section-break::before {
   content: '';
   position: absolute;
   left: 0;
@@ -1019,7 +1062,7 @@ body.image-moving * {
   border-top: 1px dashed #9aa7b4;
   pointer-events: none;
 }
-.editor-content.show-formatting-marks .docx-section-break::after {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-section-break::after {
   content: 'Podział sekcji';
   position: absolute;
   top: -0.75em;
@@ -1128,33 +1171,33 @@ body.image-moving * {
   }
   
   .editor-content .page-break,
-  .editor-content.show-formatting-marks .page-break {
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .page-break {
     border: none;
     margin: 0;
     height: 0;
     page-break-after: always;
   }
 
-  .editor-content.show-formatting-marks .page-break::after {
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .page-break::after {
     display: none;
   }
 
   /* Znaczniki „Pokaż wszystko" są nie-drukowalne (jak w Wordzie). */
-  .editor-content.show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after,
-  .editor-content.show-formatting-marks .docx-tab-seg::before,
-  .editor-content.show-formatting-marks .docx-tab-leader::before,
-  .editor-content.show-formatting-marks span[style*='min-width:2em']::before,
-  .editor-content.show-formatting-marks .docx-section-break::before,
-  .editor-content.show-formatting-marks .docx-section-break::after,
-  .editor-content.show-formatting-marks .docx-column-break::after {
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-tab-seg::before,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-tab-leader::before,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks span[style*='min-width:2em']::before,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-section-break::before,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-section-break::after,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-column-break::after {
     content: none;
   }
 
-  .editor-content.show-formatting-marks .docx-section-break {
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-section-break {
     display: none;
   }
 
-  .editor-content.show-formatting-marks .docx-column-break {
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-column-break {
     height: 0;
     border: none;
   }
@@ -1611,11 +1654,16 @@ body.image-moving * {
 .footnote-item-content {
   flex: 1 1 auto;
   min-height: 1.4em;
+  min-width: 0;
   outline: none;
   /* Jak body i pasma (ADR-0077): bez pre-wrap Chrome przy pisaniu w contenteditable wstawia
      &nbsp; zamiast zwykłych spacji (żeby nie skolapsowały) — twarde spacje szły do w:t
      i Word nie łamał wierszy przypisu (tekst wychodził poza prawy margines strony). */
   white-space: pre-wrap;
+  /* Wpis NIE może wyjechać poza prawy margines regionu: treść bez punktu złamania
+     (twarde spacje sprzed ADR-0083, długie tokeny) łamie się w dowolnym miejscu.
+     Measurer paginacji klonuje wpisy z tą samą klasą — wysokości spójne. */
+  overflow-wrap: anywhere;
 
   &:focus {
     background: #f8f9ff;

@@ -5,7 +5,7 @@ import { environment } from '../../../environments/environment';
 import { MSAL_CUSTOM_CONFIG, isAuthDisabled } from '../config/runtime-config';
 
 /**
- * Resource-based authorization (Qutas/D2WebCore pattern). The backend maps the signed-in user's app
+ * Resource-based authorization (Doc2/D2WebCore pattern). The backend maps the signed-in user's app
  * roles to a set of resource names (route names) and exposes them at GET /api/identity/resources.
  * The frontend never inspects role names — it asks the backend "what may I access" and gates routes
  * by resource. Backend = source of truth; this is UX only.

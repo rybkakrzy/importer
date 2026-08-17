@@ -4031,7 +4031,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Zapisuj TYLKO gdy edytor naprawdę ma fokus. Klik w pole toolbara (np. input rozmiaru
       // czcionki) przenosi fokus i zwija selekcję contenteditable do karetki — `blur`/`selectionchange`
       // odpalają się WTEDY z karetką wciąż „w edytorze", więc bez tego strażnika nadpisywaliśmy
-      // realne zaznaczenie pustą karetką → `setFontSize` nie miał czego sformatować (Qutas-FMT-004).
+      // realne zaznaczenie pustą karetką → `setFontSize` nie miał czego sformatować (Doc2-FMT-004).
       if (this.isSelectionInEditor(selection) && this.editorHasFocus()) {
         this.savedSelection = range.cloneRange();
       }
@@ -4856,6 +4856,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Odbij stan w EditorState — toolbar podświetla ¶ na tej podstawie.
     this.editorState.update(s => ({ ...s, formattingMarks: this.showFormattingMarks() }));
     this.stateChange.emit(this.editorState());
+    // Overlay znaków (spacje/taby/br) rysuje się na żądanie i znika przy wyłączeniu.
+    this._scheduleFormattingMarksRender();
   }
 
   /**
@@ -6313,6 +6315,143 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this._scheduleAnchorBadgeRefresh();
     } finally {
       this._isRepaginating = false;
+      // „Pokaż wszystko": znaki spacji/tabów/br żyją w overlayu pozycjonowanym pomiarami —
+      // po każdej repaginacji (nowy DOM stron) trzeba je przeliczyć. rAF = po malowaniu.
+      this._scheduleFormattingMarksRender();
+    }
+  }
+
+  // ═══════════ „Pokaż wszystko" — overlay znaków formatowania (spacje/taby/br) ═══════════
+  // CSS-owe pseudo-elementy (¶ za blokiem, strzałki tab-segów, hinty podziałów) zostają;
+  // overlay dorysowuje to, czego CSS nie umie bez mutacji treści: kropkę · za KAŻDĄ spacją,
+  // ° za twardą spacją, → dla literalnych \t w nośnikach inline i ↵ dla <br>. Warstwa jest
+  // dzieckiem .page POZA contenteditable (nie serializuje się do getContent, nie łapie
+  // kliknięć), pozycje liczone Range.getBoundingClientRect i sprowadzane do px układu
+  // strony przez _pageVisualScale (zoom). Przeliczenie TYLKO gdy tryb włączony, po
+  // repaginacji — zero kosztu w zwykłej pracy (pułapka ADR-0075 nie dotyczy).
+  private _fmtMarksRaf: number | null = null;
+
+  private _scheduleFormattingMarksRender(): void {
+    if (this._fmtMarksRaf !== null) cancelAnimationFrame(this._fmtMarksRaf);
+    this._fmtMarksRaf = requestAnimationFrame(() => {
+      this._fmtMarksRaf = null;
+      this._renderFormattingMarksOverlay();
+    });
+  }
+
+  private _renderFormattingMarksOverlay(): void {
+    const host: HTMLElement = this._hostRef.nativeElement;
+    host.querySelectorAll('.fmt-marks-layer').forEach((el: Element) => el.remove());
+    if (!this.showFormattingMarks()) return;
+
+    const pages = Array.from(host.querySelectorAll<HTMLElement>('.page'));
+    let budget = 20000; // twardy limit znaczników — patologiczne dokumenty nie zamrożą UI
+
+    // Word pokazuje znaki WSZĘDZIE: body + nagłówek/stopka (podgląd i edycja) + wpisy przypisów.
+    const CONTAINERS = '.editor-content, .page-overflow-content, .header-display, .footer-display,'
+      + ' .header-editor-content, .footer-editor-content, .footnote-item-content';
+
+    for (const page of pages) {
+      if (budget <= 0) break;
+      const scale = this._pageVisualScale(page) || 1;
+      const pageRect = page.getBoundingClientRect();
+
+      const layer = document.createElement('div');
+      layer.className = 'fmt-marks-layer';
+      layer.setAttribute('contenteditable', 'false');
+      layer.setAttribute('aria-hidden', 'true');
+
+      // Kolor i rozmiar znaczników jak w Wordzie: z RUNU, przy którym stoją (computed
+      // z rodzica text node'a; cache per element — computed w pętli po znakach byłby drogi).
+      const styleCache = new Map<Element, { color: string; fontSize: string }>();
+      const styleOf = (el: Element | null) => {
+        if (!el) return { color: '#444444', fontSize: '11pt' };
+        let cached = styleCache.get(el);
+        if (!cached) {
+          const cs = getComputedStyle(el);
+          cached = { color: cs.color, fontSize: cs.fontSize };
+          styleCache.set(el, cached);
+        }
+        return cached;
+      };
+
+      const addMark = (rect: DOMRect, glyph: string, cls: string, src: Element | null) => {
+        if (budget <= 0 || (rect.width === 0 && rect.height === 0)) return;
+        const mark = document.createElement('span');
+        mark.className = `fmt-mark ${cls}`;
+        mark.textContent = glyph;
+        const { color, fontSize } = styleOf(src);
+        mark.style.left = `${(rect.left - pageRect.left) / scale}px`;
+        mark.style.top = `${(rect.top - pageRect.top) / scale}px`;
+        mark.style.width = `${Math.max(rect.width / scale, 4)}px`;
+        mark.style.height = `${rect.height / scale}px`;
+        mark.style.color = color;
+        // computed font-size jest w px UKŁADU (transform nie zmienia computed) — bez skali.
+        mark.style.fontSize = fontSize;
+        layer.appendChild(mark);
+        budget--;
+      };
+
+      const range = document.createRange();
+      for (const container of Array.from(page.querySelectorAll<HTMLElement>(CONTAINERS))) {
+        if (budget <= 0) break;
+
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node && budget > 0; node = walker.nextNode()) {
+          const text = node.nodeValue ?? '';
+          if (!/[ \u00A0\t\u00AD]/.test(text)) continue;
+          const parent = node.parentElement;
+          // Ukryte nośniki (markery display:none) — Range da zerowe recty i addMark je odrzuci.
+          for (let i = 0; i < text.length && budget > 0; i++) {
+            const ch = text[i];
+            if (ch !== ' ' && ch !== '\u00A0' && ch !== '\t' && ch !== '\u00AD') continue;
+            range.setStart(node, i);
+            range.setEnd(node, i + 1);
+            const rect = range.getBoundingClientRect();
+            if (ch === ' ') addMark(rect, '·', 'fmt-space', parent);
+            else if (ch === '\u00A0') addMark(rect, '°', 'fmt-nbsp', parent);
+            else if (ch === '\u00AD') addMark(rect, '¬', 'fmt-shy', parent);
+            else addMark(rect, '→', 'fmt-tab', parent);
+          }
+        }
+
+        container.querySelectorAll('br').forEach(br => {
+          if (budget <= 0) return;
+          addMark(br.getBoundingClientRect(), '↵', 'fmt-br', br.parentElement);
+        });
+
+        // Znaczniki końca komórki (w komórce) i końca wiersza (za tabelą) — ¤ jak w Wordzie.
+        container.querySelectorAll<HTMLTableCellElement>('td, th').forEach(cell => {
+          if (budget <= 0 || cell.hasAttribute('data-grid-spacer')) return;
+          // Collapsed range na końcu komórki daje w Chrome zerowy rect — bierzemy OSTATNI
+          // rect zawartości i stawiamy ¤ przy jego prawej krawędzi; pusta komórka = lewy górny róg.
+          range.selectNodeContents(cell);
+          const rects = range.getClientRects();
+          const last = rects.length ? rects[rects.length - 1] : null;
+          const cr = cell.getBoundingClientRect();
+          const x = last ? last.right : cr.left + 3;
+          const top = last ? last.top : cr.top + 3;
+          const h = last ? last.height : Math.min(cr.height - 6, 18);
+          addMark(new DOMRect(x, top, 10, h), '¤', 'fmt-cell', cell);
+        });
+        container.querySelectorAll<HTMLTableRowElement>('tr').forEach(row => {
+          if (budget <= 0) return;
+          const r = row.getBoundingClientRect();
+          addMark(new DOMRect(r.right + 2, r.top, 12, r.height), '¤', 'fmt-cell', row);
+        });
+
+        // Kotwica obiektu pływającego (⚓) przy jego lewym-górnym rogu — jak w Wordzie.
+        container.querySelectorAll<HTMLElement>(
+          '.editor-image-wrapper[data-pos-mode], .docx-textbox, .docx-shape',
+        ).forEach(obj => {
+          if (budget <= 0) return;
+          if (getComputedStyle(obj).position !== 'absolute') return;
+          const r = obj.getBoundingClientRect();
+          addMark(new DOMRect(r.left - 16, r.top, 14, 16), '⚓', 'fmt-anchor', obj);
+        });
+      }
+
+      page.appendChild(layer);
     }
   }
 

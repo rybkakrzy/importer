@@ -57,7 +57,12 @@ export function applyWordLineSpacing(el: HTMLElement, multiple: number): void {
  * zapisywał exact, który przycina w Wordzie tekst wyższy niż linia).
  */
 export function applyExactLineSpacing(el: HTMLElement, points: number, atLeast: boolean): void {
-  el.style.lineHeight = `${points}pt`;
+  // PG-10: atLeast = „co najmniej" — linia rośnie, gdy treść wyższa (Word nie przycina).
+  // Ten sam kontrakt co reader: max(pt, pojedynczy odstęp fontu z .page). Writer parsuje
+  // pt z wnętrza max(...).
+  el.style.lineHeight = atLeast
+    ? `max(${points}pt, var(--w-line-single, 1.2em))`
+    : `${points}pt`;
   el.style.removeProperty('--w-line-tw');
   if (atLeast) {
     el.style.setProperty('--w-line-rule', 'atLeast');
@@ -77,6 +82,8 @@ export function readWordLineMultiple(el: HTMLElement): number | null {
   const style = getComputedStyle(el);
   const inline = el.style.lineHeight;
   if (inline.endsWith('pt')) return null;
+  // atLeast (PG-10): max(Xpt, single) — to nie jest mnożnik.
+  if (inline.startsWith('max(')) return null;
 
   const marker = parseFloat(style.getPropertyValue('--w-line-tw'));
   if (Number.isFinite(marker) && marker > 0) {

@@ -1466,7 +1466,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var markerColorVarCss = firstInfo.MarkerColorCss != null
             ? $"--marker-color:{firstInfo.MarkerColorCss};"
             : string.Empty;
-        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};{hangingCss}{markerColorVarCss}";
+        // Rozmiar znacznika z w:lvl/w:rPr/w:sz — bez var etykiety ::before dziedziczyły
+        // rozmiar KONTENERA (default dokumentu), a nie tekstu punktu (zgłoszenie: punktator
+        // większy/mniejszy niż tekst). Half-points → pt.
+        var markerSizeVarCss = MarkerSizeCssVar(firstInfo.MarkerSizeHalfPoints);
+        var listStyleCss = $"margin:0;padding-left:{listPadding}px;list-style-type:{firstInfo.ListStyleType};{hangingCss}{markerColorVarCss}{markerSizeVarCss}";
 
         // `start` = FAKTYCZNY numer pierwszego elementu wg liczników Worda (kontynuacja po przerwaniu
         // akapitem / współdzielony abstrakt), nie sama definicja w:start. Konsumpcja w pętli niżej.
@@ -1509,6 +1513,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             identityAttrs.Append(" data-lvl-override=\"1\"");
         if (firstInfo.MarkerColorHex != null)
             identityAttrs.Append($" data-marker-color=\"{firstInfo.MarkerColorHex}\"");
+        if (firstInfo.MarkerSizeHalfPoints != null)
+            identityAttrs.Append($" data-marker-size=\"{firstInfo.MarkerSizeHalfPoints}\"");
 
         html.Append($"<{listType}{startAttr}{identityAttrs} style=\"{listStyleCss}\">");
 
@@ -1635,6 +1641,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     }
                 }
 
+                // Rozmiar znacznika per pozycja: w:lvl/w:rPr/w:sz wygrywa; inaczej rPr ZNAKU
+                // KOŃCA AKAPITU (round-trip przez data-mark-size); inaczej — WYŚWIETLENIOWO —
+                // rozmiar pierwszego runu (Word skaluje numer z tekstem, my dziedziczyliśmy
+                // default kontenera: „wielkość punktatorów inna niż tekstu").
+                string? itemMarkerSizeHalf = null;
+                if (firstInfo.MarkerSizeHalfPoints == null)
+                {
+                    itemMarkerSizeHalf = p.ParagraphProperties
+                        ?.GetFirstChild<ParagraphMarkRunProperties>()
+                        ?.GetFirstChild<FontSize>()?.Val?.Value;
+                    if (itemMarkerSizeHalf != null)
+                        itemAttrs += $" data-mark-size=\"{itemMarkerSizeHalf}\"";
+                    else
+                        itemMarkerSizeHalf = p.Descendants<Run>()
+                            .FirstOrDefault(r => r.GetFirstChild<Text>() != null)
+                            ?.RunProperties?.FontSize?.Val?.Value;
+                    var itemSizeVar = MarkerSizeCssVar(itemMarkerSizeHalf);
+                    if (itemSizeVar.Length > 0) cssStyle += itemSizeVar;
+                }
+
                 html.Append($"<li{itemAttrs} style=\"{cssStyle}\">");
 
                 // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker.
@@ -1648,6 +1674,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     markerBoxCss += $"color:{firstInfo.MarkerColorCss};";
                 else if (itemMarkerColorCss != null)
                     markerBoxCss += $"color:{itemMarkerColorCss};";
+                markerBoxCss += MarkerSizeFontCss(firstInfo.MarkerSizeHalfPoints ?? itemMarkerSizeHalf);
                 if (firstInfo.BulletImageDataUri != null)
                 {
                     html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
@@ -1832,11 +1859,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterTw)));
         if (_defaultSpacingLine != null && int.TryParse(_defaultSpacingLine, out var lineTw))
         {
-            if (_defaultSpacingLineRule == "exact" || _defaultSpacingLineRule == "atLeast")
+            if (_defaultSpacingLineRule == "atLeast")
+            {
+                // PG-10 jak w akapitach: atLeast = minimum, nie exact (max z pojedynczym).
+                css.Append(string.Format(inv,
+                    "line-height:max({0:0.##}pt, var(--w-line-single, 1.2em));",
+                    OoxmlUnits.TwipsToPoints(lineTw)));
+                css.Append("--w-line-rule:atLeast;");
+            }
+            else if (_defaultSpacingLineRule == "exact")
             {
                 css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineTw)));
-                if (_defaultSpacingLineRule == "atLeast")
-                    css.Append("--w-line-rule:atLeast;");
             }
             else
             {
@@ -3771,6 +3804,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         public string? MarkerColorHex { get; init; }
         /// <summary>Rozwiązany kolor CSS markera (hex/theme/auto → #rrggbb) do renderu.</summary>
         public string? MarkerColorCss { get; init; }
+        /// <summary>Surowy w:lvl/w:rPr/w:sz@val (half-points) — rozmiar numeru/punktatora
+        /// z definicji poziomu (14104xxx: marker miał inną wielkość niż tekst).</summary>
+        public string? MarkerSizeHalfPoints { get; init; }
     }
 
     private ListLevelInfo GetListLevelInfo(NumberingProperties? numPr, int levelOverride = -1)
@@ -3802,6 +3838,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var markerColor = levelDef.NumberingSymbolRunProperties?.GetFirstChild<Color>();
         var markerColorCss = ResolveRunColorCss(markerColor);
         var markerColorHex = markerColor?.Val?.Value ?? markerColorCss?.TrimStart('#');
+        var markerSizeHalfPoints = levelDef.NumberingSymbolRunProperties?.GetFirstChild<FontSize>()?.Val?.Value;
         // w:start definicji i w:startOverride instancji round-tripują OSOBNO — writer odtwarza
         // start w abstrakcie, a override jako w:lvlOverride na instancji (FR-EXPORT-004).
         var start = levelDef.StartNumberingValue?.Val?.Value ?? 1;
@@ -3939,8 +3976,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             IndFirstLineTw = lvlInd?.FirstLine?.Value,
             FromInstanceOverride = fromInstanceOverride,
             MarkerColorHex = markerColorHex,
-            MarkerColorCss = markerColorCss
+            MarkerColorCss = markerColorCss,
+            MarkerSizeHalfPoints = markerSizeHalfPoints
         };
+    }
+
+    /// <summary>CSS var rozmiaru znacznika z w:sz (half-points → pt); pusty string gdy brak.</summary>
+    private static string MarkerSizeCssVar(string? halfPoints)
+    {
+        var css = MarkerSizeFontCss(halfPoints);
+        return css.Length > 0 ? $"--marker-font-size:{css["font-size:".Length..]}" : string.Empty;
+    }
+
+    /// <summary>`font-size:Xpt;` z w:sz (half-points); pusty string gdy brak/nieparsowalne.</summary>
+    private static string MarkerSizeFontCss(string? halfPoints)
+    {
+        if (halfPoints == null || !double.TryParse(halfPoints,
+                System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var half))
+            return string.Empty;
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "font-size:{0:0.#}pt;", half / 2.0);
     }
 
     /// <summary>
@@ -4109,14 +4163,21 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
             {
                 var lineRule = spacing.LineRule?.Value;
-                if (lineRule == LineSpacingRuleValues.Exact || lineRule == LineSpacingRuleValues.AtLeast)
+                if (lineRule == LineSpacingRuleValues.AtLeast)
+                {
+                    // PG-10: atLeast = „CO NAJMNIEJ" — linia rośnie, gdy treść wyższa
+                    // (Word nie przycina). Dotąd renderowane jak exact: mniejsza wartość
+                    // niż pojedynczy odstęp fontu ŚCISKAŁA linie (zgłoszenie „odstępy
+                    // między liniami"). CSS max(pt, single-em) = dokładna semantyka;
+                    // --w-line-single żyje na .page (PG-09), em rozwiązuje się fontem akapitu.
+                    css.Append(string.Format(inv,
+                        "line-height:max({0:0.##}pt, var(--w-line-single, 1.2em));",
+                        OoxmlUnits.TwipsToPoints(lineVal)));
+                    css.Append("--w-line-rule:atLeast;");
+                }
+                else if (lineRule == LineSpacingRuleValues.Exact)
                 {
                     css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
-                    // Rozróżnienie reguły dla round-tripu: bez tego markera writer mapował
-                    // KAŻDE line-height w pt z powrotem na w:lineRule=exact, a atLeast→exact
-                    // przycina w Wordzie tekst wyższy niż linia (np. większe glify, obrazki).
-                    if (lineRule == LineSpacingRuleValues.AtLeast)
-                        css.Append("--w-line-rule:atLeast;");
                 }
                 else
                 {
@@ -4974,7 +5035,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Renderuje wektorowy kształt DrawingML bez obrazu/tekstu jako przybliżenie HTML:
     /// preset line/straightConnector → pozioma linia (grubość/kolor z <c>a:ln</c>); prostokąt/
     /// elipsa/zaokrąglony prostokąt z <c>a:solidFill</c> → kolorowy blok (z border-radius);
-    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „Qutasator", ikona „!") → inline
+    /// <c>a:custGeom</c> (dowolna ścieżka, np. logo/wordmark „Doc2", ikona „!") → inline
     /// <c>&lt;svg&gt;&lt;path&gt;</c> z wypełnieniem kształtu. Kotwica → pozycja absolutna (jak
     /// w Wordzie). Zwraca pusty string dla nieobsługiwanej geometrii (drop bez zmian).
     /// PODGLĄD-only: writer nie odtwarza tych kształtów do DOCX (tak samo jak istniejące

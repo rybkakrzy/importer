@@ -33,6 +33,12 @@ public interface IDocumentRepository
     Task UpdateAsync(Document document, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// TRWALE usuwa dokument (wpis mastera; wersje i zadania wysyłki schodzą kaskadą
+    /// ON DELETE CASCADE ze schematu infra/sql). Wymaga SaveChangesAsync.
+    /// </summary>
+    Task DeleteAsync(Document document, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Zapisuje zmiany w bazie danych
     /// </summary>
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

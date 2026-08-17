@@ -124,7 +124,7 @@ public static class ConfigureAuthentication
             options.TokenValidationParameters.NameClaimType = "name";
         });
 
-        // Group→role mapping (Qutas): map the Entra "groups" claim onto application role claims.
+        // Group→role mapping (Doc2): map the Entra "groups" claim onto application role claims.
         services.Configure<RolesOptions>(configuration.GetSection(RolesOptions.SectionName));
         services.AddScoped<IClaimsTransformation, ClaimsTransformer>();
 
@@ -139,7 +139,7 @@ public static class ConfigureAuthentication
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUserProvider, ClaimsCurrentUserProvider>();
 
-        // Microsoft Graph (Qutas): app-only user lookup. Active only with a client secret (GCP Secret
+        // Microsoft Graph (Doc2): app-only user lookup. Active only with a client secret (GCP Secret
         // Manager) + ClientId/TenantId; otherwise a disabled no-op so the API runs locally without it.
         if (!string.IsNullOrWhiteSpace(azureAd.ClientSecret)
             && !string.IsNullOrWhiteSpace(azureAd.ClientId)

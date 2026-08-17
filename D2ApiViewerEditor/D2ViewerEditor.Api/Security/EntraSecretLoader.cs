@@ -4,7 +4,7 @@ namespace D2ViewerEditor.Api.Security;
 
 /// <summary>
 /// Loads the Entra client secret from GCP Secret Manager at startup and injects it into
-/// configuration as <c>AzureAd:ClientSecret</c> (Qutas pattern — keeps the secret out of repo and
+/// configuration as <c>AzureAd:ClientSecret</c> (Doc2 pattern — keeps the secret out of repo and
 /// out of appsettings). No-op (and never throws) when disabled or unconfigured, so local/dev
 /// without GCP credentials keeps working with token-validation-only Entra.
 /// </summary>

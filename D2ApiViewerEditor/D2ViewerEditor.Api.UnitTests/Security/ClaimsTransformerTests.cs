@@ -7,7 +7,7 @@ using NUnit.Framework;
 namespace D2ViewerEditor.Api.UnitTests.Security;
 
 /// <summary>
-/// Group→role mapping (Qutas pattern): the transformer turns Entra "groups" claims into
+/// Group→role mapping (Doc2 pattern): the transformer turns Entra "groups" claims into
 /// application role claims used by the authorization policies.
 /// </summary>
 [TestFixture]

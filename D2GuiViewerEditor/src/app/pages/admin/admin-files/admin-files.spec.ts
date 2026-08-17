@@ -1,5 +1,6 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
-import { of } from 'rxjs';
+import { vi } from 'vitest';
+import { Observable, of, throwError } from 'rxjs';
 import { AdminFilesComponent } from './admin-files';
 import { AdminService, DocumentListItem, DocumentVersionListItem } from '../../../services/admin.service';
 
@@ -26,6 +27,8 @@ describe('AdminFilesComponent — filtry Master/Version ID i rozszerzeń', () =>
   let fixture: ComponentFixture<AdminFilesComponent>;
   let component: AdminFilesComponent;
   let versionCalls: string[];
+  let deleteCalls: string[];
+  let deleteResult: Observable<void>;
 
   const docs = [
     doc('master-aaa', 'umowa.docx',
@@ -44,6 +47,8 @@ describe('AdminFilesComponent — filtry Master/Version ID i rozszerzeń', () =>
 
   beforeEach(async () => {
     versionCalls = [];
+    deleteCalls = [];
+    deleteResult = of(void 0);
     await TestBed.configureTestingModule({
       imports: [AdminFilesComponent],
       providers: [{
@@ -53,6 +58,10 @@ describe('AdminFilesComponent — filtry Master/Version ID i rozszerzeń', () =>
           getDocumentVersions: (masterId: string) => {
             versionCalls.push(masterId);
             return of(versionsByMaster[masterId] ?? []);
+          },
+          deleteDocument: (masterId: string) => {
+            deleteCalls.push(masterId);
+            return deleteResult;
           },
         },
       }],
@@ -99,5 +108,44 @@ describe('AdminFilesComponent — filtry Master/Version ID i rozszerzeń', () =>
     expect(component.fileExtension({ name: 'x.DOCX', mimeType: 'application/pdf' })).toBe('docx');
     expect(component.fileExtension({ name: '', mimeType: 'application/msword' })).toBe('doc');
     expect(component.extensionLabel(docs[2])).toBe('PDF');
+  });
+
+  describe('trwałe usuwanie pozycji (GCS + baza)', () => {
+    function firstDoc() {
+      return component.documents()[0];
+    }
+
+    it('po potwierdzeniu woła API i zdejmuje pozycję z listy', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      const before = component.documents().length;
+
+      component.deleteDocument(firstDoc(), new Event('click'));
+
+      expect(deleteCalls).toEqual(['master-aaa']);
+      expect(component.documents().length).toBe(before - 1);
+      expect(component.notice()).toContain('Usunięto');
+    });
+
+    it('anulowanie potwierdzenia NIE woła API', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      component.deleteDocument(firstDoc(), new Event('click'));
+
+      expect(deleteCalls).toEqual([]);
+      expect(component.documents().length).toBe(3);
+    });
+
+    it('409 (wysyłka w toku) pokazuje komunikat serwera, pozycja zostaje', () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      deleteResult = throwError(() => ({
+        error: { error: 'Nie można usunąć dokumentu w stanie Sending: wysyłka jest w toku.' },
+      })) as never;
+
+      component.deleteDocument(firstDoc(), new Event('click'));
+
+      expect(component.documents().length).toBe(3);
+      expect(component.notice()).toContain('wysyłka jest w toku');
+      expect(component.deletingId()).toBeNull();
+    });
   });
 });

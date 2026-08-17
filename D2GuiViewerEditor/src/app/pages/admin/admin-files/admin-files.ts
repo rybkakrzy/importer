@@ -29,6 +29,7 @@ export class AdminFilesComponent implements OnInit {
   error = signal<string | null>(null);
   loadingVersionsFor = signal<string | null>(null);
   downloadingId = signal<string | null>(null);
+  deletingId = signal<string | null>(null);
   notice = signal<string | null>(null);
 
   /** Jednorazowe dociągnięcie wersji WSZYSTKICH dokumentów — potrzebne, by filtr ID
@@ -245,6 +246,40 @@ export class AdminFilesComponent implements OnInit {
       this.notice.set(`Kopiowanie niedostępne w tej przeglądarce. Link do edycji: ${url}`);
     }
   }
+  /**
+   * TRWAŁE usunięcie pozycji: potwierdzenie → DELETE (backend kasuje bloby wszystkich wersji
+   * z GCS i wpis z bazy; wersje/wysyłki kaskadą). 409 (wysyłka w toku) i inne błędy lądują
+   * w notice z komunikatem serwera; lista aktualizowana bez przeładowania.
+   */
+  deleteDocument(doc: DocumentWithVersions, event: Event): void {
+    event.stopPropagation();
+    const confirmed = confirm(
+      `Usunąć trwale dokument „${doc.name}"?
+
+` +
+      'Z magazynu zostaną skasowane pliki WSZYSTKICH wersji, a z bazy wpis dokumentu ' +
+      'wraz z wersjami i zadaniami wysyłki. Tej operacji nie można cofnąć.');
+    if (!confirmed) return;
+
+    this.deletingId.set(doc.masterId);
+    this.notice.set(null);
+    this.adminService.deleteDocument(doc.masterId).subscribe({
+      next: () => {
+        this.deletingId.set(null);
+        this.allDocuments.update(list => list.filter(d => d.masterId !== doc.masterId));
+        // Usunięcie ostatniej pozycji strony nie może zostawić pustej strony paginacji.
+        if (this.currentPage() >= this.totalPages()) {
+          this.currentPage.set(Math.max(0, this.totalPages() - 1));
+        }
+        this.notice.set(`Usunięto dokument „${doc.name}".`);
+      },
+      error: (err) => {
+        this.deletingId.set(null);
+        this.notice.set(err?.error?.error ?? 'Nie udało się usunąć dokumentu.');
+      },
+    });
+  }
+
 
   downloadActive(doc: DocumentWithVersions, event: Event): void {
     event.stopPropagation();

@@ -53,6 +53,12 @@ export class AdminService {
     return this.http.get<DocumentVersionListItem[]>(`${this.apiUrl}/${masterId}/versions`);
   }
 
+  /** TRWAŁE usunięcie dokumentu (admin): bloby wszystkich wersji z GCS + wpis z bazy
+   *  (wersje i zadania wysyłki kaskadą). 409, gdy wysyłka w toku (Queued/Sending). */
+  deleteDocument(masterId: string): Observable<void> {
+    return this.http.delete<void>(`${this.apiUrl}/${masterId}`);
+  }
+
   getAdminStats(): Observable<AdminStats> {
     return this.getAllDocuments().pipe(
       map(docs => {
@@ -85,7 +91,4 @@ export class AdminService {
     return this.http.get(`${this.apiUrl}/${masterId}/versions/${versionId}/download`, { responseType: 'blob' });
   }
 
-  deleteDocument(masterId: string): Observable<void> {
-    return this.http.delete<void>(`${this.apiUrl}/${masterId}`);
-  }
 }

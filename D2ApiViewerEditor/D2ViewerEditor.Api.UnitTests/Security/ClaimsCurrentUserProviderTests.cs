@@ -50,7 +50,7 @@ public class ClaimsCurrentUserProviderTests
     [Test]
     public void CorporateKey_MatchesClaimCaseInsensitively()
     {
-        // Realny przypadek Qutasator-AD: token niesie claim "corpkey" (małe litery), konfiguracja to "corpKey".
+        // Realny przypadek Doc2-AD: token niesie claim "corpkey" (małe litery), konfiguracja to "corpKey".
         // CaseSensitiveClaimsIdentity (Microsoft.Identity.Web) nie dopasowałby tego przez FindFirst —
         // dlatego provider szuka po Type z OrdinalIgnoreCase. Bez tego CorporateKey jest null → 400.
         var provider = ProviderWith(AuthenticatedUser(new Claim("corpkey", "XI81XE")));
