@@ -1,4 +1,5 @@
 import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { vi } from 'vitest';
 import { EditorToolbarComponent } from './editor-toolbar';
 import { FontProviderService } from '../../services/font-provider.service';
 import { EditorState } from '../../models/document.model';
@@ -192,6 +193,43 @@ describe('EditorToolbarComponent — font combobox (items 6 & 7)', () => {
     expect(component.fontDropdownOpen()).toBe(false);
     expect(emitted!).toBe('CorporateSans');
     expect(component.selectedFontFamily()).toBe('CorporateSans');
+  });
+
+  // ── Anty-stomp dla KROJU (Problem 10, parytet z lastManualFontSizeChange) ──
+
+  it('read-back tuż po ręcznym wyborze kroju NIE nadpisuje go (okno anty-stomp)', () => {
+    const input = fakeInput('Arial');
+    component.onFontKeydown({
+      key: 'Enter',
+      preventDefault: () => {},
+      target: input,
+    } as unknown as KeyboardEvent);
+    expect(component.selectedFontFamily()).toBe('Arial');
+
+    // Stale read-back from the editor (computed style around the fresh ZWS span still
+    // reports the OLD font) arrives within the 300 ms window — it must not stomp the pick.
+    component.editorState = stateWithFont('Calibri');
+
+    expect(component.selectedFontFamily()).toBe('Arial');
+  });
+
+  it('po upływie okna 300 ms read-back znów aktualizuje krój z edytora', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+    try {
+      const input = fakeInput('Arial');
+      component.onFontKeydown({
+        key: 'Enter',
+        preventDefault: () => {},
+        target: input,
+      } as unknown as KeyboardEvent);
+
+      nowSpy.mockReturnValue(10_400); // > 300 ms później
+      component.editorState = stateWithFont('Georgia');
+
+      expect(component.selectedFontFamily()).toBe('Georgia');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('Enter z filtrem pasującym do jednej pozycji wybiera ją (jak klik)', () => {

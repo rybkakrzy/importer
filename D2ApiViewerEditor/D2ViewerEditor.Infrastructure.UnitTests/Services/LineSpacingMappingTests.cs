@@ -210,6 +210,30 @@ public class LineSpacingMappingTests
     }
 
     [Test]
+    public void AutoSpacingFlags_AreMarkedInCss_AndRestoredOnExport()
+    {
+        // w:beforeAutospacing / w:afterAutospacing: strona „auto" nie emituje wartości
+        // marginesu, ale FLAGA musi przeżyć round-trip — markery CSS --w-before-auto /
+        // --w-after-auto, z których writer odtwarza atrybuty na w:spacing.
+        var css = ParagraphCss(new SpacingBetweenLines
+        {
+            Before = "240",
+            BeforeAutoSpacing = true,
+            AfterAutoSpacing = true
+        });
+        css.Should().Contain("--w-before-auto:1;").And.Contain("--w-after-auto:1;");
+        css.Should().NotContain("margin-top:", "strona auto nie emituje wartości before");
+
+        var bytes = new HtmlToDocxConverter().Convert($"<p style=\"{css}\">Tekst</p>");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var spacing = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<SpacingBetweenLines>().Single();
+        spacing.BeforeAutoSpacing!.Value.Should().BeTrue();
+        spacing.AfterAutoSpacing!.Value.Should().BeTrue();
+    }
+
+    [Test]
     public void SpaceBeforeAfter_MapToMarginsInPoints()
     {
         // before = margin-top, after = padding-bottom (ADR-0053: padding nie kolapsuje,

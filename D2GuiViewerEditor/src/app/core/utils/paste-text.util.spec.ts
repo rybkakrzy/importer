@@ -6,8 +6,8 @@ describe('normalizeWhitespace', () => {
     expect(normalizeWhitespace('a\r\nb\rc')).toBe('a\nb\nc');
   });
 
-  it('collapses runs of spaces and trims line ends', () => {
-    expect(normalizeWhitespace('a    b   \nc')).toBe('a b\nc');
+  it('preserves runs of spaces (Word "Keep Text Only" behavior), trims line ends', () => {
+    expect(normalizeWhitespace('a    b   \nc')).toBe('a    b\nc');
   });
 
   it('caps consecutive blank lines at one', () => {
@@ -73,5 +73,9 @@ describe('resolvePlainText', () => {
 
   it('returns empty string when nothing is available', () => {
     expect(resolvePlainText('', '')).toBe('');
+  });
+
+  it('multiple consecutive spaces survive resolvePlainText', () => {
+    expect(resolvePlainText('kol 1:    wartość', '')).toBe('kol 1:    wartość');
   });
 });

@@ -1,7 +1,7 @@
-<div class="wysiwyg-editor-wrapper" [class.read-only]="readOnly">
+﻿<div class="wysiwyg-editor-wrapper" [class.read-only]="readOnly" [class.band-editing]="editingSection() !== 'body'">
   <div class="pages-container">
-    <!-- Każda strona w geometrii swojej sekcji (rozmiar/orientacja/marginesy z pageGeometries;
-         sekcja 1 = pageSize/pageMargins, kolejne z markerów docx-section-break) -->
+    <!-- KaĹĽda strona w geometrii swojej sekcji (rozmiar/orientacja/marginesy z pageGeometries;
+         sekcja 1 = pageSize/pageMargins, kolejne z markerĂłw docx-section-break) -->
     @for (page of pageContents(); track $index) {
       <div class="page-wrapper">
         <div class="page"
@@ -11,8 +11,8 @@
              [style.--w-line-single]="documentDefaultLineSingle()"
              [attr.data-page-number]="$index + 1">
 
-          <!-- Nagłówek strony: zaczyna się headerDistance od krawędzi (w:pgMar header),
-               min-height = pasmo (margines − dystans); wyższa treść SPYCHA body jak w Wordzie -->
+          <!-- NagĹ‚Ăłwek strony: zaczyna siÄ™ headerDistance od krawÄ™dzi (w:pgMar header),
+               min-height = pasmo (margines â’ dystans); wyĹĽsza treĹ›Ä‡ SPYCHA body jak w Wordzie -->
           <div class="page-header"
                [class.editing]="editingSection() === 'header'"
                [style.margin-top.px]="headerOffsetPx($index)"
@@ -27,12 +27,12 @@
                 class="header-editor-content"
                 [class.show-formatting-marks]="showFormattingMarks()"
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
-                spellcheck="true"
+                spellcheck="false"
                 [attr.placeholder]="''"
                 (beforeinput)="onEditorBeforeInput($event)"
                 (input)="onHeaderInput($event)"
               ></div>
-              <!-- Pasek nagłówka przeniesiony do d2-header-footer-panel (dock po lewej). -->
+              <!-- Pasek nagĹ‚Ăłwka przeniesiony do d2-header-footer-panel (dock po lewej). -->
             } @else {
               <div class="header-display" [class.show-formatting-marks]="showFormattingMarks()" [innerHTML]="getHeaderContentSafe($index)"></div>
             }
@@ -44,9 +44,9 @@
               class="editor-content"
               [class.show-formatting-marks]="showFormattingMarks()"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
-              spellcheck="true"
+              spellcheck="false"
               [attr.data-page-index]="$index"
-              [attr.placeholder]="'Zacznij pisać...'"
+              [attr.placeholder]="'Zacznij pisaÄ‡...'"
               [style.padding-left.px]="pageMarginPx($index, 'left')"
               [style.padding-right.px]="pageMarginPx($index, 'right')"
               [style.font-size]="documentDefaultFontSize()"
@@ -74,7 +74,7 @@
               class="editor-content"
               [class.show-formatting-marks]="showFormattingMarks()"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
-              spellcheck="true"
+              spellcheck="false"
               [attr.data-page-index]="$index"
               [style.padding-left.px]="pageMarginPx($index, 'left')"
               [style.padding-right.px]="pageMarginPx($index, 'right')"
@@ -99,7 +99,7 @@
             ></div>
           }
 
-          <!-- Stopka strony: dół stopki footerDistance od dołu strony; wyższa treść odbiera
+          <!-- Stopka strony: dĂłĹ‚ stopki footerDistance od doĹ‚u strony; wyĹĽsza treĹ›Ä‡ odbiera
                miejsce body (repaginacja mierzy realne pasmo) -->
           <div class="page-footer"
                [class.editing]="editingSection() === 'footer'"
@@ -116,7 +116,7 @@
                 class="footer-editor-content"
                 [class.show-formatting-marks]="showFormattingMarks()"
                 [attr.contenteditable]="readOnly ? 'false' : 'true'"
-                spellcheck="true"
+                spellcheck="false"
                 [attr.placeholder]="''"
                 (beforeinput)="onEditorBeforeInput($event)"
                 (input)="onFooterInput($event)"
@@ -126,14 +126,14 @@
             }
           </div>
 
-          <!-- Przypisy końcowe (jak w MS Word): region WEWNĄTRZ strony, zaraz pod ostatnim
-               blokiem treści (top liczony w repaginacji), z separatorem; nadmiar przelewa się
-               na kolejne strony (kontynuacja = separator na całą szerokość). Elementy żyją
-               POZA contenteditable body — nie wchodzą do zapisu treści. -->
+          <!-- Przypisy koĹ„cowe (jak w MS Word): region WEWNÄ„TRZ strony, zaraz pod ostatnim
+               blokiem treĹ›ci (top liczony w repaginacji), z separatorem; nadmiar przelewa siÄ™
+               na kolejne strony (kontynuacja = separator na caĹ‚Ä… szerokoĹ›Ä‡). Elementy ĹĽyjÄ…
+               POZA contenteditable body â€” nie wchodzÄ… do zapisu treĹ›ci. -->
           @if (endnoteRegionFor($index); as enRegion) {
             <div class="endnotes-region"
                  role="region"
-                 aria-label="Przypisy końcowe"
+                 aria-label="Przypisy koĹ„cowe"
                  data-testid="endnotes-region"
                  [style.top.px]="enRegion.topPx"
                  [style.left.px]="pageMarginPx($index, 'left')"
@@ -146,27 +146,27 @@
                      [attr.data-testid]="'endnote-item-' + entry.en.id">
                   <span class="footnote-item-number"
                         aria-hidden="true"
-                        title="Przejdź do odwołania w treści"
+                        title="PrzejdĹş do odwoĹ‚ania w treĹ›ci"
                         (click)="scrollToNoteReference('endnote', entry.en.id)">{{ entry.label }}</span>
                   <div class="footnote-item-content"
                        [class.show-formatting-marks]="showFormattingMarks()"
                        [attr.contenteditable]="readOnly ? 'false' : 'true'"
-                       spellcheck="true"
-                       [attr.aria-label]="'Treść przypisu końcowego ' + entry.label"
+                       spellcheck="false"
+                       [attr.aria-label]="'TreĹ›Ä‡ przypisu koĹ„cowego ' + entry.label"
                        [attr.data-testid]="'endnote-content-' + entry.en.id"
                        [innerHTML]="endnoteSafeHtml(entry.en)"
                        (blur)="commitEndnoteContent(entry.en.id, $event)"></div>
                   <!-- Bez przycisku usuwania (jak w Wordzie): przypis znika po skasowaniu
-                       odwołania w treści — syncEndnotesWithBody przycina osierocone wpisy. -->
+                       odwoĹ‚ania w treĹ›ci â€” syncEndnotesWithBody przycina osierocone wpisy. -->
                 </div>
               }
             </div>
           }
 
-          <!-- Przypisy dolne (jak w MS Word): region na DOLE strony, na której jest odwołanie
-               (kotwica od dołu, tuż nad stopką; rezerwacja miejsca w paginacji skróciła body,
-               więc region nie nachodzi na treść). Elementy żyją POZA contenteditable body —
-               nie wchodzą do zapisu treści. -->
+          <!-- Przypisy dolne (jak w MS Word): region na DOLE strony, na ktĂłrej jest odwoĹ‚anie
+               (kotwica od doĹ‚u, tuĹĽ nad stopkÄ…; rezerwacja miejsca w paginacji skrĂłciĹ‚a body,
+               wiÄ™c region nie nachodzi na treĹ›Ä‡). Elementy ĹĽyjÄ… POZA contenteditable body â€”
+               nie wchodzÄ… do zapisu treĹ›ci. -->
           @if (footnoteRegionFor($index); as fnRegion) {
             <div class="footnotes-region"
                  role="region"
@@ -183,24 +183,24 @@
                      [attr.data-testid]="'footnote-item-' + entry.fn.id">
                   <span class="footnote-item-number"
                         aria-hidden="true"
-                        title="Przejdź do odwołania w treści"
+                        title="PrzejdĹş do odwoĹ‚ania w treĹ›ci"
                         (click)="scrollToNoteReference('footnote', entry.fn.id)">{{ entry.label }}</span>
                   <div class="footnote-item-content"
                        [class.show-formatting-marks]="showFormattingMarks()"
                        [attr.contenteditable]="readOnly ? 'false' : 'true'"
-                       spellcheck="true"
-                       [attr.aria-label]="'Treść przypisu ' + entry.label"
+                       spellcheck="false"
+                       [attr.aria-label]="'TreĹ›Ä‡ przypisu ' + entry.label"
                        [attr.data-testid]="'footnote-content-' + entry.fn.id"
                        [innerHTML]="footnoteSafeHtml(entry.fn)"
                        (blur)="commitFootnoteContent(entry.fn.id, $event)"></div>
                   <!-- Bez przycisku usuwania (jak w Wordzie): przypis znika po skasowaniu
-                       odwołania w treści — syncFootnotesWithBody przycina osierocone wpisy. -->
+                       odwoĹ‚ania w treĹ›ci â€” syncFootnotesWithBody przycina osierocone wpisy. -->
                 </div>
               }
             </div>
           }
 
-          <!-- Prowadnice marginesów (przerywane linie jak w MS Word / Docs) -->
+          <!-- Prowadnice marginesĂłw (przerywane linie jak w MS Word / Docs) -->
           @if (showMarginGuides) {
             <div class="margin-guides">
               <div class="margin-guide margin-guide-top" [style.top.px]="pageMarginPx($index, 'top')"></div>
@@ -211,7 +211,7 @@
           }
         </div>
 
-        <!-- Separator między stronami - styl Google Docs -->
+        <!-- Separator miÄ™dzy stronami - styl Google Docs -->
         @if ($index < pageContents().length - 1) {
           <div class="page-separator"></div>
         }

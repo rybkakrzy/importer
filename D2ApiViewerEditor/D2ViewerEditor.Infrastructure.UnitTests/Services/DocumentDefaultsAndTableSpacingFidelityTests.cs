@@ -174,6 +174,48 @@ public class DocumentDefaultsAndTableSpacingFidelityTests
     }
 
     [Test]
+    public void Read_TableStyleAtLeastLineSpacing_EmitsMaxFormLikeMainParagraphPath()
+    {
+        // w:spacing lineRule=atLeast w pPr STYLU TABELI szło ścieżką SpacingCss i emitowało
+        // gołe line-height:Xpt (semantyka exact — ściskało linie w komórkach); ścieżka
+        // główna akapitów od PG-10 emituje max(Xpt, var(--w-line-single)). Muszą być spójne.
+        var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(
+                new Style(
+                    new StyleParagraphProperties(
+                        new SpacingBetweenLines { Line = "200", LineRule = LineSpacingRuleValues.AtLeast }))
+                {
+                    Type = StyleValues.Table,
+                    StyleId = "TabelaAtLeast",
+                    StyleName = new StyleName { Val = "Tabela AtLeast" }
+                });
+            stylesPart.Styles.Save();
+
+            var table = new Table();
+            table.Append(new TableProperties(new TableStyle { Val = "TabelaAtLeast" }));
+            table.Append(new TableRow(new TableCell(new Paragraph(new Run(new Text("X"))))));
+            body.Append(table);
+            mainPart.Document.Save();
+        }
+        ms.Position = 0;
+
+        var html = _reader.Convert(ms).Html;
+
+        var cellParagraph = System.Text.RegularExpressions.Regex.Match(
+            html, "<td[^>]*><p style=\"([^\"]*)\"");
+        cellParagraph.Success.Should().BeTrue();
+        cellParagraph.Groups[1].Value.Should().Contain("line-height:max(10pt, var(--w-line-single, 1.2em));");
+        cellParagraph.Groups[1].Value.Should().Contain("--w-line-rule:atLeast;");
+    }
+
+    [Test]
     public void Read_TableGridColumns_CarryExactTwips()
     {
         using var docx = BuildQutableLikeDocx();

@@ -273,6 +273,74 @@ describe('WysiwygEditorComponent — podział akapitu na granicy strony (ADR-004
     expect(pages[1]).toContain('<table');
   });
 
+  // ---------- tabele: układanie fragmentów po cięciu (Problem 7 — RC1/RC2) ----------
+
+  it('pierwszy fragment mieszczący się w resztce strony ZOSTAJE na niej (bez ucieczki na następną)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<p data-h="400">A</p>' +
+      '<table><tbody><tr><td>T1</td></tr><tr><td>T2</td></tr></tbody></table>'
+    );
+    stubBlockHeights();
+    // Splitter zwraca 2 fragmenty skrojone pod resztkę (~533 px przy kolumnie ~933):
+    // fragment 0 mieści się w resztce → MUSI zostać na stronie 1 (RC1 — asymetria pomiaru
+    // spychała dopasowany fragment na kolejną stronę, zostawiając pustkę).
+    (component as any)._splitTableForPagination = () => {
+      const mk = (h: number, txt: string) => {
+        const t = document.createElement('table');
+        t.setAttribute('data-h', String(h));
+        t.innerHTML = `<tbody><tr><td>${txt}</td></tr></tbody>`;
+        return t;
+      };
+      return [mk(400, 'T1'), mk(500, 'T2')];
+    };
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(pages.length).toBe(2);
+    expect(pages[0]).toContain('>A</p>');
+    expect(pages[0]).toContain('T1');
+    expect(pages[0]).not.toContain('T2');
+    expect(pages[1]).toContain('T2');
+    expect(pages[1]).not.toContain('T1');
+  });
+
+  it('fragmenty skrojone pod starą resztkę są po przejściu na świeżą stronę cięte OD NOWA pełnym budżetem (RC2)', () => {
+    (component as any)._captureDocumentDefaults('<p>x</p>');
+    editorsWith(
+      '<p data-h="800">A</p>' +
+      '<table><tbody><tr><td>Big</td></tr></tbody></table>'
+    );
+    stubBlockHeights();
+    const calls: Array<{ first: number; full: number }> = [];
+    const mk = (h: number, txt: string) => {
+      const t = document.createElement('table');
+      t.setAttribute('data-h', String(h));
+      t.innerHTML = `<tbody><tr><td>${txt}</td></tr></tbody>`;
+      return t;
+    };
+    // 1. wywołanie (resztka ~133 px): fragmenty pod STARĄ resztkę — fragment 0 (200) się
+    // nie mieści → advance. 2. wywołanie MUSI dostać pełny budżet kolumny (first === full)
+    // i jego wynik zastępuje stare fragmenty (żadna strona nie dostaje fragmentu pod
+    // nieaktualną resztkę — bez niemal pustych stron w środku tabeli).
+    (component as any)._splitTableForPagination =
+      (_t: HTMLTableElement, first: number, full: number) => {
+        calls.push({ first, full });
+        return calls.length === 1 ? [mk(200, 'STALE0'), mk(800, 'STALE1')] : [mk(900, 'FRESH')];
+      };
+
+    (component as any)._repaginateNow();
+
+    const pages = component.pageContents();
+    expect(calls.length).toBe(2);
+    expect(calls[1].first).toBe(calls[1].full); // re-split pełnym budżetem świeżej kolumny
+    expect(calls[1].first).toBeGreaterThan(calls[0].first);
+    expect(pages.length).toBe(2);
+    expect(pages[1]).toContain('FRESH');
+    expect(pages.join('')).not.toContain('STALE');
+  });
+
   // ---------- formanty blokowe (div.sdt-block): podział między dziećmi ----------
 
   /** Stub geometrii dzieci kontenera (jsdom bez layoutu): perChildPx na blok-dziecko. */

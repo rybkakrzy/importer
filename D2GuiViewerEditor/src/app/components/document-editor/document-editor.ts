@@ -1566,6 +1566,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     if (this.editor) {
       this.editor.insertTable(config);
       this.applyTableAutoFit(this.tableDialogData.autoFitBehavior, this.tableDialogData.fixedWidth);
+      // Re-derive the panel state from the final selection regardless of focus churn —
+      // relying on a selectionchange alone made the panel appear inconsistently (Problem 11).
+      queueMicrotask(() => this.detectTableContext());
     }
   }
 
@@ -1703,14 +1706,31 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    */
   private detectTableContext(): void {
     const selection = window.getSelection();
-    const editorEl = this.editor?.editorContent?.nativeElement;
-    const ctx = resolveTableContext(selection?.anchorNode, editorEl);
+    const anchorNode = selection?.anchorNode ?? null;
+    // Multi-page documents: resolve the page that actually hosts the caret — the active-page
+    // ref alone made carets on other pages (split/multi-page tables) look like
+    // "outside-editor", so the panel state was never derived for them (Problem 11).
+    const editorEl = this.editor?.findEditorContentContaining(anchorNode)
+      ?? this.editor?.editorContent?.nativeElement;
+    const ctx = resolveTableContext(anchorNode, editorEl);
 
     // Selekcja poza treścią edytora = interakcja z UI (panel boczny / toolbar).
     // Zachowujemy ostatni znany kontekst tabeli, żeby kliknięcia w panelu (np.
     // obramowania) nadal dotyczyły aktywnej tabeli i nie przełączały panelu na
     // „Wybierz tabelę". Czyszczenie tylko, gdy karetka jest realnie poza tabelą.
-    if (ctx.placement === 'outside-editor') return;
+    if (ctx.placement === 'outside-editor') {
+      // Exception: repagination replaces the pages' innerHTML, so the stored table may be a
+      // DETACHED element — keeping it would let panel actions mutate dead DOM. Clear the
+      // context instead; a connected table keeps the existing no-flicker behavior above.
+      const staleTable = this.activeTable();
+      if (staleTable && !staleTable.isConnected) {
+        this.isInTable.set(false);
+        this.activeTableCell.set(null);
+        this.activeTable.set(null);
+        this.syncTablePanel();
+      }
+      return;
+    }
 
     this.isInTable.set(ctx.placement === 'in-table');
     this.activeTableCell.set(ctx.cell);
@@ -4418,6 +4438,9 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
 
     this.closeInsertTableDialog();
+    // Re-derive the panel state from the final selection regardless of focus churn —
+    // relying on a selectionchange alone made the panel appear inconsistently (Problem 11).
+    queueMicrotask(() => this.detectTableContext());
   }
 
   // =====================

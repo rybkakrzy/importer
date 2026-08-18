@@ -120,7 +120,7 @@ describe('WysiwygEditorComponent — dzielenie wiersza tabeli między strony', (
     expect(fragments[0].querySelector('tr[data-split-row-id]')).toBeNull();
   });
 
-  it('tabela z rowspan>1 nie dzieli wierszy (koordynacja vMerge poza zakresem)', () => {
+  it('wiersz OBJĘTY scaleniem pionowym (rowspan) jest atomowy — bez cięcia wewnątrz', () => {
     const host = document.createElement('div');
     host.innerHTML =
       `<table><tbody>` +
@@ -131,7 +131,72 @@ describe('WysiwygEditorComponent — dzielenie wiersza tabeli między strony', (
     const table = host.querySelector('table') as HTMLTableElement;
 
     const fragments = splitTable(table, 250, 350);
+    // Oba wiersze leżą w zasięgu rowspan=2 → żaden nie jest cięty wewnątrz; wysoki wiersz
+    // startujący scalenie jedzie w całości (guard anty-pętla, jak cantSplit).
     expect(fragments.every(f => f.querySelector('tr[data-split-row-id]') === null)).toBe(true);
+    const allLis = fragments.flatMap(f => Array.from(f.querySelectorAll('li')));
+    expect(allLis.length).toBe(6);
+    // Lista wiersza startującego scalenie nie została rozerwana między fragmenty.
+    const liPerFragment = fragments.map(f => f.querySelectorAll('li').length);
+    expect(liPerFragment.filter(n => n > 0)).toEqual([6]);
+  });
+
+  it('rowspan w INNYCH wierszach nie blokuje cięcia wiersza nieobjętego scaleniem (RC3)', () => {
+    const host = document.createElement('div');
+    host.innerHTML =
+      `<table><tbody>` +
+      `<tr><td rowspan="2"><p>A</p></td><td><p>B</p></td></tr>` +
+      `<tr><td><p>C</p></td></tr>` +
+      `<tr><td><p>X</p></td>` +
+      `<td><ol><li>1</li><li>2</li><li>3</li><li>4</li><li>5</li><li>6</li></ol></td></tr>` +
+      `</tbody></table>`;
+    const table = host.querySelector('table') as HTMLTableElement;
+
+    // Wiersze 0-1 (scalone, 200+100) mieszczą się razem w 350; wiersz 2 (700) jest
+    // POZA zasięgiem rowspan → tnie się wewnątrz mimo scalenia gdzie indziej w tabeli.
+    const fragments = splitTable(table, 350, 350);
+    expect(fragments.length).toBe(3);
+    // Fragment 0: scalone wiersze w całości, bez markerów cięcia.
+    expect(fragments[0].querySelectorAll('tr').length).toBe(2);
+    expect(fragments[0].querySelector('td[rowspan]')).not.toBeNull();
+    expect(fragments[0].querySelector('tr[data-split-row-id]')).toBeNull();
+    // Wiersz 2 pocięty wewnątrz: head (p X + 3 li) i kontynuacja (3 li).
+    const headTr = fragments[1].querySelector('tr') as HTMLTableRowElement;
+    const contTr = fragments[2].querySelector('tr') as HTMLTableRowElement;
+    expect(headTr.getAttribute('data-split-row-id')).toBeTruthy();
+    expect(contTr.getAttribute('data-split-row')).toBe('cont');
+    expect(fragments[1].querySelectorAll('li').length).toBe(3);
+    expect(fragments[2].querySelectorAll('li').length).toBe(3);
+    const texts = [headTr, contTr].flatMap(tr =>
+      Array.from(tr.querySelectorAll('li')).map(li => li.textContent));
+    expect(texts).toEqual(['1', '2', '3', '4', '5', '6']);
+  });
+
+  it('tabela zagnieżdżona w komórce nie wnosi swoich wierszy do chunkingu tabeli zewnętrznej (RC4)', () => {
+    const host = document.createElement('div');
+    host.innerHTML =
+      `<table><tbody>` +
+      `<tr><td><p>W1</p></td></tr>` +
+      `<tr><td><table><tbody><tr><td><p>N</p></td></tr></tbody></table></td></tr>` +
+      `<tr><td><p>W3</p></td></tr>` +
+      `</tbody></table>`;
+    const table = host.querySelector('table') as HTMLTableElement;
+
+    // 3 wiersze zewnętrzne × 100 px; 250 px budżetu → 2+1. Wiersz tabeli ZAGNIEŻDŻONEJ
+    // nie może być traktowany jak wiersz zewnętrzny (duplikacja treści + zły chunking).
+    const fragments = splitTable(table, 250, 250);
+    expect(fragments.length).toBe(2);
+    // Fragment 0: dokładnie 2 wiersze WŁASNE; tabela zagnieżdżona nietknięta w komórce.
+    expect(fragments[0].querySelectorAll(':scope > tbody > tr').length).toBe(2);
+    const nested = fragments[0].querySelector('td table') as HTMLTableElement;
+    expect(nested).not.toBeNull();
+    expect(nested.querySelectorAll('tr').length).toBe(1);
+    expect(nested.textContent).toContain('N');
+    expect(fragments[1].querySelectorAll('tr').length).toBe(1);
+    expect(fragments[1].textContent).toContain('W3');
+    // Treść „N" występuje w całości dokładnie raz (bez duplikatu jako wiersz zewnętrzny).
+    const allText = fragments.map(f => f.textContent).join('');
+    expect(allText.match(/N/g)?.length).toBe(1);
   });
 
   it('zapis scala fragmenty z powrotem w JEDEN wiersz (komórki sklejone, split-para scalone, markery zdjęte)', () => {

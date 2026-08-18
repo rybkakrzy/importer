@@ -70,6 +70,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// oryginalny tblGrid w pliku), my analogicznie skalujemy TYLKO px podglądu.
     /// </summary>
     private long? _availableContentWidthTwips;
+    // True when _availableContentWidthTwips describes a COLUMN of a multi-column section.
+    // Only then (or for nested tables) does ConvertTableToHtml apply the render clamp —
+    // Word lets a top-level table wider than the text area of a single-column section
+    // extend into the page margins, so its pixels must stay true to the grid.
+    private bool _availableWidthIsColumn;
     // CSS bazowy zbudowany z powyższych — baza dla akapitów w KOMÓRKACH TABEL (styl tabeli
     // może go nadpisać własnym w:pPr); akapity body dziedziczą interlinię z kontenera.
     private string _defaultParagraphSpacingCss = "";
@@ -986,9 +991,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _anchorBand = HfBand.Header;
         // Pasma nie dziedziczą kolumn sekcji — tabela pasma ma do dyspozycji pełną szerokość.
         var prevAvail = _availableContentWidthTwips;
+        var prevIsColumn = _availableWidthIsColumn;
         _availableContentWidthTwips = FullContentWidthTwips();
+        _availableWidthIsColumn = false;
         try { return ConvertHeaderFooterToHtml(part.Header, part, document); }
-        finally { _anchorBand = HfBand.None; _availableContentWidthTwips = prevAvail; }
+        finally { _anchorBand = HfBand.None; _availableContentWidthTwips = prevAvail; _availableWidthIsColumn = prevIsColumn; }
     }
 
     private string ConvertFooterPartToHtml(FooterPart part, WordprocessingDocument document)
@@ -999,9 +1006,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         _anchorBand = HfBand.Footer;
         var prevAvail = _availableContentWidthTwips;
+        var prevIsColumn = _availableWidthIsColumn;
         _availableContentWidthTwips = FullContentWidthTwips();
+        _availableWidthIsColumn = false;
         try { return ConvertHeaderFooterToHtml(part.Footer, part, document); }
-        finally { _anchorBand = HfBand.None; _availableContentWidthTwips = prevAvail; }
+        finally { _anchorBand = HfBand.None; _availableContentWidthTwips = prevAvail; _availableWidthIsColumn = prevIsColumn; }
     }
 
     /// <summary>Pełna szerokość obszaru treści (strona − marginesy) w twipach, null gdy nieznana.</summary>
@@ -1270,6 +1279,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private long? SectionColumnWidthTwips(SectionProperties? section)
     {
+        // Side effect: tracks WHY the returned budget is narrow. Only a multi-column column
+        // width may render-clamp top-level tables (see _availableWidthIsColumn).
+        _availableWidthIsColumn = false;
         var page = section != null ? SectionPropertiesReader.ReadPageSettings(section) : null;
         var pageW = page?.PageWidthTwips ?? _pageWidthTwips;
         if (pageW is not > 0) return null;
@@ -1289,6 +1301,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 var space = (long)cols.SpaceTwips * (cols.Count - 1);
                 content = Math.Max(1, (content - space) / cols.Count);
             }
+            _availableWidthIsColumn = true;
         }
         return content;
     }
@@ -1433,7 +1446,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>
     /// Konwertuje kolejne elementy listy na prawidłowy HTML z zagnieżdżaniem
     /// </summary>
-    private string ConvertConsecutiveListItems(List<OpenXmlElement> elements, ref int index, WordprocessingDocument document, int parentIndentPx = 0)
+    private string ConvertConsecutiveListItems(List<OpenXmlElement> elements, ref int index, WordprocessingDocument document, OpenXmlPart? sourcePart = null, int parentIndentPx = 0)
     {
         var html = new StringBuilder();
         
@@ -1538,7 +1551,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 // Zagnieżdżona lista — przekaż aktualne wcięcie jako rodzica
                 var lastLi = "</li>";
                 html.Length -= lastLi.Length;
-                html.Append(ConvertConsecutiveListItems(elements, ref index, document, levelIndentPx));
+                html.Append(ConvertConsecutiveListItems(elements, ref index, document, sourcePart, levelIndentPx));
                 html.Append("</li>");
             }
             else if (currentLevel < firstLevel)
@@ -1552,8 +1565,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 // także punktorów — element płytszy restartuje głębsze poziomy numerowane.
                 NextListNumber(currentNumId, currentLevel);
 
-                // Buduj CSS dla <li> BEZ wcięć — wcięcia obsługuje kontener <ul>/<ol>
-                var cssStyle = GetParagraphStyle(p.ParagraphProperties);
+                // Buduj CSS dla <li> BEZ wcięć — wcięcia obsługuje kontener <ul>/<ol>.
+                // Line font passed like the <p> path: AutoCss calibrated with the paragraph's
+                // own run font, not the document default.
+                var cssStyle = GetParagraphStyle(p.ParagraphProperties, ResolveParagraphLineFont(p));
                 var styleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
                 if (styleId != null && _styles.TryGetValue(styleId, out var styleCss))
                 {
@@ -1661,6 +1676,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     if (itemSizeVar.Length > 0) cssStyle += itemSizeVar;
                 }
 
+                // Paragraph style of the list item round-trips through data-style-id —
+                // the writer used to hardcode ListParagraph, losing custom list styles.
+                if (!string.IsNullOrEmpty(styleId))
+                    itemAttrs += $" data-style-id=\"{System.Net.WebUtility.HtmlEncode(styleId)}\"";
+
+                // Tab stops round-trip exactly like the <p> path (data-tab-stops → w:tabs).
+                var itemTabStops = GetEffectiveTabStops(p.ParagraphProperties);
+                if (itemTabStops.Count > 0)
+                    itemAttrs += $" data-tab-stops=\"{SerializeTabStops(itemTabStops)}\"";
+
                 html.Append($"<li{itemAttrs} style=\"{cssStyle}\">");
 
                 // Niestandardowy punktator (obrazek, checkbox z Wingdings, emoji) — wstaw własny marker.
@@ -1697,16 +1722,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     switch (child)
                     {
                         case Run run:
-                            html.Append(ConvertRunToHtml(run, document));
+                            // sourcePart threaded through: images/hyperlinks in list items
+                            // living in header/footer/footnote parts must resolve r:id
+                            // against THEIR part, not MainDocumentPart (rIds are per part).
+                            html.Append(ConvertRunToHtml(run, document, sourcePart));
                             break;
                         case Hyperlink hyperlink:
-                            html.Append(ConvertHyperlinkToHtml(hyperlink, document));
+                            html.Append(ConvertHyperlinkToHtml(hyperlink, document, sourcePart));
                             break;
                         case SimpleField simpleField:
                             html.Append(ConvertSimpleFieldToHtml(simpleField));
                             break;
                         case SdtRun sdtRun:
-                            html.Append(ConvertSdtRunToHtml(sdtRun, document));
+                            html.Append(ConvertSdtRunToHtml(sdtRun, document, sourcePart));
                             break;
                     }
                 }
@@ -4151,6 +4179,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var beforeAuto = spacing.BeforeAutoSpacing?.Value == true;
             var afterAuto = spacing.AfterAutoSpacing?.Value == true;
 
+            // Round-trip markers: without them the flags vanished on save and Word fell
+            // back to the raw before/after values.
+            if (beforeAuto) css.Append("--w-before-auto:1;");
+            if (afterAuto) css.Append("--w-after-auto:1;");
+
             if (!beforeAuto)
             {
                 if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
@@ -4270,7 +4303,20 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
-        var (prefix, suffix) = BuildRunWrapper(runProps, needsBold, needsItalic, needsUnderline, needsStrike, needsSup, needsSub);
+        // A note reference MARK already renders as a semantic <sup class="footnote-ref"/
+        // "endnote-ref"> which carries the raise+shrink on its own. The run's direct
+        // w:vertAlign and the reference character style (vertical-align:super;font-size:
+        // smaller) would superscript it a SECOND time (nested sups, twice-shrunk digit).
+        var hasNoteReferenceMark = run.Elements<FootnoteReference>().Any()
+            || run.Elements<EndnoteReference>().Any();
+        if (hasNoteReferenceMark)
+        {
+            needsSup = false;
+            needsSub = false;
+        }
+
+        var (prefix, suffix) = BuildRunWrapper(runProps, needsBold, needsItalic, needsUnderline, needsStrike, needsSup, needsSub,
+            stripSuperscriptCss: hasNoteReferenceMark);
         html.Append(prefix);
         foreach (var child in run.Elements())
         {
@@ -4287,7 +4333,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// wrapper wokół każdego segmentu runu.
     /// </summary>
     private (string Prefix, string Suffix) BuildRunWrapper(RunProperties? runProps,
-        bool needsBold, bool needsItalic, bool needsUnderline, bool needsStrike, bool needsSup, bool needsSub)
+        bool needsBold, bool needsItalic, bool needsUnderline, bool needsStrike, bool needsSup, bool needsSub,
+        bool stripSuperscriptCss = false)
     {
         var cleanCss = GetRunStyleClean(runProps);
 
@@ -4300,8 +4347,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             ? rsCss
             : string.Empty;
 
+        var wrapperCss = rStyleCss + cleanCss;
+        // Note reference marks: the semantic <sup> alone carries the raise/shrink — the
+        // character style's vertical-align/smaller CSS around it would double the effect.
+        if (stripSuperscriptCss)
+            wrapperCss = Regex.Replace(wrapperCss,
+                @"(?:vertical-align:\s*(?:super|sub)|font-size:\s*smaller)\s*;?", "");
+
         var prefix = new StringBuilder();
-        prefix.Append($"<span style=\"{rStyleCss}{cleanCss}\">");
+        prefix.Append($"<span style=\"{wrapperCss}\">");
         if (needsBold) prefix.Append("<strong>");
         if (needsItalic) prefix.Append("<em>");
         if (needsUnderline) prefix.Append("<u>");
@@ -7356,6 +7410,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Szerokość tabeli
         var tableWidth = "auto";
         var hasExplicitWidth = false;
+        var explicitWidthDxa = 0;
         if (tableProps?.TableWidth?.Width?.Value != null)
         {
             var w = tableProps.TableWidth;
@@ -7371,6 +7426,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             {
                 tableWidth = $"{TwipsToPx(wtw)}px";
                 hasExplicitWidth = true;
+                explicitWidthDxa = wtw;
             }
         }
 
@@ -7392,9 +7448,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // My analogicznie: skalujemy WYŁĄCZNIE px podglądu (colgroup style + width tabeli);
         // data-w-tw niesie dalej oryginalne twipy, więc zapis nie utrwala kompresji.
         var indentTw = tableProps?.TableIndentation?.Width?.Value ?? 0;
-        var availTw = _availableContentWidthTwips is { } a && a > 0
-            ? a - Math.Max(0, indentTw)
+        // Clamp only where Word itself compresses the render: a table wider than the column
+        // of a multi-column section, or a table nested inside another table cell. A top-level
+        // table in a single-column section keeps its true pixel widths and extends into the
+        // page margins exactly like Word (the GUI page clips at the paper edge). The indent
+        // is applied SIGNED — a negative w:tblInd credits extra budget in clamped contexts.
+        var clampToAvailableWidth = _availableWidthIsColumn || table.Ancestors<TableCell>().Any();
+        var availTw = clampToAvailableWidth && _availableContentWidthTwips is { } a && a > 0
+            ? a - indentTw
             : (long?)null;
+        var clampedExplicitWidth = false;
         if (availTw is > 0 && gridColumnsPx.Count > 0)
         {
             var availPx = TwipsToPx((int)availTw.Value);
@@ -7406,7 +7469,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     .Select(c => (Px: Math.Max(1, (int)Math.Round(c.Px * f)), c.Tw))
                     .ToList();
                 if (hasExplicitWidth && tableWidth.EndsWith("px", StringComparison.Ordinal))
+                {
                     tableWidth = $"{Math.Min(availPx, gridColumnsPx.Sum(c => c.Px))}px";
+                    clampedExplicitWidth = true;
+                }
             }
         }
 
@@ -7427,9 +7493,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             else if (tblAlignVal == TableRowAlignmentValues.Right) tableAlign = "margin-left:auto;margin-right:0;";
         }
 
-        // Wcięcie tabeli
+        // Wcięcie tabeli. With jc=center/right Word ignores w:tblInd — and the px margin-left
+        // emitted after the alignment would override margin-left:auto and lose the centering.
         var tableIndent = "";
-        if (tableProps?.TableIndentation?.Width?.Value != null)
+        if (tableProps?.TableIndentation?.Width?.Value != null && tableAlign.Length == 0)
         {
             tableIndent = $"margin-left:{TwipsToPx(tableProps.TableIndentation.Width.Value)}px;";
         }
@@ -7456,6 +7523,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             widthSemanticsAttrs += " data-tbl-w=\"auto\"";
         if (!isFixedLayout && useFixedLayout)
             widthSemanticsAttrs += " data-tbl-layout=\"autofit\"";
+        // The width in CSS is render-clamped (column of a multi-column section / nested
+        // table) — the marker carries the ORIGINAL w:tblW dxa so export does not persist
+        // the compressed pixels as the document width.
+        if (clampedExplicitWidth && explicitWidthDxa > 0)
+            widthSemanticsAttrs += $" data-tbl-w-tw=\"{explicitWidthDxa}\"";
 
         // Referencja stylu tabeli — zachowywana w data-*, by eksport mógł ponownie
         // wyemitować w:tblStyle/w:tblLook (rozwiązane wartości i tak są w inline CSS).
@@ -8273,11 +8345,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
         {
             var lineRule = spacing.LineRule?.Value;
-            if (lineRule == LineSpacingRuleValues.Exact || lineRule == LineSpacingRuleValues.AtLeast)
+            if (lineRule == LineSpacingRuleValues.AtLeast)
+            {
+                // PG-10, same semantics as the main paragraph path: "at least" is a MINIMUM —
+                // a bare pt value rendered like exact and squeezed lines below the font's
+                // single spacing in table cells.
+                css.Append(string.Format(inv,
+                    "line-height:max({0:0.##}pt, var(--w-line-single, 1.2em));",
+                    OoxmlUnits.TwipsToPoints(lineVal)));
+                css.Append("--w-line-rule:atLeast;");
+            }
+            else if (lineRule == LineSpacingRuleValues.Exact)
             {
                 css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
-                if (lineRule == LineSpacingRuleValues.AtLeast)
-                    css.Append("--w-line-rule:atLeast;");
             }
             else
             {
@@ -8474,7 +8554,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 var el = elems[i];
                 if (el is Paragraph p && IsListParagraph(p))
                 {
-                    html.Append(ConvertConsecutiveListItems(elems, ref i, document));
+                    html.Append(ConvertConsecutiveListItems(elems, ref i, document, sourcePart));
                 }
                 else
                 {
@@ -8604,7 +8684,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var inner = innerElements[innerIndex];
             if (inner is Paragraph listPara && IsListParagraph(listPara))
             {
-                html.Append(ConvertConsecutiveListItems(innerElements, ref innerIndex, document));
+                html.Append(ConvertConsecutiveListItems(innerElements, ref innerIndex, document, sourcePart));
                 continue; // indeks przesunięty wewnątrz
             }
 

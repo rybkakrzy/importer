@@ -49,6 +49,25 @@ public class ImageImportRegressionTests
         content.Header.Html.Should().NotContain(b64Body);
     }
 
+    [Test]
+    public void HeaderListItemImage_ResolvesRelationshipFromHeaderPart()
+    {
+        // Lista w KOMÓRCE tabeli nagłówka idzie przez ConvertConsecutiveListItems — bez
+        // przekazania sourcePart obraz elementu listy rozwiązywał r:id względem
+        // MainDocumentPart (kolizja rId = obraz z body zamiast z nagłówka).
+        var pngBody = MinimalPng(20, 20);
+        var pngHeader = MinimalPng(40, 10);
+        var docx = BuildDocxWithHeaderListImage(pngBody, pngHeader, sharedRelId: "rIdImg");
+
+        var content = new DocxToHtmlConverter().Convert(new MemoryStream(docx));
+
+        content.Header.Should().NotBeNull();
+        content.Header!.Html.Should().Contain("<li", "akapit listy w komórce nagłówka renderuje się jako element listy");
+        content.Header.Html.Should().Contain(Convert.ToBase64String(pngHeader),
+            "obraz elementu listy musi pochodzić z części NAGŁÓWKA");
+        content.Header.Html.Should().NotContain(Convert.ToBase64String(pngBody));
+    }
+
     // ---- 2. mc:AlternateContent ------------------------------------------------------
 
     [Test]
@@ -268,6 +287,52 @@ public class ImageImportRegressionTests
             var headerImg = headerPart.AddImagePart(ImagePartType.Png, sharedRelId);
             using (var s = new MemoryStream(headerPng)) headerImg.FeedData(s);
             headerPart.Header = new Header(new Paragraph(new Run(BuildInlineDrawing(sharedRelId, 2))));
+            headerPart.Header.Save();
+
+            var body = new Body(
+                new Paragraph(new Run(BuildInlineDrawing(sharedRelId, 1))),
+                new SectionProperties(
+                    new HeaderReference { Type = HeaderFooterValues.Default, Id = main.GetIdOfPart(headerPart) }));
+            main.Document = new Document(body);
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildDocxWithHeaderListImage(byte[] bodyPng, byte[] headerPng, string sharedRelId)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+
+            var bodyImg = main.AddImagePart(ImagePartType.Png, sharedRelId);
+            using (var s = new MemoryStream(bodyPng)) bodyImg.FeedData(s);
+
+            var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
+            var level = new Level { LevelIndex = 0 };
+            level.Append(new StartNumberingValue { Val = 1 });
+            level.Append(new NumberingFormat { Val = NumberFormatValues.Decimal });
+            level.Append(new LevelText { Val = "%1." });
+            var abstractNum = new AbstractNum { AbstractNumberId = 1 };
+            abstractNum.Append(level);
+            var num = new NumberingInstance { NumberID = 1 };
+            num.Append(new AbstractNumId { Val = 1 });
+            numberingPart.Numbering = new Numbering(abstractNum, num);
+            numberingPart.Numbering.Save();
+
+            var headerPart = main.AddNewPart<HeaderPart>();
+            var headerImg = headerPart.AddImagePart(ImagePartType.Png, sharedRelId);
+            using (var s = new MemoryStream(headerPng)) headerImg.FeedData(s);
+
+            // Lista W KOMÓRCE tabeli — jedyna ścieżka nagłówka przechodząca przez
+            // ConvertConsecutiveListItems (akapity top-level idą przez ConvertParagraphToHtml).
+            var listParagraph = new Paragraph(
+                new ParagraphProperties(new NumberingProperties(
+                    new NumberingLevelReference { Val = 0 },
+                    new NumberingId { Val = 1 })),
+                new Run(BuildInlineDrawing(sharedRelId, 3)));
+            headerPart.Header = new Header(new Table(new TableRow(new TableCell(listParagraph))));
             headerPart.Header.Save();
 
             var body = new Body(

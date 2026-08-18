@@ -436,16 +436,55 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // tylko brakujące elementy. Sekwencja CT_Settings: footnotePr przed endnotePr,
         // oba za evenAndOddHeaders; endnotePr dopinany na końcu jest zawsze poprawny,
         // footnotePr wstawiamy przed istniejącym endnotePr.
-        if (footnotePr != null && settings.GetFirstChild<FootnoteDocumentWideProperties>() == null)
+        if (footnotePr != null)
         {
-            if (settings.GetFirstChild<EndnoteDocumentWideProperties>() is { } existingEndnotePr)
+            if (settings.GetFirstChild<FootnoteDocumentWideProperties>() is { } generatedFootnotePr)
+                MergeMissingNoteProperties(generatedFootnotePr, footnotePr);
+            else if (settings.GetFirstChild<EndnoteDocumentWideProperties>() is { } existingEndnotePr)
                 settings.InsertBefore(footnotePr, existingEndnotePr);
             else
                 settings.AppendChild(footnotePr);
         }
-        if (endnotePr != null && settings.GetFirstChild<EndnoteDocumentWideProperties>() == null)
-            settings.AppendChild(endnotePr);
+        if (endnotePr != null)
+        {
+            if (settings.GetFirstChild<EndnoteDocumentWideProperties>() is { } generatedEndnotePr)
+                MergeMissingNoteProperties(generatedEndnotePr, endnotePr);
+            else
+                settings.AppendChild(endnotePr);
+        }
         settings.Save();
+    }
+
+    /// <summary>
+    /// ApplyNoteNumberFormats regenerates footnotePr/endnotePr with only w:numFmt (the model
+    /// format wins), which used to silently WIPE the original w:pos / w:numStart /
+    /// w:numRestart. Copies those children from the original element into the generated one
+    /// when missing, respecting CT_FtnDocProps child order (pos, numFmt, numStart, numRestart).
+    /// Separator references were already stripped from the source — they must not come back.
+    /// </summary>
+    private static void MergeMissingNoteProperties(OpenXmlCompositeElement generated, OpenXmlCompositeElement original)
+    {
+        if (generated.GetFirstChild<FootnotePosition>() == null
+            && generated.GetFirstChild<EndnotePosition>() == null)
+        {
+            var pos = original.GetFirstChild<FootnotePosition>()
+                ?? (OpenXmlElement?)original.GetFirstChild<EndnotePosition>();
+            if (pos != null) generated.InsertAt(pos.CloneNode(true), 0);
+        }
+        if (generated.GetFirstChild<NumberingStart>() == null
+            && original.GetFirstChild<NumberingStart>() is { } numStart)
+        {
+            // numStart precedes numRestart in the schema sequence.
+            if (generated.GetFirstChild<NumberingRestart>() is { } existingRestart)
+                generated.InsertBefore(numStart.CloneNode(true), existingRestart);
+            else
+                generated.AppendChild(numStart.CloneNode(true));
+        }
+        if (generated.GetFirstChild<NumberingRestart>() == null
+            && original.GetFirstChild<NumberingRestart>() is { } numRestart)
+        {
+            generated.AppendChild(numRestart.CloneNode(true));
+        }
     }
 
     /// <summary>
@@ -1609,7 +1648,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Utwórz paragraf z elementem listy
             var para = new Paragraph();
             var props = new ParagraphProperties();
-            props.Append(new ParagraphStyleId { Val = "ListParagraph" });
+            // data-style-id preserves the source paragraph style of the list item —
+            // hardcoding ListParagraph lost custom list styles (e.g. "Wyliczenie").
+            var liParagraphStyleId = child.GetAttributeValue("data-style-id", "");
+            props.Append(new ParagraphStyleId
+            {
+                Val = string.IsNullOrEmpty(liParagraphStyleId)
+                    ? "ListParagraph"
+                    : System.Net.WebUtility.HtmlDecode(liParagraphStyleId)
+            });
             props.Append(new NumberingProperties(
                 new NumberingLevelReference { Val = level },
                 new NumberingId { Val = numId }
@@ -1628,6 +1675,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // Direct w:ind elementu listy (kontrakt data-ind-*-tw z readera) — bez tego
             // wcięcie nadpisane na akapicie wracałoby po zapisie do definicji poziomu.
             AppendListItemIndentation(props, child);
+
+            // Tab stops on list paragraphs round-trip through the same data-tab-stops
+            // contract as <p> — the li path used to drop w:tabs entirely.
+            var liTabStopsAttr = child.GetAttributeValue("data-tab-stops", "");
+            if (!string.IsNullOrEmpty(liTabStopsAttr) && ParseTabStops(liTabStopsAttr) is { } liTabs)
+            {
+                props.Append(liTabs);
+                NormalizeParagraphPropertiesOrder(props);
+            }
 
             // Kolor znacznika per pozycja (14104878): rPr ZNAKU KOŃCA AKAPITU — Word koloruje
             // nim numer/punktator. Bez odtworzenia kolor znacznika ginął przy pierwszym zapisie.
@@ -2361,6 +2417,13 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (tableWidthIsAuto)
         {
             tableProps.Append(new TableWidth { Width = "0", Type = TableWidthUnitValues.Auto });
+        }
+        // Reader emits data-tbl-w-tw when the preview width was render-clamped (table wider
+        // than a multi-column section column) — the ORIGINAL w:tblW dxa must win over the
+        // compressed pixel width, or every save would persist the render-only compression.
+        else if (int.TryParse(node.GetAttributeValue("data-tbl-w-tw", ""), out var tblWTw) && tblWTw > 0)
+        {
+            tableProps.Append(new TableWidth { Width = tblWTw.ToString(), Type = TableWidthUnitValues.Dxa });
         }
         else if (tableWidthMatch.Success)
         {
@@ -4766,7 +4829,20 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             }
             hasSpacing = true;
         }
-        
+
+        // Reader marks w:beforeAutospacing / w:afterAutospacing with CSS custom properties
+        // (the auto side emits no margin) — restore the flags so Word keeps auto-spacing.
+        if (Regex.IsMatch(style, @"--w-before-auto\s*:\s*1"))
+        {
+            spacing.BeforeAutoSpacing = true;
+            hasSpacing = true;
+        }
+        if (Regex.IsMatch(style, @"--w-after-auto\s*:\s*1"))
+        {
+            spacing.AfterAutoSpacing = true;
+            hasSpacing = true;
+        }
+
         if (hasSpacing)
             props.Append(spacing);
 

@@ -269,6 +269,14 @@ export class EditorToolbarComponent {
    */
   private lastManualFontSizeChange = 0;
 
+  /**
+   * Same anti-stomp guard for the font FAMILY (parity with lastManualFontSizeChange): right
+   * after the user picks a family, the editor's read-back (computed style around the fresh
+   * ZWS span, or a selectionchange racing the DOM update) may still report the OLD font —
+   * without the window it would overwrite the just-picked value in the combobox.
+   */
+  private lastManualFontFamilyChange = 0;
+
   // Stan dialogów
   showLinkDialog = signal(false);
   showStyleDropdown = signal(false);
@@ -350,8 +358,10 @@ export class EditorToolbarComponent {
 
     // Update the font name from the caret/selection. Skip while the user is
     // typing in the combobox, otherwise a selectionChange read-back would stomp
-    // the draft. Normalisation is delegated to the shared provider (item 7).
-    if (!this.fontEditing) {
+    // the draft; skip also right after a manual pick (stale read-back window,
+    // same rule as font size above). Normalisation is delegated to the shared
+    // provider (item 7).
+    if (!this.fontEditing && Date.now() - this.lastManualFontFamilyChange > 300) {
       this.fontMixed.set(!!state.fontMixed);
       const rawFont = state.currentStyle.fontFamily ?? state.fontFamily;
       if (!state.fontMixed && rawFont) {
@@ -573,6 +583,7 @@ export class EditorToolbarComponent {
     if (this.fontMixed() || canonical !== this.selectedFontFamily()) {
       this.selectedFontFamily.set(canonical);
       this.fontMixed.set(false);
+      this.lastManualFontFamilyChange = Date.now();
       this.fontFamilyChange.emit(canonical);
     }
     return canonical;

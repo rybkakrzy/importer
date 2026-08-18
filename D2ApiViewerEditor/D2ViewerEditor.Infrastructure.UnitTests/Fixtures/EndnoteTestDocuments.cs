@@ -236,6 +236,47 @@ internal static class EndnoteTestDocuments
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Like <see cref="EndnoteWithNumberFormat"/>, but the original w:endnotePr carries the
+    /// FULL property set (numFmt + numStart + numRestart + separator references) — used to
+    /// assert the preserving export merges numStart/numRestart with a model-driven numFmt
+    /// instead of wiping them.
+    /// </summary>
+    internal static byte[] EndnoteWithFullNumberProperties(
+        NumberFormatValues numFmt, int numStart, RestartNumberValues numRestart)
+    {
+        using var ms = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+            body.Append(new Paragraph(TextRun("Zdanie"), EndnoteReferenceRun(1), TextRun(".")));
+
+            var endnotesPart = main.AddNewPart<EndnotesPart>();
+            var endnotesRoot = new Endnotes();
+            AppendTechnicalSeparators(endnotesRoot);
+            endnotesRoot.Append(UserEndnote(1, new Paragraph(AutoNumberMarkRun(), TextRun("Przypis końcowy."))));
+            endnotesPart.Endnotes = endnotesRoot;
+            endnotesPart.Endnotes.Save();
+
+            // CT_EdnDocProps child order: numFmt, numStart, numRestart, endnote refs.
+            var settingsPart = main.AddNewPart<DocumentSettingsPart>();
+            settingsPart.Settings = new Settings(
+                new EndnoteDocumentWideProperties(
+                    new NumberingFormat { Val = numFmt },
+                    new NumberingStart { Val = (ushort)numStart },
+                    new NumberingRestart { Val = numRestart },
+                    new EndnoteSpecialReference { Id = -1 },
+                    new EndnoteSpecialReference { Id = 0 }));
+            settingsPart.Settings.Save();
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     private static byte[] Build(Action<Endnotes> buildEndnotes, Action<Body> buildBody)
     {
         using var ms = new MemoryStream();

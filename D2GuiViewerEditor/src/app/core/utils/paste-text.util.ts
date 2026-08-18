@@ -12,9 +12,11 @@ const BLOCK_TAGS = new Set([
 
 /**
  * Collapses clipboard whitespace into something predictable for a plain-text
- * paste: normalizes newlines, drops invisible characters, squeezes runs of
- * spaces, and caps consecutive blank lines at one (Word-like behavior).
- * Tabs are preserved because they carry table/column structure (Excel TSV).
+ * paste: normalizes newlines, drops invisible characters, and caps consecutive
+ * blank lines at one (Word-like behavior). Runs of spaces are preserved —
+ * Word's "Keep Text Only" keeps consecutive spaces (the editor renders them
+ * faithfully under pre-wrap). Tabs are preserved because they carry
+ * table/column structure (Excel TSV).
  */
 export function normalizeWhitespace(text: string): string {
   return text
@@ -22,7 +24,6 @@ export function normalizeWhitespace(text: string): string {
     .replace(/ /g, ' ')
     .replace(/[​-‍﻿]/g, '')
     .replace(/[ \t]*\n[ \t]*/g, '\n')
-    .replace(/ {2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]+$/gm, '')
     .trim();

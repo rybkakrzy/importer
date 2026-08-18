@@ -194,10 +194,12 @@
 
 /* Nośnik tabulatora (reader: span z literalnym \t, min-width:2em) — pod odziedziczonym
    pre-wrap literalny tab renderowałby się jako skok do stopu i zmieniał szerokość boksu;
-   normal przywraca dotychczasowe 2em (znak \t w DOM zostaje — round-trip nietknięty). */
+   normal przywraca dotychczasowe 2em (znak \t w DOM zostaje — round-trip nietknięty).
+   !important: the leader-path carrier arrives with inline white-space:pre, which would
+   beat this rule and render the literal \t as a real tab jump on top of the 2em box. */
 .editor-content span[style*='min-width:2em'],
 .page-overflow-content span[style*='min-width:2em'] {
-  white-space: normal;
+  white-space: normal !important;
 }
 
 /* Rozkład interlinii jak w Wordzie (ADR-0085, koryguje ADR-0079): Word kotwiczy zawartość
@@ -734,7 +736,7 @@ span.docx-tab-leader[data-leader='heavy']::after {
 
 :is(.header-editor-content, .footer-editor-content, .header-display, .footer-display)
   span[style*='min-width:2em'] {
-  white-space: normal;
+  white-space: normal !important;
 }
 
 :is(.editor-content, .header-editor-content, .footer-editor-content) .editor-image-wrapper:hover {
@@ -999,7 +1001,7 @@ body.image-moving * {
 /* Znacznik końca akapitu ¶ — inline-block o szerokości 0 (glif „wystaje" za ostatni
    znak przez overflow, bez wpływu na zawijanie). Dotyczy też nagłówków i punktów list,
    jak w Wordzie. */
-:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li, blockquote, pre)::after {
   content: '¶';
   display: inline-block;
   width: 0;
@@ -1017,7 +1019,7 @@ body.image-moving * {
    — do NOWEJ linii, rozpychając blok o linię względem pomiaru paginacji (znaczniki muszą
    mieć zerowy wpływ na układ). Klasę nadaje overlay (_renderFormattingMarksOverlay),
    który sam maluje ¶ w tej samej linii zaraz za ↵. */
-:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li).fmt-trailing-br::after {
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li, blockquote, pre).fmt-trailing-br::after {
   content: none;
 }
 
@@ -1201,7 +1203,7 @@ body.image-moving * {
   }
 
   /* Znaczniki „Pokaż wszystko" są nie-drukowalne (jak w Wordzie). */
-  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li)::after,
+  :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li, blockquote, pre)::after,
   :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-tab-seg::before,
   :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-tab-leader::before,
   :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks span[style*='min-width:2em']::before,
@@ -1218,6 +1220,13 @@ body.image-moving * {
   :is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks .docx-column-break {
     height: 0;
     border: none;
+  }
+
+  /* Focus dimming (screen-only): print everything at full opacity. */
+  .page-header:not(.editing) .header-display,
+  .page-footer:not(.editing) .footer-display,
+  .wysiwyg-editor-wrapper.band-editing :is(.editor-content, .footnotes-region, .endnotes-region) {
+    opacity: 1;
   }
 }
 
@@ -1295,6 +1304,21 @@ body.image-moving * {
 .wysiwyg-editor-wrapper.read-only .page-footer:hover {
   background-color: transparent;
   border-color: transparent;
+}
+
+/* Word-like focus dimming: while the body is edited, idle header/footer bands are
+   greyed; while a band is edited (.band-editing on the wrapper), the body and note
+   regions are greyed instead. Presentation-only: opacity (never color) so inline run
+   colors and images dim uniformly and exported content is untouched. Layout is not
+   affected — pagination band-height measurements stay valid. Applies in read-only
+   too (Word's viewer shows headers greyed as well). */
+.page-header:not(.editing) .header-display,
+.page-footer:not(.editing) .footer-display {
+  opacity: 0.5;
+}
+
+.wysiwyg-editor-wrapper.band-editing :is(.editor-content, .footnotes-region, .endnotes-region) {
+  opacity: 0.5;
 }
 
 /* Stan edycji */
@@ -1563,6 +1587,9 @@ body.image-moving * {
   cursor: pointer;
   user-select: none;
   padding: 0 1px;
+  /* Word superscript is ~65% of the run size; UA default (smaller ≈ 83%) renders the
+     in-body mark visibly too large. Matches the 0.65em note-area label. */
+  font-size: 0.65em;
 }
 
 /* Region przypisów dolnych — na DOLE strony (jak w MS Word), tuż nad stopką. Kotwica od dołu
@@ -1696,7 +1723,7 @@ body.image-moving * {
 
 /* Nośnik tabulatora w przypisie — jak w body: pod pre-wrap literalny \t skakałby do stopu. */
 .footnote-item-content span[style*='min-width:2em'] {
-  white-space: normal;
+  white-space: normal !important;
 }
 
 /* Pole daty AUTO-aktualizowane (ADR-0084): atomowy inline (contenteditable=false z readera/

@@ -169,6 +169,96 @@ public class EndnoteFidelityTests
     }
 
     [Test]
+    public void PreservingExport_ModelFormat_MergesOriginalNumStartAndNumRestart()
+    {
+        // ApplyNoteNumberFormats regeneruje endnotePr z samym numFmt (format z modelu
+        // WYGRYWA), ale oryginalne w:numStart / w:numRestart nie mogą przy tym zginąć —
+        // PreserveNoteProperties scala brakujące dzieci z oryginalnego settings.xml.
+        var original = EndnoteTestDocuments.EndnoteWithFullNumberProperties(
+            NumberFormatValues.LowerRoman, numStart: 5, RestartNumberValues.EachSection);
+        var content = Import(original);
+
+        var result = _writer.ConvertPreservingPackage(content.Html, new MemoryStream(original),
+            content.Metadata, content.Header, content.Footer, content.Margins, content.PageSize,
+            content.SectionHeadersFooters, content.Footnotes, content.Endnotes,
+            footnoteNumberFormat: null, endnoteNumberFormat: "decimal");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(result), false);
+        var settings = doc.MainDocumentPart!.DocumentSettingsPart!.Settings!;
+        var endnotePr = settings.GetFirstChild<EndnoteDocumentWideProperties>()!;
+        endnotePr.GetFirstChild<NumberingFormat>()!.Val!.Value.Should().Be(NumberFormatValues.Decimal,
+            "format z modelu edytora wygrywa z oryginałem");
+        endnotePr.GetFirstChild<NumberingStart>().Should().NotBeNull("w:numStart nie może zginąć przy scaleniu");
+        ((int)endnotePr.GetFirstChild<NumberingStart>()!.Val!.Value).Should().Be(5);
+        endnotePr.GetFirstChild<NumberingRestart>()!.Val!.Value.Should().Be(RestartNumberValues.EachSection);
+        settings.Descendants<EndnoteSpecialReference>().Should().BeEmpty(
+            "odwołania do separatorów nie mogą wrócić przy scalaniu");
+
+        // Kolejność dzieci CT_EdnDocProps (numFmt → numStart → numRestart) musi przejść walidację.
+        var validator = new OpenXmlValidator(FileFormatVersions.Office2013);
+        var errors = validator.Validate(doc.MainDocumentPart.DocumentSettingsPart).ToList();
+        errors.Should().BeEmpty("scalony settings.xml musi być schema-valid: {0}",
+            string.Join(" | ", errors.Select(e => e.Description)));
+    }
+
+    // ---------- Reference mark superscript (single, not doubled) ----------
+
+    [Test]
+    public void Import_ReferenceStyledBySuperscriptCharacterStyle_RendersSingleSupWithoutCssRaise()
+    {
+        // Znacznik odwołania renderuje się jako semantyczny <sup class="endnote-ref">;
+        // styl znakowy „EndnoteReference" (vertAlign=superscript) owijał go DRUGĄ warstwą
+        // vertical-align:super + font-size:smaller — cyfra podniesiona i zmniejszona 2×.
+        using var ms = new MemoryStream();
+        using (var document = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = document.AddMainDocumentPart();
+
+            var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new Style(
+                new StyleRunProperties(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript }))
+            {
+                Type = StyleValues.Character,
+                StyleId = "EndnoteReference",
+                StyleName = new StyleName { Val = "endnote reference" }
+            });
+            stylesPart.Styles.Save();
+
+            main.Document = new Document(new Body(new Paragraph(
+                new Run(new Text("Tekst")),
+                new Run(
+                    new RunProperties(new RunStyle { Val = "EndnoteReference" }),
+                    new EndnoteReference { Id = 1 }))));
+
+            var endnotesPart = main.AddNewPart<EndnotesPart>();
+            endnotesPart.Endnotes = new Endnotes(
+                new WpEndnote(new Paragraph(new Run(new Text("Treść przypisu.")))) { Id = 1 });
+            endnotesPart.Endnotes.Save();
+            main.Document.Save();
+        }
+
+        var html = _reader.Convert(new MemoryStream(ms.ToArray())).Html;
+
+        System.Text.RegularExpressions.Regex.Matches(html, "<sup").Count.Should().Be(1,
+            "znacznik odwołania ma DOKŁADNIE jeden (semantyczny) sup");
+        html.Should().Contain("class=\"endnote-ref\"");
+        html.Should().NotContain("vertical-align:super", "podniesienie niesie sam semantyczny sup");
+        html.Should().NotContain("font-size:smaller");
+    }
+
+    [Test]
+    public void Import_DirectSuperscriptOnReferenceRuns_DoesNotNestSups()
+    {
+        // Bezpośredni w:vertAlign=superscript na runie odwołania (typowy kształt Worda)
+        // otwierał DODATKOWY <sup> wokół semantycznego — zagnieżdżone sup-y.
+        var content = Import(EndnoteTestDocuments.FootnoteAndEndnote());
+
+        content.Html.Should().NotContain("<sup><sup");
+        System.Text.RegularExpressions.Regex.Matches(content.Html, "<sup").Count.Should().Be(2,
+            "jeden sup na odwołanie dolne i jeden na końcowe — bez dublowania");
+    }
+
+    [Test]
     public void Import_SingleEndnote_ProducesModelWithReferenceAndContent()
     {
         var content = Import(EndnoteTestDocuments.SingleEndnote());

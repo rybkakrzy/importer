@@ -1290,8 +1290,22 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // Bieżący rozmiar czcionki (dla nowego tekstu gdy nie ma zaznaczenia)
   private currentFontSize = 11;
   private currentFontFamily = 'Calibri';
-  private pendingFontSize: number | null = null;
-  private pendingFontFamily: string | null = null;
+
+  // ── Sticky formatting (Problem 10) ──
+  /**
+   * Style picked at a collapsed caret that must survive DOM churn. The ZWS span created by
+   * the font pickers is the only DOM carrier of the choice; when a deletion empties it the
+   * browser silently removes the span and the caret falls back into the paragraph — without
+   * this record the toolbar and the next typed character revert to the document default
+   * font. Values are CSS-ready ('Arial', '11pt').
+   */
+  private _pendingInlineStyle: { fontFamily?: string; fontSize?: string } | null = null;
+  /** Caret position the pending style is valid at; any other caret invalidates it. */
+  private _pendingStyleAnchor: { node: Node; offset: number } | null = null;
+  /** Style captured in beforeinput (delete) — re-anchored after the input event mutates the DOM. */
+  private _pendingDeleteCapture: { fontFamily?: string; fontSize?: string } | null = null;
+  /** Guard window: our own programmatic re-anchor must not be treated as the user moving away. */
+  private _pendingStyleHoldUntil = 0;
 
   // Nagłówek i stopka - stan
   private _headerHtml = signal<string>('');
@@ -1327,12 +1341,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   documentDefaultLineTw = signal<string | null>(null);
 
   /**
-   * Pojedynczy odstęp fontu dokumentu w em (metryki fontu, tabela PG-09) — CSS var
-   * `--w-line-single` na `.page`. Word dokleja dodatkowy odstęp interlinii POD linią
-   * (tekst u góry slotu), CSS rozkłada pół nad / pół pod — SCSS przesuwa tusz akapitów
-   * o pół leadingu w górę (`top: calc((1lh - var(--w-line-single))/-2)`), żeby duże
-   * mnożniki (np. „Wielokrotność 3") nie renderowały tekstu „wyśrodkowanego" w slocie.
-   * Token w em rozwiązuje się przy UŻYCIU (font-size akapitu), nie deklaracji.
+   * Single line spacing of the document font in em (font metrics, PG-09 table) — CSS var
+   * `--w-line-single` on `.page`. ADR-0085: Word anchors the ink at the BOTTOM of the line
+   * slot, so any excess leading goes ABOVE the line ("Exactly" smaller than the font clips
+   * the TOP), while CSS splits it half above / half below — so the SCSS shifts paragraph
+   * ink DOWN by half the leading (`top: calc((1lh - var(--w-line-single, 1.221em)) / 2)`)
+   * to keep large multipliers (e.g. "Multiple 3") from rendering the text centered in the
+   * slot. The em token resolves at USE time (against the paragraph font-size), not at
+   * declaration.
    */
   documentDefaultLineSingle(): string {
     return `${wordSingleFactor(this.documentDefaultFontFamily())}em`;
@@ -1587,6 +1603,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     });
     editor.addEventListener('blur', () => {
       this.saveSelection();
+      // Sticky formatting (Problem 10): leaving the editor ends the pending-style intent.
+      // (The pickers set it AFTER the blur their toolbar click causes, so this is safe.)
+      this._clearPendingInlineStyle();
     });
     editor.addEventListener('drop', (e) => {
       this.handleDrop(e);
@@ -1637,7 +1656,18 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Dwuklik/trójklik = intencja ZAZNACZENIA tekstu (słowo/akapit) — strefa resize nie
     // może go kraść: 6px od krawędzi komórki pokrywa dolną połowę glifów przy tcMar≈0,
     // więc dwuklik w słowo w ciasnej tabeli bywał połykany (preventDefault) do skutku.
-    const tableHit = event.detail >= 2 ? null : this.detectTableResizeHit(event);
+    let tableHit = event.detail >= 2 ? null : this.detectTableResizeHit(event);
+    if (tableHit) {
+      // Empty cells have no glyphs, so the _pointOverText escape hatch never fires and the
+      // 6px band claims most of a small cell's interior (freshly inserted tables have
+      // <br>-only cells) — the click never placed a caret, so no selectionchange fired and
+      // the table panel never appeared. Re-run the hit-test with a tight threshold: resize
+      // stays possible on the exact border, the interior falls through to caret placement.
+      const cell = (event.target as HTMLElement | null)?.closest?.('td, th') as HTMLTableCellElement | null;
+      if (cell && !cell.textContent?.trim()) {
+        tableHit = this.detectTableResizeHit(event, this.EMPTY_CELL_EDGE_THRESHOLD);
+      }
+    }
     if (tableHit) {
       event.preventDefault();
       event.stopPropagation();
@@ -1909,11 +1939,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   // ======= RESIZE TABEL =======
 
   private readonly TABLE_EDGE_THRESHOLD = 6; // px od krawędzi
+  // Tight band used for cells with no visible text: without glyphs the _pointOverText guard
+  // cannot fire, so the full 6px band would swallow most of the cell (see handleEditorMouseDown).
+  private readonly EMPTY_CELL_EDGE_THRESHOLD = 2; // px od krawędzi
 
   /**
    * Wykrywa czy kursor jest nad krawędzią kolumny, wiersza lub narożnikiem tabeli
    */
-  private detectTableResizeHit(event: MouseEvent): {
+  private detectTableResizeHit(event: MouseEvent, threshold: number = this.TABLE_EDGE_THRESHOLD): {
     type: 'col' | 'row' | 'table';
     table: HTMLTableElement;
     colIndex: number;
@@ -1925,7 +1958,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     if (!table) return null;
 
-    const t = this.TABLE_EDGE_THRESHOLD;
+    const t = threshold;
 
     // Sprawdź narożnik tabeli (prawy dolny)
     const tableRect = table.getBoundingClientRect();
@@ -2990,6 +3023,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const selection = window.getSelection();
 
     if (selection && this.isSelectionInEditor(selection)) {
+      // Sticky formatting (Problem 10): the pending style is tied to ONE caret position —
+      // clicking or arrowing away means the intent is gone. Our own programmatic re-anchor
+      // is protected by a short hold window (see _consumePendingDeleteCapture).
+      if (
+        this._pendingInlineStyle &&
+        Date.now() >= this._pendingStyleHoldUntil &&
+        !this._caretMatchesPendingAnchor(selection)
+      ) {
+        this._clearPendingInlineStyle();
+      }
       // Zapisuj selekcję NA BIEŻĄCO, nie tylko na `blur`. Klik w pole toolbara (np. ręczny
       // input rozmiaru czcionki) przenosi fokus poza edytor — zdarzenie `blur` bywa zbyt późne
       // (selekcja contenteditable już znika), więc `saveSelection()` na blur nic nie zapisywał
@@ -3020,6 +3063,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const footer = this.footerContentEl?.nativeElement;
     if (footer && footer.contains(selection.anchorNode)) return true;
     return false;
+  }
+
+  /**
+   * Returns the page `.editor-content` element hosting the given node (multi-page aware),
+   * or null when the node lives outside every page. Callers that resolved only the ACTIVE
+   * page ref (`editorContent`) treated carets on other pages as "outside the editor" —
+   * e.g. the table panel never appeared for tables on page 2+ (Problem 11).
+   */
+  findEditorContentContaining(node: Node | null | undefined): HTMLElement | null {
+    if (!node) return null;
+    for (const ref of this.pageEditorRefs?.toArray() ?? []) {
+      if (ref.nativeElement.contains(node)) return ref.nativeElement;
+    }
+    return null;
   }
 
   /**
@@ -3557,12 +3614,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     // Tab: w tabeli nawigacja po komórkach jak w MS Word (13259982) — indent robił
-    // „nieoczekiwany efekt wizualny" i nie ruszał kursora. Poza tabelą — wcięcie jak dotąd.
+    // „nieoczekiwany efekt wizualny" i nie ruszał kursora. Poza tabelą jak Word:
+    // Tab z kolapsowaną karetką W ŚRODKU bloku wstawia znak tabulacji; wcięcie tylko
+    // na początku bloku lub przy zaznaczeniu. Shift+Tab — outdent jak dotąd.
     if (e.key === 'Tab') {
       e.preventDefault();
       if (this._handleTableTab(e.shiftKey)) return;
       if (e.shiftKey) {
         this.executeCommand('outdent');
+        return;
+      }
+      const sel = window.getSelection();
+      const collapsed = !!sel && sel.rangeCount > 0 && sel.isCollapsed;
+      if (collapsed && !this._isCaretAtBlockStart()) {
+        this._insertTabAtCaret();
       } else {
         this.executeCommand('indent');
       }
@@ -3634,6 +3699,72 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const lastRow = prevFragment?.rows[prevFragment.rows.length - 1];
     if (lastRow?.cells.length) { this._focusTableCell(lastRow.cells[lastRow.cells.length - 1]); return true; }
     return true; // pierwsza komórka tabeli: jak Word — nic, ale bez outdentu
+  }
+
+  /**
+   * True when the collapsed caret sits at the very start of its containing block
+   * (P/H1-H6/LI or the contenteditable root): only zero-width/empty nodes precede it.
+   * Word indents on Tab only in that position — elsewhere Tab inserts a tab character.
+   */
+  private _isCaretAtBlockStart(): boolean {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return false;
+    const range = sel.getRangeAt(0);
+    const isZeroWidthOnly = (text: string | null) =>
+      (text ?? '').replace(/[​‌‍﻿]/g, '') === '';
+    const editor = this.getActiveEditor();
+    const isBlock = (el: HTMLElement) =>
+      /^(P|H[1-6]|LI)$/.test(el.tagName) || el === editor || el.getAttribute('contenteditable') === 'true';
+
+    let node: Node = range.startContainer;
+
+    // Content before the caret inside the start node itself.
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!isZeroWidthOnly((node.textContent ?? '').slice(0, range.startOffset))) return false;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      for (let i = 0; i < range.startOffset; i++) {
+        const child = el.childNodes[i];
+        if (child.nodeName === 'BR' || child.nodeName === 'IMG' || !isZeroWidthOnly(child.textContent)) return false;
+      }
+      if (isBlock(el)) return true;
+    }
+
+    // Walk up to the block, checking that every left sibling on the way is empty.
+    while (node.parentNode) {
+      for (let sib = node.previousSibling; sib; sib = sib.previousSibling) {
+        if (sib.nodeName === 'BR' || sib.nodeName === 'IMG' || !isZeroWidthOnly(sib.textContent)) return false;
+      }
+      const parent = node.parentNode;
+      if (parent.nodeType === Node.ELEMENT_NODE && isBlock(parent as HTMLElement)) return true;
+      node = parent;
+    }
+    return true;
+  }
+
+  /**
+   * Inserts the same tab carrier the DOCX reader emits (inline-block span with a
+   * literal \t and min-width:2em) at the collapsed caret. The export pipeline
+   * already converts both the carrier span and the literal \t to w:tab.
+   */
+  private _insertTabAtCaret(): void {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    const span = document.createElement('span');
+    // Exact reader attribute string — stylesheet rules match [style*='min-width:2em'].
+    span.setAttribute('style', 'display:inline-block;min-width:2em');
+    span.textContent = '\t';
+    range.insertNode(span);
+
+    // Caret AFTER the carrier (insertNode does not move the selection).
+    const caret = document.createRange();
+    caret.setStartAfter(span);
+    caret.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(caret);
+    this.savedSelection = caret.cloneRange();
+    this.onContentChange();
   }
 
   /** Sąsiedni fragment tej samej logicznej tabeli (podział między strony), ±1 w kolejności DOM. */
@@ -4064,17 +4195,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     if (!selection || selection.rangeCount === 0) {
-      // Brak selekcji - ustaw dla następnego tekstu
-      this.pendingFontSize = size;
+      // No caret to anchor the choice at — nothing to apply it to.
       return;
     }
 
     const range = selection.getRangeAt(0);
 
     if (range.collapsed) {
-      // Kursor bez zaznaczenia - ustaw rozmiar dla następnie wpisywanego tekstu.
-      this.pendingFontSize = size;
-
       // Jeśli kursor siedzi wewnątrz istniejącego ZWS-spana (wstawionego przez
       // poprzedni klik +/-), aktualizuj jego font-size zamiast zagnieżdżać nowy.
       // Dzięki temu nie powstają stosy spanów z różnymi rozmiarami, które utrzymują
@@ -4096,6 +4223,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         selection.removeAllRanges();
         selection.addRange(newRange);
         this.savedSelection = newRange.cloneRange();
+        // Sticky formatting: remember the pick so it survives the span being dropped
+        // by a later deletion (Problem 10).
+        this._setPendingInlineStyle({ fontSize: `${size}pt` }, newRange);
         this.updateFormattingState();
         return;
       }
@@ -4121,6 +4251,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // Zapisz nową pozycję karetki, żeby kolejne klik +/- znalazły żywą selekcję
       // a nie zdezaktualizowaną z poprzedniego zapisu.
       this.savedSelection = newRange.cloneRange();
+      this._setPendingInlineStyle({ fontSize: `${size}pt` }, newRange);
       this.updateFormattingState();
       return;
     }
@@ -4142,95 +4273,91 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aplikuje rozmiar czcionki do zaznaczenia - bez execCommand
    */
   private applyFontSizeToSelection(size: number, selection: Selection, range: Range): void {
-    const editor = this.getActiveEditor();
-    if (!editor) return;
-
-    // Wyodrębnij zawartość zaznaczenia
-    const fragment = range.extractContents();
-
-    // insideStyledSpan = true gdy węzeł jest już dzieckiem spana z font-size;
-    // węzły tekstowe w tym kontekście NIE powinny być owijane kolejnym spanem —
-    // inaczej każdy cykl zwiększ/zmniejsz dodaje kolejną warstwę zagnieżdżenia,
-    // a każda warstwa wnosi swój line-height do wysokości linii (ogromny odstęp).
-    const processNode = (node: Node, insideStyledSpan = false): Node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        if (insideStyledSpan) {
-          // Rodzic span już ma ustawiony font-size — klonuj tekst bez owijania.
-          return node.cloneNode(true);
-        }
-        // Tekst na poziomie bloku (bezpośrednio w <p>, <li> itp.) — opakuj w span.
-        const span = document.createElement('span');
-        span.style.fontSize = `${size}pt`;
-        span.textContent = node.textContent;
-        return span;
-      }
-
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const element = node as HTMLElement;
-
-        // Jeśli to span lub font — nadpisz font-size, zachowaj inne style.
-        if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
-          const newSpan = document.createElement('span');
-
-          if (element.style.cssText) {
-            newSpan.style.cssText = element.style.cssText;
-          }
-          newSpan.style.fontSize = `${size}pt`;
-
-          if (element.tagName === 'FONT') {
-            const fontEl = element as HTMLFontElement;
-            if (fontEl.face) newSpan.style.fontFamily = fontEl.face;
-            if (fontEl.color) newSpan.style.color = fontEl.color;
-          }
-
-          // Dzieci spana: przekaż flagę insideStyledSpan=true, żeby teksty
-          // nie były ponownie owijane (eliminuje rosnące zagnieżdżenie).
-          Array.from(element.childNodes).forEach(child => {
-            newSpan.appendChild(processNode(child, true));
-          });
-
-          return newSpan;
-        }
-
-        // Dla innych elementów (b, i, u, sub, sup itp.) — zachowaj, przetwórz dzieci.
-        // Dziedzicz flagę insideStyledSpan (gdy jesteśmy już w strefie spana z fontem).
-        const clone = element.cloneNode(false) as HTMLElement;
-        Array.from(element.childNodes).forEach(child => {
-          clone.appendChild(processNode(child, insideStyledSpan));
-        });
-        return clone;
-      }
-
-      return node.cloneNode(true);
-    };
-    
-    // Przetwórz fragment - zbierz węzły do późniejszego zaznaczenia
-    const newFragment = document.createDocumentFragment();
-    const insertedNodes: Node[] = [];
-    Array.from(fragment.childNodes).forEach(child => {
-      const processed = processNode(child);
-      insertedNodes.push(processed);
-      newFragment.appendChild(processed);
+    this._applyInlineStyleToRange(range, span => {
+      span.style.fontSize = `${size}pt`;
     });
-    
-    // Wstaw przetworzony fragment
-    range.insertNode(newFragment);
-    
-    // Przywróć zaznaczenie na wstawionej zawartości
-    if (insertedNodes.length > 0) {
-      const newRange = document.createRange();
-      const firstNode = insertedNodes[0];
-      const lastNode = insertedNodes[insertedNodes.length - 1];
-      
-      newRange.setStartBefore(firstNode);
-      newRange.setEndAfter(lastNode);
-      
-      selection.removeAllRanges();
-      selection.addRange(newRange);
+  }
+
+  /**
+   * Wraps every text node intersecting `range` in an inline <span> styled by `apply`,
+   * IN PLACE — deliberately without Range.extractContents()/insertNode(). The old
+   * extract/reinsert approach split the boundary blocks (leaving empty <p> shells at
+   * both ends) and, for ranges spanning page boundaries (Ctrl+A → selectAllContent
+   * covers the .editor-content of EVERY page), it ripped the page scaffolding apart
+   * and re-inserted its clones as content — the "new phantom page appears after
+   * Ctrl+A + color change" bug. Wrapping the innermost text keeps all structure
+   * intact and still wins the CSS cascade over any styled ancestor span. Only
+   * document text surfaces are touched; page chrome between editors and
+   * non-editable islands (markers, labels) are skipped.
+   */
+  private _applyInlineStyleToRange(range: Range, apply: (span: HTMLElement) => void): void {
+    if (range.collapsed) return;
+
+    let startContainer: Node = range.startContainer;
+    let startOffset = range.startOffset;
+    let endContainer: Node = range.endContainer;
+    const endOffset = range.endOffset;
+
+    // Split the boundary text nodes (end first, so the start offset stays valid).
+    if (endContainer.nodeType === Node.TEXT_NODE && endOffset < (endContainer as Text).length) {
+      (endContainer as Text).splitText(endOffset);
     }
-    
-    // Normalizuj edytor (połącz sąsiadujące węzły tekstowe)
-    editor.normalize();
+    if (startContainer.nodeType === Node.TEXT_NODE && startOffset > 0) {
+      const right = (startContainer as Text).splitText(startOffset);
+      if (endContainer === startContainer) endContainer = right;
+      startContainer = right;
+      startOffset = 0;
+    }
+
+    // Element-level range: the split halves OUTSIDE the selection touch it at a
+    // boundary and must not count as intersecting.
+    const norm = document.createRange();
+    if (startContainer.nodeType === Node.TEXT_NODE) norm.setStartBefore(startContainer);
+    else norm.setStart(startContainer, startOffset);
+    if (endContainer.nodeType === Node.TEXT_NODE) norm.setEndAfter(endContainer);
+    else norm.setEnd(endContainer, endOffset);
+
+    const root = norm.commonAncestorContainer;
+    const rootEl = root.nodeType === Node.ELEMENT_NODE ? root as Element : root.parentElement;
+    if (!rootEl) return;
+
+    const targets: Text[] = [];
+    const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!norm.intersectsNode(n)) continue;
+      if (!(n.textContent ?? '').length) continue;
+      const el = n.parentElement;
+      if (!el) continue;
+      if (el.closest('[contenteditable="false"]')) continue;
+      // A cross-page range (Ctrl+A → selectAllContent) walks through page chrome:
+      // idle band displays and note regions between the page editors. That is not
+      // document text — skip it, but keep the band/footnote EDITORS editable text.
+      if (el.closest('.page-header, .page-footer, .footnotes-region, .endnotes-region')
+        && !el.closest('.header-editor-content, .footer-editor-content, .footnote-item-content')) continue;
+      targets.push(n as Text);
+    }
+
+    for (const n of targets) {
+      const parent = n.parentElement;
+      if (!parent) continue;
+      if (parent.tagName === 'SPAN' && parent.childNodes.length === 1) {
+        // Reuse the sole-child wrapper — repeated applications stay one layer deep
+        // (each extra span layer used to contribute its own line-height).
+        apply(parent);
+        continue;
+      }
+      const span = document.createElement('span');
+      apply(span);
+      parent.insertBefore(span, n);
+      span.appendChild(n);
+    }
+
+    rootEl.normalize();
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      sel.addRange(norm);
+    }
   }
 
   /**
@@ -4264,16 +4391,13 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     if (!selection || selection.rangeCount === 0) {
-      this.pendingFontFamily = fontFamily;
+      // No caret to anchor the choice at — nothing to apply it to.
       return;
     }
 
     const range = selection.getRangeAt(0);
-    
-    if (range.collapsed) {
-      // Kursor bez zaznaczenia - ustaw czcionkę dla następnie wpisywanego tekstu.
-      this.pendingFontFamily = fontFamily;
 
+    if (range.collapsed) {
       // Jeśli kursor już siedzi w ZWS-spanie (z poprzedniego wyboru czcionki), zaktualizuj
       // jego font-family zamiast zagnieżdżać kolejny pusty span (analogicznie do `setFontSize`).
       const zwsChar = String.fromCharCode(0x200b);
@@ -4293,6 +4417,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         selection.removeAllRanges();
         selection.addRange(updRange);
         this.savedSelection = updRange.cloneRange();
+        // Sticky formatting: remember the pick so it survives the span being dropped
+        // by a later deletion (Problem 10).
+        this._setPendingInlineStyle({ fontFamily }, updRange);
         this.updateFormattingState();
         return;
       }
@@ -4312,6 +4439,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // setFontSize): a follow-up combobox pick restores INTO the span instead of the
       // pre-span caret, and the selector reflects the chosen font before any typing.
       this.savedSelection = newRange.cloneRange();
+      this._setPendingInlineStyle({ fontFamily }, newRange);
       this.updateFormattingState();
 
       return;
@@ -4358,82 +4486,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aplikuje rodzinę czcionki do zaznaczenia
    */
   private applyFontFamilyToSelection(fontFamily: string, selection: Selection, range: Range): void {
-    const editor = this.getActiveEditor();
-    if (!editor) return;
-
-    // Wyodrębnij zawartość zaznaczenia
-    const fragment = range.extractContents();
-    
-    // Funkcja pomocnicza do rekurencyjnego przetwarzania węzłów
-    const processNode = (node: Node): Node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const span = document.createElement('span');
-        span.style.fontFamily = fontFamily;
-        span.textContent = node.textContent;
-        return span;
-      }
-      
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const element = node as HTMLElement;
-        
-        if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
-          const newSpan = document.createElement('span');
-          
-          if (element.style.cssText) {
-            newSpan.style.cssText = element.style.cssText;
-          }
-          newSpan.style.fontFamily = fontFamily;
-          
-          if (element.tagName === 'FONT') {
-            const fontEl = element as HTMLFontElement;
-            if (fontEl.size) {
-              const sizeMap: Record<string, number> = {
-                '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36
-              };
-              newSpan.style.fontSize = `${sizeMap[fontEl.size] || 11}pt`;
-            }
-            if (fontEl.color) {
-              newSpan.style.color = fontEl.color;
-            }
-          }
-          
-          Array.from(element.childNodes).forEach(child => {
-            newSpan.appendChild(processNode(child));
-          });
-          
-          return newSpan;
-        }
-        
-        const clone = element.cloneNode(false) as HTMLElement;
-        Array.from(element.childNodes).forEach(child => {
-          clone.appendChild(processNode(child));
-        });
-        return clone;
-      }
-      
-      return node.cloneNode(true);
-    };
-    
-    const newFragment = document.createDocumentFragment();
-    const insertedNodes: Node[] = [];
-    Array.from(fragment.childNodes).forEach(child => {
-      const processed = processNode(child);
-      insertedNodes.push(processed);
-      newFragment.appendChild(processed);
+    this._applyInlineStyleToRange(range, span => {
+      span.style.fontFamily = fontFamily;
     });
-    
-    range.insertNode(newFragment);
-    
-    // Przywróć zaznaczenie
-    if (insertedNodes.length > 0) {
-      const newRange = document.createRange();
-      newRange.setStartBefore(insertedNodes[0]);
-      newRange.setEndAfter(insertedNodes[insertedNodes.length - 1]);
-      selection.removeAllRanges();
-      selection.addRange(newRange);
-    }
-    
-    editor.normalize();
   }
 
   /**
@@ -4459,80 +4514,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Aplikuje kolor do zaznaczenia
    */
   private applyColorToSelection(color: string, selection: Selection, range: Range): void {
-    const editor = this.getActiveEditor();
-    if (!editor) return;
-
-    const fragment = range.extractContents();
-    
-    const processNode = (node: Node): Node => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const span = document.createElement('span');
-        span.style.color = color;
-        span.textContent = node.textContent;
-        return span;
-      }
-      
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        const element = node as HTMLElement;
-        
-        if (element.tagName === 'SPAN' || element.tagName === 'FONT') {
-          const newSpan = document.createElement('span');
-          
-          if (element.style.cssText) {
-            newSpan.style.cssText = element.style.cssText;
-          }
-          newSpan.style.color = color;
-          
-          if (element.tagName === 'FONT') {
-            const fontEl = element as HTMLFontElement;
-            if (fontEl.size) {
-              const sizeMap: Record<string, number> = {
-                '1': 8, '2': 10, '3': 12, '4': 14, '5': 18, '6': 24, '7': 36
-              };
-              newSpan.style.fontSize = `${sizeMap[fontEl.size] || 11}pt`;
-            }
-            if (fontEl.face) {
-              newSpan.style.fontFamily = fontEl.face;
-            }
-          }
-          
-          Array.from(element.childNodes).forEach(child => {
-            newSpan.appendChild(processNode(child));
-          });
-          
-          return newSpan;
-        }
-        
-        const clone = element.cloneNode(false) as HTMLElement;
-        Array.from(element.childNodes).forEach(child => {
-          clone.appendChild(processNode(child));
-        });
-        return clone;
-      }
-      
-      return node.cloneNode(true);
-    };
-    
-    const newFragment = document.createDocumentFragment();
-    const insertedNodes: Node[] = [];
-    Array.from(fragment.childNodes).forEach(child => {
-      const processed = processNode(child);
-      insertedNodes.push(processed);
-      newFragment.appendChild(processed);
+    this._applyInlineStyleToRange(range, span => {
+      span.style.color = color;
     });
-    
-    range.insertNode(newFragment);
-    
-    // Przywróć zaznaczenie
-    if (insertedNodes.length > 0) {
-      const newRange = document.createRange();
-      newRange.setStartBefore(insertedNodes[0]);
-      newRange.setEndAfter(insertedNodes[insertedNodes.length - 1]);
-      selection.removeAllRanges();
-      selection.addRange(newRange);
-    }
-    
-    editor.normalize();
   }
 
   /**
@@ -4825,13 +4809,21 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const range = bookmark.cloneRange();
     range.deleteContents(); // replace the target selection when it was non-empty
 
-    const fragment = this.buildPlainTextFragment(text);
-    const lastNode = fragment.lastChild;
-    // Insert at BLOCK level, escaping any inline formatting wrappers (b/i/u/font/
-    // span[style]) around the caret. Otherwise a bare text node inherits the run it
-    // sits in — e.g. right after copying colored text, when the source selection is
-    // still the paste target, "bez formatowania" would re-emit the source color/bold.
-    this.insertFragmentOutsideInlineFormatting(range, fragment);
+    // Word's "Keep Text Only" turns every newline into a PARAGRAPH boundary (¶),
+    // not a soft line break — a multi-line paste must split the host paragraph.
+    const lines = text.split('\n');
+    let lastNode: Node | null;
+    if (lines.length > 1) {
+      lastNode = this._pastePlainLinesAsParagraphs(range, lines);
+    } else {
+      const fragment = this.buildPlainTextFragment(text);
+      lastNode = fragment.lastChild;
+      // Insert at BLOCK level, escaping any inline formatting wrappers (b/i/u/font/
+      // span[style]) around the caret. Otherwise a bare text node inherits the run it
+      // sits in — e.g. right after copying colored text, when the source selection is
+      // still the paste target, "bez formatowania" would re-emit the source color/bold.
+      this.insertFragmentOutsideInlineFormatting(range, fragment);
+    }
 
     const sel = window.getSelection();
     if (sel && lastNode) {
@@ -4848,8 +4840,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
-   * Builds a DOM fragment for plain text: newlines become <br>, the rest are text
-   * nodes. Text nodes (not innerHTML) guarantee that `<`, `>`, `&` stay literal — the
+   * Builds a DOM fragment for a SINGLE-LINE plain-text paste (multi-line pastes go
+   * through _pastePlainLinesAsParagraphs — Word models newlines as paragraph marks).
+   * Text nodes (not innerHTML) guarantee that `<`, `>`, `&` stay literal — the
    * pasted string is never parsed as HTML.
    */
   private buildPlainTextFragment(text: string): DocumentFragment {
@@ -4878,6 +4871,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * fall back to a plain insert at the caret.
    */
   private insertFragmentOutsideInlineFormatting(range: Range, fragment: DocumentFragment): void {
+    const { container, offset } = this._liftRangeToBlockLevel(range);
+    const insertAt = document.createRange();
+    insertAt.setStart(container, Math.max(0, offset));
+    insertAt.collapse(true);
+    insertAt.insertNode(fragment);
+  }
+
+  /**
+   * Resolves the caret to a (block container, child index) position, splitting every
+   * inline formatting wrapper (b/i/u/font/span[style], …) between the caret and its
+   * block on the way up. Left halves stay, right halves move into clones after them,
+   * empty halves are pruned — the returned position sits directly inside the block.
+   */
+  private _liftRangeToBlockLevel(range: Range): { container: Node; offset: number } {
     const editor = this.getActiveEditor();
     const BLOCK_TAGS = ['P', 'DIV', 'LI', 'TD', 'TH', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE'];
     const isBlock = (node: Node | null): boolean =>
@@ -4914,10 +4921,81 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       offset = idx;
     }
 
-    const insertAt = document.createRange();
-    insertAt.setStart(container, Math.max(0, offset));
-    insertAt.collapse(true);
-    insertAt.insertNode(fragment);
+    return { container, offset };
+  }
+
+  /**
+   * Multi-line "Wklej bez formatowania": every newline is a PARAGRAPH boundary, like
+   * Word's Keep Text Only. The host paragraph is split at the caret — line 1 joins the
+   * head, the last line joins the tail (keeping the text after the caret), middle lines
+   * become sibling blocks cloned from the host shell (destination paragraph formatting,
+   * matching Word). Returns the node the caret should land after (end of pasted text).
+   */
+  private _pastePlainLinesAsParagraphs(range: Range, lines: string[]): Node | null {
+    const editor = this.getActiveEditor();
+    if (!editor) return null;
+    const { container, offset } = this._liftRangeToBlockLevel(range);
+
+    const PARA_TAGS = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'PRE'];
+    const host = container !== editor && container.nodeType === Node.ELEMENT_NODE
+      && PARA_TAGS.includes((container as Element).tagName) ? container as Element : null;
+
+    // New blocks inherit the destination paragraph's shell, but never its identity or
+    // pagination/presentation markers (a cloned data-split-* id would make the merge
+    // pass weld unrelated paragraphs together).
+    const shell = (): Element => {
+      const el = host ? host.cloneNode(false) as Element : document.createElement('p');
+      el.removeAttribute('id');
+      for (const attr of Array.from(el.attributes)) {
+        if (attr.name.startsWith('data-split')) el.removeAttribute(attr.name);
+      }
+      el.classList.remove('fmt-trailing-br');
+      if (!el.getAttribute('class')) el.removeAttribute('class');
+      return el;
+    };
+    const fill = (el: Element, line: string) => {
+      el.appendChild(line ? document.createTextNode(line) : document.createElement('br'));
+    };
+
+    if (!host) {
+      // Caret sits directly in the editor / a cell / a wrapper div — emit one block per line.
+      const frag = document.createDocumentFragment();
+      let lastText: Node | null = null;
+      for (const line of lines) {
+        const p = shell();
+        fill(p, line);
+        lastText = p.lastChild;
+        frag.appendChild(p);
+      }
+      const at = document.createRange();
+      at.setStart(container, Math.max(0, offset));
+      at.collapse(true);
+      at.insertNode(frag);
+      return lastText;
+    }
+
+    const parent = host.parentNode!;
+    const tail = shell();
+    while (host.childNodes.length > offset) {
+      tail.appendChild(host.childNodes[offset]);
+    }
+    parent.insertBefore(tail, host.nextSibling);
+
+    if (lines[0]) host.appendChild(document.createTextNode(lines[0]));
+    if (!host.firstChild) host.appendChild(document.createElement('br'));
+
+    for (let i = 1; i < lines.length - 1; i++) {
+      const el = shell();
+      fill(el, lines[i]);
+      parent.insertBefore(el, tail);
+    }
+
+    // Empty text node keeps a caret anchor even for an empty last line; contenteditable
+    // normalization may drop it later, which is fine once the caret has been placed.
+    const caretNode = document.createTextNode(lines[lines.length - 1]);
+    tail.insertBefore(caretNode, tail.firstChild);
+    if (!tail.textContent && !tail.querySelector('*')) tail.appendChild(document.createElement('br'));
+    return caretNode;
   }
 
   /**
@@ -5402,6 +5480,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Undo
    */
   undo(): void {
+    // Sticky formatting (Problem 10): the restored DOM invalidates the pending-style anchor.
+    this._clearPendingInlineStyle();
     // Bug 13184834: bez flusha klik w oknie debounce'a (500 ms od ostatniej edycji) nie miał
     // czego cofnąć — ostatnia porcja pisania nie była jeszcze na stosie.
     this._flushPendingPersist();
@@ -5438,6 +5518,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * Redo
    */
   redo(): void {
+    // Sticky formatting (Problem 10): the restored DOM invalidates the pending-style anchor.
+    this._clearPendingInlineStyle();
     // Flush jak w undo(): jeżeli po cofnięciu użytkownik COŚ dopisał, wiszący snapshot
     // unieważnia redo (nowa edycja czyści redoStack) — dokładnie jak w Wordzie.
     this._flushPendingPersist();
@@ -5593,6 +5675,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       const listTag = li?.parentElement?.tagName;
       bulletList = listTag === 'UL';
       numberedList = listTag === 'OL';
+    }
+
+    // Sticky formatting (Problem 10): after deleting the last character of a styled span the
+    // browser drops the span, so the DOM no longer carries the picked font. While the caret
+    // still sits at the remembered anchor, report the pending style instead of the value
+    // re-derived from the paragraph's computed style (the document default).
+    if (this._pendingInlineStyle && selection && this._caretMatchesPendingAnchor(selection)) {
+      if (this._pendingInlineStyle.fontFamily) {
+        fontFamily = this._pendingInlineStyle.fontFamily;
+      }
+      const pendingPt = parseFloat(this._pendingInlineStyle.fontSize ?? '');
+      if (Number.isFinite(pendingPt)) {
+        fontSize = Math.round(pendingPt);
+      }
     }
 
     // Bold/italic/underline/… come from queryCommandState when a real selection drives the
@@ -5826,6 +5922,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    *  i kasuje kursor). Zmienione DOM żyje samo do czasu repaginacji. */
   onPageInput(index: number, _ev: Event): void {
     if (this._isRepaginating) return;
+    // Sticky formatting (Problem 10): the deletion has mutated the DOM by now — re-anchor
+    // the style captured in beforeinput at the post-delete caret.
+    this._consumePendingDeleteCapture();
     this._isDirty = true;
     this._schedulePaginate('input');
     this._schedulePersist();
@@ -5839,9 +5938,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    *  spacji, której nie ma w Wordzie. Zamiast usuwać węzeł (kursor straciłby kotwicę),
    *  zaznaczamy nbsp, więc domyślne wstawienie tekstu go zastępuje. */
   onEditorBeforeInput(event: InputEvent): void {
+    if (event.inputType === 'deleteContentBackward' || event.inputType === 'deleteContentForward') {
+      // Sticky formatting (Problem 10): snapshot the style BEFORE the browser deletes —
+      // once the deletion empties a styled span the browser drops it and the style is gone.
+      this._captureStyleBeforeDelete();
+      return;
+    }
     if (event.inputType !== 'insertText' && event.inputType !== 'insertFromPaste') return;
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+    // Sticky formatting write path (Problem 10): re-create the styled span BEFORE the browser
+    // inserts the character, so the character lands inside it and inherits the pending style.
+    if (event.inputType === 'insertText' && this._pendingInlineStyle && this._caretMatchesPendingAnchor(sel)) {
+      this._materializePendingStyleSpan(sel);
+    }
     const anchor = sel.anchorNode;
     if (!anchor) return;
     const el = anchor.nodeType === Node.ELEMENT_NODE ? (anchor as Element) : anchor.parentElement;
@@ -5857,6 +5967,127 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     range.selectNodeContents(nbspNode);
     sel.removeAllRanges();
     sel.addRange(range);
+  }
+
+  // ═════════════ Sticky formatting (Problem 10) ═════════════
+
+  /**
+   * Records the style picked at a collapsed caret. The ZWS span is the DOM carrier, but the
+   * browser removes it once a deletion empties it — this record lets the toolbar read-back
+   * and the next insertText survive that removal. A pick at the same anchor merges with the
+   * previous one (family + size can coexist); a new anchor starts fresh.
+   */
+  private _setPendingInlineStyle(
+    patch: { fontFamily?: string; fontSize?: string },
+    caret: Range,
+  ): void {
+    const sameAnchor =
+      this._pendingStyleAnchor?.node === caret.startContainer &&
+      this._pendingStyleAnchor?.offset === caret.startOffset;
+    this._pendingInlineStyle = { ...(sameAnchor ? this._pendingInlineStyle : null), ...patch };
+    this._pendingStyleAnchor = { node: caret.startContainer, offset: caret.startOffset };
+  }
+
+  private _clearPendingInlineStyle(): void {
+    this._pendingInlineStyle = null;
+    this._pendingStyleAnchor = null;
+    this._pendingDeleteCapture = null;
+  }
+
+  /** True when the collapsed caret sits exactly at the remembered anchor (same live node). */
+  private _caretMatchesPendingAnchor(selection: Selection): boolean {
+    const anchor = this._pendingStyleAnchor;
+    if (!anchor || !anchor.node.isConnected) return false;
+    if (selection.rangeCount === 0 || !selection.isCollapsed) return false;
+    const range = selection.getRangeAt(0);
+    return range.startContainer === anchor.node && range.startOffset === anchor.offset;
+  }
+
+  /**
+   * Deletion capture: when Backspace/Delete is about to remove the LAST visible character of
+   * an inline-styled span, the browser will drop the span and the caret will fall back into
+   * the paragraph — so the effective font would silently reset to the document default.
+   * Snapshot the effective style now; `_consumePendingDeleteCapture` re-anchors it at the
+   * post-delete caret. The last-character check keeps ordinary backspaces free of this cost.
+   */
+  private _captureStyleBeforeDelete(): void {
+    this._pendingDeleteCapture = null;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return;
+    if (!this.isSelectionInEditor(sel)) return;
+    const node = sel.anchorNode;
+    const el = node instanceof Element ? node : node?.parentElement;
+    const span = (el?.closest?.('span') as HTMLElement | null) ?? null;
+    if (!span || (span.style.fontFamily === '' && span.style.fontSize === '')) return;
+    // Only when the deletion is about to empty the span (ZWS carriers excluded from length).
+    const visible = (span.textContent ?? '').replace(/[\u200B\uFEFF]/g, '');
+    if (visible.length !== 1) return;
+    try {
+      const cs = window.getComputedStyle(span);
+      const fontFamily = cs.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+      const sizePx = parseFloat(cs.fontSize);
+      const capture: { fontFamily?: string; fontSize?: string } = {};
+      if (fontFamily) capture.fontFamily = fontFamily;
+      if (Number.isFinite(sizePx)) capture.fontSize = `${Math.round(sizePx * 0.75)}pt`;
+      if (capture.fontFamily || capture.fontSize) this._pendingDeleteCapture = capture;
+    } catch {
+      // Degrade silently: no capture, the delete behaves as before.
+    }
+  }
+
+  /** After the deletion has mutated the DOM (input event), re-anchor the captured style. */
+  private _consumePendingDeleteCapture(): void {
+    const capture = this._pendingDeleteCapture;
+    if (!capture) return;
+    this._pendingDeleteCapture = null;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || !sel.isCollapsed || !sel.anchorNode) return;
+    if (!this.isSelectionInEditor(sel)) return;
+    this._pendingInlineStyle = capture;
+    this._pendingStyleAnchor = { node: sel.anchorNode, offset: sel.anchorOffset };
+    // The browser fires selectionchange asynchronously after this input event; hold the
+    // pending style through that programmatic churn so it is not mistaken for the user
+    // clicking away.
+    this._pendingStyleHoldUntil = Date.now() + 150;
+  }
+
+  /**
+   * Write path: the user types while a pending style is armed at the caret — put the styled
+   * span back (same pattern as the pickers' collapsed branch) so the character being
+   * inserted lands inside it. Runs in beforeinput, i.e. before the browser mutation.
+   */
+  private _materializePendingStyleSpan(sel: Selection): void {
+    const pending = this._pendingInlineStyle;
+    if (!pending) return;
+    const range = sel.getRangeAt(0);
+    const zws = '\u200B';
+    const containerEl = range.startContainer.nodeType === Node.TEXT_NODE
+      ? range.startContainer.parentElement
+      : range.startContainer as HTMLElement;
+    // Caret still inside a live ZWS carrier span — restyle it instead of nesting another.
+    if (
+      containerEl instanceof HTMLSpanElement &&
+      containerEl.textContent === zws &&
+      (containerEl.style.fontFamily !== '' || containerEl.style.fontSize !== '')
+    ) {
+      if (pending.fontFamily) containerEl.style.fontFamily = pending.fontFamily;
+      if (pending.fontSize) containerEl.style.fontSize = pending.fontSize;
+      this._clearPendingInlineStyle();
+      return;
+    }
+    const span = document.createElement('span');
+    if (pending.fontFamily) span.style.fontFamily = pending.fontFamily;
+    if (pending.fontSize) span.style.fontSize = pending.fontSize;
+    span.textContent = zws;
+    range.insertNode(span);
+    const newRange = document.createRange();
+    newRange.setStart(span.firstChild!, 1);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    this.savedSelection = newRange.cloneRange();
+    // The span now carries the style; the pending record has served its purpose.
+    this._clearPendingInlineStyle();
   }
 
   // ═════════════ Punktory-checkboxy: ☐/❑ ↔ ☑ (zgłoszenie „nie da się odhaczyć") ═════════════
@@ -6431,7 +6662,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           b.getAttribute('data-split-table-id') === prev.getAttribute('data-split-table-id')
         ) {
           const targetBody = prev.querySelector('tbody') ?? prev;
-          b.querySelectorAll('tr').forEach(tr => targetBody.appendChild(tr));
+          // Tylko wiersze WŁASNE fragmentu (RC4): querySelectorAll('tr') łapał też wiersze
+          // tabel zagnieżdżonych i wyrywał je do tbody tabeli zewnętrznej.
+          this._tableDirectRows(b as HTMLTableElement).forEach(tr => targetBody.appendChild(tr));
           continue;
         }
         premerged.push(b);
@@ -6744,11 +6977,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           // Tabela mieści się w jednej KOLUMNIE (nie w całej szerokości strony wielokolumnowej),
           // więc fragmenty tnie wysokość kolumny; kolejny fragment idzie do następnej kolumny,
           // a na nową stronę dopiero, gdy kolumny się skończą.
+          // Problem 7 / RC1: splitter mierzy SAME wiersze, a kontrola pojemności fragmentu
+          // (measureBlock = _measureBlockRunHeights) liczy blok z pionowymi MARGINESAMI tabeli
+          // (`.editor-content table { margin: 15px 0 }` / inline z importu). Budżety splittera
+          // pomniejszamy o te marginesy — inaczej świeżo dopasowany fragment mierzył się na
+          // avail+marginesy, oblewał kontrolę i CAŁY jechał dalej mimo wolnego miejsca.
+          const tableMargins = this._measureTableVerticalMargins(
+            block as HTMLTableElement, measurer);
+          const freshColumnBudget = Math.max(80, columnHeight - tableMargins);
           const usedInColumn = columnHeight > 0 ? (currentHeight - columnBase) % columnHeight : 0;
-          const split = this._splitTableForPagination(
+          let split = this._splitTableForPagination(
             block as HTMLTableElement,
-            Math.max(80, columnHeight - usedInColumn),
-            columnHeight,
+            Math.max(80, columnHeight - usedInColumn - tableMargins),
+            freshColumnBudget,
             measurer,
             lineHeightPx
           );
@@ -6762,7 +7003,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
             }
           };
           for (let i = 0; i < split.length; i++) {
-            const h = measureBlock(split[i]);
+            let frag = split[i];
+            let h = measureBlock(frag);
             if (i > 0) {
               advanceColumnOrPage();
             } else {
@@ -6776,10 +7018,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
               const remaining = columnHeight - used;
               if (h > remaining + 0.5 && pages[pages.length - 1].length > 0) {
                 advanceColumnOrPage();
+                // Problem 7 / RC2: fragmenty były skrojone pod STARĄ resztkę strony — po
+                // przejściu na świeżą kolumnę/stronę potnij tabelę od nowa pełnym budżetem
+                // (dokładnie raz; każdy nowy fragment mieści się w pełnej kolumnie
+                // z konstrukcji, więc bez ryzyka pętli). Bez tego chunk 0 skrojony pod małą
+                // resztkę siedział sam na świeżej stronie, a chunk 1 otwierał następną —
+                // niemal puste strony w środku tabeli.
+                if (split.length > 1) {
+                  split = this._splitTableForPagination(
+                    block as HTMLTableElement,
+                    freshColumnBudget,
+                    freshColumnBudget,
+                    measurer,
+                    lineHeightPx
+                  );
+                  frag = split[0];
+                  h = measureBlock(frag);
+                }
               }
             }
-            pages[pages.length - 1].push(split[i]);
-            commitFootnotes(split[i]);
+            pages[pages.length - 1].push(frag);
+            commitFootnotes(frag);
             currentHeight += h;
           }
           bi++;
@@ -7151,7 +7410,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    * a klasa .fmt-trailing-br gasi CSS-owy ::after (patrz SCSS).
    */
   private _trailingBrBlock(br: HTMLElement): HTMLElement | null {
-    const block = br.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li');
+    // Every paragraph-like block that gets the CSS ::after pilcrow must be listed here,
+    // or a trailing <br> in it would show ↵ with no ¶ at all (blockquote/pre arrive
+    // from the clipboard pipeline's splittable-block set).
+    const block = br.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre');
     if (!block) return null;
     const tail = document.createRange();
     tail.selectNodeContents(block);
@@ -7478,17 +7740,37 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   }
 
   /**
+   * Wiersze NALEŻĄCE do tej tabeli (thead/tbody/tfoot + bezpośrednie `tr`) — `table.rows`
+   * per spec pomija wiersze tabel ZAGNIEŻDŻONYCH w komórkach (RC4: `querySelectorAll('tr')`
+   * schodził w głąb i psuł chunking / skan rowSpan).
+   */
+  private _tableDirectRows(table: HTMLTableElement): HTMLTableRowElement[] {
+    return Array.from(table.rows);
+  }
+
+  /**
    * Czy zawartość wiersza może być dzielona między strony (Word: „Zezwalaj na dzielenie
    * wierszy między strony"). Nie dzielimy: jawny zakaz `w:cantSplit`, wiersz nagłówkowy,
-   * sztywna wysokość (`hRule=exact` — Word przycina treść, nie łamie) oraz CAŁE tabele
-   * z rowspan>1 (koordynacja vMerge przez granicę cięcia poza zakresem — wiersz atomowy).
+   * sztywna wysokość (`hRule=exact` — Word przycina treść, nie łamie) oraz wiersze OBJĘTE
+   * scaleniem pionowym (rowspan/vMerge — koordynacja scalenia przez granicę cięcia poza
+   * zakresem). Jak Word: atomowe są TYLKO wiersze w zasięgu scalenia, nie cała tabela
+   * (RC3 — jeden rowspan gdziekolwiek blokował dzielenie wszystkich wysokich wierszy).
    */
   private _rowCanSplit(table: HTMLTableElement, row: HTMLTableRowElement): boolean {
     if (row.getAttribute('data-cant-split') === '1') return false;
     if (row.getAttribute('data-tbl-header') === '1') return false;
     if (row.getAttribute('data-row-hrule') === 'exact') return false;
-    for (const cell of Array.from(table.querySelectorAll('td, th'))) {
-      if ((cell as HTMLTableCellElement).rowSpan > 1) return false;
+    // Tylko wiersze WŁASNE tabeli i ich WŁASNE komórki (row.cells) — komórki tabel
+    // zagnieżdżonych nie wpływają na scalenia pionowe tabeli zewnętrznej (RC4).
+    const rows = this._tableDirectRows(table);
+    const idx = rows.indexOf(row);
+    // Tail poprzedniego cięcia (wiersz odłączony od tabeli) — cięty dalej jak dotąd;
+    // wiersz objęty scaleniem nigdy nie zostaje tailem, bo nie jest cięty wcale.
+    if (idx < 0) return true;
+    for (let r = 0; r < rows.length; r++) {
+      for (const cell of Array.from(rows[r].cells)) {
+        if (cell.rowSpan > 1 && idx >= r && idx <= r + cell.rowSpan - 1) return false;
+      }
     }
     return true;
   }
@@ -7506,7 +7788,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     measurer: HTMLElement
   ): { contentWidthPx: number; blockTops: number[]; blockBottoms: number[] }[] {
     const t = table.cloneNode(false) as HTMLTableElement;
-    const colgroup = table.querySelector('colgroup');
+    const colgroup = table.querySelector(':scope > colgroup');
     if (colgroup) t.appendChild(colgroup.cloneNode(true));
     const tbody = document.createElement('tbody');
     const rowClone = row.cloneNode(true) as HTMLTableRowElement;
@@ -7558,6 +7840,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     measurer: HTMLElement
   ): number {
     const t = table.cloneNode(false) as HTMLTableElement;
+    // Symetria z budową fragmentu w _splitTableForPagination: bez colgroup szerokości kolumn
+    // degradują do auto → inne łamanie tekstu → inna wysokość niż realny fragment na stronie
+    // (RC1 — fragment „mieszczący się" w budżecie mierzył się potem wyżej i uciekał na
+    // następną stronę). `:scope >` — nie podbieraj colgroup tabeli zagnieżdżonej.
+    const colgroup = table.querySelector(':scope > colgroup');
+    if (colgroup) t.appendChild(colgroup.cloneNode(true));
     let key = measurer.style.cssText + '|' + t.outerHTML;
     for (const r of subset) key += r.outerHTML;
     const cached = this._tableMeasureCache.get(key);
@@ -7571,6 +7859,30 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this._tableMeasureCache.size >= 2000) this._tableMeasureCache.clear();
     this._tableMeasureCache.set(key, h);
     return h;
+  }
+
+  /**
+   * Pionowe marginesy tabeli (margin-top + margin-bottom) w kontekście strony — mierzone
+   * na klonie shellu w measurerze (klasa `.editor-content` → działa reguła
+   * `.editor-content table { margin: 15px 0 }` oraz inline margin z importu). Budżety dla
+   * `_splitTableForPagination` muszą być o nie pomniejszone: splitter mierzy SAME wiersze,
+   * a kontrola pojemności fragmentu (`_measureBlockRunHeights`) liczy blok z marginesami.
+   * Cache współdzielony z `_tableMeasureCache` (gorąca ścieżka repaginacji — ADR-0075:
+   * bez cache to dodatkowy layout-flush per tabela przy każdym keystroke).
+   */
+  private _measureTableVerticalMargins(table: HTMLTableElement, measurer: HTMLElement): number {
+    const shell = table.cloneNode(false) as HTMLTableElement;
+    const key = 'tblMargins|' + measurer.style.cssText + '|' + shell.outerHTML;
+    const cached = this._tableMeasureCache.get(key);
+    if (cached !== undefined) return cached;
+    measurer.innerHTML = '';
+    measurer.appendChild(shell);
+    const cs = getComputedStyle(shell);
+    const m = (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    measurer.innerHTML = '';
+    if (this._tableMeasureCache.size >= 2000) this._tableMeasureCache.clear();
+    this._tableMeasureCache.set(key, m);
+    return m;
   }
 
   /** Sekwencja id fragmentów jednego logicznie podzielonego WIERSZA. */
@@ -7690,7 +8002,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     measurer: HTMLElement,
     lineHeightPx = 16
   ): HTMLTableElement[] {
-    const rows = Array.from(table.querySelectorAll('tr')) as HTMLTableRowElement[];
+    // Tylko wiersze WŁASNE tabeli — querySelectorAll('tr') schodził do tabel zagnieżdżonych
+    // w komórkach i wciągał ich wiersze do chunkingu jak wiersze zewnętrzne (RC4).
+    const rows = this._tableDirectRows(table);
     if (rows.length === 0) return [table];
 
     const measureRows = (subset: HTMLTableRowElement[]): number =>
@@ -7745,7 +8059,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // każdym przebiegu zmieniałoby HTML stron i wymuszało rebind [innerHTML] (utrata kursora).
     const existingId = table.getAttribute('data-split-table-id');
     const splitId = chunks.length > 1 ? (existingId ?? `st-${++this._splitTableSeq}`) : existingId;
-    const colgroup = table.querySelector('colgroup');
+    const colgroup = table.querySelector(':scope > colgroup');
 
     return chunks.map(subset => {
       const t = table.cloneNode(false) as HTMLTableElement;
@@ -7807,7 +8121,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       let next = first.nextElementSibling;
       while (next && next.tagName === 'TABLE' && next.getAttribute('data-split-table-id') === id) {
         handled.add(next);
-        next.querySelectorAll('tr').forEach(tr => targetBody.appendChild(tr));
+        // Tylko wiersze WŁASNE fragmentu — nie wyrywaj wierszy tabel zagnieżdżonych (RC4).
+        this._tableDirectRows(next as HTMLTableElement).forEach(tr => targetBody.appendChild(tr));
         const toRemove = next;
         next = next.nextElementSibling;
         toRemove.remove();

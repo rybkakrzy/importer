@@ -36,10 +36,12 @@ describe('WysiwygEditorComponent — skompilowany CSS zachowuje wielokrotne spac
     expect(css).toMatch(/\.footer-display[\s\S]{0,200}?white-space:\s*pre-wrap/);
   });
 
-  it('nośnik tabulatora (min-width:2em) wraca do white-space: normal', () => {
+  it('nośnik tabulatora (min-width:2em) wraca do white-space: normal !important', () => {
+    // !important: reader ścieżki leadera emituje nośnik z inline white-space:pre,
+    // które bez !important wygrywałoby z arkuszem (literalny \t skakał do stopu).
     const css = collectStyleText();
     expect(css).toMatch(
-      /span\[style\*=['"]min-width:2em['"]\][^{]*\{[^}]*white-space:\s*normal/
+      /span\[style\*=['"]min-width:2em['"]\][^{]*\{[^}]*white-space:\s*normal\s*!important/
     );
   });
 });

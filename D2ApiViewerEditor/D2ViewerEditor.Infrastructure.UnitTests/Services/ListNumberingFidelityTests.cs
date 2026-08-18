@@ -1196,4 +1196,93 @@ public class ListNumberingFidelityTests
         markColor!.Val!.Value.Should().Be("FF0000");
         AssertNoValidationErrors(regenerated);
     }
+
+    // ── <li>: pStyle, tab-stopy i kalibracja interlinii ─────────────────────────
+
+    [Test]
+    public void RoundTrip_ListItemParagraphStyle_SurvivesThroughDataStyleId()
+    {
+        // Writer hardkodował pStyle=ListParagraph dla KAŻDEGO li — niestandardowy styl
+        // akapitu listy (np. „Wyliczenie") ginął przy pierwszym zapisie.
+        using var docx = BuildDocx(
+            [Abstract(1, Lvl(0, NumberFormatValues.Decimal, "%1."))],
+            [Num(1, 1)],
+            [
+                new Paragraph(
+                    new ParagraphProperties(
+                        new ParagraphStyleId { Val = "Wyliczenie" },
+                        new NumberingProperties(
+                            new NumberingLevelReference { Val = 0 },
+                            new NumberingId { Val = 1 })),
+                    new Run(new Text("Jeden"))),
+            ]);
+
+        var html = _reader.Convert(docx).Html;
+        html.Should().Contain("data-style-id=\"Wyliczenie\"");
+
+        var regenerated = _writer.Convert(html);
+        using var doc = WordprocessingDocument.Open(new MemoryStream(regenerated), false);
+        var listPara = doc.MainDocumentPart!.Document.Body!
+            .Descendants<Paragraph>()
+            .First(p => p.ParagraphProperties?.NumberingProperties != null);
+        listPara.ParagraphProperties!.ParagraphStyleId!.Val!.Value.Should().Be("Wyliczenie");
+    }
+
+    [Test]
+    public void RoundTrip_ListItemTabStops_SurviveThroughDataTabStops()
+    {
+        // Ścieżka <p> niesie data-tab-stops od dawna; li gubił w:tabs przy każdym zapisie.
+        using var docx = BuildDocx(
+            [Abstract(1, Lvl(0, NumberFormatValues.Decimal, "%1."))],
+            [Num(1, 1)],
+            [
+                new Paragraph(
+                    new ParagraphProperties(
+                        new NumberingProperties(
+                            new NumberingLevelReference { Val = 0 },
+                            new NumberingId { Val = 1 }),
+                        new Tabs(new TabStop { Val = TabStopValues.Center, Position = 4536 })),
+                    new Run(new Text("Jeden"), new TabChar(), new Text("Dwa"))),
+            ]);
+
+        var html = _reader.Convert(docx).Html;
+        html.Should().Contain("data-tab-stops=\"4536:center\"");
+
+        var regenerated = _writer.Convert(html);
+        using var doc = WordprocessingDocument.Open(new MemoryStream(regenerated), false);
+        var listPara = doc.MainDocumentPart!.Document.Body!
+            .Descendants<Paragraph>()
+            .First(p => p.ParagraphProperties?.NumberingProperties != null);
+        var stop = listPara.ParagraphProperties!.GetFirstChild<Tabs>()!.Elements<TabStop>().Single();
+        stop.Position!.Value.Should().Be(4536);
+        stop.Val!.Value.Should().Be(TabStopValues.Center);
+        AssertNoValidationErrors(regenerated);
+    }
+
+    [Test]
+    public void Reader_ListItemAutoLineHeight_CalibratedWithParagraphRunFont()
+    {
+        // Interlinia auto na li kalibrowała się fontem DOMYŚLNYM dokumentu — akapit listy
+        // w Calibri (mnożnik 1.221) dostawał fallback 1.2 jak ścieżka bez fontu.
+        using var docx = BuildDocx(
+            [Abstract(1, Lvl(0, NumberFormatValues.Decimal, "%1."))],
+            [Num(1, 1)],
+            [
+                new Paragraph(
+                    new ParagraphProperties(
+                        new NumberingProperties(
+                            new NumberingLevelReference { Val = 0 },
+                            new NumberingId { Val = 1 }),
+                        new SpacingBetweenLines { Line = "240", LineRule = LineSpacingRuleValues.Auto }),
+                    new Run(new RunProperties(new RunFonts { Ascii = "Calibri" }), new Text("Jeden"))),
+            ]);
+
+        var html = _reader.Convert(docx).Html;
+
+        var li = Regex.Match(html, "<li[^>]*style=\"([^\"]*)\"");
+        li.Success.Should().BeTrue();
+        li.Groups[1].Value.Should().Contain("line-height:1.221;",
+            "kalibracja fontem AKAPITU (Calibri, jak ścieżka <p>), nie domyślnym dokumentu");
+        li.Groups[1].Value.Should().Contain("--w-line-tw:240;");
+    }
 }

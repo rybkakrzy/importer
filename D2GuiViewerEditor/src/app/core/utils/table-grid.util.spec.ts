@@ -262,7 +262,7 @@ describe('writeColgroupWidths', () => {
     // Markery każą writerowi przywrócić tblW=auto / autofit (px tylko renderowe) —
     // po świadomym resize szerokość MUSI utrwalić się jako jawna.
     const table = makeTable(
-      '<table data-tbl-w="auto" data-tbl-layout="autofit">' +
+      '<table data-tbl-w="auto" data-tbl-layout="autofit" data-tbl-w-tw="9638">' +
         '<colgroup><col style="width:100px;"><col style="width:200px;"></colgroup>' +
         '<tr><td>a</td><td>b</td></tr></table>'
     );
@@ -270,6 +270,7 @@ describe('writeColgroupWidths', () => {
     writeColgroupWidths(table, grid, [100, 200], [150, 200]);
     expect(table.hasAttribute('data-tbl-w')).toBe(false);
     expect(table.hasAttribute('data-tbl-layout')).toBe(false);
+    expect(table.hasAttribute('data-tbl-w-tw')).toBe(false);
   });
 
   it('brak zmiany szerokości zachowuje markery semantyki szerokości', () => {
@@ -283,12 +284,23 @@ describe('writeColgroupWidths', () => {
     expect(table.getAttribute('data-tbl-w')).toBe('auto');
     expect(table.getAttribute('data-tbl-layout')).toBe('autofit');
   });
+
+  it('brak zmiany szerokości zachowuje marker data-tbl-w-tw (oryginalne twipsy w:tblW)', () => {
+    const table = makeTable(
+      '<table data-tbl-w-tw="9638">' +
+        '<colgroup><col style="width:100px;"><col style="width:200px;"></colgroup>' +
+        '<tr><td>a</td><td>b</td></tr></table>'
+    );
+    const grid = buildTableGrid(table);
+    writeColgroupWidths(table, grid, [100, 200], [100, 200]);
+    expect(table.getAttribute('data-tbl-w-tw')).toBe('9638');
+  });
 });
 
 describe('applyColumnWidths — markery semantyki szerokości', () => {
-  it('resize całej tabeli zdejmuje data-tbl-w / data-tbl-layout', () => {
+  it('resize całej tabeli zdejmuje data-tbl-w / data-tbl-layout / data-tbl-w-tw', () => {
     const table = makeTable(
-      '<table data-tbl-w="auto" data-tbl-layout="autofit">' +
+      '<table data-tbl-w="auto" data-tbl-layout="autofit" data-tbl-w-tw="9638">' +
         '<tr><td>a</td><td>b</td></tr></table>'
     );
     const grid = buildTableGrid(table);
@@ -296,5 +308,6 @@ describe('applyColumnWidths — markery semantyki szerokości', () => {
     expect(table.style.width).toBe('300px');
     expect(table.hasAttribute('data-tbl-w')).toBe(false);
     expect(table.hasAttribute('data-tbl-layout')).toBe(false);
+    expect(table.hasAttribute('data-tbl-w-tw')).toBe(false);
   });
 });

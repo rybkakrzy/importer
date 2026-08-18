@@ -159,9 +159,9 @@ describe('EditorToolbarComponent — ENTER w polu rozmiaru czcionki', () => {
 });
 
 /**
- * „Pokaż wszystko" (¶) — przycisk PRZYWRÓCONY (2026-08-14, pełna funkcja znaków
- * formatowania: overlay spacji/tabów/br + CSS ¶). Wiring: klik emituje komendę
- * toggleFormattingMarks, podświetlenie z EditorState.formattingMarks.
+ * „Pokaż wszystko" (¶) — przycisk ZNÓW UKRYTY (2026-08-18, decyzja użytkownika;
+ * wcześniej ukryty 2026-08-10, przywrócony 2026-08-14). Funkcja żyje pod
+ * Ctrl+Shift+8; stan isFormattingMarksActive nadal czytany (gotowość na powrót).
  */
 describe('EditorToolbarComponent — przycisk „Pokaż wszystko"', () => {
   let fixture: ComponentFixture<EditorToolbarComponent>;
@@ -179,32 +179,21 @@ describe('EditorToolbarComponent — przycisk „Pokaż wszystko"', () => {
       HTMLButtonElement | undefined;
   }
 
-  it('przycisk jest renderowany i klik emituje toggleFormattingMarks', () => {
+  it('przycisk NIE jest renderowany (ukryty decyzją użytkownika 2026-08-18)', () => {
     component.readOnly = false;
     fixture.detectChanges();
-    const emitted: string[] = [];
-    component.command.subscribe((c: { command: string }) => emitted.push(c.command));
 
-    const btn = marksBtn();
-    expect(btn).toBeTruthy();
-    btn!.click();
-
-    expect(emitted).toContain('toggleFormattingMarks');
+    expect(marksBtn()).toBeUndefined();
   });
 
-  it('przycisk podświetla się według EditorState.formattingMarks', () => {
-    component.editorState = {
-      isModified: false, canUndo: false, canRedo: false, wordCount: 0,
-      formattingMarks: true,
-      currentFormatting: {
-        bold: false, italic: false, underline: false,
-        strikethrough: false, subscript: false, superscript: false,
-      },
-      currentStyle: {},
-    };
+  it('ukryte są też checkbox-punktor i „Więcej narzędzi" (ta sama decyzja)', () => {
+    component.readOnly = false;
     fixture.detectChanges();
+    const titles = Array.from(fixture.nativeElement.querySelectorAll('button'))
+      .map((b) => (b as HTMLElement).getAttribute('title') ?? '');
 
-    expect(marksBtn()!.classList.contains('active')).toBe(true);
+    expect(titles.some((t) => t.startsWith('Przełącz punktor'))).toBe(false);
+    expect(titles).not.toContain('Więcej narzędzi');
   });
 
   it('stan z EditorState.formattingMarks jest nadal czytany (gotowość na przywrócenie)', () => {

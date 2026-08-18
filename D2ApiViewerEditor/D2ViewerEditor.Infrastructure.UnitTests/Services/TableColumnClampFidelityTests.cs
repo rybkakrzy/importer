@@ -13,14 +13,22 @@ namespace D2ViewerEditor.Infrastructure.UnitTests.Services;
 /// robić to samo: skalować px podglądu (colgroup style + width tabeli), zachowując
 /// data-w-tw z ORYGINALNYMI twipami (zapis nie utrwala kompresji). Repro: tabela wzoru
 /// Rachunku Wirtualnego w dwukolumnowej umowie deweloperskiej wyjeżdżała poza szpaltę.
+/// W sekcji JEDNOkolumnowej clamp NIE działa: Word pozwala tabeli szerszej niż obszar
+/// treści wystawać w marginesy — podgląd trzyma prawdziwe px (strona przycina na krawędzi
+/// papieru), a wyśrodkowanie (w:jc) nie może być nadpisane przez margin-left z w:tblInd.
 /// </summary>
 [TestFixture]
 public class TableColumnClampFidelityTests
 {
     private DocxToHtmlConverter _reader = null!;
+    private HtmlToDocxConverter _writer = null!;
 
     [SetUp]
-    public void Setup() => _reader = new DocxToHtmlConverter();
+    public void Setup()
+    {
+        _reader = new DocxToHtmlConverter();
+        _writer = new HtmlToDocxConverter();
+    }
 
     // Tabela 2×4000tw (533px) — szersza niż szpalta 2-kolumnowej A4 (~4182tw ≈ 278px).
     private const string WideTable = @"<w:tbl>
@@ -88,15 +96,52 @@ public class TableColumnClampFidelityTests
     }
 
     [Test]
-    public void Read_TableWiderThanPage_ScalesToContentWidth()
+    public void Read_TableWiderThanPage_SingleColumnSection_KeepsTruePxExtendingIntoMargins()
     {
+        // Word NIE ściska tabeli szerszej niż obszar treści sekcji jednokolumnowej — tabela
+        // wchodzi w marginesy. Podgląd trzyma prawdziwe px (strona przycina na krawędzi
+        // papieru); wcześniejsze doskalowanie fałszowało proporcje względem Worda.
         var hugeTable = WideTable.Replace("4000", "6000").Replace("8000", "12000");
         var html = _reader.Convert(DocxWithBody(hugeTable, SingleColumnSectPr)).Html;
 
-        // 12000tw = 800px > obszar treści 9072tw ≈ 604px → doskalowanie.
+        // 12000tw = 800px > obszar treści 9072tw ≈ 604px → px zostają PRAWDZIWE.
         var colPx = System.Text.RegularExpressions.Regex.Matches(html, "<col style=\"width:(\\d+)px;\"")
             .Select(m => int.Parse(m.Groups[1].Value)).ToList();
-        colPx.Sum().Should().BeLessThanOrEqualTo(606);
+        colPx.Should().HaveCount(2);
+        colPx.Sum().Should().BeInRange(798, 802, "tabela wystaje w marginesy jak w Wordzie");
         html.Should().Contain("data-w-tw=\"6000\"");
+        html.Should().NotContain("data-tbl-w-tw", "bez clampu nie ma potrzeby markera szerokości");
+    }
+
+    [Test]
+    public void RoundTrip_ClampedTableInTwoColumnSection_ExportsOriginalTblW()
+    {
+        // Clamp w szpalcie jest TYLKO renderowy — data-tbl-w-tw niesie oryginalne w:tblW,
+        // a writer preferuje go nad ściśniętymi px (inaczej każdy zapis utrwalałby kompresję).
+        var html = _reader.Convert(DocxWithBody(WideTable, TwoColumnSectPr)).Html;
+        html.Should().Contain("data-tbl-w-tw=\"8000\"");
+
+        var bytes = _writer.Convert(html);
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(bytes), false);
+        var tblW = doc.MainDocumentPart!.Document!.Body!
+            .Descendants<DocumentFormat.OpenXml.Wordprocessing.TableWidth>().First();
+        tblW.Type!.Value.Should().Be(DocumentFormat.OpenXml.Wordprocessing.TableWidthUnitValues.Dxa);
+        tblW.Width!.Value.Should().Be("8000");
+    }
+
+    [Test]
+    public void Read_CenteredTableWithTblInd_KeepsAutoMargins_NoPxMarginLeft()
+    {
+        // w:jc=center + w:tblInd: margin-left:Npx emitowany PO margin-left:auto nadpisywał
+        // auto i tabela traciła wyśrodkowanie (Word przy jc ignoruje tblInd).
+        var centeredTable = WideTable.Replace(
+            "<w:tblPr><w:tblW w:w=\"8000\" w:type=\"dxa\"/>",
+            "<w:tblPr><w:tblW w:w=\"8000\" w:type=\"dxa\"/><w:jc w:val=\"center\"/><w:tblInd w:w=\"500\" w:type=\"dxa\"/>");
+        var html = _reader.Convert(DocxWithBody(centeredTable, SingleColumnSectPr)).Html;
+
+        var tableTag = System.Text.RegularExpressions.Regex.Match(html, "<table[^>]*>").Value;
+        tableTag.Should().Contain("margin-left:auto;margin-right:auto;");
+        tableTag.Should().NotMatchRegex(@"margin-left:\d+px", "px z tblInd nie może nadpisać wyśrodkowania");
     }
 }

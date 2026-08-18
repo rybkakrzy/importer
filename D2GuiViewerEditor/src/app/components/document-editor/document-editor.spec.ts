@@ -1626,3 +1626,135 @@ describe('DocumentEditorComponent — otwarcie PDF z edytora → podgląd (/view
     expect(component.errorMessage()).toContain('PDF');
   });
 });
+
+/**
+ * Problem 11 — the table settings panel appeared inconsistently. Three root causes covered:
+ *  (RC-B) `detectTableContext` resolved only the ACTIVE page ref, so a caret in a table on
+ *         another page classified as 'outside-editor' and the panel state was never derived
+ *         → fixed via `editor.findEditorContentContaining(anchorNode)`;
+ *  (RC-C) after repagination replaces page innerHTML, `activeTable()` may hold a DETACHED
+ *         element — panel actions would mutate dead DOM → the context is cleared instead
+ *         (while a still-connected table keeps the anti-flicker 'outside-editor' behavior);
+ *  (determinism) after inserting a table the panel state is re-derived explicitly instead
+ *         of relying on a selectionchange racing the focus churn of the dialog close.
+ */
+describe('DocumentEditorComponent — kontekst tabeli: strony, martwy DOM, determinizm (Problem 11)', () => {
+  let fixture: ComponentFixture<DocumentEditorComponent>;
+  let component: DocumentEditorComponent;
+  const mounted: HTMLElement[] = [];
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
+      ],
+    }).compileComponents();
+    fixture = TestBed.createComponent(DocumentEditorComponent);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => {
+    mounted.splice(0).forEach(el => el.remove());
+    window.getSelection()?.removeAllRanges();
+  });
+
+  function mount(el: HTMLElement): HTMLElement {
+    document.body.appendChild(el);
+    mounted.push(el);
+    return el;
+  }
+
+  function caretIn(node: Node, offset = 0): void {
+    const sel = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  it('detectTableContext widzi tabelę na NIEaktywnej stronie (findEditorContentContaining)', () => {
+    const page1 = mount(document.createElement('div'));
+    const page2 = mount(document.createElement('div'));
+    page2.innerHTML = '<table><tbody><tr><td>x</td></tr></tbody></table>';
+    // Active-page ref points at page 1; the caret lives in a table on page 2.
+    (component as any).editor = {
+      findEditorContentContaining: (n: Node) => (page2.contains(n) ? page2 : null),
+      editorContent: { nativeElement: page1 },
+    };
+    caretIn(page2.querySelector('td')!.firstChild!);
+
+    (component as any).detectTableContext();
+
+    expect(component.isInTable()).toBe(true);
+    expect(component.activeTable()).toBe(page2.querySelector('table'));
+    expect(component.showTablePanel()).toBe(true);
+  });
+
+  it('odłączona activeTable + selekcja poza edytorem → kontekst czyszczony (bez martwego DOM)', () => {
+    const detachedTable = document.createElement('table') as HTMLTableElement;
+    const detachedCell = document.createElement('td') as HTMLTableCellElement;
+    component.activeTable.set(detachedTable);
+    component.activeTableCell.set(detachedCell);
+    component.isInTable.set(true);
+    component.showTablePanel.set(true);
+    window.getSelection()?.removeAllRanges(); // brak selekcji → placement 'outside-editor'
+
+    (component as any).detectTableContext();
+
+    expect(component.isInTable()).toBe(false);
+    expect(component.activeTable()).toBeNull();
+    expect(component.activeTableCell()).toBeNull();
+    expect(component.showTablePanel()).toBe(false);
+  });
+
+  it('podłączona activeTable + selekcja poza edytorem → kontekst zachowany (anty-migotanie)', () => {
+    const table = mount(document.createElement('table')) as HTMLTableElement;
+    component.activeTable.set(table);
+    component.isInTable.set(true);
+    component.showTablePanel.set(true);
+    window.getSelection()?.removeAllRanges();
+
+    (component as any).detectTableContext();
+
+    expect(component.isInTable()).toBe(true);
+    expect(component.activeTable()).toBe(table);
+    expect(component.showTablePanel()).toBe(true);
+  });
+
+  it('applyInsertTable → po zamknięciu dialogu detectTableContext jest wywoływany', async () => {
+    (component as any).editor = {
+      insertTable: vi.fn(),
+      editorContent: { nativeElement: document.createElement('div') },
+    };
+    vi.spyOn(component as any, 'applyTableAutoFit').mockImplementation(() => {});
+    const detectSpy = vi.spyOn(component as any, 'detectTableContext').mockImplementation(() => {});
+    component.showInsertTableDialog.set(true);
+
+    component.applyInsertTable();
+    expect(component.showInsertTableDialog()).toBe(false);
+    await Promise.resolve(); // queueMicrotask
+
+    expect(detectSpy).toHaveBeenCalled();
+  });
+
+  it('onInsertTable (szybkie wstawianie) też wywołuje detectTableContext po wstawieniu', async () => {
+    (component as any).editor = {
+      insertTable: vi.fn(),
+      editorContent: { nativeElement: document.createElement('div') },
+    };
+    vi.spyOn(component as any, 'applyTableAutoFit').mockImplementation(() => {});
+    const detectSpy = vi.spyOn(component as any, 'detectTableContext').mockImplementation(() => {});
+
+    component.onInsertTable('3x3');
+    await Promise.resolve(); // queueMicrotask
+
+    expect(detectSpy).toHaveBeenCalled();
+  });
+});

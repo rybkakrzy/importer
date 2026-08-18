@@ -175,7 +175,7 @@ describe('WysiwygEditorComponent — pastePlainTextAt (Wklej bez formatowania)',
     expect(caret.compareBoundaryPoints(Range.START_TO_START, after)).toBe(0);
   });
 
-  it('multi-line text becomes soft <br> breaks within the paragraph', () => {
+  it('multi-line text becomes separate PARAGRAPHS, not soft <br> breaks (Word Keep Text Only)', () => {
     editor.innerHTML = '<p id="target"><br></p>';
     const target = editor.querySelector('#target')!;
     const bookmark = document.createRange();
@@ -184,9 +184,60 @@ describe('WysiwygEditorComponent — pastePlainTextAt (Wklej bez formatowania)',
 
     component.pastePlainTextAt(bookmark, 'line1\nline2');
 
-    expect(target.querySelectorAll('br').length).toBeGreaterThanOrEqual(1);
-    expect(target.textContent).toContain('line1');
-    expect(target.textContent).toContain('line2');
+    const paras = Array.from(editor.querySelectorAll('p'));
+    expect(paras.length).toBe(2);
+    expect(paras[0].textContent).toBe('line1');
+    expect(paras[1].textContent).toBe('line2');
+    // No soft break may join the lines inside one paragraph.
+    expect(paras[0].querySelector('br')).toBeNull();
+  });
+
+  it('multi-line paste mid-paragraph splits the host and keeps the tail after the last line', () => {
+    editor.innerHTML = '<p id="target" style="text-align:center">ABCD</p>';
+    const target = editor.querySelector('#target')!;
+    const bookmark = document.createRange();
+    bookmark.setStart(target.firstChild!, 2); // AB|CD
+    bookmark.collapse(true);
+
+    component.pastePlainTextAt(bookmark, 'one\ntwo\nthree');
+
+    const paras = Array.from(editor.querySelectorAll('p'));
+    expect(paras.map(p => p.textContent)).toEqual(['ABone', 'two', 'threeCD']);
+    // New blocks inherit the destination paragraph shell (Word: destination formatting).
+    expect(paras[1].getAttribute('style')).toBe('text-align:center');
+    expect(paras[2].getAttribute('style')).toBe('text-align:center');
+    // ...but never its identity.
+    expect(paras[1].id).toBe('');
+    expect(paras[2].id).toBe('');
+  });
+
+  it('blank line in a multi-line paste becomes an empty paragraph', () => {
+    editor.innerHTML = '<p id="target"><br></p>';
+    const target = editor.querySelector('#target')!;
+    const bookmark = document.createRange();
+    bookmark.setStart(target, 0);
+    bookmark.collapse(true);
+
+    component.pastePlainTextAt(bookmark, 'a\n\nb');
+
+    const paras = Array.from(editor.querySelectorAll('p'));
+    expect(paras.map(p => p.textContent)).toEqual(['a', '', 'b']);
+    // The empty paragraph keeps a <br> placeholder so it stays visible/editable.
+    expect(paras[1].querySelector('br')).not.toBeNull();
+  });
+
+  it('multi-line paste into a list item creates sibling list items', () => {
+    editor.innerHTML = '<ul><li id="target">punkt</li></ul>';
+    const target = editor.querySelector('#target')!;
+    const bookmark = document.createRange();
+    bookmark.setStart(target.firstChild!, 5);
+    bookmark.collapse(true);
+
+    component.pastePlainTextAt(bookmark, 'x\ny');
+
+    const items = Array.from(editor.querySelectorAll('li'));
+    expect(items.map(li => li.textContent)).toEqual(['punktx', 'y']);
+    expect(editor.querySelectorAll('ul').length).toBe(1);
   });
 
   it('keeps HTML-looking text literal (no injection)', () => {

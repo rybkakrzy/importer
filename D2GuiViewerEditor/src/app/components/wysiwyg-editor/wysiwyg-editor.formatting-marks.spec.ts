@@ -42,6 +42,21 @@ describe('WysiwygEditorComponent — „Pokaż wszystko": <br> zamykający akapi
     expect(trailingBrBlock('<h2>tytuł<br></h2>')?.tagName).toBe('H2');
   });
 
+  it('wykrywa <br> zamykający blockquote/pre (bloki ze ścieżki wklejania)', () => {
+    expect(trailingBrBlock('<blockquote>cytat<br></blockquote>')?.tagName).toBe('BLOCKQUOTE');
+    expect(trailingBrBlock('<pre>kod<br></pre>')?.tagName).toBe('PRE');
+  });
+
+  it('skompilowany CSS daje ¶ (::after) także dla blockquote/pre', () => {
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+
+    // Selektor reguły ¶ — sam znak w skompilowanym CSS bywa escapowany, więc
+    // asercja idzie po liście bloków, nie po treści content.
+    expect(css).toMatch(/:is\(p, h1, h2, h3, h4, h5, h6, li, blockquote, pre\)::after/);
+  });
+
   it('NIE oznacza <br> w środku treści (tekst lub element za złamaniem)', () => {
     expect(trailingBrBlock('<p><span>a<br>b</span></p>')).toBeNull();
     expect(trailingBrBlock('<p><span>a<br></span><span>b</span></p>')).toBeNull();

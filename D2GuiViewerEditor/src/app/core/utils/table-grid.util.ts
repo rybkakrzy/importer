@@ -172,6 +172,9 @@ export function applyColumnWidths(table: HTMLTableElement, grid: TableGrid, widt
 function dropRenderOnlyWidthMarkers(table: HTMLTableElement): void {
   table.removeAttribute('data-tbl-w');
   table.removeAttribute('data-tbl-layout');
+  // Original w:tblW twips preserved across render-only clamping — same rule: a
+  // manual resize makes the user the owner of the geometry, so the marker goes.
+  table.removeAttribute('data-tbl-w-tw');
 }
 
 function ensureColgroup(table: HTMLTableElement, columnCount: number): HTMLElement {
