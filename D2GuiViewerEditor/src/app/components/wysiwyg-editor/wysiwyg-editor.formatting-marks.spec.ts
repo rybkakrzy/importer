@@ -1,0 +1,115 @@
+import { TestBed, ComponentFixture } from '@angular/core/testing';
+import { WysiwygEditorComponent } from './wysiwyg-editor';
+
+/**
+ * Regresja trybu „Pokaż wszystko": akapit ZAMKNIĘTY ręcznym złamaniem (<br> bez treści
+ * za nim) dostawał CSS-owe ¶ (::after) ZA złamaniem — pseudo-element lądował w NOWEJ
+ * linii i rozpychał akapit o linię względem pomiaru paginacji (znaczniki muszą mieć
+ * zerowy wpływ na układ). Fix: overlay wykrywa taki <br>, nadaje blokowi prezentacyjną
+ * klasę .fmt-trailing-br (gasi ::after w SCSS) i sam maluje ¶ w tej samej linii zaraz
+ * za ↵. Klasa nie może wyciec do zapisu (getContent) ani do modelu pasm/przypisów.
+ *
+ * jsdom nie liczy layoutu (zerowe recty — znaczniki overlay się nie rysują), więc tu
+ * pinujemy: detekcję trailing-<br>, nadawanie/zdejmowanie klasy i higienę serializacji.
+ */
+describe('WysiwygEditorComponent — „Pokaż wszystko": <br> zamykający akapit', () => {
+  let fixture: ComponentFixture<WysiwygEditorComponent>;
+  let component: WysiwygEditorComponent;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({ imports: [WysiwygEditorComponent] }).compileComponents();
+    fixture = TestBed.createComponent(WysiwygEditorComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  function trailingBrBlock(html: string): HTMLElement | null {
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    document.body.appendChild(holder);
+    try {
+      const brs = holder.querySelectorAll('br');
+      const br = brs[brs.length - 1] as HTMLElement;
+      return (component as any)._trailingBrBlock(br);
+    } finally {
+      holder.remove();
+    }
+  }
+
+  it('wykrywa <br> zamykający akapit (także w spanie runu)', () => {
+    expect(trailingBrBlock('<p><span>tekst<br></span></p>')?.tagName).toBe('P');
+    expect(trailingBrBlock('<p><br></p>')?.tagName).toBe('P');
+    expect(trailingBrBlock('<h2>tytuł<br></h2>')?.tagName).toBe('H2');
+  });
+
+  it('NIE oznacza <br> w środku treści (tekst lub element za złamaniem)', () => {
+    expect(trailingBrBlock('<p><span>a<br>b</span></p>')).toBeNull();
+    expect(trailingBrBlock('<p><span>a<br></span><span>b</span></p>')).toBeNull();
+    expect(trailingBrBlock('<p><span>a<br><img src="x.png"></span></p>')).toBeNull();
+  });
+
+  it('biały znak/ZWSP za <br> nie liczy się jako treść', () => {
+    expect(trailingBrBlock('<p><span>a<br>\n \u200B</span></p>')?.tagName).toBe('P');
+  });
+
+  it('z dwóch <br> pod rząd tylko OSTATNI zamyka akapit', () => {
+    const holder = document.createElement('div');
+    holder.innerHTML = '<p><span>a<br><br></span></p>';
+    document.body.appendChild(holder);
+    try {
+      const [first, last] = Array.from(holder.querySelectorAll('br'));
+      expect((component as any)._trailingBrBlock(first)).toBeNull();
+      expect((component as any)._trailingBrBlock(last)?.tagName).toBe('P');
+    } finally {
+      holder.remove();
+    }
+  });
+
+  it('overlay nadaje klasę .fmt-trailing-br tylko blokom zamkniętym <br> i zdejmuje ją po wyłączeniu trybu', () => {
+    const host: HTMLElement = (component as any)._hostRef.nativeElement;
+    const page = document.createElement('div');
+    page.className = 'page';
+    page.innerHTML =
+      '<div class="editor-content">' +
+      '<p id="closed"><span>x<br></span></p>' +
+      '<p id="open"><span>a<br>b</span></p>' +
+      '</div>';
+    host.appendChild(page);
+
+    component.showFormattingMarks.set(true);
+    (component as any)._renderFormattingMarksOverlay();
+
+    expect(page.querySelector('#closed')!.classList.contains('fmt-trailing-br')).toBe(true);
+    expect(page.querySelector('#open')!.classList.contains('fmt-trailing-br')).toBe(false);
+
+    component.showFormattingMarks.set(false);
+    (component as any)._renderFormattingMarksOverlay();
+
+    expect(page.querySelector('.fmt-trailing-br')).toBeNull();
+    // Sprzątanie zdejmuje też pusty atrybut class (higiena serializacji).
+    expect(page.querySelector('#closed')!.getAttribute('class')).toBeNull();
+  });
+
+  it('getContent() nie przepuszcza klasy prezentacyjnej do zapisu', () => {
+    const el = document.createElement('div');
+    el.innerHTML =
+      '<p class="fmt-trailing-br"><span>x<br></span></p>' +
+      '<p class="moja-klasa fmt-trailing-br"><span>y<br></span></p>';
+    (component as any).pageEditorRefs = { toArray: () => [{ nativeElement: el }] };
+
+    const html = component.getContent();
+
+    expect(html).not.toContain('fmt-trailing-br');
+    expect(html).toContain('moja-klasa'); // inne klasy bloku przeżywają
+    expect(html).not.toContain('class=""'); // bez pustych atrybutów po zdjęciu
+  });
+
+  it('skompilowany CSS gasi ::after (¶) dla bloków .fmt-trailing-br', () => {
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(s => s.textContent ?? '')
+      .join('\n');
+    const block = /\.fmt-trailing-br::after\s*\{[^}]*\}/.exec(css)?.[0] ?? '';
+
+    expect(block).toMatch(/content:\s*none/);
+  });
+});

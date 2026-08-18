@@ -721,6 +721,7 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.stopAutoSave();
+    this._disarmMiniToolbarAutoHide();
     this.finishSendSub?.unsubscribe();
     this.vRulerResizeObserver?.disconnect();
     clearTimeout(this.tabCloseHintTimer);
@@ -3300,7 +3301,42 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       this.miniToolbarX.set(x);
       this.miniToolbarY.set(y);
       this.showMiniToolbar.set(true);
+      this._armMiniToolbarAutoHide();
     }, 10);
+  }
+
+  /**
+   * Jak w Wordzie: pasek znika, gdy mysz odjedzie od niego dalej niż margines —
+   * przestaje wisieć nad tekstem i kraść kliknięcia (dwuklik w słowo pod paskiem).
+   * Listener sam się rozbraja, gdy pasek już schowany (inne ścieżki zamknięcia).
+   */
+  private _miniToolbarMoveAway: ((e: MouseEvent) => void) | null = null;
+
+  private _armMiniToolbarAutoHide(): void {
+    if (this._miniToolbarMoveAway) return;
+    const PROXIMITY_PX = 48;
+    this._miniToolbarMoveAway = (e: MouseEvent) => {
+      if (!this.showMiniToolbar()) {
+        this._disarmMiniToolbarAutoHide();
+        return;
+      }
+      const el = document.querySelector('.mini-toolbar') as HTMLElement | null;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const outside = e.clientX < r.left - PROXIMITY_PX || e.clientX > r.right + PROXIMITY_PX
+        || e.clientY < r.top - PROXIMITY_PX || e.clientY > r.bottom + PROXIMITY_PX;
+      if (outside) {
+        this.showMiniToolbar.set(false);
+        this._disarmMiniToolbarAutoHide();
+      }
+    };
+    document.addEventListener('mousemove', this._miniToolbarMoveAway);
+  }
+
+  private _disarmMiniToolbarAutoHide(): void {
+    if (!this._miniToolbarMoveAway) return;
+    document.removeEventListener('mousemove', this._miniToolbarMoveAway);
+    this._miniToolbarMoveAway = null;
   }
 
   onEditorMouseDown(event: MouseEvent): void {
@@ -3310,13 +3346,34 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** Zapobiega utracie selekcji w edytorze przy klikaniu w mini-toolbar,
+  /** Jak w Wordzie: pisanie chowa mini-toolbar (wisiał nad tekstem i kradł
+   *  następne kliknięcia — dwuklik w słowo pod paskiem trafiał w kontrolki). */
+  onEditorKeyDownHideMiniToolbar(): void {
+    if (this.showMiniToolbar()) this.showMiniToolbar.set(false);
+  }
+
+  /** Zapobiega utracie selekcji w edytorze przy klikaniu w KONTROLKI mini-toolbara,
    *  ale pozwala INPUT i SELECT na normalne działanie.
    *  Dla INPUT/SELECT selekcja jest zapisywana PRZED przeniesieniem focusu
-   *  przez przeglądarkę (mousedown odpala się przed blur edytora). */
+   *  przez przeglądarkę (mousedown odpala się przed blur edytora).
+   *  Tło/przerwy paska NIE kradną kliku: preventDefault na całym panelu 560px
+   *  sprawiał, że dwuklik w słowo przykryte paskiem był połykany bez końca
+   *  (pasek nie znikał, bo klik „w pasek" nie liczył się jako klik poza nim) —
+   *  zamykamy pasek i pozwalamy sekwencji dwukliku dokończyć się na tekście. */
   onMiniToolbarMouseDown(event: MouseEvent): void {
     const target = event.target as HTMLElement;
-    if (target.tagName === 'INPUT' || target.tagName === 'SELECT') {
+    const control = target.closest('input, select, button') as HTMLElement | null;
+    if (!control) {
+      this.showMiniToolbar.set(false);
+      return;
+    }
+    // Dwuklik w SELECT paska = celowanie w tekst POD paskiem (dropdown otwiera się
+    // pojedynczym klikiem; podwójnego się na nim nie używa) — oddaj słowo tekstowi.
+    if (control.tagName === 'SELECT' && event.detail >= 2) {
+      this.showMiniToolbar.set(false);
+      return;
+    }
+    if (control.tagName === 'INPUT' || control.tagName === 'SELECT') {
       // Zapisz selekcję zanim focus przejdzie do kontrolki i edytor ją wyczyści
       this.editor?.saveSelection();
     } else {

@@ -420,6 +420,13 @@ img[data-legacy-graphic='blank'] {
   text-indent: 0;
 }
 
+/* Marker punktora to artefakt prezentacyjny (writer pomija go przy zapisie; definicja
+   punktora wraca z data-lvl-text) — nie może łapać się w zaznaczenie ani kasować znak
+   po znaku („pusty punktor" po edycji). Reader emituje też contenteditable="false". */
+.editor-content li .list-marker {
+  user-select: none;
+}
+
 /* Etykiety list DOCX liczone silnikiem (data-list-label z list-label.util) — natywne
    markery przeglądarki nie umieją szablonów wielopoziomowych ("2.4.1."), sufiksów
    lvlText ("1)"), numeracji legal ani kontynuacji fragmentów po edycji. Pseudo-element
@@ -1005,6 +1012,17 @@ body.image-moving * {
   user-select: none;
   pointer-events: none;
 }
+
+/* Blok ZAMKNIĘTY ręcznym złamaniem (<br> bez treści za nim): ::after wpadłby ZA złamanie
+   — do NOWEJ linii, rozpychając blok o linię względem pomiaru paginacji (znaczniki muszą
+   mieć zerowy wpływ na układ). Klasę nadaje overlay (_renderFormattingMarksOverlay),
+   który sam maluje ¶ w tej samej linii zaraz za ↵. */
+:is(.editor-content, .header-editor-content, .footer-editor-content, .header-display, .footer-display, .footnote-item-content).show-formatting-marks :is(p, h1, h2, h3, h4, h5, h6, li).fmt-trailing-br::after {
+  content: none;
+}
+
+/* ¶ malowane w overlayu (blok zamknięty <br>) — proporcja jak CSS-owy ::after (0.9em). */
+.fmt-mark.fmt-pilcrow { transform: scale(0.9); }
 
 /* Strzałka tabulatora → dla trzech nośników tabów z readera:
    1) span.docx-tab-seg — segment pozycjonowany absolutnie na stopie; strzałka W LUCE

@@ -209,6 +209,46 @@ public class TableStyleFidelityTests
     }
 
     [Test]
+    public void Read_FirstRowConditionalBorders_ResolvePositionallyWithinRegion()
+    {
+        // tblStylePr[firstRow] z tblBorders: obwód DOUBLE, insideV single. Wcześniej każda
+        // komórka nagłówka dostawała krawędzie zewnętrzne regionu na WSZYSTKICH stronach
+        // (insideH/insideV regionu ignorowane), a po zapisie utrwalało się to jako
+        // bezpośrednie w:tcBorders val="double" — podwójne linie między komórkami w Wordzie.
+        var style = GridTableStyle("HeadBorders");
+        style.Append(new TableStyleProperties(
+            new TableStyleConditionalFormattingTableProperties(
+                new TableBorders(
+                    new TopBorder { Val = BorderValues.Double, Size = 12, Color = "000000" },
+                    new LeftBorder { Val = BorderValues.Double, Size = 12, Color = "000000" },
+                    new BottomBorder { Val = BorderValues.Double, Size = 12, Color = "000000" },
+                    new RightBorder { Val = BorderValues.Double, Size = 12, Color = "000000" },
+                    new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" })))
+        { Type = TableStyleOverrideValues.FirstRow });
+
+        var tblPr = new TableProperties(
+            new TableStyle { Val = "HeadBorders" },
+            new TableLook { FirstRow = true, NoHorizontalBand = true, NoVerticalBand = true });
+
+        var html = _reader.Convert(BuildDocx(style, tblPr, rows: 2, cols: 3)).Html;
+        var cells = CellStyles(html);
+        cells.Should().HaveCount(6);
+
+        // Środkowa komórka nagłówka: lewa/prawa krawędź leżą WEWNĄTRZ regionu → insideV
+        // (single), nie obwód (double); góra/dół to obwód pasma → double.
+        cells[1].Should().Contain("border-left:0.7px solid")
+            .And.Contain("border-right:0.7px solid")
+            .And.Contain("border-top:6px double")
+            .And.Contain("border-bottom:6px double");
+        // Skrajne komórki nagłówka: zewnętrzna strona double, wewnętrzna single.
+        cells[0].Should().Contain("border-left:6px double").And.Contain("border-right:0.7px solid");
+        cells[2].Should().Contain("border-right:6px double").And.Contain("border-left:0.7px solid");
+        // Wiersz treści poza regionem — żadnych double.
+        cells[3].Should().NotContain("double");
+        cells[4].Should().NotContain("double");
+    }
+
+    [Test]
     public void Read_RowBanding_SkipsHeaderAndAlternates()
     {
         var style = GridTableStyle("Banded");

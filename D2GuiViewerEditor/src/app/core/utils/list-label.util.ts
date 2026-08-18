@@ -249,7 +249,10 @@ export function ensureBulletMarkers(roots: Iterable<HTMLElement>): void {
       );
       const template = items
         .map(li => li.querySelector<HTMLElement>(':scope > span.list-marker'))
-        .find(span => span !== null);
+        .find(span => span !== null)
+        // Kontener bez ŻADNEGO wzorca (fragment po paginacji/wklejce, w którym wszystkie
+        // li straciły marker) — zsyntetyzuj go z kontraktu data-lvl-text/data-bullet-font.
+        ?? synthesizeBulletMarker(container);
       if (!template) return;
       for (const li of items) {
         if (li.querySelector(':scope > span.list-marker')) continue;
@@ -257,4 +260,40 @@ export function ensureBulletMarkers(roots: Iterable<HTMLElement>): void {
       }
     });
   }
+}
+
+/**
+ * Buduje `span.list-marker` z kontraktu kontenera (fmt=bullet + data-lvl-text), gdy w DOM
+ * nie ma już wzorca do sklonowania. Lustrzana, minimalna wersja mapowania readera:
+ * znaki PUA U+F0xx (Wingdings zapisany bez glifu Unicode) mapujemy po młodszym bajcie,
+ * nieznany kod → kropka. Zwraca null dla list numerowanych / bez lvlText / z obrazkiem.
+ */
+export function synthesizeBulletMarker(container: Element): HTMLElement | null {
+  const attrs = readListContainerAttrs(container);
+  if (!attrs || attrs.fmt !== 'bullet' || attrs.picBullet || !attrs.lvlText) return null;
+  const span = document.createElement('span');
+  span.className = 'list-marker';
+  span.setAttribute('contenteditable', 'false');
+  span.setAttribute('style', 'display:inline-block;min-width:1.2em;margin-right:0.4em;');
+  span.textContent = bulletGlyphFromContract(attrs.lvlText, container.getAttribute('data-bullet-font'));
+  return span;
+}
+
+/** Wingdings (młodszy bajt) → Unicode; podzbiór spójny z mapą readera (WingdingsFontMap). */
+const WINGDINGS_GLYPHS: Record<number, string> = {
+  0x6c: '●', 0x6e: '■', 0x6f: '□', 0x71: '❑', 0x72: '❒', 0x75: '◆',
+  0xa7: '■', 0xa8: '☐', 0xd8: '❖',
+  0xfb: '✗', 0xfc: '✔', 0xfd: '☒', 0xfe: '☑',
+};
+
+/** Widoczny glif punktora z kontraktu (lvlText + font); pusty/PUA nigdy nie wycieka do DOM. */
+export function bulletGlyphFromContract(lvlText: string, font: string | null): string {
+  const code = lvlText.codePointAt(0) ?? 0x2022;
+  const isPua = code >= 0xf000 && code <= 0xf0ff;
+  const low = isPua ? code & 0xff : code;
+  const f = (font ?? '').toLowerCase();
+  if (isPua || f.includes('wingdings') || f.includes('webdings') || f === 'symbol') {
+    return WINGDINGS_GLYPHS[low] ?? '•';
+  }
+  return lvlText;
 }

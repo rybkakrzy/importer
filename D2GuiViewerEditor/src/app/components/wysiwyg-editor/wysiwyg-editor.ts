@@ -35,8 +35,10 @@ import {
 import { normalizeWhitespace, resolvePlainText } from '../../core/utils/paste-text.util';
 import {
   applyListLabels,
+  bulletGlyphFromContract,
   ensureBulletMarkers,
   stripListLabelAttributes,
+  synthesizeBulletMarker,
 } from '../../core/utils/list-label.util';
 import {
   applyColumnWidths,
@@ -534,6 +536,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     columnWidths: number[];
     startHeight: number;
     startTableWidth: number;
+    // Czy wskaźnik faktycznie się poruszył — sam klik w strefie krawędzi (bez ruchu)
+    // nie może commitować (onContentChange = dirty/undo/persist za darmo).
+    moved: boolean;
   } | null = null;
 
   // Multi-page MVP (Wariant A):
@@ -805,9 +810,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private _isSameRenderedHtml(stored: string, live: HTMLElement): boolean {
     if (stored === live.innerHTML) return true;
+    // Overlay „Pokaż wszystko" mógł nadać blokom wpisu prezentacyjną klasę .fmt-trailing-br
+    // — porównujemy treść BEZ niej, inaczej sam blur (bez edycji) commitowałby wpis.
+    const liveClone = live.cloneNode(true) as HTMLElement;
+    this._stripFmtTrailingBr(liveClone);
+    if (stored === liveClone.innerHTML) return true;
     const probe = document.createElement('div');
     probe.innerHTML = stored;
-    return probe.innerHTML === live.innerHTML;
+    return probe.innerHTML === liveClone.innerHTML;
   }
 
   /** Commit treści przypisu po edycji w panelu (blur) → aktualizacja modelu + emisja. */
@@ -820,7 +830,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (idx < 0 || this._isSameRenderedHtml(current[idx].html, el)) return;
 
     this._normalizeEditedNbsp(el);
-    const html = el.innerHTML;
+    // Do modelu idzie treść BEZ prezentacyjnej klasy overlay'a (żywy DOM ją zachowuje —
+    // overlay uzgodni ją przy następnym przebiegu).
+    const clean = el.cloneNode(true) as HTMLElement;
+    this._stripFmtTrailingBr(clean);
+    const html = clean.innerHTML;
     const updated = current.map(f => (f.id === id ? { ...f, html } : f));
     this._footnotes.set(updated);
     this.footnotesChange.emit(this.getFootnotes());
@@ -1031,7 +1045,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (idx < 0 || this._isSameRenderedHtml(current[idx].html, el)) return;
 
     this._normalizeEditedNbsp(el);
-    const html = el.innerHTML;
+    // Jak w commitFootnoteContent: treść do modelu bez prezentacyjnej klasy overlay'a.
+    const clean = el.cloneNode(true) as HTMLElement;
+    this._stripFmtTrailingBr(clean);
+    const html = clean.innerHTML;
     const updated = current.map(e => (e.id === id ? { ...e, html } : e));
     this._endnotes.set(updated);
     this.endnotesChange.emit(this.getEndnotes());
@@ -1428,6 +1445,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this.pageCheckInterval) {
       clearInterval(this.pageCheckInterval);
     }
+    // Wiszący debounce persist po zniszczeniu komponentu sięgałby po zdjęty DOM
+    // (w testach: „document is not defined" po teardownie środowiska).
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
     if (this._paginateRafHandle !== null) {
       cancelAnimationFrame(this._paginateRafHandle);
       this._paginateRafHandle = null;
@@ -1550,6 +1573,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     editor.addEventListener('paste', (e) => {
       this.handlePaste(e);
     });
+    // Własna serializacja kopiowania: domyślna (przeglądarkowa) zapieka computed style
+    // w spany i gubi kontekst częściowo zaznaczonych list/tabel; do schowka wchodziły też
+    // wewnętrzne markery podziału paginacji i zakładki (duplikaty po wklejeniu).
+    editor.addEventListener('copy', (e) => {
+      this.handleCopyOrCut(e, false);
+    });
+    editor.addEventListener('cut', (e) => {
+      this.handleCopyOrCut(e, true);
+    });
     editor.addEventListener('keydown', (e) => {
       this.handleKeyboard(e);
     });
@@ -1602,7 +1634,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const target = event.target as HTMLElement;
 
     // --- Resize tabeli ---
-    const tableHit = this.detectTableResizeHit(event);
+    // Dwuklik/trójklik = intencja ZAZNACZENIA tekstu (słowo/akapit) — strefa resize nie
+    // może go kraść: 6px od krawędzi komórki pokrywa dolną połowę glifów przy tcMar≈0,
+    // więc dwuklik w słowo w ciasnej tabeli bywał połykany (preventDefault) do skutku.
+    const tableHit = event.detail >= 2 ? null : this.detectTableResizeHit(event);
     if (tableHit) {
       event.preventDefault();
       event.stopPropagation();
@@ -1902,6 +1937,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     if (!td) return null;
+
+    // Wskaźnik NAD glifami tekstu = intencja pracy z tekstem (karetka/zaznaczenie),
+    // nie resize. Przy tcMar≈0 tekst kończy się tuż przy krawędzi komórki i 6px strefa
+    // pokrywała dolną połowę glifów — klik/dwuklik w słowo był połykany do skutku.
+    if (this._pointOverText(event.clientX, event.clientY)) return null;
+
     const cellRect = td.getBoundingClientRect();
     const rowIndex = (td.parentElement as HTMLTableRowElement).rowIndex;
 
@@ -1927,6 +1968,27 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     return null;
+  }
+
+  /**
+   * Czy punkt (viewport px) leży w prostokącie glifów tekstu — sąsiedztwo pozycji
+   * z caretRangeFromPoint rozszerzone o 1 znak w obie strony. Czyste odczyty layoutu
+   * (bez zapisów — pułapka ADR-0075 nie dotyczy).
+   */
+  private _pointOverText(x: number, y: number): boolean {
+    const caret = document.caretRangeFromPoint?.(x, y);
+    if (!caret || caret.startContainer.nodeType !== Node.TEXT_NODE) return false;
+    const node = caret.startContainer as Text;
+    const start = Math.max(0, caret.startOffset - 1);
+    const end = Math.min(node.length, caret.startOffset + 1);
+    if (start === end) return false;
+    const r = document.createRange();
+    r.setStart(node, start);
+    r.setEnd(node, end);
+    for (const rect of Array.from(r.getClientRects())) {
+      if (x >= rect.left - 2 && x <= rect.right + 2 && y >= rect.top && y <= rect.bottom) return true;
+    }
+    return false;
   }
 
   /**
@@ -2025,7 +2087,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       startColumnWidths,
       columnWidths: [...startColumnWidths],
       startHeight,
-      startTableWidth
+      startTableWidth,
+      moved: false
     };
 
     // Zablokuj zaznaczanie tekstu i wymusz kursor na całym dokumencie
@@ -2037,6 +2100,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       moveEvent.preventDefault();
       if (!this.tableResizeState) return;
       const st = this.tableResizeState;
+      if (moveEvent.clientX !== st.startX || moveEvent.clientY !== st.startY) st.moved = true;
 
       if (st.type === 'col') {
         this.resizeTableColumn(st, moveEvent);
@@ -2062,7 +2126,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // odtwarza w:tblGrid; bez synchronizacji zapis wracał ze starą geometrią kolumn.
       // Widths come from the logical grid, so merged/spacer tables stay correct even
       // when no "clean" row exists to measure.
-      if (finished && (finished.type === 'col' || finished.type === 'table')) {
+      // Sam klik w strefie krawędzi (zero ruchu) nie jest edycją — bez commitu
+      // dokument nie brudzi się (undo/persist/repaginacja) od nieudanych kliknięć.
+      if (!finished?.moved) return;
+      if (finished.type === 'col' || finished.type === 'table') {
         writeColgroupWidths(
           finished.table,
           finished.grid,
@@ -2991,26 +3058,413 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
 
     if (html) {
-      this.insertHtml(this.sanitizeHtml(html));
-    } else {
-      this.insertText(normalizeWhitespace(plain));
+      const fragment = this.prepareClipboardFragment(html);
+      if (fragment) {
+        this.insertClipboardFragment(fragment);
+        return;
+      }
+    }
+    this.insertText(normalizeWhitespace(plain));
+  }
+
+  // ═════════════ Schowek — deterministyczny pipeline (copy/cut/paste) ═════════════
+  // Objawy sprzed zmiany: „wytnij/kopiuj/wklej zmienia formatowanie, rozjazdy w tekście,
+  // listach i tabelach". Przyczyny: (1) domyślna serializacja kopiowania Chrome zapieka
+  // computed style i nie niesie tożsamości list (data-num-*)/kolumn tabel; (2) gołe
+  // execCommand('insertHTML') pozwalało wkleić wewnętrzne markery podziału paginacji
+  // (getContent SKLEJA tabele po data-split-table-id → korupcja!), duplikaty zakładek
+  // i śmieci Worda (mso-*, o:p); (3) blok wklejony w środek akapitu lądował W <p>
+  // (np. table-in-p), czego writer nie umie odczytać.
+
+  /** Kopiuj/Wytnij: własny payload text/html + text/plain. Puste zaznaczenie → default. */
+  private handleCopyOrCut(e: ClipboardEvent, cut: boolean): void {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    if (!this.isSelectionInEditor(sel) || !e.clipboardData) return;
+
+    const range = sel.getRangeAt(0);
+    e.preventDefault();
+    e.clipboardData.setData('text/html', this.buildClipboardHtml(range));
+    e.clipboardData.setData('text/plain', sel.toString());
+
+    if (cut && !this.readOnly) {
+      range.deleteContents();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      this.savedSelection = range.cloneRange();
+      this.onContentChange();
     }
   }
 
   /**
-   * Oczyszcza HTML z niechcianych elementów
+   * Buduje HTML schowka z zaznaczenia: klon fragmentu + odtworzone kontenery częściowo
+   * zaznaczonych list/tabel (z ich atrybutami i colgroup — tożsamość i szerokości przeżywają),
+   * bez wewnętrznych artefaktów (markery podziału, zakładki). Wrapper `data-d2-clip`
+   * pozwala odróżnić wklejkę własną (zaufaną) od zewnętrznej.
    */
-  private sanitizeHtml(html: string): string {
-    // Usuń skrypty
-    html = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
-    // Usuń style globalne (zachowaj inline)
-    html = html.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    // Usuń komentarze
-    html = html.replace(/<!--[\s\S]*?-->/g, '');
-    // Usuń atrybuty onclick, onerror itp.
-    html = html.replace(/\s*on\w+\s*=\s*["'][^"']*["']/gi, '');
-    
-    return html;
+  private buildClipboardHtml(range: Range): string {
+    const holder = document.createElement('div');
+    holder.appendChild(range.cloneContents());
+
+    this.rewrapClipboardOrphans(holder, range);
+    this.stripClipboardArtifacts(holder);
+
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('data-d2-clip', '1');
+    while (holder.firstChild) wrapper.appendChild(holder.firstChild);
+    return wrapper.outerHTML;
+  }
+
+  /**
+   * Częściowe zaznaczenie listy/tabeli klonuje się bez kontenera (gołe LI / TR / TD) —
+   * wklejone tak, jak jest, gubi tożsamość listy (numeracja od 1, zły format) i strukturę
+   * tabeli. Odtwarzamy powłoki z ORYGINAŁU (shallow clone z atrybutami; tabela dostaje
+   * klon colgroup — szerokości kolumn). Kolejność przebiegów: TD→TR zanim TR→TABLE.
+   */
+  private rewrapClipboardOrphans(holder: HTMLElement, range: Range): void {
+    const anchorNode = range.commonAncestorContainer;
+    const anchor = anchorNode instanceof Element ? anchorNode : anchorNode.parentElement;
+
+    const groupConsecutive = (tagNames: Set<string>, makeShell: () => HTMLElement) => {
+      const kids = Array.from(holder.children);
+      let run: HTMLElement[] = [];
+      const flush = () => {
+        if (run.length === 0) return;
+        const shell = makeShell();
+        holder.insertBefore(shell, run[0]);
+        run.forEach(el => shell.appendChild(el));
+        run = [];
+      };
+      for (const kid of kids) {
+        if (tagNames.has(kid.tagName)) run.push(kid as HTMLElement);
+        else flush();
+      }
+      flush();
+    };
+
+    groupConsecutive(new Set(['TD', 'TH']), () => document.createElement('tr'));
+    groupConsecutive(new Set(['TR', 'TBODY', 'THEAD', 'TFOOT']), () => {
+      const table = anchor?.closest('table');
+      if (!table) return document.createElement('table');
+      const shell = table.cloneNode(false) as HTMLElement;
+      const colgroup = table.querySelector(':scope > colgroup');
+      if (colgroup) shell.appendChild(colgroup.cloneNode(true));
+      return shell;
+    });
+    groupConsecutive(new Set(['LI']), () => {
+      // Zaznaczenie od akapitu w głąb listy: commonAncestor leży NAD listą — powłokę
+      // odzyskujemy z końców zakresu (gołe <ul> bez kontraktu/stylów wklejałoby się
+      // z domyślnym wcięciem SCSS zamiast wcięcia źródła).
+      const list = anchor?.closest('ul,ol')
+        ?? this._closestList(range.startContainer)
+        ?? this._closestList(range.endContainer);
+      return list ? (list.cloneNode(false) as HTMLElement) : document.createElement('ul');
+    });
+  }
+
+  /** Najbliższy kontener listy nad węzłem (tekstowym lub elementem). */
+  private _closestList(node: Node): HTMLElement | null {
+    const el = node instanceof Element ? node : node.parentElement;
+    return el?.closest('ul,ol') ?? null;
+  }
+
+  /** Artefakty, które NIGDY nie mogą wejść do schowka ani wrócić z wklejką. */
+  private stripClipboardArtifacts(root: ParentNode): void {
+    // Markery podziału paginacji: getContent scala tabele/wiersze po tych id — wklejona
+    // kopia z tym samym id zostałaby SKLEJONA z oryginałem przy zapisie.
+    root.querySelectorAll('[data-split-table-id],[data-split-row-id],[data-split-cont]').forEach(el => {
+      el.removeAttribute('data-split-table-id');
+      el.removeAttribute('data-split-row-id');
+      el.removeAttribute('data-split-cont');
+    });
+    // Zakładki: duplikat data-bm-name → writer emituje drugi bookmarkStart o tej samej
+    // nazwie (ryzyko „naprawy" pliku w Wordzie). Cel pozostaje w miejscu oryginału.
+    root.querySelectorAll('.docx-bookmark').forEach(el => el.remove());
+  }
+
+  /**
+   * Parsuje i czyści HTML ze schowka. Wklejka własna (marker data-d2-clip) przechodzi
+   * lekką ścieżką (tylko artefakty); zewnętrzna (Word/przeglądarka) — pełną sanitizację
+   * z allowlistami tagów i stylów. Zwraca null, gdy po czyszczeniu nic nie zostało
+   * (wtedy wklejamy czysty tekst).
+   */
+  private prepareClipboardFragment(html: string): DocumentFragment | null {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = html; // template nie wykonuje skryptów ani nie ładuje zasobów
+
+    tpl.content.querySelectorAll('script,style,link,meta,title,iframe,object,embed,base,form,input,button,textarea,select')
+      .forEach(n => n.remove());
+
+    const internal = tpl.content.querySelector('[data-d2-clip]');
+    if (!internal) {
+      this.sanitizeExternalClipboardHtml(tpl.content);
+    }
+    // Pas bezpieczeństwa także dla wklejek wewnętrznych (i starych kopii sprzed tej zmiany).
+    this.stripClipboardArtifacts(tpl.content);
+
+    const source: ParentNode = internal ?? tpl.content;
+    const out = document.createDocumentFragment();
+    while (source.firstChild) out.appendChild(source.firstChild);
+    return out.childNodes.length > 0 ? out : null;
+  }
+
+  /**
+   * Sanitizacja HTML spoza edytora (Word, strony WWW): allowlista tagów (reszta odpakowana,
+   * treść zostaje), allowlista właściwości inline (mso-*, position, marginesy Worda — precz;
+   * szerokości/obramowania zostają na elementach tabel), zrzucone klasy/id/handlery,
+   * obrazki tylko data: (CSP i tak blokuje zdalne), międzywyrazowe twarde spacje → zwykłe
+   * (Word HTML jest nimi upstrzony — bez tego „rozjazdy w tekście", ADR-0083).
+   */
+  private sanitizeExternalClipboardHtml(root: DocumentFragment): void {
+    const ALLOWED_TAGS = new Set([
+      'P', 'DIV', 'SPAN', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SUB', 'SUP', 'A',
+      'UL', 'OL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH', 'COL', 'COLGROUP',
+      'BR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'IMG', 'BLOCKQUOTE',
+    ]);
+    const KEEP_STYLES = new Set([
+      'font-weight', 'font-style', 'text-decoration', 'text-decoration-line', 'color',
+      'background-color', 'font-size', 'font-family', 'text-align', 'vertical-align',
+    ]);
+    const TABLE_TAGS = new Set(['TABLE', 'TD', 'TH', 'COL', 'COLGROUP', 'TR']);
+    const KEEP_TABLE_STYLES = new Set([
+      'width', 'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
+      'border-collapse', 'padding',
+    ]);
+
+    for (const el of Array.from(root.querySelectorAll('*'))) {
+      // Odpakowany/usunięty przez wcześniejszą iterację. UWAGA: nie isConnected —
+      // w DocumentFragment jest zawsze false i pomijałby WSZYSTKO.
+      if (!root.contains(el)) continue;
+
+      if (!ALLOWED_TAGS.has(el.tagName)) {
+        // Odpakuj (o:p, font, section, article…) — treść przechodzi dalej.
+        el.replaceWith(...Array.from(el.childNodes));
+        continue;
+      }
+
+      if (el.tagName === 'IMG') {
+        const src = el.getAttribute('src') ?? '';
+        if (!src.startsWith('data:image/')) { el.remove(); continue; }
+      }
+      if (el.tagName === 'A') {
+        const href = el.getAttribute('href') ?? '';
+        if (!/^(https?:|mailto:|#)/i.test(href)) el.removeAttribute('href');
+      }
+
+      // Atrybuty: zostaje wyłącznie przefiltrowany style (+ src/alt obrazka, href linku,
+      // colspan/rowspan/span komórek). Klasy (Mso*), id, contenteditable, data-* — precz.
+      const keepAttrs = new Set(['src', 'alt', 'href', 'colspan', 'rowspan', 'span']);
+      for (const attr of Array.from(el.attributes)) {
+        if (attr.name === 'style' || keepAttrs.has(attr.name)) continue;
+        el.removeAttribute(attr.name);
+      }
+
+      const style = el.getAttribute('style');
+      if (style) {
+        const kept: string[] = [];
+        for (const decl of style.split(';')) {
+          const idx = decl.indexOf(':');
+          if (idx < 0) continue;
+          const prop = decl.slice(0, idx).trim().toLowerCase();
+          const value = decl.slice(idx + 1).trim();
+          if (!value) continue;
+          if (KEEP_STYLES.has(prop) || (TABLE_TAGS.has(el.tagName) && KEEP_TABLE_STYLES.has(prop))) {
+            kept.push(`${prop}:${value}`);
+          }
+        }
+        if (kept.length > 0) el.setAttribute('style', kept.join(';') + ';');
+        else el.removeAttribute('style');
+      }
+    }
+
+    // Puste spany bez atrybutów — odpakuj (Chrome/Word potrafią ich nawrzucać setki).
+    root.querySelectorAll('span').forEach(span => {
+      if (span.attributes.length === 0) span.replaceWith(...Array.from(span.childNodes));
+    });
+
+    // Międzywyrazowe twarde spacje → zwykłe (jak commit przypisów, ADR-0083).
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const value = node.nodeValue ?? '';
+      if (!value.includes('\u00A0')) continue;
+      const cleaned = value.replace(/(?<=\S)\u00A0|\u00A0(?=\S)/g, ' ');
+      if (cleaned !== value) node.nodeValue = cleaned;
+    }
+  }
+
+  /**
+   * Wstawia fragment w kursor Z ROZRÓŻNIENIEM inline/blok. Fragment czysto inline idzie
+   * wprost w miejsce kursora. Fragment z blokami dzieli bieżący akapit na pół (jak Word):
+   * wiodące inline'y doklejają się do pierwszej połówki, bloki wchodzą MIĘDZY połówki na
+   * poziomie bloków (koniec z <table> wewnątrz <p>, których writer nie czyta), końcowe
+   * inline'y otwierają drugą połówkę. Puste połówki są sprzątane.
+   */
+  private insertClipboardFragment(fragment: DocumentFragment): void {
+    const editor = this.getActiveEditor();
+    if (!editor) return;
+
+    let range: Range | null = null;
+    const live = window.getSelection();
+    if (live && live.rangeCount > 0 && this.isSelectionInEditor(live)) {
+      range = live.getRangeAt(0);
+    } else if (this.savedSelection && editor.contains(this.savedSelection.startContainer)) {
+      range = this.savedSelection.cloneRange();
+    }
+    if (!range) return;
+    range.deleteContents();
+
+    const BLOCK_TAGS = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'TABLE', 'BLOCKQUOTE']);
+    const isBlock = (n: Node): n is HTMLElement =>
+      n.nodeType === Node.ELEMENT_NODE && BLOCK_TAGS.has((n as Element).tagName);
+    const nodes = Array.from(fragment.childNodes);
+
+    let last: Node | null = null;
+    if (!nodes.some(isBlock)) {
+      last = nodes[nodes.length - 1] ?? null;
+      range.insertNode(fragment);
+    } else {
+      last = this.insertBlockNodesAtCaret(range, nodes, isBlock, editor);
+    }
+
+    if (last) {
+      const caret = document.createRange();
+      caret.setStartAfter(last);
+      caret.collapse(true);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(caret);
+      this.savedSelection = caret.cloneRange();
+    }
+    this.onContentChange();
+  }
+
+  /** Wstawianie blokowe: split akapitu-gospodarza + dystrybucja inline/blok (patrz wyżej). */
+  private insertBlockNodesAtCaret(
+    range: Range,
+    nodes: Node[],
+    isBlock: (n: Node) => boolean,
+    editor: HTMLElement,
+  ): Node | null {
+    const block = this._nearestBlockElement(range.startContainer, editor);
+    let last: Node | null = null;
+
+    // Wklejka listy z kursorem w elemencie listy: elementy scalamy do listy-gospodarza
+    // jako rodzeństwo (jak Word). Zagnieżdżenie ul/ol wewnątrz li sumowałoby wcięcia
+    // (padding-left kontraktu + wcięcie gospodarza) — punktor odjeżdżał od krawędzi,
+    // a numeracja zaczynała się od nowa.
+    if (block?.tagName === 'LI' && block.parentElement
+        && (block.parentElement.tagName === 'UL' || block.parentElement.tagName === 'OL')
+        && nodes.filter(isBlock).every(n => (n as Element).tagName === 'UL' || (n as Element).tagName === 'OL')) {
+      return this.mergeListNodesIntoHostList(range, nodes, block, isBlock);
+    }
+
+    // Rozcinamy wyłącznie bloki „akapitowe". TD/TH rozcięte klonem = dodatkowa komórka
+    // w wierszu; DIV bywa sdt-blockiem (klon = zduplikowany formant przy zapisie);
+    // LI rozcięte wpuściłoby blok jako dziecko UL/OL. Te kontenery legalnie mieszczą
+    // bloki w środku — wstawiamy sekwencyjnie w miejscu kursora.
+    const SPLITTABLE = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE', 'PRE']);
+    if (!block || block === editor || !block.parentNode || !SPLITTABLE.has(block.tagName)) {
+      for (const n of nodes) {
+        range.insertNode(n);
+        range.setStartAfter(n);
+        range.collapse(true);
+        last = n;
+      }
+      return last;
+    }
+
+    const parent = block.parentNode;
+    const after = block.cloneNode(false) as HTMLElement;
+    const tail = document.createRange();
+    tail.setStart(range.startContainer, range.startOffset);
+    tail.setEnd(block, block.childNodes.length);
+    after.appendChild(tail.extractContents());
+    parent.insertBefore(after, block.nextSibling);
+
+    let leading = true;
+    let afterCursor: Node | null = after.firstChild;
+    for (const n of nodes) {
+      if (leading && !isBlock(n)) {
+        block.appendChild(n);
+        last = n;
+        continue;
+      }
+      leading = false;
+      if (isBlock(n)) {
+        parent.insertBefore(n, after);
+        last = n;
+      } else {
+        after.insertBefore(n, afterCursor);
+        last = n;
+      }
+    }
+
+    // Sprzątanie pustych połówek — bez osieroconych pustych akapitów wokół wklejki.
+    const isEmpty = (el: HTMLElement) => (el.textContent ?? '').length === 0 && el.children.length === 0;
+    if (isEmpty(after)) after.remove();
+    if (isEmpty(block)) block.remove();
+
+    return last;
+  }
+
+  /**
+   * Scala wklejane listy do listy-gospodarza: element pod kursorem dzielimy jak akapit,
+   * li wklejanych ul/ol wchodzą MIĘDZY połówki jako rodzeństwo (powłoka wklejanej listy
+   * odpada — wcięcie i numerację nadaje kontrakt gospodarza; etykiety przeliczy
+   * applyListLabels po onContentChange). Wiodące/końcowe inline'y trafiają do połówek.
+   */
+  private mergeListNodesIntoHostList(
+    range: Range,
+    nodes: Node[],
+    li: HTMLElement,
+    isBlock: (n: Node) => boolean,
+  ): Node | null {
+    const list = li.parentElement!;
+    const after = li.cloneNode(false) as HTMLElement;
+    const tail = document.createRange();
+    tail.setStart(range.startContainer, range.startOffset);
+    tail.setEnd(li, li.childNodes.length);
+    after.appendChild(tail.extractContents());
+    list.insertBefore(after, li.nextSibling);
+
+    let leading = true;
+    let last: Node | null = null;
+    const afterCursor: Node | null = after.firstChild;
+    for (const n of nodes) {
+      if (leading && !isBlock(n)) {
+        li.appendChild(n);
+        last = n;
+        continue;
+      }
+      leading = false;
+      if (isBlock(n)) {
+        // Przejmujemy dzieci-elementy wklejanej listy (li; ewentualne inne elementy też —
+        // lepsza nadmiarowość niż utrata treści). Białe znaki między li pomijamy.
+        for (const item of Array.from(n.childNodes)) {
+          if (!(item instanceof Element)) continue;
+          list.insertBefore(item, after);
+          last = item;
+        }
+      } else {
+        after.insertBefore(n, afterCursor);
+        last = n;
+      }
+    }
+
+    // Puste połówki precz; li z samym znacznikiem punktora (span.list-marker,
+    // prezentacyjny) też jest puste — bez osieroconych pustych punktów wokół wklejki.
+    const isEmptyItem = (el: HTMLElement) => {
+      const nonMarkerKids = Array.from(el.children).filter(c => !c.classList.contains('list-marker'));
+      const text = Array.from(el.childNodes)
+        .filter(n => !(n instanceof Element && n.classList.contains('list-marker')))
+        .map(n => n.textContent ?? '')
+        .join('');
+      return text.length === 0 && nonMarkerKids.length === 0;
+    };
+    if (isEmptyItem(after)) after.remove();
+    if (isEmptyItem(li)) li.remove();
+
+    return last;
   }
 
   /**
@@ -3429,14 +3883,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         document.execCommand('justifyFull', false);
         break;
       case 'indent':
-        document.execCommand('indent', false);
+        this._changeParagraphIndent(1);
         break;
       case 'outdent':
-        document.execCommand('outdent', false);
+        this._changeParagraphIndent(-1);
         break;
       case 'bulletList':
       case 'insertUnorderedList':
         document.execCommand('insertUnorderedList', false);
+        break;
+      case 'toggleCheckboxBullet':
+        this.toggleCheckboxBullet();
         break;
       case 'numberedList':
       case 'insertOrderedList':
@@ -3485,6 +3942,87 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     this.onContentChange();
     this.updateFormattingState();
+  }
+
+  /** Krok wcięcia akapitu jak w Wordzie: 0,5 cala = 48px przy 96 dpi. */
+  private static readonly INDENT_STEP_PX = 48;
+
+  /**
+   * Wcięcie/wysunięcie akapitów zaznaczenia przez inline `margin-left` (writer mapuje je
+   * na w:ind, więc zmiana round-tripuje do DOCX). NIE używamy document.execCommand('indent'):
+   * Chrome opakowuje akapit w <blockquote>, który dostawał szarą ramkę i kursywę z reguły
+   * `.editor-content blockquote`, a każdy kolejny Tab zagnieżdżał następny blockquote bez
+   * limitu — akapit dojeżdżał do prawej krawędzi i zapadał się w pionową kolumnę znaków
+   * uciekającą poza dolną krawędź strony. Listy zostają przy execCommand — tam indent/outdent
+   * to zmiana poziomu zagnieżdżenia, nie margines.
+   */
+  private _changeParagraphIndent(direction: 1 | -1): void {
+    const editor = this.getActiveEditor();
+    if (!editor) return;
+
+    // Selekcja może żyć poza edytorem (klik w przycisk toolbara) — wtedy działamy
+    // na zapamiętanym zakresie, jak pozostałe komendy formatujące.
+    const live = window.getSelection();
+    const range: Range | null = live && live.rangeCount > 0 && this.isSelectionInEditor(live)
+      ? live.getRangeAt(0)
+      : this.savedSelection;
+    if (!range) return;
+
+    const startEl = range.startContainer instanceof Element
+      ? range.startContainer
+      : range.startContainer.parentElement;
+    if (startEl?.closest('li')) {
+      document.execCommand(direction > 0 ? 'indent' : 'outdent', false);
+      return;
+    }
+
+    const step = WysiwygEditorComponent.INDENT_STEP_PX;
+    for (const block of this._indentableBlocksInRange(editor, range)) {
+      const inline = parseFloat(block.style.marginLeft);
+      const current = Number.isFinite(inline)
+        ? inline
+        : parseFloat(getComputedStyle(block).marginLeft) || 0;
+      // Nie wypychaj akapitu poza kolumnę tekstu — zostaw co najmniej jeden krok
+      // szerokości na treść. Szerokość kolumny = content-box rodzica (clientWidth
+      // ZAWIERA padding, a padding .editor-content to marginesy strony — liczony
+      // z paddingiem wypuszczał akapit poza prawy margines). W jsdom clientWidth=0
+      // → bez górnego ograniczenia.
+      const parent = block.parentElement;
+      let maxMargin = Number.POSITIVE_INFINITY;
+      if (parent && parent.clientWidth > 0) {
+        const cs = getComputedStyle(parent);
+        const columnWidth = parent.clientWidth
+          - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+        maxMargin = Math.max(0, columnWidth - step);
+      }
+      const next = direction > 0
+        ? Math.min(current + step, maxMargin)
+        : Math.max(current - step, 0);
+      if (next === current) continue;
+      if (next > 0) {
+        block.style.marginLeft = `${Math.round(next)}px`;
+      } else {
+        block.style.removeProperty('margin-left');
+      }
+    }
+  }
+
+  /**
+   * Bloki akapitowe objęte zakresem — tylko najgłębsze trafienia (blockquote z akapitem
+   * w środku wciąłby się podwójnie). Dla kursora bez zaznaczenia: blok pod kursorem.
+   */
+  private _indentableBlocksInRange(editor: HTMLElement, range: Range): HTMLElement[] {
+    const SELECTOR = 'p, h1, h2, h3, h4, h5, h6, blockquote, pre';
+    if (range.collapsed) {
+      const el = range.startContainer instanceof Element
+        ? range.startContainer
+        : range.startContainer.parentElement;
+      const block = el?.closest<HTMLElement>(SELECTOR) ?? null;
+      return block && editor.contains(block) ? [block] : [];
+    }
+    const hits = Array.from(editor.querySelectorAll<HTMLElement>(SELECTOR))
+      .filter(b => range.intersectsNode(b));
+    return hits.filter(b => !hits.some(other => other !== b && b.contains(other)));
   }
 
   /**
@@ -5321,6 +5859,144 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     sel.addRange(range);
   }
 
+  // ═════════════ Punktory-checkboxy: ☐/❑ ↔ ☑ (zgłoszenie „nie da się odhaczyć") ═════════════
+
+  /** Młodsze bajty Wingdings (PUA) punktorów „pustych" i „odhaczonych". */
+  private static readonly UNCHECKED_BULLET_CODES = new Set([0x71, 0xa8, 0x6f, 0x72]);
+  private static readonly CHECKED_BULLET_CODES = new Set([0xfe, 0xfd, 0xfc]);
+  private static readonly UNCHECKED_BULLET_GLYPHS = new Set(['☐', '❑', '□', '❒', '◻']);
+  private static readonly CHECKED_BULLET_GLYPHS = new Set(['☑', '☒', '✔', '✓']);
+
+  private _checkboxListSeq = 0;
+
+  /**
+   * Przełącza punktor-checkbox bieżącego elementu listy: pusty (☐/❑) ↔ odhaczony (☑).
+   * Zmiana dotyczy TYLKO tego punktu: li jest wydzielany do własnego fragmentu listy
+   * (nowy data-num-id + data-lvl-override="1"), więc writer emituje dla niego osobną
+   * instancję numeracji z pełnym w:lvlOverride — reszta listy zostaje przy oryginalnym
+   * punktorze, a definicja wraca do DOCX w oryginalnym kodowaniu (PUA + font Wingdings).
+   */
+  toggleCheckboxBullet(): void {
+    if (this.readOnly) return;
+    const editor = this.getActiveEditor();
+    if (!editor) return;
+
+    const sel = window.getSelection();
+    let node: Node | null = sel && sel.rangeCount > 0 && this.isSelectionInEditor(sel)
+      ? sel.getRangeAt(0).startContainer
+      : this.savedSelection?.startContainer ?? null;
+    const li = (node instanceof Element ? node : node?.parentElement)?.closest('li') ?? null;
+    const container = li?.parentElement instanceof HTMLElement ? li.parentElement : null;
+    if (!li || !container || !editor.contains(li)) return;
+    if (!/^(ul|ol)$/i.test(container.tagName) || !container.hasAttribute('data-num-id')) return;
+
+    const state = this._checkboxBulletState(container);
+    if (!state) return; // punktor tej listy nie jest checkboxem — nic nie rób
+
+    const solo = this._isolateListItem(container, li);
+    const targetLvlText = state.checked ? state.uncheckedLvlText : state.checkedLvlText;
+    solo.setAttribute('data-lvl-text', targetLvlText);
+    if (state.bulletFont) solo.setAttribute('data-bullet-font', state.bulletFont);
+    solo.setAttribute('data-lvl-override', '1');
+    // Odhaczenie ma wracać do ORYGINALNEGO pustego znaku tej listy (❑ vs ☐).
+    solo.setAttribute('data-unchecked-lvl-text', state.uncheckedLvlText);
+
+    const glyph = bulletGlyphFromContract(targetLvlText, state.bulletFont);
+    const marker = li.querySelector<HTMLElement>(':scope > span.list-marker');
+    if (marker) {
+      marker.textContent = glyph;
+    } else {
+      const synthesized = synthesizeBulletMarker(solo);
+      if (synthesized) li.insertBefore(synthesized, li.firstChild);
+    }
+
+    // Kursor z powrotem do przełączanego punktu (przenosiny li unieważniają selekcję).
+    const caret = document.createRange();
+    caret.selectNodeContents(li);
+    caret.collapse(false);
+    sel?.removeAllRanges();
+    sel?.addRange(caret);
+    this.savedSelection = caret.cloneRange();
+
+    this.onContentChange();
+  }
+
+  /**
+   * Rozpoznaje stan checkboxa z kontraktu kontenera (data-lvl-text + data-bullet-font).
+   * Zwraca null, gdy punktor nie jest checkboxem. Docelowe lvlText trzymają kodowanie
+   * źródła: lista z PUA (Wingdings) dostaje PUA, lista ze zwykłym glifem — glif.
+   */
+  private _checkboxBulletState(container: HTMLElement): {
+    checked: boolean;
+    checkedLvlText: string;
+    uncheckedLvlText: string;
+    bulletFont: string | null;
+  } | null {
+    if ((container.getAttribute('data-num-fmt') ?? '') !== 'bullet') return null;
+    const lvlText = container.getAttribute('data-lvl-text') ?? '';
+    if (lvlText.length === 0) return null;
+    const code = lvlText.codePointAt(0) ?? 0;
+    const isPua = code >= 0xf000 && code <= 0xf0ff;
+    const low = isPua ? code & 0xff : code;
+    const font = container.getAttribute('data-bullet-font');
+    const storedUnchecked = container.getAttribute('data-unchecked-lvl-text');
+
+    const isUnchecked = isPua
+      ? WysiwygEditorComponent.UNCHECKED_BULLET_CODES.has(low)
+      : WysiwygEditorComponent.UNCHECKED_BULLET_GLYPHS.has(lvlText);
+    const isChecked = isPua
+      ? WysiwygEditorComponent.CHECKED_BULLET_CODES.has(low)
+      : WysiwygEditorComponent.CHECKED_BULLET_GLYPHS.has(lvlText);
+    if (!isUnchecked && !isChecked) return null;
+
+    return {
+      checked: isChecked,
+      checkedLvlText: isPua ? String.fromCharCode(0xf0fe) : String.fromCharCode(0x2611),
+      uncheckedLvlText: isUnchecked
+        ? lvlText
+        : storedUnchecked ?? (isPua ? String.fromCharCode(0xf0a8) : String.fromCharCode(0x2610)),
+      bulletFont: isPua ? (font ?? 'Wingdings') : font,
+    };
+  }
+
+  /**
+   * Wydziela li do własnego kontenera listy (klon atrybutów + świeży data-num-id).
+   * Elementy ZA li idą do osobnego fragmentu z ORYGINALNĄ tożsamością (data-num-id
+   * bez zmian = writer skleja je z głową listy w jedną instancję numeracji).
+   */
+  private _isolateListItem(container: HTMLElement, li: HTMLElement): HTMLElement {
+    const kids = Array.from(container.children);
+    const otherItems = kids.filter(k => k !== li && k.tagName === 'LI');
+    if (otherItems.length === 0) {
+      // Jednoelementowy fragment — wystarczy nowa tożsamość instancji.
+      container.setAttribute('data-num-id', this._uniqueListInstanceId());
+      return container;
+    }
+
+    const parent = container.parentNode!;
+    const after = kids.slice(kids.indexOf(li) + 1);
+    if (after.length > 0) {
+      const tail = container.cloneNode(false) as HTMLElement;
+      after.forEach(k => tail.appendChild(k));
+      parent.insertBefore(tail, container.nextSibling);
+    }
+    const solo = container.cloneNode(false) as HTMLElement;
+    solo.setAttribute('data-num-id', this._uniqueListInstanceId());
+    solo.appendChild(li);
+    parent.insertBefore(solo, container.nextSibling);
+    if (!container.querySelector(':scope > li')) container.remove();
+    return solo;
+  }
+
+  /** Unikalny data-num-id nowego fragmentu (nie koliduje z żadnym w dokumencie). */
+  private _uniqueListInstanceId(): string {
+    let id: string;
+    do {
+      id = `chk-${++this._checkboxListSeq}`;
+    } while (document.querySelector(`[data-num-id="${id}"]`));
+    return id;
+  }
+
   /**
    * Przelicza etykiety list DOCX silnikiem z `list-label.util` na wszystkich stronach
    * W KOLEJNOŚCI DOKUMENTU (kontynuacja działa przez granice stron i fragmentów listy).
@@ -6342,6 +7018,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private _renderFormattingMarksOverlay(): void {
     const host: HTMLElement = this._hostRef.nativeElement;
     host.querySelectorAll('.fmt-marks-layer').forEach((el: Element) => el.remove());
+    // Prezentacyjna klasa .fmt-trailing-br z poprzedniego przebiegu — zdejmij i nadaj
+    // od nowa (treść mogła się zmienić); po wyłączeniu trybu nie może zostać w DOM.
+    this._stripFmtTrailingBr(host);
     if (!this.showFormattingMarks()) return;
 
     const pages = Array.from(host.querySelectorAll<HTMLElement>('.page'));
@@ -6417,7 +7096,17 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
         container.querySelectorAll('br').forEach(br => {
           if (budget <= 0) return;
-          addMark(br.getBoundingClientRect(), '↵', 'fmt-br', br.parentElement);
+          const rect = br.getBoundingClientRect();
+          addMark(rect, '↵', 'fmt-br', br.parentElement);
+          // <br> ZAMYKAJĄCY blok: CSS-owe ¶ (::after) wpadłoby ZA złamanie — do nowej
+          // linii, rozpychając akapit względem pomiaru paginacji (znaczniki muszą mieć
+          // zerowy wpływ na układ). Gasimy pseudo-element klasą i malujemy ¶ tutaj,
+          // w TEJ SAMEJ linii zaraz za ↵. Offset w px ekranu = px układu × skala.
+          const block = this._trailingBrBlock(br);
+          if (block) {
+            block.classList.add('fmt-trailing-br');
+            addMark(new DOMRect(rect.left + 9 * scale, rect.top, rect.width, rect.height), '¶', 'fmt-pilcrow', br.parentElement);
+          }
         });
 
         // Znaczniki końca komórki (w komórce) i końca wiersza (za tabelą) — ¤ jak w Wordzie.
@@ -6453,6 +7142,35 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
       page.appendChild(layer);
     }
+  }
+
+  /**
+   * Blok (p/h1–h6/li), który dany <br> ZAMYKA — tzn. za tym <br> nie ma już w bloku żadnej
+   * widocznej treści (biały znak/ZWSP się nie liczy). Dla takiego bloku pseudo-element ¶
+   * renderowałby się ZA złamaniem, w nowej linii — overlay przejmuje rysowanie ¶,
+   * a klasa .fmt-trailing-br gasi CSS-owy ::after (patrz SCSS).
+   */
+  private _trailingBrBlock(br: HTMLElement): HTMLElement | null {
+    const block = br.closest<HTMLElement>('p, h1, h2, h3, h4, h5, h6, li');
+    if (!block) return null;
+    const tail = document.createRange();
+    tail.selectNodeContents(block);
+    tail.setStartAfter(br);
+    if (tail.toString().replace(/[\s\u200B\uFEFF]/g, '').length > 0) return null;
+    // Elementy bez tekstu, ale widoczne (kolejne <br>, obraz, tabela, odwołanie przypisu,
+    // nośniki tabów, obiekty pływające) także oznaczają „jest treść za złamaniem".
+    const frag = tail.cloneContents();
+    return frag.querySelector(
+      'br, img, svg, table, sup, .docx-tab-seg, .docx-tab-leader, .docx-textbox, .docx-shape, .editor-image-wrapper',
+    ) ? null : block;
+  }
+
+  /** Zdejmuje prezentacyjną klasę .fmt-trailing-br (nadawaną przez overlay „Pokaż wszystko"). */
+  private _stripFmtTrailingBr(root: ParentNode): void {
+    root.querySelectorAll('.fmt-trailing-br').forEach(el => {
+      el.classList.remove('fmt-trailing-br');
+      if (!el.getAttribute('class')) el.removeAttribute('class');
+    });
   }
 
   /**
@@ -7640,6 +8358,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // przy każdym renderze; w zapisie byłyby szumem i groziłyby dryfem po edycjach.
     stripListLabelAttributes(clone);
 
+    // Klasa .fmt-trailing-br („Pokaż wszystko": ¶ malowane w overlayu za ↵ przy <br>
+    // zamykającym blok) jest czysto prezentacyjna — nie może wejść do zapisu.
+    this._stripFmtTrailingBr(clone);
+
     this._unwrapImageWrappers(clone);
 
     return clone.innerHTML;
@@ -8112,12 +8834,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    *  przywrócenie KONTRAKTOWYCH współrzędnych kształtów ze stasha edycji pasma). */
   private _cleanBandHtml(html: string): string {
     if (!html || (!html.includes('editor-image-wrapper') && !html.includes('data-band-orig-left')
-        && !html.includes('shape-resize-handle') && !html.includes('shape-selected'))) {
+        && !html.includes('shape-resize-handle') && !html.includes('shape-selected')
+        && !html.includes('fmt-trailing-br'))) {
       return html;
     }
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
     this._unwrapImageWrappers(tmp);
+    // Prezentacyjny znacznik trybu „Pokaż wszystko" — nie może wejść do modelu pasma.
+    this._stripFmtTrailingBr(tmp);
     // Kształty przeliczone na układ pasma na czas edycji — do modelu wraca DOKŁADNY
     // oryginał z data-band-orig-* (bez dryfu zaokrągleń przy wielokrotnych edycjach).
     tmp.querySelectorAll<HTMLElement>('[data-band-orig-left]').forEach(el => {

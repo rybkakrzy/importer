@@ -804,7 +804,7 @@
       }
 
       <!-- Scrollowalny obszar dokumentu -->
-      <div class="editor-scroll-container" #editorScrollContainer (scroll)="onEditorScroll($event)" (mouseup)="onEditorMouseUp($event)" (mousedown)="onEditorMouseDown($event)">
+      <div class="editor-scroll-container" #editorScrollContainer (scroll)="onEditorScroll($event)" (mouseup)="onEditorMouseUp($event)" (mousedown)="onEditorMouseDown($event)" (keydown)="onEditorKeyDownHideMiniToolbar()">
         <div class="editor-wrapper" [style.transform]="'scale(' + zoomLevel() / 100 + ')'" [style.transform-origin]="'top center'">
           <div class="paper-container" [class.landscape]="pageSettings().orientation === 'landscape'">
             <!-- Linia prowadząca linijki (jak w MS Word) — nad kartką podczas drag uchwytu -->

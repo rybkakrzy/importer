@@ -297,6 +297,59 @@ public class TextBoxAnchorRoundTripTests
         roundTripped.Should().Contain("data-border-color=\"#FF0000\"");
     }
 
+    // ---- Legacy VML: w:pict → v:shape → v:textbox -------------------------------------
+
+    // Pole tekstowe „przy prawym marginesie" jak w papierze firmowym (Katowice, TIME):
+    // geometria żyje w atrybucie style v:shape, nie w wp:extent/wp:anchor.
+    private const string VmlRightAlignedTextBoxBody = @"<w:p><w:r><w:pict>
+  <v:shape id=""_x0000_s1026"" type=""#_x0000_t202""
+    style=""position:absolute;margin-left:0;margin-top:5pt;width:110.6pt;height:20pt;z-index:251658240;mso-position-horizontal:right;mso-position-horizontal-relative:margin"" stroked=""f"">
+    <v:textbox><w:txbxContent>
+      <w:p><w:r><w:t>Katowice, dnia</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox>
+  </v:shape>
+</w:pict></w:r></w:p>
+<w:p><w:r><w:t>Tresc listu</w:t></w:r></w:p>
+<w:sectPr><w:pgSz w:w=""11906"" w:h=""16838""/><w:pgMar w:top=""1440"" w:right=""1440"" w:bottom=""1440"" w:left=""1440"" w:header=""708"" w:footer=""708""/></w:sectPr>";
+
+    [Test]
+    public void Reader_VmlTextBox_MsoPositionHorizontalRight_IsAnchoredAtRightMargin()
+    {
+        using var ms = DocxFromRawBody(VmlRightAlignedTextBoxBody);
+
+        var html = _reader.Convert(ms).Html;
+
+        // mso-position-horizontal:right względem marginesów:
+        // x = mLeft + (contentW − width) = 914400 + (5731510 − 1404620) = 5241290 EMU.
+        html.Should().Contain("data-pos-mode=\"front\"");
+        html.Should().Contain("data-x-emu=\"5241290\"");
+        // Pion: brak mso-position-vertical → offset margin-top:5pt = 63500 EMU od akapitu
+        // (w body ≈ góra obszaru treści).
+        html.Should().Contain("data-y-emu=\"63500\"");
+        // Rozmiar ze stylu VML: 110.6pt × 20pt.
+        html.Should().Contain("data-width-emu=\"1404620\"");
+        html.Should().Contain("data-height-emu=\"254000\"");
+        Regex.IsMatch(html, @"class=""docx-textbox""[^>]*style=""position:absolute;")
+            .Should().BeTrue("pozycjonowany VML textbox nie może renderować się inline przy lewej krawędzi");
+    }
+
+    [Test]
+    public void Reader_VmlTextBox_StaticPosition_StaysInlineWithVmlSize()
+    {
+        const string body = @"<w:p><w:r><w:pict>
+  <v:shape id=""_x0000_s1027"" type=""#_x0000_t202"" style=""width:100pt;height:30pt"">
+    <v:textbox><w:txbxContent><w:p><w:r><w:t>Pole w tekscie</w:t></w:r></w:p></w:txbxContent></v:textbox>
+  </v:shape>
+</w:pict></w:r></w:p>";
+        using var ms = DocxFromRawBody(body);
+
+        var html = _reader.Convert(ms).Html;
+
+        html.Should().NotContain("data-pos-mode", "brak position:absolute = pole w przepływie");
+        html.Should().Contain("data-width-emu=\"1270000\"");
+        html.Should().Contain("display:inline-block");
+    }
+
     // ---- data-wrap: tryb zawijania obrazów --------------------------------------------
 
     [TestCase("wrapSquare", "square")]

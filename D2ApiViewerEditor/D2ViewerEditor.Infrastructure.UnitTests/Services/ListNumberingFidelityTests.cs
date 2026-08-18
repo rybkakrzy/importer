@@ -851,6 +851,67 @@ public class ListNumberingFidelityTests
         }
     }
 
+    private static Level BulletLvl(int index, string lvlText, string? font)
+    {
+        var level = new Level { LevelIndex = index };
+        level.Append(new StartNumberingValue { Val = 1 });
+        level.Append(new NumberingFormat { Val = NumberFormatValues.Bullet });
+        level.Append(new LevelText { Val = lvlText });
+        level.Append(new LevelJustification { Val = LevelJustificationValues.Left });
+        if (font != null)
+            level.Append(new NumberingSymbolRunProperties(new RunFonts { Ascii = font, HighAnsi = font }));
+        return level;
+    }
+
+    [Test]
+    public void CheckboxBullets_WingdingsAndBarePua_RenderVisibleGlyphs()
+    {
+        // Punktory-checkboxy szablonów pism: ❑ = Wingdings 0x71 („q") — najczęstszy „pusty
+        // kwadracik" Worda — wychodził jako kropka (brak w mapie markerów), a lvlText PUA
+        // bez w:rPr/rFonts jako GOŁY znak PUA = niewidoczny („część punktorów pustych").
+        var cases = new (string lvlText, string? font, string expected)[]
+        {
+            ("", "Wingdings", "❑"),  // ❑
+            ("", "Wingdings", "☐"),  // ☐
+            ("", "Wingdings", "☑"),  // ☑ (odhaczony)
+            ("", "Wingdings", "☒"),  // ☒
+            ("", null, "❑"),         // PUA bez fontu → mapa Wingdings po bajcie
+            ("", null, "☐"),
+            ("", null, "•"),         // nieznany kod PUA → bezpieczna kropka, nie pustka
+        };
+        foreach (var (lvlText, font, expected) in cases)
+        {
+            var reader = new DocxToHtmlConverter();
+            using var docx = BuildDocx(
+                [Abstract(1, BulletLvl(0, lvlText, font))],
+                [Num(1, 1)],
+                [ListItem("pozycja", 1, 0)]);
+
+            var html = reader.Convert(docx).Html;
+
+            var markerSpan = Regex.Match(html, "<span class=\"list-marker\"[^>]*>([^<]*)</span>");
+            markerSpan.Success.Should().BeTrue($"lvlText U+{(int)lvlText[0]:X4} font={font ?? "brak"}");
+            System.Net.WebUtility.HtmlDecode(markerSpan.Groups[1].Value).Should().Be(expected,
+                $"lvlText U+{(int)lvlText[0]:X4} font={font ?? "brak"} musi dać widoczny glif");
+        }
+    }
+
+    [Test]
+    public void BulletMarkers_AreContentEditableFalse()
+    {
+        // Marker to artefakt prezentacyjny (writer go pomija) — edytowalny dawał się
+        // skasować znak po znaku w contenteditable („lista bez punktora").
+        using var docx = BuildDocx(
+            [Abstract(1, BulletLvl(0, "", "Wingdings"))],
+            [Num(1, 1)],
+            [ListItem("pozycja", 1, 0)]);
+
+        var html = _reader.Convert(docx).Html;
+
+        Regex.Match(html, "<span class=\"list-marker\"[^>]*>").Value
+            .Should().Contain("contenteditable=\"false\"");
+    }
+
     [Test]
     public void Writer_EditorHtmlAfterEnterAndListExit_KeepsOneLogicalList()
     {

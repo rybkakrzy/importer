@@ -1675,9 +1675,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 else if (itemMarkerColorCss != null)
                     markerBoxCss += $"color:{itemMarkerColorCss};";
                 markerBoxCss += MarkerSizeFontCss(firstInfo.MarkerSizeHalfPoints ?? itemMarkerSizeHalf);
+                // contenteditable="false": marker jest artefaktem prezentacyjnym (writer go
+                // pomija, definicja wraca z data-lvl-text) — edytowalny dawał się skasować
+                // Backspace'em znak po znaku = „lista bez punktora" u klienta.
                 if (firstInfo.BulletImageDataUri != null)
                 {
-                    html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
+                    html.Append($"<span class=\"list-marker\" contenteditable=\"false\" style=\"{markerBoxCss}\"><img src=\"{firstInfo.BulletImageDataUri}\" alt=\"\" style=\"height:1em;vertical-align:-0.125em;\"/></span>");
                 }
                 else if (firstInfo.BulletChar != null)
                 {
@@ -1686,7 +1689,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                         !firstInfo.BulletFont.ToLowerInvariant().Contains("symbol")
                             ? $"font-family:'{firstInfo.BulletFont}';"
                             : "";
-                    html.Append($"<span class=\"list-marker\" style=\"{markerBoxCss}{fontCss}\">{System.Net.WebUtility.HtmlEncode(firstInfo.BulletChar)}</span>");
+                    html.Append($"<span class=\"list-marker\" contenteditable=\"false\" style=\"{markerBoxCss}{fontCss}\">{System.Net.WebUtility.HtmlEncode(firstInfo.BulletChar)}</span>");
                 }
                 
                 foreach (var child in p.Elements())
@@ -3895,7 +3898,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // Private Use Area U+F000..U+F0FF. Dla rozpoznawania punktatora interesuje nas
             // wtedy tylko młodszy bajt.
             var fontLower = (bulletFont ?? string.Empty).ToLowerInvariant();
-            bool isSymbolicFont = fontLower.Contains("wingdings") || fontLower.Contains("symbol");
+            // Dokładne nazwy fontów bajtowych (+ warianty „Wingdings-Regular") — NIE Contains("symbol"):
+            // „Segoe UI Symbol" to zwykły font Unicode i obcięcie jego znaków do młodszego
+            // bajtu produkowało przypadkowe glify/kropki zamiast oryginalnego znaku.
+            bool isSymbolicFont = NormalizeSymbolFontName(bulletFont) != null
+                || fontLower.Contains("wingdings") || fontLower.Contains("webdings");
             int lookup = (isSymbolicFont || (codePoint >= 0xF000 && codePoint <= 0xF0FF))
                 ? (codePoint & 0xFF)
                 : codePoint;
@@ -4011,6 +4018,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // Dla mapowania interesuje nas tylko młodszy bajt.
         int low = codePoint & 0xFF;
 
+        // Najpierw wspólne, dokładne tabele (te same co dla w:sym i runów tekstowych) —
+        // wcześniej marker listy miał własną, uboższą mapę i np. punktor-checkbox ❑
+        // (Wingdings 0x71, najczęstszy „pusty kwadracik" Worda) wychodził jako kropka.
+        if (TryMapSymbolicChar(codePoint, font, out var mappedSym) && mappedSym.Length > 0)
+            return mappedSym;
+
         if (f.Contains("wingdings"))
         {
             return low switch
@@ -4034,6 +4047,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 _ => "\u2022"
             };
         }
+        // PUA bez rozpoznanego fontu (najczęściej Wingdings zapisany bez rFonts w w:lvl) —
+        // mapuj po młodszym bajcie tabelą Wingdings zamiast emitować goły znak PUA: marker
+        // celowo nie dostaje font-family, więc goły PUA renderował się jako PUSTY punktor.
+        if (codePoint is >= 0xF000 and <= 0xF0FF)
+            return WingdingsFontMap.TryGetValue(low, out var w) ? w : "•";
+
         // Zwykły Unicode (w tym emoji poza BMP) — buduj poprawny string z code-pointa.
         try { return char.ConvertFromUtf32(codePoint); }
         catch { return "\u2022"; }
@@ -4519,6 +4538,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         [0x4A] = "☺", [0x4C] = "☹",                                       // ☺ ☹
         [0x6C] = "●", [0x6E] = "■", [0x6F] = "□", [0x75] = "◆", // ● ■ □ ◆
+        [0x71] = "❑", [0x72] = "❒",                                       // ❑ ❒ (punktory-checkboxy Worda)
         [0xA7] = "■", [0xA8] = "☐",                                       // ■ ☐ (spójne z MapBulletChar)
         [0xD8] = "❖",                                                          // ❖
         [0xE8] = "➔",                                                          // ➔ (autokorekta „-->")
@@ -4669,11 +4689,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var extent = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent>().FirstOrDefault();
         var widthEmu = extent?.Cx?.Value ?? 0;
         var heightEmu = extent?.Cy?.Value ?? 0;
+
+        var anchor = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
+        // Legacy VML (w:pict → v:shape): rozmiar i pozycja żyją w atrybucie style kształtu,
+        // nie w wp:extent/wp:anchor — bez tej gałęzi pole pozycjonowane w Wordzie np. przy
+        // prawym marginesie (mso-position-horizontal:right) renderowało się inline przy lewym.
+        var vmlGeo = anchor == null ? ResolveVmlTextBoxGeometry(container) : null;
+        if (vmlGeo != null)
+        {
+            if (widthEmu <= 0) widthEmu = vmlGeo.WidthEmu;
+            if (heightEmu <= 0) heightEmu = vmlGeo.HeightEmu;
+        }
+
         var attrs = new StringBuilder();
         if (widthEmu > 0) attrs.Append($" data-width-emu=\"{widthEmu}\"");
         if (heightEmu > 0) attrs.Append($" data-height-emu=\"{heightEmu}\"");
 
-        var anchor = container.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
         if (anchor != null)
         {
             var behind = anchor.BehindDoc?.Value == true;
@@ -4682,6 +4713,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             attrs.Append($" data-x-emu=\"{xEmu}\" data-y-emu=\"{yEmu}\"");
             var wrap = ReadAnchorWrapMode(anchor);
             if (wrap != null) attrs.Append($" data-wrap=\"{wrap}\"");
+        }
+        else if (vmlGeo is { Absolute: true })
+        {
+            attrs.Append($" data-pos-mode=\"{(vmlGeo.Behind ? "behind" : "front")}\"");
+            attrs.Append($" data-x-emu=\"{vmlGeo.XEmu}\" data-y-emu=\"{vmlGeo.YEmu}\"");
+            layout = $"position:absolute;left:{(int)OoxmlUnits.EmuToPixels(vmlGeo.XEmu)}px;"
+                   + $"top:{(int)OoxmlUnits.EmuToPixels(vmlGeo.YEmu)}px;"
+                   + (vmlGeo.Behind ? "z-index:0;" : "z-index:1;")
+                   + (widthEmu > 0 ? $"width:{(int)OoxmlUnits.EmuToPixels(widthEmu)}px;" : string.Empty)
+                   + (heightEmu > 0 ? $"min-height:{(int)OoxmlUnits.EmuToPixels(heightEmu)}px;" : string.Empty);
+        }
+        else if (vmlGeo != null && widthEmu > 0)
+        {
+            // Inline VML: BuildTextBoxLayoutCss nie zna stylu VML, więc rozmiar dokładamy tu.
+            layout = "display:inline-block;max-width:100%;vertical-align:top;margin:4px 0;"
+                   + $"width:{(int)OoxmlUnits.EmuToPixels(widthEmu)}px;"
+                   + (heightEmu > 0 ? $"min-height:{(int)OoxmlUnits.EmuToPixels(heightEmu)}px;" : string.Empty);
         }
 
         // Obramowanie DOKUMENTOWE kształtu (a:ln kształtu, nie runów tekstu) — należy do
@@ -6170,6 +6218,124 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return $"position:absolute;left:{leftPx}px;top:{topPx}px;{zIndex}" + sizeCss;
     }
 
+    /// <summary>Geometria legacy VML textboxa rozwiązana ze stylu CSS kształtu (patrz
+    /// <see cref="ResolveVmlTextBoxGeometry"/>). X/Y w układzie kontraktu edytora
+    /// (X od lewej krawędzi strony, Y od góry obszaru treści), EMU.</summary>
+    private sealed record VmlTextBoxGeometry(
+        long WidthEmu, long HeightEmu, bool Absolute, long XEmu, long YEmu, bool Behind);
+
+    /// <summary>
+    /// Legacy VML textbox (w:pict → v:shape → v:textbox) trzyma geometrię w atrybucie
+    /// style kształtu: width/height, position:absolute + left/margin-left (offset) oraz
+    /// mso-position-horizontal/vertical(-relative) (wyrównanie „right"/„center" itd.).
+    /// Wartości mapujemy na te same prymitywy co wp:anchor (<see cref="ResolveAxis"/>),
+    /// dzięki czemu kontrakt data-pos-mode/x/y-emu i writer działają bez osobnej ścieżki.
+    /// </summary>
+    private VmlTextBoxGeometry? ResolveVmlTextBoxGeometry(OpenXmlElement container)
+    {
+        var shapeEl = container.Descendants().FirstOrDefault(e =>
+            e.NamespaceUri == "urn:schemas-microsoft-com:vml"
+            && e.LocalName is "shape" or "rect" or "roundrect" or "oval");
+        if (shapeEl == null) return null;
+
+        string styleAttr;
+        try { styleAttr = shapeEl.GetAttribute("style", string.Empty).Value ?? string.Empty; }
+        catch { return null; }
+        if (styleAttr.Length == 0) return null;
+
+        var css = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var decl in styleAttr.Split(';'))
+        {
+            var colon = decl.IndexOf(':');
+            if (colon <= 0) continue;
+            css[decl[..colon].Trim()] = decl[(colon + 1)..].Trim();
+        }
+
+        var widthEmu = VmlLengthToEmu(css, "width") ?? 0;
+        var heightEmu = VmlLengthToEmu(css, "height") ?? 0;
+        if (!css.TryGetValue("position", out var position) || position != "absolute")
+            return new VmlTextBoxGeometry(widthEmu, heightEmu, Absolute: false, 0, 0, Behind: false);
+
+        long pageW = _pageWidthTwips is { } pw ? OoxmlUnits.TwipsToEmu(pw) : 0;
+        long pageH = _pageHeightTwips is { } ph ? OoxmlUnits.TwipsToEmu(ph) : 0;
+        long mLeft = OoxmlUnits.TwipsToEmu(_marginLeftTwips);
+        long mTop = OoxmlUnits.TwipsToEmu(_marginTopTwips);
+        long mRight = OoxmlUnits.TwipsToEmu(_marginRightTwips);
+        long mBottom = OoxmlUnits.TwipsToEmu(_marginBottomTwips);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+
+        // Wyrównanie („right"/„center"…) wygrywa z offsetem — tak liczy Word; „absolute"
+        // lub brak atrybutu = jawny offset z left/margin-left względem układu odniesienia.
+        var alignH = css.TryGetValue("mso-position-horizontal", out var ah)
+            && ah is "left" or "center" or "right" or "inside" or "outside" ? ah : null;
+        var offH = VmlLengthToEmu(css, "left") ?? VmlLengthToEmu(css, "margin-left") ?? 0;
+        long xPage = ResolveAxis(
+            offsetText: alignH == null ? offH.ToString(inv) : null,
+            alignText: alignH,
+            relFrom: MapVmlRelative(css, "mso-position-horizontal-relative", vertical: false),
+            objectSize: widthEmu, pageSize: pageW, marginStart: mLeft, marginEnd: mRight, horizontal: true);
+
+        var alignV = css.TryGetValue("mso-position-vertical", out var av)
+            && av is "top" or "center" or "bottom" or "inside" or "outside" ? av : null;
+        var offV = VmlLengthToEmu(css, "top") ?? VmlLengthToEmu(css, "margin-top") ?? 0;
+        // Jak w ResolveAnchorPosition: kotwica akapitowa w pasmie nagłówka/stopki liczy się
+        // od pasma, nie od góry obszaru treści.
+        long? bandParagraphBase = _anchorBand switch
+        {
+            HfBand.Header => OoxmlUnits.TwipsToEmu(_headerDistanceTwips),
+            HfBand.Footer when pageH > 0 => pageH - mBottom,
+            _ => null,
+        };
+        long yPage = ResolveAxis(
+            offsetText: alignV == null ? offV.ToString(inv) : null,
+            alignText: alignV,
+            relFrom: MapVmlRelative(css, "mso-position-vertical-relative", vertical: true),
+            objectSize: heightEmu, pageSize: pageH, marginStart: mTop, marginEnd: mBottom, horizontal: false,
+            bandParagraphBase: bandParagraphBase);
+
+        var behind = css.TryGetValue("z-index", out var z) && z.StartsWith('-');
+        return new VmlTextBoxGeometry(widthEmu, heightEmu, Absolute: true, xPage, yPage - mTop, behind);
+    }
+
+    /// <summary>Mapuje mso-position-*-relative (VML) na relativeFrom wp:anchor dla
+    /// <see cref="ResolveAxis"/>. Brak atrybutu/„text" = kotwica akapitowa: pion liczy się
+    /// od akapitu (w pasmach od pasma), poziom od kolumny ≈ obszaru treści.</summary>
+    private static string? MapVmlRelative(IReadOnlyDictionary<string, string> css, string key, bool vertical)
+    {
+        css.TryGetValue(key, out var rel);
+        return rel switch
+        {
+            "page" => "page",
+            "margin" => "margin",
+            "left-margin-area" => "leftMargin",
+            "right-margin-area" => "rightMargin",
+            "top-margin-area" => "topMargin",
+            "bottom-margin-area" => "bottomMargin",
+            _ => vertical ? "paragraph" : null,
+        };
+    }
+
+    /// <summary>Długość CSS ze stylu VML na EMU (pt/px/in/cm/mm/pc; goła liczba = px).
+    /// Null, gdy właściwości brak lub wartość nieparsowalna.</summary>
+    private static long? VmlLengthToEmu(IReadOnlyDictionary<string, string> css, string key)
+    {
+        if (!css.TryGetValue(key, out var raw) || string.IsNullOrEmpty(raw)) return null;
+        var m = Regex.Match(raw, @"^(-?[\d.]+)\s*(pt|px|in|cm|mm|pc)?$");
+        if (!m.Success || !double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+            return null;
+        var emuPerUnit = m.Groups[2].Value switch
+        {
+            "pt" => 12700.0,
+            "in" => 914400.0,
+            "cm" => 360000.0,
+            "mm" => 36000.0,
+            "pc" => 152400.0,
+            _ => 9525.0,
+        };
+        return (long)Math.Round(v * emuPerUnit);
+    }
+
     /// <summary>
     /// Pobiera CSS dla Run bez właściwości obsługiwanych przez semantyczne tagi HTML
     /// </summary>
@@ -7633,10 +7799,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var isLastCol = ctx.GridColumnCount <= 0 || gridColStart + gridSpan >= ctx.GridColumnCount;
 
         var cb = props?.TableCellBorders;
-        css.Append($"border-top:{ResolveCellBorderSide(cb?.TopBorder, regions, TableCellEdge.Top, isFirstRow ? ctx.Style.Borders.Top : ctx.Style.Borders.InsideH, ctx)};");
-        css.Append($"border-bottom:{ResolveCellBorderSide(cb?.BottomBorder, regions, TableCellEdge.Bottom, isLastRow ? ctx.Style.Borders.Bottom : ctx.Style.Borders.InsideH, ctx)};");
-        css.Append($"border-left:{ResolveCellBorderSide(cb?.LeftBorder, regions, TableCellEdge.Left, isFirstCol ? ctx.Style.Borders.Left : ctx.Style.Borders.InsideV, ctx)};");
-        css.Append($"border-right:{ResolveCellBorderSide(cb?.RightBorder, regions, TableCellEdge.Right, isLastCol ? ctx.Style.Borders.Right : ctx.Style.Borders.InsideV, ctx)};");
+        css.Append($"border-top:{ResolveCellBorderSide(cb?.TopBorder, regions, TableCellEdge.Top, isFirstRow ? ctx.Style.Borders.Top : ctx.Style.Borders.InsideH, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
+        css.Append($"border-bottom:{ResolveCellBorderSide(cb?.BottomBorder, regions, TableCellEdge.Bottom, isLastRow ? ctx.Style.Borders.Bottom : ctx.Style.Borders.InsideH, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
+        css.Append($"border-left:{ResolveCellBorderSide(cb?.LeftBorder, regions, TableCellEdge.Left, isFirstCol ? ctx.Style.Borders.Left : ctx.Style.Borders.InsideV, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
+        css.Append($"border-right:{ResolveCellBorderSide(cb?.RightBorder, regions, TableCellEdge.Right, isLastCol ? ctx.Style.Borders.Right : ctx.Style.Borders.InsideV, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
 
         // Padding: w:tcMar nadpisuje TYLKO zadeklarowane strony — pozostałe dziedziczą
         // z tblCellMar/defaultu Worda (wcześniej częściowy tcMar zerował brakujące strony,
@@ -7734,7 +7900,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
     /// <summary>
     /// Rozstrzyga jedną krawędź komórki: bezpośredni tcBorders (w tym jawne none/nil) →
-    /// tcBorders/tblBorders regionów stylu warunkowego → tcPr stylu (cała tabela) →
+    /// tcBorders/tblBorders regionów stylu warunkowego (POZYCYJNIE: krawędź zewnętrzna
+    /// regionu vs insideH/insideV — jak w Wordzie) → tcPr stylu (cała tabela) →
     /// pozycyjna krawędź z efektywnych tblBorders (przekazana jako fallback).
     /// </summary>
     private string ResolveCellBorderSide(
@@ -7742,7 +7909,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         List<TableStyleProperties> regions,
         TableCellEdge edge,
         BorderType? tableFallback,
-        TableRenderContext ctx)
+        TableRenderContext ctx,
+        int rowIndex,
+        int gridColStart,
+        int gridSpan,
+        int rowSpan)
     {
         // Bezpośrednia definicja na komórce wygrywa zawsze — także jawne "brak linii".
         if (directBorder != null)
@@ -7754,12 +7925,19 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         foreach (var region in regions)
         {
+            // Krawędź komórki leżąca WEWNĄTRZ regionu bierze insideH/insideV regionu,
+            // a nie jego ramkę zewnętrzną. Bez tego np. „double" z tblStylePr[firstRow]
+            // rozlewało się na WSZYSTKIE krawędzie komórek nagłówka i po zapisie
+            // utrwalało jako bezpośrednie w:tcBorders — podwójne linie w Wordzie.
+            var onOuter = RegionOuterEdges(region.Type?.Value, ctx, rowIndex, gridColStart, gridSpan, rowSpan);
             var tcB = region.GetFirstChild<TableStyleConditionalFormattingTableCellProperties>()?.GetFirstChild<TableCellBorders>();
-            var b = PickEdge(tcB, edge);
+            var b = PickEdgePositional(
+                PickEdge(tcB, edge), tcB?.InsideHorizontalBorder, tcB?.InsideVerticalBorder, edge, onOuter);
             if (b == null)
             {
                 var tblB = region.GetFirstChild<TableStyleConditionalFormattingTableProperties>()?.GetFirstChild<TableBorders>();
-                b = PickEdge(tblB, edge);
+                b = PickEdgePositional(
+                    PickEdge(tblB, edge), tblB?.InsideHorizontalBorder, tblB?.InsideVerticalBorder, edge, onOuter);
             }
             if (b != null)
             {
@@ -7791,6 +7969,78 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         TableCellEdge.Right => b?.RightBorder,
         _ => null
     };
+
+    /// <summary>Krawędzie komórki leżące na ZEWNĘTRZNEJ granicy regionu stylu warunkowego.</summary>
+    private readonly record struct RegionEdgeFlags(bool Top, bool Bottom, bool Left, bool Right);
+
+    /// <summary>
+    /// Które krawędzie komórki pokrywają się z granicą regionu tblStylePr (Word: ramka
+    /// zewnętrzna regionu idzie tylko na jego obwód, insideH/insideV — między komórki
+    /// wewnątrz regionu). FirstRow/LastRow = pasmo pełnej szerokości o wysokości wiersza;
+    /// FirstColumn/LastColumn = kolumna pełnej wysokości; pasy Band* liczone z rozmiaru pasa.
+    /// </summary>
+    private static RegionEdgeFlags RegionOuterEdges(
+        TableStyleOverrideValues? type,
+        TableRenderContext ctx,
+        int rowIndex,
+        int gridColStart,
+        int gridSpan,
+        int rowSpan)
+    {
+        var s = ctx.Style;
+        var tblFirstRow = rowIndex == 0;
+        var tblLastRow = rowIndex + rowSpan >= ctx.RowCount;
+        var tblFirstCol = gridColStart == 0;
+        var tblLastCol = ctx.GridColumnCount <= 0 || gridColStart + gridSpan >= ctx.GridColumnCount;
+
+        if (type == TableStyleOverrideValues.FirstRow || type == TableStyleOverrideValues.LastRow)
+            return new RegionEdgeFlags(true, true, tblFirstCol, tblLastCol);
+        if (type == TableStyleOverrideValues.FirstColumn || type == TableStyleOverrideValues.LastColumn)
+            return new RegionEdgeFlags(tblFirstRow, tblLastRow, true, true);
+        if (type == TableStyleOverrideValues.Band1Horizontal || type == TableStyleOverrideValues.Band2Horizontal)
+        {
+            var offset = s.FirstRow ? 1 : 0;
+            var size = Math.Max(1, s.RowBandSize);
+            var rel = rowIndex - offset;
+            var top = rel >= 0 && rel % size == 0;
+            var bottom = tblLastRow || (rel >= 0 && (rel + rowSpan) % size == 0);
+            return new RegionEdgeFlags(top, bottom, tblFirstCol, tblLastCol);
+        }
+        if (type == TableStyleOverrideValues.Band1Vertical || type == TableStyleOverrideValues.Band2Vertical)
+        {
+            var offset = s.FirstColumn ? 1 : 0;
+            var size = Math.Max(1, s.ColBandSize);
+            var rel = gridColStart - offset;
+            var left = rel >= 0 && rel % size == 0;
+            var right = tblLastCol || (rel >= 0 && (rel + gridSpan) % size == 0);
+            return new RegionEdgeFlags(tblFirstRow, tblLastRow, left, right);
+        }
+        // Nieznany/nowy typ regionu — zachowanie sprzed poprawki (krawędzie zewnętrzne).
+        return new RegionEdgeFlags(true, true, true, true);
+    }
+
+    /// <summary>
+    /// Wybiera definicję krawędzi regionu pozycyjnie: krawędź na obwodzie regionu bierze
+    /// ramkę zewnętrzną, krawędź wewnętrzna — insideH (pozioma) / insideV (pionowa).
+    /// </summary>
+    private static BorderType? PickEdgePositional(
+        BorderType? outerBorder,
+        BorderType? insideH,
+        BorderType? insideV,
+        TableCellEdge edge,
+        RegionEdgeFlags onOuter)
+    {
+        var isOuter = edge switch
+        {
+            TableCellEdge.Top => onOuter.Top,
+            TableCellEdge.Bottom => onOuter.Bottom,
+            TableCellEdge.Left => onOuter.Left,
+            TableCellEdge.Right => onOuter.Right,
+            _ => true
+        };
+        if (isOuter) return outerBorder;
+        return edge is TableCellEdge.Top or TableCellEdge.Bottom ? insideH : insideV;
+    }
 
     private static BorderType? PickEdge(TableBorders? b, TableCellEdge edge) => edge switch
     {
