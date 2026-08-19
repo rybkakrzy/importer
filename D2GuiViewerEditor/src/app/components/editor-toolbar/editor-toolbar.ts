@@ -280,12 +280,6 @@ export class EditorToolbarComponent {
   // Stan dialogów
   showLinkDialog = signal(false);
   showStyleDropdown = signal(false);
-  /** Wąskie okno: czy grupy niższego priorytetu (tb-collapse) są rozwinięte przyciskiem „Więcej". */
-  readonly moreOpen = signal(false);
-
-  toggleMore(): void {
-    this.moreOpen.update((v) => !v);
-  }
   showSearchBar = signal(false);
   showReplaceRow = signal(false);
   searchText = '';

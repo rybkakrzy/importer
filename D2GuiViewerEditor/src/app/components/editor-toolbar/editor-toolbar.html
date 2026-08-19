@@ -1,4 +1,4 @@
-<div class="editor-toolbar" [class.more-open]="moreOpen()" (mousedown)="onToolbarMouseDown($event)">
+<div class="editor-toolbar" (mousedown)="onToolbarMouseDown($event)">
   <!-- Grupa: Wyszukiwanie i Kopiowanie formatu -->
   <div class="toolbar-group">
     <button
@@ -32,10 +32,10 @@
   </div>
 
   @if (!readOnly) {
-  <div class="toolbar-separator tb-collapse tb-tier2"></div>
+  <div class="toolbar-separator"></div>
 
   <!-- Grupa: Format bloku - Custom Dropdown -->
-  <div class="toolbar-group tb-collapse tb-tier2">
+  <div class="toolbar-group">
     <div class="style-dropdown" [class.open]="showStyleDropdown()">
       <button 
         class="style-dropdown-trigger"
@@ -210,10 +210,10 @@
     </button>
   </div>
 
-  <div class="toolbar-separator tb-collapse tb-tier1"></div>
+  <div class="toolbar-separator"></div>
 
   <!-- Grupa: Wyrównanie -->
-  <div class="toolbar-group tb-collapse tb-tier1">
+  <div class="toolbar-group">
     <button
       class="toolbar-btn"
       [class.active]="isAlignActive('left')"
@@ -252,10 +252,10 @@
     </button>
   </div>
 
-  <div class="toolbar-separator tb-collapse tb-tier1"></div>
+  <div class="toolbar-separator"></div>
 
   <!-- Grupa: Listy i wcięcia -->
-  <div class="toolbar-group tb-collapse tb-tier1">
+  <div class="toolbar-group">
     <button
       class="toolbar-btn"
       [class.active]="isActive('bulletList')"
@@ -332,10 +332,10 @@
     }
   </div>
 
-  <div class="toolbar-separator tb-collapse tb-tier1"></div>
+  <div class="toolbar-separator"></div>
 
   <!-- Grupa: Wstawianie -->
-  <div class="toolbar-group tb-collapse tb-tier1">
+  <div class="toolbar-group">
     <button 
       class="toolbar-btn" 
       (click)="openLinkDialog()"
@@ -380,22 +380,6 @@
     </button>
   </div>
 
-  <!-- Wąskie okno: grupy niższego priorytetu (tb-collapse) chowane do jednej linii;
-       „Więcej" rozwijał je z powrotem. Przycisk UKRYTY (2026-08-18, decyzja użytkownika —
-       screen z prośbą o zdjęcie ikonek). UWAGA: na wąskim oknie zwinięte grupy nie mają
-       teraz innej drogi powrotu — przywrócenie = zdjęcie @if. -->
-  @if (false) {
-    <button
-      class="toolbar-btn toolbar-more-btn"
-      [class.active]="moreOpen()"
-      (click)="toggleMore()"
-      title="Więcej narzędzi"
-      aria-label="Więcej narzędzi">
-      <svg viewBox="0 0 24 24" width="18" height="18">
-        <path fill="currentColor" d="M6 10c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm12 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm-6 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
-      </svg>
-    </button>
-  }
   }
 </div>
 

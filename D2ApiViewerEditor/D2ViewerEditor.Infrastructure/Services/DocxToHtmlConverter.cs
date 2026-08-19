@@ -1028,6 +1028,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         var inner = new StringBuilder();
 
+        // Jak w body: w:customXml to przezroczysty kontener — bez rozpakowania jego treść
+        // (akapity/tabele klauzul) znikała, bo pętla zna tylko Paragraph/Table/SdtBlock.
+        UnwrapCustomXmlContainers(headerFooter);
         foreach (var element in headerFooter.Elements())
         {
             if (element is Paragraph para)
@@ -1218,6 +1221,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else
             html.Append("<div class=\"document-content\">");
 
+        // w:customXml jest w Wordzie PRZEZROCZYSTYM kontenerem (blok/wiersz/komórka/run) —
+        // dotąd wpadał w default dispatchu i CAŁA jego treść (w tym tabele) znikała z podglądu.
+        // Rozpakowanie w pamięci obsługuje każdą ścieżkę (body, tabele, listy) jednym mechanizmem.
+        UnwrapCustomXmlContainers(body);
         var elements = body.Elements().ToList();
         var orderedSections = GetSectionPropertiesInDocumentOrder(body);
         // Szerokość szpalty BIEŻĄCEJ sekcji (treść przed k-tym paragraph-level sectPr należy
@@ -1581,6 +1588,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 {
                     cssStyle = _tableParagraphDefaultCss + cssStyle;
                 }
+                else if (!string.IsNullOrEmpty(_defaultParagraphSpacingCss))
+                {
+                    // Word stosuje domyślne odstępy akapitu (docDefaults/Normal) także do
+                    // akapitów LISTOWYCH bez contextualSpacing — body <p> dostaje je z SCSS
+                    // (--doc-par-margin), ale <li> nie łapie tej reguły i listy renderowały
+                    // się ściśnięte o n×after względem Worda (dryf paginacji). Styl/direct/
+                    // contextualSpacing nadal nadpisują (DeduplicateCss: ostatnia wygrywa).
+                    cssStyle = _defaultParagraphSpacingCss + cssStyle;
+                }
                 cssStyle = DeduplicateCss(StripIndentationCss(cssStyle));
 
                 // w:contextualSpacing działa też dla elementów list (ADR-0053) — bez tego
@@ -1813,16 +1829,38 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             CaptureDefaultParagraphSpacing(styleSpacing);
         _defaultParagraphSpacingCss = BuildDefaultParagraphSpacingCss();
 
-        if (defaultStyle?.StyleRunProperties == null) return;
+        if (defaultStyle == null) return;
 
-        var name = GetFontName(defaultStyle.StyleRunProperties.GetFirstChild<RunFonts>());
-        if (!string.IsNullOrEmpty(name))
-            _defaultFontFamily = name;
-
-        var size = defaultStyle.StyleRunProperties.GetFirstChild<FontSize>();
-        if (size?.Val?.Value != null &&
-            double.TryParse(size.Val.Value, System.Globalization.CultureInfo.InvariantCulture, out var sz))
-            _defaultFontSizePt = OoxmlUnits.HalfPointsToPoints(sz);
+        // Krój i rozmiar mogą siedzieć WYŻEJ w łańcuchu basedOn domyślnego stylu (Word
+        // rozwiązuje dziedziczenie do docDefaults) — sam bezpośredni rPr gubił rozmiar,
+        // gdy Normal opiera się na stylu bazowym niosącym w:sz.
+        var chainStyle = defaultStyle;
+        string? chainFont = null;
+        double? chainSizePt = null;
+        var visitedStyleIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (chainStyle != null)
+        {
+            var rpr = chainStyle.StyleRunProperties;
+            if (chainFont == null)
+            {
+                var name = GetFontName(rpr?.GetFirstChild<RunFonts>());
+                if (!string.IsNullOrEmpty(name)) chainFont = name;
+            }
+            if (chainSizePt == null)
+            {
+                var size = rpr?.GetFirstChild<FontSize>();
+                if (size?.Val?.Value != null &&
+                    double.TryParse(size.Val.Value, System.Globalization.CultureInfo.InvariantCulture, out var sz))
+                    chainSizePt = OoxmlUnits.HalfPointsToPoints(sz);
+            }
+            if (chainFont != null && chainSizePt != null) break;
+            var basedOnId = chainStyle.BasedOn?.Val?.Value;
+            if (basedOnId == null || !visitedStyleIds.Add(basedOnId)
+                || !_rawStyles.TryGetValue(basedOnId, out chainStyle))
+                break;
+        }
+        if (chainFont != null) _defaultFontFamily = chainFont;
+        if (chainSizePt != null) _defaultFontSizePt = chainSizePt;
     }
 
     /// <summary>
@@ -2405,7 +2443,16 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // editor's page splitter (regex split cut the <p> in half) and height-pagination ignored it,
         // so e.g. "PROTOKÓŁ…" did not start on a new page. The writer maps it back to w:br type=page.
         if (IsPageBreakOnlyParagraph(paragraph))
+        {
+            // Inside a TABLE CELL the top-level <div class="page-break"> form is poison: the GUI
+            // page splitter cuts the raw HTML at that div, tearing <table>…<td> apart — the
+            // browser then drops the orphan fragments and the whole table vanishes, leaving a
+            // half-empty page. Emit an inline-block marker instead; the writer maps any element
+            // with class page-break back to w:br type=page, so the round-trip is unchanged.
+            if (paragraph.Ancestors<TableCell>().Any())
+                return "<p><span class=\"page-break\" style=\"display:block;height:0;overflow:hidden;\"></span></p>";
             return "<div class=\"page-break\"></div>";
+        }
 
         var html = new StringBuilder();
         var paraProps = paragraph.ParagraphProperties;
@@ -2535,6 +2582,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else if (paraProps?.GetFirstChild<PageBreakBefore>() != null)
             cssBuilder.Append("page-break-before:auto;");
 
+        // Akapit będący samą POZIOMĄ LINIĄ (w:pict v:rect o:hr): Word renderuje go na wysokość
+        // POJEDYNCZEJ linii fontu (bez mnożnika w:line) i BEZ odstępu „po" — 1px rula w zwykłym
+        // akapicie z domyślnym after zawyżała wysokość ~60%. line-height:normal sprawia, że
+        // 1lh w marginesach spanu docx-hr (centrowanie ruli) = pojedyncza linia fontu.
+        var isHrOnlyParagraph = string.IsNullOrEmpty(paragraph.InnerText)
+            && paragraph.Descendants<DocumentFormat.OpenXml.Vml.Rectangle>()
+                .Any(r => GetOfficeVmlAttribute(r, "hr") is "t" or "true");
+        if (isHrOnlyParagraph)
+            cssBuilder.Append("line-height:normal;padding-bottom:0;margin-bottom:0;");
+
+        // Nagłówki: efektywny rozmiar w Wordzie = łańcuch stylu aż do docDefaults. Gdy łańcuch
+        // nie deklaruje w:sz, nagłówek DZIEDZICZY rozmiar dokumentu — emitujemy go jawnie,
+        // bo inaczej prezentacyjne rozmiary h1-h6 z SCSS edytora nadpisywały realny rozmiar
+        // Worda (styl firmowy „Heading1 = bold, rozmiar z Normal" renderował się 24pt).
+        if (headingLevel > 0
+            && !cssBuilder.ToString().Contains("font-size", StringComparison.OrdinalIgnoreCase))
+        {
+            var effHeadingPt = _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : (double?)null);
+            if (effHeadingPt.HasValue)
+                cssBuilder.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "font-size:{0:0.##}pt;", effHeadingPt.Value));
+        }
+
         // Dedup finalnego CSS: styl + direct pPr potrafiły zostawić duplikaty tej samej
         // właściwości (przeglądarka bierze ostatnią, ale regexy writera brały PIERWSZĄ —
         // nadpisanie stylu przez direct pPr ginęło na eksporcie).
@@ -2649,7 +2719,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         _flexTabs = prevFlexTabs;
 
-        if (!paragraph.Elements<Run>().Any() && !paragraph.Elements<Hyperlink>().Any() && !paragraph.Elements<SimpleField>().Any())
+        // Akapit bez WIDOCZNEJ treści (także z pustymi runami — sam `Elements<Run>().Any()`
+        // przepuszczał `<w:r><w:rPr/></w:r>` i akapit zapadał się do zera) musi mieć line box:
+        // w Wordzie znak ¶ zawsze daje pełną wysokość wiersza. Bez tego każdy pusty akapit
+        // zaniżał render o ~1 linię i dryf paginacji kumulował się do całych stron.
+        if (!ParagraphHasVisibleContent(paragraph))
         {
             html.Append("&nbsp;");
         }
@@ -2671,6 +2745,33 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
 
         return html.ToString();
+    }
+
+    /// <summary>
+    /// Rozpakowuje przezroczyste kontenery <c>w:customXml</c> (blok/wiersz/komórka/run) w miejscu:
+    /// dzieci wchodzą na pozycję kontenera, metadane (<c>w:customXmlPr</c>) odpadają. Word renderuje
+    /// customXml transparentnie — nasze dispatche (body, tabele, akapity) widziały go jako nieznany
+    /// element i CAŁA treść (łącznie z tabelami) znikała z podglądu. Mutacja czysto w pamięci —
+    /// pakiet źródłowy (v1) pozostaje nietknięty. Ograniczenie: sam wrapper customXml nie
+    /// round-tripuje przy zapisie (treść tak).
+    /// </summary>
+    private static void UnwrapCustomXmlContainers(OpenXmlElement root)
+    {
+        var wrappers = root.Descendants<CustomXmlElement>().ToList();
+        // Od końca = najgłębsze najpierw (Descendants zwraca rodziców przed dziećmi).
+        for (var i = wrappers.Count - 1; i >= 0; i--)
+        {
+            var wrapper = wrappers[i];
+            var parent = wrapper.Parent;
+            if (parent == null) continue;
+            foreach (var child in wrapper.ChildElements.ToList())
+            {
+                if (child is CustomXmlProperties) continue;
+                wrapper.RemoveChild(child);
+                parent.InsertBefore(child, wrapper);
+            }
+            parent.RemoveChild(wrapper);
+        }
     }
 
     /// <summary>
@@ -3183,7 +3284,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
             else
             {
-                html.Append("<span style=\"display:inline-block;min-width:2em;white-space:pre;\">\t</span>");
+                // Atomic like ConvertRunChildToHtml's TabChar carrier (caret/Backspace parity).
+                html.Append("<span style=\"display:inline-block;min-width:2em;white-space:pre;\" contenteditable=\"false\">\t</span>");
             }
             html.Append("<span class=\"docx-tab-text\" style=\"white-space:pre;\">")
                 .Append(segments[k])
@@ -4348,9 +4450,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             : string.Empty;
 
         var wrapperCss = rStyleCss + cleanCss;
-        // Note reference marks: the semantic <sup> alone carries the raise/shrink — the
-        // character style's vertical-align/smaller CSS around it would double the effect.
-        if (stripSuperscriptCss)
+        // Note reference marks AND any run that gets a semantic <sup>/<sub> wrapper: the
+        // wrapper alone carries the raise/shrink — the character style's
+        // vertical-align/smaller CSS around it would double the effect (0.83 × 0.83).
+        if (stripSuperscriptCss || needsSup || needsSub)
             wrapperCss = Regex.Replace(wrapperCss,
                 @"(?:vertical-align:\s*(?:super|sub)|font-size:\s*smaller)\s*;?", "");
 
@@ -4396,12 +4499,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             case Text text:
                 return EscapeHtml(MapSymbolicTextRun(text));
             case Break br:
-                if (br.Type?.Value == BreakValues.Page) return "<div class=\"page-break\"></div>";
+                if (br.Type?.Value == BreakValues.Page)
+                {
+                    // In a table cell the div form tears the page-splitter's raw-HTML cut through
+                    // the table (see IsPageBreakOnlyParagraph) — an inline marker renders as a
+                    // line break there and still round-trips to w:br type=page.
+                    if (br.Ancestors<TableCell>().Any())
+                        return "<span class=\"page-break\" style=\"display:block;height:0;overflow:hidden;\"></span>";
+                    return "<div class=\"page-break\"></div>";
+                }
                 // Podział kolumny (w:br w:type="column") — atomowy marker, render CSS break-before:column (ADR-0039).
                 if (br.Type?.Value == BreakValues.Column) return "<div class=\"docx-column-break\"></div>";
                 return "<br/>";
             case TabChar _:
-                return "<span style=\"display:inline-block;min-width:2em;\">\t</span>";
+                // contenteditable=false: a Word tab is atomic. Without it a TRAILING tab's \t is
+                // collapsible whitespace and Chrome moves the caret before the span — typing after
+                // a tab at the end of a paragraph landed before it (and Backspace left a 2em ghost).
+                return "<span style=\"display:inline-block;min-width:2em;\" contenteditable=\"false\">\t</span>";
             case Drawing drawing:
                 return ConvertDrawingToHtml(drawing, document, sourcePart);
             case Picture picture:
@@ -5016,6 +5130,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string ConvertFootnoteContent(WpFootnote footnote, WordprocessingDocument document, OpenXmlPart sourcePart)
     {
         var html = new StringBuilder();
+        UnwrapCustomXmlContainers(footnote);
         foreach (var block in footnote.Elements())
         {
             switch (block)
@@ -5118,6 +5233,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string ConvertEndnoteContent(WpEndnote endnote, WordprocessingDocument document, OpenXmlPart sourcePart)
     {
         var html = new StringBuilder();
+        UnwrapCustomXmlContainers(endnote);
         foreach (var block in endnote.Elements())
         {
             switch (block)
@@ -7234,6 +7350,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         css.Append(string.Format(inv, "height:{0}px;background:{1};",
             heightPx, string.IsNullOrEmpty(fill) ? "#a0a0a0" : fill));
+        // Word: linia HR żyje w linii tekstu ze znakiem ¶, więc akapit ma PEŁNĄ wysokość
+        // wiersza. Goły 1px span zaniżał wysokość ~21px na każdej linii — dryf paginacji
+        // kumulował się do stron. Rula wycentrowana w jednym wierszu (1lh) jak w Wordzie.
+        css.Append(string.Format(inv,
+            "margin-top:calc((1lh - {0}px)/2);margin-bottom:calc((1lh - {0}px)/2);", heightPx));
 
         var attrs = new StringBuilder(" data-docx-hr=\"1\"");
         if (!string.IsNullOrEmpty(align)) attrs.Append($" data-hr-align=\"{System.Net.WebUtility.HtmlEncode(align)}\"");
@@ -8327,6 +8448,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             var styleSpacing = chain[i].StyleParagraphProperties?.GetFirstChild<SpacingBetweenLines>();
             if (styleSpacing != null)
                 cellParagraphCss.Append(SpacingCss(styleSpacing));
+        }
+        // w:rPr stylu tabeli (krój/rozmiar tekstu komórek): Word stosuje go do całego tekstu
+        // tabeli pod tym stylem — bez tego komórki spadały na rozmiar dokumentu (np. styl
+        // tabeli 9pt renderował się 11pt). Styl akapitu / direct rPr nadal wygrywają
+        // (dokładane później, DeduplicateCss bierze ostatnią wartość).
+        for (var i = chain.Count - 1; i >= 0; i--)
+        {
+            var styleRpr = chain[i].StyleRunProperties;
+            if (styleRpr == null) continue;
+            var tableFont = GetFontName(styleRpr.GetFirstChild<RunFonts>());
+            if (!string.IsNullOrEmpty(tableFont))
+                cellParagraphCss.Append(FontFamilyCss(tableFont));
+            var tableSize = styleRpr.GetFirstChild<FontSize>();
+            if (tableSize?.Val?.Value != null &&
+                double.TryParse(tableSize.Val.Value, System.Globalization.CultureInfo.InvariantCulture, out var tableSz))
+                cellParagraphCss.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "font-size:{0:0.##}pt;", OoxmlUnits.HalfPointsToPoints(tableSz)));
         }
         ctx.ParagraphDefaultCss = DeduplicateCss(cellParagraphCss.ToString());
 

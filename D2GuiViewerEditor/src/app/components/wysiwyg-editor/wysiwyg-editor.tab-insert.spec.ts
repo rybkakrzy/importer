@@ -138,6 +138,38 @@ describe('WysiwygEditorComponent — Tab wstawia znak tabulacji w środku akapit
     expect(exec).toHaveBeenCalledWith('outdent');
   });
 
+  it('karetka na KOŃCU akapitu: Tab wstawia nośnik, a karetka ląduje ZA nim (pisanie kontynuuje po tabie)', () => {
+    editor.innerHTML = '<p id="p">Koniec akapitu</p>';
+    const p = editor.querySelector<HTMLElement>('#p')!;
+    caretIn(p.firstChild!, p.firstChild!.textContent!.length);
+
+    pressTab();
+
+    const span = carrier();
+    expect(span).not.toBeNull();
+    // Atomowy jak tab Worda: bez contenteditable=false Chrome kanonizował karetkę PRZED span
+    // (trailing \t = kolapsowany biały znak) i pisanie po Tabie lądowało przed tabulatorem.
+    expect(span!.getAttribute('contenteditable')).toBe('false');
+    const sel = window.getSelection()!;
+    const r = sel.getRangeAt(0);
+    expect(r.collapsed).toBe(true);
+    expect(r.startContainer).toBe(p);
+    expect(r.startOffset).toBe(2); // za spanem (dzieci: [tekst, span])
+  });
+
+  it('_placeCaretAtTextOffset nie stawia karetki WEWNĄTRZ atomowego nośnika (contenteditable=false)', () => {
+    editor.innerHTML =
+      '<p id="p">ab<span style="display:inline-block;min-width:2em" contenteditable="false">\t</span>cd</p>';
+    const p = editor.querySelector<HTMLElement>('#p')!;
+
+    // Offset 3 = koniec \t — granica atomu: karetka ma wylądować ZA spanem, nie w jego tekście.
+    (component as any)._placeCaretAtTextOffset(p, 3);
+
+    const r = window.getSelection()!.getRangeAt(0);
+    expect(r.startContainer).toBe(p);
+    expect(r.startOffset).toBe(2); // za spanem
+  });
+
   it('Tab w tabeli: _handleTableTab konsumuje zdarzenie — bez nośnika i bez indentu', () => {
     editor.innerHTML = '<p id="p">Tekst</p>';
     const p = editor.querySelector<HTMLElement>('#p')!;

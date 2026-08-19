@@ -3754,6 +3754,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const span = document.createElement('span');
     // Exact reader attribute string — stylesheet rules match [style*='min-width:2em'].
     span.setAttribute('style', 'display:inline-block;min-width:2em');
+    // Atomic like a Word tab: without this, a TRAILING tab's \t is collapsible whitespace
+    // and Chrome canonicalizes the caret to BEFORE the span — typing after Tab at the end
+    // of a paragraph landed before the tab ("Tab does nothing"). contenteditable=false makes
+    // the position after the span real and Backspace removes the whole tab in one step.
+    span.setAttribute('contenteditable', 'false');
     span.textContent = '\t';
     range.insertNode(span);
 
@@ -8521,7 +8526,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     while ((node = walker.nextNode())) {
       const nl = node.textContent?.length ?? 0;
       if (r <= nl) {
-        range.setStart(node, r);
+        // Atomic inline (tab carrier, bullet marker): the caret must never sit INSIDE a
+        // contenteditable=false element — Chrome would snap it out unpredictably. Land
+        // before/after the wrapper instead, matching which edge the offset falls on.
+        const atom = (node.parentElement ?? null)?.closest?.('[contenteditable="false"]');
+        if (atom && block.contains(atom) && atom !== block) {
+          if (r <= 0) range.setStartBefore(atom);
+          else range.setStartAfter(atom);
+        } else {
+          range.setStart(node, r);
+        }
         range.collapse(true);
         sel.removeAllRanges();
         sel.addRange(range);
@@ -8532,7 +8546,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     }
     // Brak węzłów tekstowych (pusty akapit) lub offset poza zakresem — początek/koniec bloku.
     if (lastNode) {
-      range.setStart(lastNode, lastNode.textContent?.length ?? 0);
+      const atom = (lastNode.parentElement ?? null)?.closest?.('[contenteditable="false"]');
+      if (atom && block.contains(atom) && atom !== block) {
+        range.setStartAfter(atom);
+      } else {
+        range.setStart(lastNode, lastNode.textContent?.length ?? 0);
+      }
     } else {
       range.setStart(block, 0);
     }
