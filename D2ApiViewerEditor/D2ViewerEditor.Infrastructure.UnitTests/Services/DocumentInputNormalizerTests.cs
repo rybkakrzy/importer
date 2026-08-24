@@ -141,12 +141,12 @@ public class DocumentInputNormalizerTests
 
         // EncryptedPackage: 8B rozmiar + segmenty 4096B (IV = H(pkgSalt + i)).
         using var pkg = new MemoryStream();
-        pkg.Write(BitConverter.GetBytes((long)docx.Length));
+        pkg.Fill(BitConverter.GetBytes((long)docx.Length));
         for (int off = 0, bi = 0; off < docx.Length; off += 4096, bi++)
         {
             int len = Math.Min(4096, docx.Length - off);
             var iv = H(Cat(pkgSalt, BitConverter.GetBytes(bi))).AsSpan(0, block).ToArray();
-            pkg.Write(Enc(docx.AsSpan(off, len).ToArray(), secretKey, iv));
+            pkg.Fill(Enc(docx.AsSpan(off, len).ToArray(), secretKey, iv));
         }
 
         string B64(byte[] b) => Convert.ToBase64String(b);
@@ -161,8 +161,8 @@ public class DocumentInputNormalizerTests
             "</keyEncryptor></keyEncryptors></encryption>";
         var xmlBytes = System.Text.Encoding.UTF8.GetBytes(xml);
         using var infoMs = new MemoryStream();
-        infoMs.Write(new byte[] { 0x04, 0x00, 0x04, 0x00, 0x40, 0x00, 0x00, 0x00 }); // major 4, minor 4, flags 0x40
-        infoMs.Write(xmlBytes);
+        infoMs.Fill(new byte[] { 0x04, 0x00, 0x04, 0x00, 0x40, 0x00, 0x00, 0x00 }); // major 4, minor 4, flags 0x40
+        infoMs.Fill(xmlBytes);
 
         return BuildCfb(("EncryptionInfo", infoMs.ToArray()), ("EncryptedPackage", pkg.ToArray()));
     }
@@ -177,7 +177,7 @@ public class DocumentInputNormalizerTests
             foreach (var (name, data) in entries)
             {
                 using CfbStream stream = root.CreateStream(name);
-                stream.Write(data, 0, data.Length);
+                stream.Fill(data);
             }
         }
         return ms.ToArray();

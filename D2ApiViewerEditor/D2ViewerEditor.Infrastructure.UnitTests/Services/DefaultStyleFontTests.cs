@@ -132,8 +132,7 @@ public class DefaultStyleFontTests
             stylesPart.Styles = styles;
             stylesPart.Styles.Save();
 
-            using (var w = new StreamWriter(mainPart.AddNewPart<ThemePart>().GetStream(FileMode.Create)))
-                w.Write(ThemeXml(themeMinor));
+            mainPart.AddNewPart<ThemePart>().FeedXml(ThemeXml(themeMinor));
 
             mainPart.Document.Save();
         }

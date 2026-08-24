@@ -84,7 +84,7 @@ public class DigitalSignatureServiceTests
     private static byte[] AppendParagraph(byte[] docx, string text)
     {
         using var ms = new MemoryStream();
-        ms.Write(docx, 0, docx.Length);
+        ms.Fill(docx);
         ms.Position = 0;
         using (var doc = WordprocessingDocument.Open(ms, true))
         {

@@ -187,7 +187,7 @@ public static class GoldenDocuments
 
             var headerPart = mainPart.AddNewPart<HeaderPart>();
             var imagePart = headerPart.AddImagePart(ImagePartType.Png);
-            using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+            imagePart.FeedBytes(OnePixelPng);
             var relId = headerPart.GetIdOfPart(imagePart);
             headerPart.Header = new Header(new Paragraph(InlineImageRun(relId, 1270000, 317500)));
             headerPart.Header.Save();

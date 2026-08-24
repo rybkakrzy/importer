@@ -48,8 +48,7 @@ public class TableColumnClampFidelityTests
         using (var docx = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = docx.AddMainDocumentPart();
-            using var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8);
-            w.Write(doc);
+            mainPart.FeedXml(doc);
         }
         ms.Position = 0;
         return ms;

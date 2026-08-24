@@ -117,7 +117,7 @@ public class OpcPackageAnalysisTests
             using var stream = archive.CreateEntry("[Content_Types].xml").Open();
             var bytes = System.Text.Encoding.UTF8.GetBytes(
                 """<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>""");
-            stream.Write(bytes, 0, bytes.Length);
+            stream.Fill(bytes);
         }
 
         var act = () => StructureInspectorTestHost.Analyze(buffer.ToArray());

@@ -425,8 +425,7 @@ public class TextBoxAnchorRoundTripTests
         using (var wpd = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = wpd.AddMainDocumentPart();
-            using var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8);
-            w.Write(doc.Replace("{BODY}", bodyInnerXml));
+            mainPart.FeedXml(doc.Replace("{BODY}", bodyInnerXml));
         }
         ms.Position = 0;
         return ms;
@@ -441,11 +440,7 @@ public class TextBoxAnchorRoundTripTests
             var mainPart = wpd.AddMainDocumentPart();
 
             var imagePart = mainPart.AddImagePart(ImagePartType.Png, "rIdImg1");
-            using (var s = imagePart.GetStream(FileMode.Create))
-            {
-                var bytes = System.Convert.FromBase64String(PngBase64);
-                s.Write(bytes, 0, bytes.Length);
-            }
+            imagePart.FeedBytes(System.Convert.FromBase64String(PngBase64));
 
             const string doc = @"<?xml version=""1.0"" encoding=""UTF-8"" standalone=""yes""?>
 <w:document xmlns:w=""http://schemas.openxmlformats.org/wordprocessingml/2006/main""
@@ -454,8 +449,7 @@ public class TextBoxAnchorRoundTripTests
   xmlns:r=""http://schemas.openxmlformats.org/officeDocument/2006/relationships"">
   <w:body>{BODY}</w:body>
 </w:document>";
-            using var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8);
-            w.Write(doc.Replace("{BODY}", bodyInnerXml));
+            mainPart.FeedXml(doc.Replace("{BODY}", bodyInnerXml));
         }
         ms.Position = 0;
         return ms;

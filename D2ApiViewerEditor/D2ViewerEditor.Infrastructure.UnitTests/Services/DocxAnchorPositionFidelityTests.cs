@@ -53,7 +53,7 @@ public class DocxAnchorPositionFidelityTests
             var body = mainPart.Document.Body!;
 
             var imagePart = mainPart.AddImagePart(ImagePartType.Png);
-            using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+            imagePart.FeedBytes(OnePixelPng);
             var relId = mainPart.GetIdOfPart(imagePart);
 
             body.Append(new Paragraph(BuildAnchoredImageRun(relId, posHXml, posVXml, cx, cy)));
@@ -248,7 +248,7 @@ public class DocxAnchorPositionFidelityTests
             {
                 var footerPart = mainPart.AddNewPart<FooterPart>();
                 var imagePart = footerPart.AddImagePart(ImagePartType.Png);
-                using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+                imagePart.FeedBytes(OnePixelPng);
                 footerPart.Footer = new Footer(new Paragraph(
                     BuildAnchoredImageRun(footerPart.GetIdOfPart(imagePart), posH, posVXml, cx, cy)));
                 sectPr.PrependChild(new FooterReference
@@ -258,7 +258,7 @@ public class DocxAnchorPositionFidelityTests
             {
                 var headerPart = mainPart.AddNewPart<HeaderPart>();
                 var imagePart = headerPart.AddImagePart(ImagePartType.Png);
-                using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+                imagePart.FeedBytes(OnePixelPng);
                 headerPart.Header = new Header(new Paragraph(
                     BuildAnchoredImageRun(headerPart.GetIdOfPart(imagePart), posH, posVXml, cx, cy)));
                 sectPr.PrependChild(new HeaderReference

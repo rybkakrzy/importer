@@ -27,9 +27,7 @@ public class DigitalSignatureService : IDigitalSignatureService
         var cert = new X509Certificate2(certificateBytes, password,
             X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
 
-        using var memoryStream = new MemoryStream();
-        memoryStream.Write(docxBytes, 0, docxBytes.Length);
-        memoryStream.Position = 0;
+        using var memoryStream = BinaryBuffers.ToExpandableStream(docxBytes);
 
         using (var document = WordprocessingDocument.Open(memoryStream, true))
         {

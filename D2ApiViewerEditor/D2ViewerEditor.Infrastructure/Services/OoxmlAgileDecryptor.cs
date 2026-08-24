@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
@@ -95,7 +96,7 @@ public static class OoxmlAgileDecryptor
             // EncryptedPackage: 8 bajtów rozmiar (LE) + segmenty 4096 B (każdy własne IV = H(pkgSalt + i)).
             if (encryptedPackage.Length < 8) return DecryptResult.Invalid;
             long totalSize = BitConverter.ToInt64(encryptedPackage, 0);
-            var output = new MemoryStream();
+            var output = new ArrayBufferWriter<byte>();
             const int segment = 4096;
             int offset = 8;
             int blockIndex = 0;
@@ -107,12 +108,13 @@ public static class OoxmlAgileDecryptor
                 var iv = Hash(pkgHash.Value, Concat(pkgSalt, BitConverter.GetBytes(blockIndex)));
                 if (iv.Length > pkgBlockSize) iv = iv.AsSpan(0, pkgBlockSize).ToArray();
                 var chunk = encryptedPackage.AsSpan(offset, len).ToArray();
-                output.Write(AesCbcDecrypt(chunk, secretKey, iv), 0, len);
+                AesCbcDecrypt(chunk, secretKey, iv).AsSpan(0, len).CopyTo(output.GetSpan(len));
+                output.Advance(len);
                 offset += segment;
                 blockIndex++;
             }
 
-            var all = output.ToArray();
+            var all = output.WrittenSpan.ToArray();
             if (totalSize > 0 && totalSize <= all.Length)
                 all = all.AsSpan(0, (int)totalSize).ToArray();
             docx = all;

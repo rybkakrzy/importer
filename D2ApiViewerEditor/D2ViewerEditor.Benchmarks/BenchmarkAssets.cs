@@ -89,7 +89,7 @@ public static class BenchmarkAssets
         for (var i = 0; i < count; i++)
         {
             var imagePart = mainPart.AddImagePart(ImagePartType.Png);
-            using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+            imagePart.FeedBytes(OnePixelPng);
             var relId = mainPart.GetIdOfPart(imagePart);
             body.Append(new Paragraph(InlineImageRun(relId, 1270000, 317500)));
         }
@@ -99,7 +99,7 @@ public static class BenchmarkAssets
     {
         var headerPart = mainPart.AddNewPart<HeaderPart>();
         var imagePart = headerPart.AddImagePart(ImagePartType.Png);
-        using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+        imagePart.FeedBytes(OnePixelPng);
         headerPart.Header = new Header(new Paragraph(InlineImageRun(headerPart.GetIdOfPart(imagePart), 1270000, 317500)));
         headerPart.Header.Save();
 
@@ -150,8 +150,7 @@ public static class BenchmarkAssets
             stylesPart.Styles = styles;
             stylesPart.Styles.Save();
 
-            using (var w = new StreamWriter(mainPart.AddNewPart<ThemePart>().GetStream(FileMode.Create)))
-                w.Write(MinimalThemeXml());
+            mainPart.AddNewPart<ThemePart>().FeedXml(MinimalThemeXml());
 
             fill(doc, mainPart, mainPart.Document.Body!);
             mainPart.Document.Save();

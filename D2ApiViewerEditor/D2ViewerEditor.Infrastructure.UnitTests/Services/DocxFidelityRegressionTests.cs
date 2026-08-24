@@ -166,8 +166,7 @@ public class DocxFidelityRegressionTests
             stylesPart.Styles = styles;
             stylesPart.Styles.Save();
 
-            using (var w = new StreamWriter(mainPart.AddNewPart<ThemePart>().GetStream(FileMode.Create)))
-                w.Write(ThemeXml(minorFont));
+            mainPart.AddNewPart<ThemePart>().FeedXml(ThemeXml(minorFont));
 
             fill(mainPart.Document.Body!);
             mainPart.Document.Save();

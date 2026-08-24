@@ -249,7 +249,7 @@ public class ImageImportRegressionTests
     {
         using var ms = new MemoryStream();
         using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
-            gz.Write(data, 0, data.Length);
+            gz.Fill(data);
         return ms.ToArray();
     }
 

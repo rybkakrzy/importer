@@ -44,8 +44,7 @@ public class PassThroughPackageTests
             stylesPart.Styles.Save();
 
             var themePart = mainPart.AddNewPart<ThemePart>();
-            using (var w = new StreamWriter(themePart.GetStream(FileMode.Create)))
-                w.Write(ThemeXml("Cambria"));
+            themePart.FeedXml(ThemeXml("Cambria"));
 
             mainPart.Document.Save();
         }

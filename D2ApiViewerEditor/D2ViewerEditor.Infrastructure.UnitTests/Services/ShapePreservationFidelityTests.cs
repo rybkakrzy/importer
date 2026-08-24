@@ -55,8 +55,7 @@ public class ShapePreservationFidelityTests
         using (var docx = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = docx.AddMainDocumentPart();
-            using var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8);
-            w.Write(doc.Replace("{BODY}", bodyInnerXml));
+            mainPart.FeedXml(doc.Replace("{BODY}", bodyInnerXml));
         }
         ms.Position = 0;
         return ms;
@@ -212,8 +211,7 @@ public class ShapePreservationFidelityTests
         using (var docx = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = docx.AddMainDocumentPart();
-            using (var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8))
-                w.Write(doc);
+            mainPart.FeedXml(doc);
 
             var imagePart = mainPart.AddImagePart(ImagePartType.Png, "rIdPreview");
             using (var s = new MemoryStream(System.Convert.FromBase64String(OnePxPngB64)))

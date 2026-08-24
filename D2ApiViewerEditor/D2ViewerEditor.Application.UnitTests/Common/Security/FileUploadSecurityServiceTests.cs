@@ -165,15 +165,14 @@ public class FileUploadSecurityServiceTests
     {
         var entry = archive.CreateEntry(name);
         using var stream = entry.Open();
-        using var writer = new StreamWriter(stream);
-        writer.Write(value);
+        stream.FillText(value);
     }
 
     private static void WriteEntry(ZipArchive archive, string name, byte[] content)
     {
         var entry = archive.CreateEntry(name);
         using var stream = entry.Open();
-        stream.Write(content, 0, content.Length);
+        stream.Fill(content);
     }
 
     private sealed class StubScanner : IFileScanner

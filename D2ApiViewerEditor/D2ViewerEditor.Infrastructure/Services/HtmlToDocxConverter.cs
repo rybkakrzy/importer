@@ -307,9 +307,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// </summary>
     private static byte[] PreserveOriginalParts(byte[] generated, Stream originalPackage)
     {
-        var ms = new MemoryStream();
-        ms.Write(generated, 0, generated.Length);
-        ms.Position = 0;
+        var ms = BinaryBuffers.ToExpandableStream(generated);
 
         if (originalPackage.CanSeek) originalPackage.Position = 0;
 

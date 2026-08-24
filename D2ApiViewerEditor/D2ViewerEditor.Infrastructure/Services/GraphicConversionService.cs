@@ -484,15 +484,7 @@ public sealed class GraphicConversionService : IGraphicConversionService
         {
             using var input = new MemoryStream(data, writable: false);
             using var gz = new GZipStream(input, CompressionMode.Decompress);
-            using var output = new MemoryStream();
-            var buffer = new byte[81920];
-            int read;
-            while ((read = gz.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                if (output.Length + read > maxOutputBytes) return null; // bomba/oversize → odrzuć
-                output.Write(buffer, 0, read);
-            }
-            return output.Length > 0 ? output.ToArray() : null;
+            return BinaryBuffers.ReadAllBounded(gz, maxOutputBytes);
         }
         catch { return null; }
     }

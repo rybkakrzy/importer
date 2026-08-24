@@ -52,15 +52,11 @@ public class ImportStructureFidelityTests
         using (var docx = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = docx.AddMainDocumentPart();
-            using (var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8))
-            {
-                w.Write(doc);
-            }
+            mainPart.FeedXml(doc);
             if (stylesXml != null)
             {
                 var stylesPart = mainPart.AddNewPart<DocumentFormat.OpenXml.Packaging.StyleDefinitionsPart>();
-                using var sw = new StreamWriter(stylesPart.GetStream(FileMode.Create), Encoding.UTF8);
-                sw.Write(stylesXml);
+                stylesPart.FeedXml(stylesXml);
             }
         }
         ms.Position = 0;

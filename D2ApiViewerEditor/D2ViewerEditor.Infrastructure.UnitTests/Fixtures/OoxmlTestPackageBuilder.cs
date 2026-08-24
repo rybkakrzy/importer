@@ -185,14 +185,13 @@ public sealed class OoxmlTestPackageBuilder
     private static void WriteText(ZipArchive archive, string path, string content)
     {
         using var stream = archive.CreateEntry(path).Open();
-        var bytes = Encoding.UTF8.GetBytes(content);
-        stream.Write(bytes, 0, bytes.Length);
+        stream.Fill(Encoding.UTF8.GetBytes(content));
     }
 
     private static void WriteBytes(ZipArchive archive, string path, byte[] content)
     {
         using var stream = archive.CreateEntry(path).Open();
-        stream.Write(content, 0, content.Length);
+        stream.Fill(content);
     }
 
     public static byte[] PngPixel() =>

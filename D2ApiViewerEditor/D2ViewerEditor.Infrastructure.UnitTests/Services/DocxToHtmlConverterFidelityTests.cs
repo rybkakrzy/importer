@@ -53,7 +53,7 @@ public class DocxToHtmlConverterFidelityTests
             // Default header: paragraph with an inline image (extent cx × cy EMU).
             var headerPart = mainPart.AddNewPart<HeaderPart>();
             var imagePart = headerPart.AddImagePart(ImagePartType.Png);
-            using (var s = imagePart.GetStream()) s.Write(OnePixelPng, 0, OnePixelPng.Length);
+            imagePart.FeedBytes(OnePixelPng);
             var imgRelId = headerPart.GetIdOfPart(imagePart);
             headerPart.Header = new Header(new Paragraph(BuildInlineImageRun(imgRelId, imageCx, imageCy)));
             headerPart.Header.Save();

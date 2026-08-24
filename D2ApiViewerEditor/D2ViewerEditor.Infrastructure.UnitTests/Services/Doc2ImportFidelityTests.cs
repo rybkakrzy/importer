@@ -761,8 +761,7 @@ public class Doc2ImportFidelityTests
         using (var wpd = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = wpd.AddMainDocumentPart();
-            using var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8);
-            w.Write(doc.Replace("{BODY}", bodyInnerXml));
+            mainPart.FeedXml(doc.Replace("{BODY}", bodyInnerXml));
         }
         ms.Position = 0;
         return ms;
@@ -819,12 +818,10 @@ public class Doc2ImportFidelityTests
         using (var wpd = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
         {
             var mainPart = wpd.AddMainDocumentPart();
-            using (var w = new StreamWriter(mainPart.GetStream(FileMode.Create), Encoding.UTF8))
-                w.Write(doc.Replace("{BODY}", bodyInnerXml));
+            mainPart.FeedXml(doc.Replace("{BODY}", bodyInnerXml));
 
             var themePart = mainPart.AddNewPart<ThemePart>();
-            using var tw = new StreamWriter(themePart.GetStream(FileMode.Create), Encoding.UTF8);
-            tw.Write(theme);
+            themePart.FeedXml(theme);
         }
         ms.Position = 0;
         return ms;
