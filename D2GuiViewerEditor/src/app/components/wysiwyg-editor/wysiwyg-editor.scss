@@ -225,9 +225,33 @@
      (repro QA: „To jest test interlinii 3" z cieniowaniem przy w:line=720) —
      bez przesunięcia tekst jest wyśrodkowany w slocie (kompromis: pół leadingu różnicy,
      zero artefaktów). */
+/* ADR-0108 r.4 — KOREKTA ADR-0085 po pomiarze glifów w PDF z Worda (fixture spacing-usecases):
+   - lineRule=AUTO (wielokrotność N): pozycja PIERWSZEJ linii względem poprzedniego akapitu jest
+     STAŁA niezależnie od N (baseline 12.05pt od góry slotu dla 11pt; 1.2×/1.5×/2×/2.5× = 16.3pt
+     od etykiety), a nadmiar leży POD każdą linią → tusz kotwiczony u GÓRY slotu. CSS centruje
+     tusz (pół leadingu nad i pod), więc przesuwamy go W GÓRĘ o pół różnicy. Dla single (1lh =
+     single) przesunięcie = 0 — rendering dokumentów z pojedynczym odstępem bez zmian.
+   - EXACT / AT LEAST: pierwsza linia schodzi w dół wraz z wysokością slotu (exact 24 → 20.75pt,
+     atLeast 24 → 22.75pt od góry) → tusz przy DOLE slotu, jak w ADR-0085 (Dokładnie < font
+     obcina GÓRĘ). Rozpoznanie po markerze --w-line-rule z readera (atLeast/exact) — także
+     odziedziczonym z kontenera (domyślna interlinia dokumentu exact/atLeast). */
 .page :is(p, h1, h2, h3, h4, h5, h6, li):not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']) {
   position: relative;
+  top: calc((var(--w-line-single, 1.221em) - 1lh) / 2);
+}
+
+.page :is(p, h1, h2, h3, h4, h5, h6, li):is([style*='--w-line-rule:atLeast'], [style*='--w-line-rule:exact']):not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']),
+.page [style*='--w-line-rule:atLeast'] :is(p, h1, h2, h3, h4, h5, h6, li):not([style*='line-height']):not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']),
+.page [style*='--w-line-rule:exact'] :is(p, h1, h2, h3, h4, h5, h6, li):not([style*='line-height']):not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']) {
   top: calc((1lh - var(--w-line-single, 1.221em)) / 2);
+}
+
+/* ADR-0108 r.5 — linie snapowane do siatki dokumentu (reader: line-height = N × pitch + marker
+   --w-line-grid:1): pomiar PDF pokazuje, że Word CENTRUJE tusz w takim slocie (etykieta →
+   1. linia G01 = 23.2 pt = model centrowany 23.0), czyli dokładnie domyślny model CSS —
+   żadnego przesunięcia. Reguła po obu powyższych (ta sama specyficzność → wygrywa kolejność). */
+.page :is(p, h1, h2, h3, h4, h5, h6, li)[style*='--w-line-grid:1']:not(:has([data-pos-mode])):not([style*='background-color']):not([style*='border']) {
+  top: 0;
 }
 
 .editor-content:empty::before {
@@ -240,10 +264,25 @@
   outline: none;
 }
 
-/* Naprawienie problemów z font-size w spanach */
+/* Runy o własnym rozmiarze DZIEDZICZĄ regułę interlinii akapitu (ADR-0107, pomiar Word 16
+   dla akapitu „10pt / BIG 32pt / 10pt"):
+   - mnożnik (auto, bezjednostkowe line-height): Word = N × pojedynczy odstęp NAJWYŻSZEGO runu
+     (1,5 → 58 pt); odziedziczona liczba mnoży font-size spanu — dokładnie to;
+   - „Dokładnie" (pt): linia ma stałą wysokość niezależnie od runów (Word 12 pt, tekst wystaje);
+   - dawne `line-height:normal` na spanie rozdymało linię do naturalnej wysokości dużego runu
+     przy każdej regule (1,5 → 39 pt, Dokładnie 12 → 39 pt) — rozjazd paginacji z Wordem.
+   Wyjątek „Co najmniej" poniżej. */
 .editor-content span[style*="font-size"] {
-  line-height: normal;
+  line-height: inherit;
   vertical-align: baseline;
+}
+
+/* „Co najmniej" (atLeast): akapit niesie max(Xpt, single) policzone JEGO fontem, więc
+   odziedziczona długość ściskałaby duży run; `normal` spanu = pojedynczy odstęp jego fontu,
+   a line box = max(strut akapitu ≥ X, normal spanu) — czyli semantyka Worda (min X, rośnie
+   z treścią: atLeast 12 + 32pt → 39 pt; atLeast 40 + 24pt → 40 pt). */
+.editor-content [style*='--w-line-rule:atLeast'] span[style*="font-size"] {
+  line-height: normal;
 }
 
 /* Usuń domyślne style z elementów font */
@@ -252,9 +291,9 @@
   vertical-align: baseline;
 }
 
-/* Style dla elementów dokumentu. Odstęp „po" nagłówku = padding-bottom (ADR-0053, jak
-   dla akapitów): inline padding-bottom ze stylu Worda nadpisuje wartość klasy zamiast
-   sumować się z klasowym margin-bottom.
+/* Style dla elementów dokumentu. Odstęp „po" nagłówku = margin-bottom (ADR-0107, jak dla
+   akapitów: Word bierze MAX odstępów sąsiadów = kolaps marginesów CSS); w modelu SUMY
+   (.para-spacing-sum) nośnikiem jest padding-bottom — patrz blok na końcu sekcji.
    ROZMIARY = wbudowane style Heading1-6 Worda (16/13/12/11/11/11pt) — dokładnie te,
    które writer zapisuje do styles.xml (headingSizes 32/26/24/22/22/22 half-pt), więc
    nagłówek utworzony w edytorze wygląda tak, jak wyjdzie w DOCX. Nagłówki IMPORTOWANE
@@ -263,50 +302,61 @@
 .editor-content h1 {
   font-size: 16pt;
   font-weight: 700;
-  margin: 20px 0 0 0;
-  padding-bottom: 10px;
+  margin: 20px 0 10px 0;
+  padding-bottom: 0;
   color: #1a1a1a;
 }
 
 .editor-content h2 {
   font-size: 13pt;
   font-weight: 700;
-  margin: 18px 0 0 0;
-  padding-bottom: 9px;
+  margin: 18px 0 9px 0;
+  padding-bottom: 0;
   color: #1a1a1a;
 }
 
 .editor-content h3 {
   font-size: 12pt;
   font-weight: 700;
-  margin: 16px 0 0 0;
-  padding-bottom: 8px;
+  margin: 16px 0 8px 0;
+  padding-bottom: 0;
   color: #1a1a1a;
 }
 
 .editor-content h4 {
   font-size: 11pt;
   font-weight: 700;
-  margin: 14px 0 0 0;
-  padding-bottom: 7px;
+  margin: 14px 0 7px 0;
+  padding-bottom: 0;
   color: #1a1a1a;
 }
 
 .editor-content h5 {
   font-size: 11pt;
   font-weight: 700;
-  margin: 12px 0 0 0;
-  padding-bottom: 6px;
+  margin: 12px 0 6px 0;
+  padding-bottom: 0;
   color: #1a1a1a;
 }
 
 .editor-content h6 {
   font-size: 11pt;
   font-weight: 700;
-  margin: 10px 0 0 0;
-  padding-bottom: 5px;
+  margin: 10px 0 5px 0;
+  padding-bottom: 0;
   color: #1a1a1a;
 }
+
+/* Model SUMY odstępów (ADR-0107): dokument z flagą zgodności doNotUseHTMLParagraphAutoSpacing
+   — Word SUMUJE after(A) + before(B), więc nośnikiem „po" jest padding (nie kolapsuje).
+   Reader emituje wtedy inline padding-bottom; klasowe defaulty nagłówków też przechodzą
+   na padding, żeby inline ze stylu Worda nadpisywał je zamiast się sumować. */
+.editor-content.para-spacing-sum h1 { margin-bottom: 0; padding-bottom: 10px; }
+.editor-content.para-spacing-sum h2 { margin-bottom: 0; padding-bottom: 9px; }
+.editor-content.para-spacing-sum h3 { margin-bottom: 0; padding-bottom: 8px; }
+.editor-content.para-spacing-sum h4 { margin-bottom: 0; padding-bottom: 7px; }
+.editor-content.para-spacing-sum h5 { margin-bottom: 0; padding-bottom: 6px; }
+.editor-content.para-spacing-sum h6 { margin-bottom: 0; padding-bottom: 5px; }
 
 /* Word renderuje indeks górny/dolny w ~65% rozmiaru bazowego — domyślne 'smaller'
    przeglądarki (~83%) było wyraźnie za duże obok Worda. Ten sam współczynnik co
@@ -316,47 +366,44 @@
   font-size: 0.65em;
 }
 
-/* Nagłówki i tytuły używają w Wordzie 'Calibri Light'. Web nie ma odpowiednika
- * 'Calibri Light Bold', więc przeglądarka syntetyzuje bold z Light → wychodzi cienko.
- * Dla spanów wewnątrz nagłówków nadpisujemy font-family na zwykłego Calibri
- * (ma prawdziwą wagę Bold), aby wygląd był zgodny z MS Word. */
-.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title, .doc-subtitle) span[style*="Calibri Light"],
-.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title, .doc-subtitle) span[style*="Aptos Display"] {
+/* Nagłówki w 'Calibri Light' z POGRUBIENIEM (inline font-weight z w:b): web nie ma
+ * 'Calibri Light Bold', przeglądarka syntetyzuje bold z Light → cienko. Tylko dla spanów
+ * z realnym boldem podmieniamy rodzinę na Calibri (ma prawdziwy Bold). Waga NIE jest
+ * wymuszana — pochodzi z dokumentu (ADR-0108 r.10: styl Title bez w:b renderował się
+ * bold przez `.doc-title { font-weight: 700 }`, a Word pokazuje go jasnym krojem;
+ * spany „Aptos Display" dostają stos fallbacków z readera, nie remap na Calibri). */
+.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title, .doc-subtitle) span[style*="Calibri Light"]:is([style*="font-weight:bold"], [style*="font-weight:700"]),
+.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title, .doc-subtitle)[style*="font-weight:bold"] span[style*="Calibri Light"] {
   font-family: 'Calibri', 'Segoe UI', Arial, sans-serif !important;
-  font-weight: 700;
   font-synthesis: weight style;
 }
 
-/* Dodatkowe wzmocnienie syntezy boldu dla pozostałych spanów w nagłówkach */
-.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title) strong,
-.editor-content :is(h1, h2, h3, h4, h5, h6, .doc-title) b {
-  font-weight: 800;
+/* Kroje Light (Calibri Light — także jako podstawienie Worda za „Aptos Display") Word rasteryzuje
+ * wyraźnie ciemniej niż Chrome (gamma DirectWrite). Porównanie zrzutów (ADR-0108 r.10): stroke
+ * 0.3px daje wagę jak w Wordzie; 0 = „za cienko", 0.45 = półgrube. Tylko bez boldu z dokumentu —
+ * pogrubione runy mają prawdziwą wagę (patrz reguła wyżej). */
+.editor-content :is(p, h1, h2, h3, h4, h5, h6, span):is([style*="Calibri Light"], [style*="Aptos Display"]):not([style*="font-weight:bold"]):not([style*="font-weight:700"]) {
+  -webkit-text-stroke: 0.3px currentColor;
 }
-
-/* Title (Word): duży tekst, domyślnie Calibri Light, bez <h1>.
- * Wymuszamy cięższy rysunek litery — w Wordzie subpikselowy rendering DirectWrite
- * sprawia, że Title wygląda masywnie; w web bez tego trzeba to emulować wagą. */
-.editor-content .doc-title {
-  font-weight: 700;
-}
-.editor-content .doc-subtitle {
-  font-weight: 600;
+.editor-content :is(p, h1, h2, h3, h4, h5, h6, span):is([style*="Calibri Light"], [style*="Aptos Display"]) :is(strong, b, [style*="font-weight:bold"], [style*="font-weight:700"]) {
+  -webkit-text-stroke: 0;
 }
 
 /* Domyślny odstęp PO akapicie: z docDefaults dokumentu (--doc-par-margin ustawiane przez
    wysiwyg-editor z data-default-after-tw kontenera), fallback = dotychczasowe 10px.
-   PADDING, nie margin (ADR-0053): Word SUMUJE odstęp „po" akapitu z odstępem „przed"
-   następnego, a marginesy CSS rodzeństwa kolapsują do max — między akapitami znikał
-   mniejszy z odstępów. Padding nie kolapsuje; reader emituje w:after tak samo. */
+   MARGIN (ADR-0107, koryguje ADR-0053): Word (pomiar COM, Word 16, także tryby zgodności
+   11/12/14) liczy odstęp między akapitami jako MAX(after A, before B) — dokładnie tak
+   kolapsują marginesy rodzeństwa w CSS. Padding (suma) zostaje WYŁĄCZNIE dla dokumentów
+   z flagą zgodności doNotUseHTMLParagraphAutoSpacing (.para-spacing-sum poniżej). */
 .editor-content p {
   margin: 0;
   /* Domyślny odstęp PRZED akapitem (data-default-before-tw → --doc-par-margin-top).
      Word renderuje go przy każdym akapicie, także na górze strony (por. flaga kompatybilności
      „Suppress Space Before…" — domyślnie wyłączona). Fallback 0 = dotychczasowe zachowanie.
-     Odstęp „przed" zostaje MARGINESEM (nie paddingiem): gap = padding-bottom(A) + margin-top(B),
-     czyli suma jak w Wordzie (ADR-0053). Inline margin-top z readera wygrywa nad tą regułą. */
+     Inline margin-top z readera wygrywa nad tą regułą. */
   margin-top: var(--doc-par-margin-top, 0px);
-  padding-bottom: var(--doc-par-margin, 10px);
+  margin-bottom: var(--doc-par-margin, 10px);
+  padding-bottom: 0;
   /* NIE dodawać tu `text-box-trim: trim-start`. Ta reguła przesuwa TUSZ pierwszej linii
      akapitu w górę o połowę interlinii (half-leading), poza box akapitu. Dla PIERWSZEGO
      akapitu strony (np. duży „Title" tuż pod nagłówkiem) tusz trafiał POWYŻEJ górnej
@@ -368,9 +415,42 @@
      interlinii (bez trim) renderuje tytuł zgodnie z Wordem (~2px różnicy) i nie przycina. */
 }
 
+/* ADR-0108: Word ignoruje odstęp „przed" PIERWSZEGO akapitu na stronie (po twardym łamaniu
+   i przy naturalnym przelaniu; NIE po przerwie sekcji, NIE na 1. stronie dokumentu). Klasę
+   nadaje paginacja (_repaginateNow), która o tę samą wartość pomniejsza pomiar bloku;
+   !important, bo reader emituje inline margin-top (zostaje w treści dla writera). */
+.editor-content > .fmt-page-top,
+.page-overflow-content > .fmt-page-top {
+  margin-top: 0 !important;
+}
+
 .editor-content > p:last-child {
   margin-bottom: 0;
   padding-bottom: 0;
+}
+
+/* Model SUMY (flaga zgodności Worda, ADR-0107): nośnik „po" = padding, margin wyzerowany —
+   gap = padding-bottom(A) + margin-top(B) = suma jak w Wordzie z tą flagą (ADR-0053). */
+.editor-content.para-spacing-sum p {
+  margin-bottom: 0;
+  padding-bottom: var(--doc-par-margin, 10px);
+}
+.editor-content.para-spacing-sum > p:last-child {
+  padding-bottom: 0;
+}
+
+/* w:contextualSpacing (ADR-0107): reader oznacza markerami, które strony granicy Word
+   znosi między akapitami TEGO SAMEGO stylu (model zmierzony w Word 16 — patrz
+   ApplyContextualSpacingMarkers w readerze). Wartości inline zostają nietknięte
+   (dialog pokazuje zadeklarowane, writer round-tripuje bez utrwalania zer), a zerowanie
+   jest czysto prezentacyjne — !important wygrywa z inline. Selektor bez wartości
+   (Chrome re-serializuje custom properties ze spacją po dwukropku). */
+.editor-content :is(p, h1, h2, h3, h4, h5, h6, li)[style*='--w-ctx-prev'] {
+  margin-top: 0 !important;
+}
+.editor-content :is(p, h1, h2, h3, h4, h5, h6, li)[style*='--w-ctx-next'] {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
 }
 
 /* Legacy grafiki wektorowe (EMF/WMF) bez rasteryzacji renderują się jako PRZEZROCZYSTY

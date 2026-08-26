@@ -560,7 +560,7 @@ public class TableStyleFidelityTests
         var html = _reader.Convert(BuildDocx(null, tblPr, rows: 1, cols: 2)).Html;
         var tag = FirstTableTag(html);
         tag.Should().Contain("border-collapse:separate")
-            .And.Contain("border-spacing:4px")
+            .And.Contain("border-spacing:8px") // ADR-0108 r.8: odstęp między komórkami = 2×w (pomiar PDF Worda)
             .And.Contain("data-cell-spacing-tw=\"60\"");
     }
 

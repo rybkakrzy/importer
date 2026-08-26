@@ -39,4 +39,13 @@ public sealed class PageSettings
     /// is also single-column; only Count &gt; 1 is a real multi-column section (ADR-0039).
     /// </summary>
     public ColumnLayout? Columns { get; init; }
+
+    /// <summary>
+    /// Siatka dokumentu (w:docGrid) sekcji, surowo jak w pliku — tylko round-trip (ADR-0107).
+    /// <see cref="DocGridType"/>: "default" | "lines" | "linesAndChars" | "snapToChars";
+    /// null we wszystkich trzech = sekcja bez w:docGrid.
+    /// </summary>
+    public string? DocGridType { get; init; }
+    public int? DocGridLinePitchTwips { get; init; }
+    public int? DocGridCharSpace { get; init; }
 }

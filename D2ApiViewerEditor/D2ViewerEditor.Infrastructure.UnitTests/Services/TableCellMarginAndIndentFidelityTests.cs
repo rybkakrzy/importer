@@ -114,9 +114,10 @@ public class TableCellMarginAndIndentFidelityTests
         var liTags = System.Text.RegularExpressions.Regex.Matches(html, "<li[^>]*>")
             .Select(m => m.Value).ToList();
         liTags.Should().HaveCount(2);
-        liTags[0].Should().Contain("padding-bottom:0",
+        // ADR-0107: zniesienie = markery prezentacyjne (SCSS zeruje), wartości inline zostają.
+        liTags[0].Should().Contain("--w-ctx-next:1",
             "sąsiad tego samego stylu poniżej — odstęp po zniesiony");
-        liTags[1].Should().Contain("margin-top:0",
+        liTags[1].Should().Contain("--w-ctx-prev:1",
             "sąsiad tego samego stylu powyżej — odstęp przed zniesiony");
     }
 }

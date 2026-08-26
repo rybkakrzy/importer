@@ -152,8 +152,10 @@ public class LineSpacingMappingTests
         // atLeast→exact przycina w Wordzie tekst wyższy niż linia.
         ParagraphCss(new SpacingBetweenLines { Line = "360", LineRule = LineSpacingRuleValues.AtLeast })
             .Should().Contain("--w-line-rule:atLeast;");
+        // ADR-0108 r.4: exact niesie WŁASNY marker (kotwica tuszu przy dole slotu w SCSS);
+        // writer rozpoznaje tylko `atLeast`, więc pt + `exact` nadal zapisuje w:lineRule=exact.
         ParagraphCss(new SpacingBetweenLines { Line = "360", LineRule = LineSpacingRuleValues.Exact })
-            .Should().NotContain("--w-line-rule");
+            .Should().Contain("--w-line-rule:exact;").And.NotContain("atLeast");
     }
 
     [Test]
@@ -222,7 +224,9 @@ public class LineSpacingMappingTests
             AfterAutoSpacing = true
         });
         css.Should().Contain("--w-before-auto:1;").And.Contain("--w-after-auto:1;");
-        css.Should().NotContain("margin-top:", "strona auto nie emituje wartości before");
+        // Word (pomiar): auto = 14 pt, a jawne before=240 jest ignorowane (ADR-0107).
+        css.Should().Contain("margin-top:14pt;").And.NotContain("margin-top:12pt;");
+        css.Should().Contain("margin-bottom:14pt;");
 
         var bytes = new HtmlToDocxConverter().Convert($"<p style=\"{css}\">Tekst</p>");
 
@@ -236,10 +240,10 @@ public class LineSpacingMappingTests
     [Test]
     public void SpaceBeforeAfter_MapToMarginsInPoints()
     {
-        // before = margin-top, after = padding-bottom (ADR-0053: padding nie kolapsuje,
-        // więc after(A) + before(B) sumują się między akapitami jak w Wordzie).
+        // before = margin-top, after = margin-bottom (ADR-0107: Word bierze MAX odstępów
+        // sąsiadów = kolaps marginesów CSS; padding tylko z flagą zgodności).
         var css = ParagraphCss(new SpacingBetweenLines { Before = "240", After = "200" });
         css.Should().Contain("margin-top:12pt;");
-        css.Should().Contain("padding-bottom:10pt;");
+        css.Should().Contain("margin-bottom:10pt;");
     }
 }

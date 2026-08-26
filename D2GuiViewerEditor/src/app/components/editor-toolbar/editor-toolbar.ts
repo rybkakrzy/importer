@@ -665,9 +665,8 @@ export class EditorToolbarComponent {
       // Wyłącz format painter
       this.formatPainterActive.set(false);
     } else {
-      // Kopiuj bieżące formatowanie
-      this.copyFormat.emit();
       this.formatPainterActive.set(true);
+      this.copyFormat.emit();
     }
   }
 

@@ -15,6 +15,7 @@ public static class SectionPropertiesReader
     {
         var pageSize = sectPr?.GetFirstChild<OoxmlPageSize>();
         var pageMargin = sectPr?.GetFirstChild<PageMargin>();
+        var docGrid = sectPr?.GetFirstChild<DocGrid>();
 
         var orientation = pageSize?.Orient?.Value == PageOrientationValues.Landscape
             ? PageOrientation.Landscape
@@ -33,7 +34,19 @@ public static class SectionPropertiesReader
             HeaderDistanceTwips = pageMargin?.Header?.Value is { } hd ? (int)hd : null,
             FooterDistanceTwips = pageMargin?.Footer?.Value is { } fd ? (int)fd : null,
             Columns = ReadColumns(sectPr?.GetFirstChild<Columns>()),
+            DocGridType = docGrid == null ? null : DocGridTypeName(docGrid.Type?.Value),
+            DocGridLinePitchTwips = docGrid?.LinePitch?.Value,
+            DocGridCharSpace = docGrid?.CharacterSpace?.Value,
         };
+    }
+
+    /// <summary>w:docGrid/@w:type jako token OOXML (brak atrybutu = "default").</summary>
+    private static string DocGridTypeName(DocGridValues? type)
+    {
+        if (type == DocGridValues.Lines) return "lines";
+        if (type == DocGridValues.LinesAndChars) return "linesAndChars";
+        if (type == DocGridValues.SnapToChars) return "snapToChars";
+        return "default";
     }
 
     /// <summary>

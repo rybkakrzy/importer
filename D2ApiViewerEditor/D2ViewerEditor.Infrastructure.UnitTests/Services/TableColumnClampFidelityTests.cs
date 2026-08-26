@@ -109,7 +109,9 @@ public class TableColumnClampFidelityTests
         colPx.Should().HaveCount(2);
         colPx.Sum().Should().BeInRange(798, 802, "tabela wystaje w marginesy jak w Wordzie");
         html.Should().Contain("data-w-tw=\"6000\"");
-        html.Should().NotContain("data-tbl-w-tw", "bez clampu nie ma potrzeby markera szerokości");
+        // ADR-0108 r.7: marker tblW dxa emitowany ZAWSZE (nie tylko przy clampie) — writer oddaje
+        // w:tblW 1:1 zamiast liczyć go z px renderu (W06 w audycie table-text-layout).
+        html.Should().Contain("data-tbl-w-tw=\"12000\"");
     }
 
     [Test]

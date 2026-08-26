@@ -1628,6 +1628,78 @@ describe('DocumentEditorComponent — otwarcie PDF z edytora → podgląd (/view
 });
 
 /**
+ * „Plik → Otwórz" z plikiem DOCX (ADR-0108 r.12): nowy dokument w bazie (v1 = wgrany plik,
+ * v2 = kopia robocza) i nawigacja na NOWE masterId/versionId — jak na stronie startowej.
+ * Dotąd treść lądowała w bieżącym widoku bez zmiany adresu, a autosave nadpisywał v2
+ * STAREGO dokumentu treścią nowego pliku (rozjazd „kopia robocza vs plik bazowy").
+ */
+describe('DocumentEditorComponent — otwarcie DOCX z edytora → nowy dokument + nawigacja', () => {
+  let component: DocumentEditorComponent;
+  let navigateToEditableDocument: ReturnType<typeof vi.fn>;
+  let uploadDocument: ReturnType<typeof vi.fn>;
+  let saveDocumentVersion: ReturnType<typeof vi.fn>;
+  let convertAndLoad: ReturnType<typeof vi.fn>;
+
+  async function setup(uploadResult: unknown): Promise<void> {
+    navigateToEditableDocument = vi.fn();
+    uploadDocument = vi.fn().mockReturnValue(uploadResult);
+    saveDocumentVersion = vi.fn().mockReturnValue(of({ versionId: 'v-new' }));
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        {
+          provide: DocumentStorageService,
+          useValue: { fileToBase64: vi.fn().mockResolvedValue('ZG9jeA=='), uploadDocument, saveDocumentVersion },
+        },
+        { provide: DocumentNavigationService, useValue: { navigateToEditableDocument, navigateToDocument: vi.fn() } },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
+      ],
+    }).compileComponents();
+    component = TestBed.createComponent(DocumentEditorComponent).componentInstance;
+    convertAndLoad = vi.fn();
+    (component as any)._convertAndLoad = convertAndLoad;
+  }
+
+  it('DOCX: upload (v1) + wersja edytowalna (v2) + nawigacja na nowe id; bez wczytywania do bieżącego widoku', async () => {
+    await setup(of({ masterId: 'm-new' }));
+    component.documentMasterId.set('m-old');
+    component.documentVersionId.set('v-old');
+
+    await (component as any).openDocxAsNewDocument(new File(['x'], 'umowa.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }));
+
+    expect(uploadDocument).toHaveBeenCalledWith({
+      name: 'umowa.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      content: 'ZG9jeA==',
+    });
+    expect(saveDocumentVersion).toHaveBeenCalledWith('m-new', { content: 'ZG9jeA==' });
+    expect(navigateToEditableDocument).toHaveBeenCalledWith('m-new', 'v-new');
+    expect(convertAndLoad).not.toHaveBeenCalled();
+    // stare identyfikatory nie są mieszane z nową treścią — zmienia je dopiero routing
+    expect(component.documentMasterId()).toBe('m-old');
+    expect(component.documentVersionId()).toBe('v-old');
+  });
+
+  it('.doc dostaje application/msword (jak dashboard)', async () => {
+    await setup(of({ masterId: 'm-new' }));
+    await (component as any).openDocxAsNewDocument(new File(['x'], 'stary.doc'));
+    expect(uploadDocument.mock.calls[0][0].mimeType).toBe('application/msword');
+  });
+
+  it('błąd uploadu → komunikat, bez nawigacji, spinner zdjęty', async () => {
+    await setup(throwError(() => new Error('boom')));
+    await (component as any).openDocxAsNewDocument(new File(['x'], 'umowa.docx'));
+    expect(navigateToEditableDocument).not.toHaveBeenCalled();
+    expect(component.isLoading()).toBe(false);
+    expect(component.errorMessage()).toContain('dokumentu');
+  });
+});
+
+/**
  * Problem 11 — the table settings panel appeared inconsistently. Three root causes covered:
  *  (RC-B) `detectTableContext` resolved only the ACTIVE page ref, so a caret in a table on
  *         another page classified as 'outside-editor' and the panel state was never derived
@@ -1756,5 +1828,220 @@ describe('DocumentEditorComponent — kontekst tabeli: strony, martwy DOM, deter
     await Promise.resolve(); // queueMicrotask
 
     expect(detectSpy).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Malarz formatów — zgłoszenie użytkowników: „zaznaczam, klikam pędzel, idę w inne miejsce
+ * i kompletnie nic się nie dzieje". Root cause 1: `EditorToolbarComponent.applyFormatPainter()`
+ * nie miał w aplikacji ANI JEDNEGO wywołania. Root cause 2: warunek oparty na `event.target`
+ * odrzucał zaznaczenia, przy których mysz ląduje na marginesie strony.
+ */
+describe('DocumentEditorComponent — malarz formatów', () => {
+  let component: DocumentEditorComponent;
+  let applied: unknown[];
+
+  /** Powierzchnia edytowalna z tekstem; zwraca element, w którym da się zrobić zakres. */
+  const surface = (cls: string) => {
+    const host = document.createElement('div');
+    host.className = cls;
+    const child = document.createElement('span');
+    child.textContent = 'tekst do pomalowania';
+    host.appendChild(child);
+    document.body.appendChild(host);
+    return child;
+  };
+
+  /** Podstawia zaznaczenie obejmujące zawartość `el` (albo zwinięte). */
+  const selectInside = (el: Node, collapsed = false) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    if (collapsed) range.collapse(true);
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      rangeCount: 1,
+      isCollapsed: collapsed,
+      getRangeAt: () => range,
+    } as unknown as Selection);
+  };
+
+  const mouseUpOn = (target: Element | null) =>
+    component.onFormatPainterMouseUp({ target } as unknown as MouseEvent);
+
+  beforeEach(async () => {
+    applied = [];
+    await TestBed.configureTestingModule({
+      imports: [DocumentEditorComponent],
+      providers: [
+        { provide: DocumentService, useValue: { getTemplates: () => of([]) } },
+        { provide: DocumentStorageService, useValue: {} },
+        { provide: Router, useValue: { navigate: () => {} } },
+        { provide: ActivatedRoute, useValue: { queryParams: of({}) } },
+        { provide: BuildInfoService, useValue: {} },
+        { provide: MsalService, useValue: msalStub },
+      ],
+    }).compileComponents();
+    component = TestBed.createComponent(DocumentEditorComponent).componentInstance;
+
+    (component as any).editor = {
+      getCurrentFormatting: () => ({ bold: true, fontSize: 15 }),
+      applyFormatting: (f: unknown) => applied.push(f),
+    };
+    (component as any).toolbar = {
+      formatPainterActive: () => (component as any)._painterArmed ?? false,
+      applyFormatPainter: () => { (component as any)._painterArmed = false; component.onPasteFormat(); },
+      deactivateFormatPainter: () => { (component as any)._painterArmed = false; },
+    };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  const arm = () => { component.onCopyFormat(); (component as any)._painterArmed = true; };
+
+  it('zaznaczenie w treści przy uzbrojonym pędzlu APLIKUJE formatowanie (regresja: nic się nie działo)', () => {
+    arm();
+    const el = surface('editor-content');
+    selectInside(el);
+
+    mouseUpOn(el);
+
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toEqual({ bold: true, fontSize: 15 });
+  });
+
+  // Regresja: przeciągając zaznaczenie użytkownik puszcza mysz zwykle POZA tekstem
+  // (margines strony, tło `.page`). Decyduje położenie ZAZNACZENIA, nie element pod kursorem.
+  it('puszczenie myszy poza tekstem, ale z zaznaczeniem w treści → maluje', () => {
+    arm();
+    const el = surface('editor-content');
+    selectInside(el);
+    const margin = document.createElement('div');
+    margin.className = 'page';
+    document.body.appendChild(margin);
+
+    mouseUpOn(margin);
+
+    expect(applied).toHaveLength(1);
+  });
+
+  it('działa także w paśmie nagłówka/stopki', () => {
+    arm();
+    const el = surface('header-editor-content');
+    selectInside(el);
+
+    mouseUpOn(el);
+
+    expect(applied).toHaveLength(1);
+  });
+
+  it('zaznaczenie poza powierzchnią edytowalną nie maluje', () => {
+    arm();
+    const outside = document.createElement('p');
+    outside.textContent = 'poza edytorem';
+    document.body.appendChild(outside);
+    selectInside(outside);
+
+    mouseUpOn(outside);
+
+    expect(applied).toHaveLength(0);
+  });
+
+  // Paginacja daje KAŻDEJ stronie własny `.editor-content` — zaznaczenie przeciągnięte przez
+  // granicę stron ma końce w różnych kontenerach i musi nadal malować.
+  it('zaznaczenie przez granicę stron (dwa .editor-content) maluje', () => {
+    arm();
+    const p1 = surface('editor-content');
+    const p2 = surface('editor-content');
+    const range = document.createRange();
+    range.setStart(p1.firstChild!, 0);
+    range.setEnd(p2.firstChild!, 3);
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      rangeCount: 1, isCollapsed: false, getRangeAt: () => range,
+    } as unknown as Selection);
+
+    mouseUpOn(p2);
+
+    expect(applied).toHaveLength(1);
+  });
+
+  it('pędzel rozbraja się po jednym użyciu (jak w Wordzie)', () => {
+    arm();
+    const el = surface('editor-content');
+    selectInside(el);
+
+    mouseUpOn(el);
+    mouseUpOn(el);
+
+    expect(applied).toHaveLength(1);
+  });
+
+  it('puszczenie myszy NA PASKU narzędzi to klik uzbrajający — nie maluje', () => {
+    arm();
+    const el = surface('editor-content');
+    selectInside(el);
+    const toolbarEl = document.createElement('d2-editor-toolbar');
+    const btn = document.createElement('button');
+    toolbarEl.appendChild(btn);
+    document.body.appendChild(toolbarEl);
+
+    mouseUpOn(btn);
+
+    expect(applied).toHaveLength(0);
+  });
+
+  it('zwinięta karetka (sam klik, bez zaznaczenia) nie maluje', () => {
+    arm();
+    const el = surface('editor-content');
+    selectInside(el, true);
+
+    mouseUpOn(el);
+
+    expect(applied).toHaveLength(0);
+  });
+
+  it('dokument w trybie tylko do odczytu nie daje się pomalować', () => {
+    arm();
+    component.readOnly.set(true); // editingDisabled to computed
+    const el = surface('editor-content');
+    selectInside(el);
+
+    mouseUpOn(el);
+
+    expect(applied).toHaveLength(0);
+  });
+
+  // Regresja wiring: `document:mouseup` ma w komponencie JEDEN dekorator (`onCellMouseUp`).
+  // Drugi @HostListener na to samo zdarzenie nadpisywał pierwszy i pędzel cicho nie działał.
+  it('wejściem jest onCellMouseUp — delegacja do malarza musi zostać', () => {
+    arm();
+    const el = surface('editor-content');
+    selectInside(el);
+
+    component.onCellMouseUp({ target: el } as unknown as MouseEvent);
+
+    expect(applied).toHaveLength(1);
+  });
+
+  it('nieuzbrojony pędzel ignoruje zaznaczenia', () => {
+    component.onCopyFormat();
+    const el = surface('editor-content');
+    selectInside(el);
+
+    mouseUpOn(el);
+
+    expect(applied).toHaveLength(0);
+  });
+
+  it('klik w pędzel BEZ zaznaczenia rozbraja przycisk i mówi dlaczego', () => {
+    (component as any).editor.getCurrentFormatting = () => null;
+    const err = vi.spyOn(component as any, 'showError').mockImplementation(() => {});
+    (component as any)._painterArmed = true;
+
+    component.onCopyFormat();
+
+    expect((component as any)._painterArmed).toBe(false);
+    expect(err).toHaveBeenCalled();
   });
 });

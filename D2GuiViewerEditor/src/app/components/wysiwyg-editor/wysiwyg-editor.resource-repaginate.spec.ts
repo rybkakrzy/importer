@@ -41,8 +41,31 @@ describe('WysiwygEditorComponent — korekcyjna repaginacja po załadowaniu zaso
     return editor;
   }
 
-  /** Przepuszcza kolejkę mikrozadań (łańcuch Promise.all w _repaginateAfterResources). */
-  const flushMicrotasks = () => new Promise(resolve => setTimeout(resolve, 0));
+  /**
+   * Przepuszcza łańcuch Promise.all w _repaginateAfterResources ORAZ makrotask, do którego
+   * przebieg jest odroczony (ADR-0108 r.7: po change detection). Dwa setTimeout(0): pierwszy
+   * bywa zarejestrowany PRZED wewnętrznym timerem korekty, więc sam nie wystarcza.
+   */
+  const flushMicrotasks = async () => {
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+
+  it('przebieg korekcyjny jest odroczony do MAKROTASKU (po change detection), nie do mikrotasku', async () => {
+    // ADR-0108 r.7: gdy fonts.ready było już spełnione, korekta leciała w mikrotasku PRZED
+    // renderem nowej geometrii stron — measurer brał szerokość POPRZEDNIEGO dokumentu (605 px
+    // zamiast 687 px) i liczył o stronę za dużo (PB02, table-text-layout).
+    setPageEditor('<p>Treść</p>');
+    const flush = vi.fn();
+    (component as any)._flushPaginateNow = flush;
+
+    (component as any)._repaginateAfterResources();
+    for (let i = 0; i < 10; i++) await Promise.resolve(); // same mikrotaski — jeszcze nie
+    expect(flush).not.toHaveBeenCalled();
+
+    await flushMicrotasks();
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
 
   it('po ustabilizowaniu zasobów wykonuje DOKŁADNIE jeden przebieg repaginacji', async () => {
     setPageEditor('<p>Treść</p>');

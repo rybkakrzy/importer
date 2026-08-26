@@ -6,8 +6,7 @@ import {
   OnChanges,
   SimpleChanges,
   signal,
-  HostListener
-} from '@angular/core';
+  HostListener, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { PageMargins } from '../../models/document.model';
 import { CSS_PX_PER_CM } from '../../core/utils/units.util';
@@ -38,7 +37,13 @@ export interface RulerColumnSegment {
   standalone: true,
   imports: [CommonModule],
   templateUrl: './ruler.html',
-  styleUrl: './ruler.scss'
+  styleUrl: './ruler.scss',
+  // OnPush (ADR-0108 r.9): pionowa linijka jest renderowana PER STRONA, więc 128-stronicowy
+  // dokument = 128 instancji; w trybie Default każdy cykl CD (każdy klik/zaznaczenie → zone)
+  // re-renderował wszystkie tick-i (~1.8 s/cykl — edytor „zamierał"). Wejścia to prymitywy
+  // i stabilne referencje (computed w rodzicu), drag idzie przez @HostListener (oznacza widok
+  // jako dirty) i sygnały — OnPush nic nie traci.
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class RulerComponent implements OnChanges {
 
@@ -127,10 +132,13 @@ export class RulerComponent implements OnChanges {
     return this.zoomLevel / 100;
   }
 
-  /** Ticki (co 1 cm) */
+  /** Ticki (co 1 cm) — memoizowane po długości osi (nowa tablica przy każdym CD = pełny diff @for). */
   get ticks(): number[] {
-    return Array.from({ length: Math.floor(this.axisCm) + 1 }, (_, i) => i);
+    const n = Math.floor(this.axisCm) + 1;
+    if (this._ticksCache.length !== n) this._ticksCache = Array.from({ length: n }, (_, i) => i);
+    return this._ticksCache;
   }
+  private _ticksCache: number[] = [];
 
   /**
    * Aktywny segment kolumny (cm od lewej krawędzi kartki) albo null, gdy kursor

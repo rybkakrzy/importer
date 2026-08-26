@@ -169,7 +169,7 @@ public class ImportStructureFidelityTests
 
         var li = System.Text.RegularExpressions.Regex.Match(html, "<li[^>]*>");
         li.Success.Should().BeTrue();
-        li.Value.Should().Contain("padding-bottom:8pt", "160tw = 8pt odstępu po każdym punkcie jak w Wordzie");
+        li.Value.Should().Contain("margin-bottom:8pt", "160tw = 8pt odstępu po każdym punkcie jak w Wordzie");
     }
 
     [Test]

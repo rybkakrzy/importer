@@ -276,6 +276,24 @@ describe('WysiwygEditorComponent — getContent nie materializuje auto-paginacji
     expect(component.documentDefaultLineTw()).toBeNull();
   });
 
+  // ADR-0107: model SUMY odstępów (flaga zgodności Worda) przychodzi z readera jako
+  // data-para-spacing-sum i steruje klasą `para-spacing-sum` stron (nośnik „po" = padding);
+  // dokument bez flagi / bez wrappera = model MAX (kolaps marginesów).
+  it('_captureDocumentDefaults czyta data-para-spacing-sum i resetuje je dla kolejnego dokumentu', () => {
+    (component as any)._captureDocumentDefaults(
+      '<div class="document-content" data-para-spacing-sum="1" data-default-after-tw="0"><p>Suma</p></div>');
+    expect(component.documentParagraphSpacingSum()).toBe(true);
+
+    (component as any)._captureDocumentDefaults(
+      '<div class="document-content" data-default-after-tw="0"><p>Max</p></div>');
+    expect(component.documentParagraphSpacingSum()).toBe(false);
+
+    (component as any)._captureDocumentDefaults(
+      '<div class="document-content" data-para-spacing-sum="1"><p>Suma</p></div>');
+    (component as any)._captureDocumentDefaults('<p>Nowy dokument bez wrappera</p>');
+    expect(component.documentParagraphSpacingSum()).toBe(false);
+  });
+
   it('_captureDocumentDefaults czyta interlinię i odstęp akapitu (data-default-after-tw)', () => {
     const html = '<div class="document-content" data-default-after-tw="160" data-default-line="278"'
       + ' data-default-line-rule="auto" style="font-size:12pt;line-height:1.158;">'

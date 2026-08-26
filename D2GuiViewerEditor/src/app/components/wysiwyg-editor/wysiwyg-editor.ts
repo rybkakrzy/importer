@@ -1335,6 +1335,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    *  --doc-par-margin-top. Word renderuje odstęp „przed" każdego akapitu (także na górze
    *  strony), a wcześniej wartość jechała tylko w round-tripie atrybutów i nie była widoczna. */
   documentDefaultParagraphSpacingBefore = signal<string | null>(null);
+  /** Model SUMY odstępów akapitów (data-para-spacing-sum kontenera; ADR-0107): dokument
+   *  z flagą zgodności doNotUseHTMLParagraphAutoSpacing — Word SUMUJE after+before, więc
+   *  strony dostają klasę `para-spacing-sum` (nośnik „po" = padding). Domyślnie false =
+   *  MAX Worda przez kolaps marginesów CSS. */
+  documentParagraphSpacingSum = signal<boolean>(false);
   /** Domyślna interlinia auto w 240-tych (data-default-line kontenera) — marker --w-line-tw
    *  na .editor-content; dziedziczy na akapity, więc dialog akapitu czyta mnożnik Worda,
    *  a nie skalibrowaną wartość renderową (PG-09). */
@@ -1342,13 +1347,14 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
   /**
    * Single line spacing of the document font in em (font metrics, PG-09 table) — CSS var
-   * `--w-line-single` on `.page`. ADR-0085: Word anchors the ink at the BOTTOM of the line
-   * slot, so any excess leading goes ABOVE the line ("Exactly" smaller than the font clips
-   * the TOP), while CSS splits it half above / half below — so the SCSS shifts paragraph
-   * ink DOWN by half the leading (`top: calc((1lh - var(--w-line-single, 1.221em)) / 2)`)
-   * to keep large multipliers (e.g. "Multiple 3") from rendering the text centered in the
-   * slot. The em token resolves at USE time (against the paragraph font-size), not at
-   * declaration.
+   * `--w-line-single` on `.page`. ADR-0108 r.4 (koryguje ADR-0085 po pomiarze glifów w PDF
+   * z Worda): for lineRule=AUTO Word anchors the ink at the TOP of the slot (first-line
+   * baseline is constant regardless of the multiplier; excess goes BELOW each line), for
+   * EXACT/AT LEAST at the BOTTOM (excess ABOVE; "Exactly" smaller than the font clips the
+   * TOP). CSS splits leading half above / half below, so the SCSS shifts paragraph ink UP by
+   * half the leading by default (`top: calc((var(--w-line-single) - 1lh) / 2)`) and DOWN for
+   * paragraphs carrying the `--w-line-rule:atLeast|exact` marker. The em token resolves at
+   * USE time (against the paragraph font-size), not at declaration.
    */
   documentDefaultLineSingle(): string {
     return `${wordSingleFactor(this.documentDefaultFontFamily())}em`;
@@ -3229,6 +3235,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   private stripClipboardArtifacts(root: ParentNode): void {
     // Markery podziału paginacji: getContent scala tabele/wiersze po tych id — wklejona
     // kopia z tym samym id zostałaby SKLEJONA z oryginałem przy zapisie.
+    root.querySelectorAll('tr[data-repeated-header]').forEach(el => el.remove());
     root.querySelectorAll('[data-split-table-id],[data-split-row-id],[data-split-cont]').forEach(el => {
       el.removeAttribute('data-split-table-id');
       el.removeAttribute('data-split-row-id');
@@ -4955,6 +4962,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         if (attr.name.startsWith('data-split')) el.removeAttribute(attr.name);
       }
       el.classList.remove('fmt-trailing-br');
+      el.classList.remove('fmt-page-top');
       if (!el.getAttribute('class')) el.removeAttribute('class');
       return el;
     };
@@ -6322,9 +6330,11 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       this.documentDefaultLineHeight.set(null);
       this.documentDefaultParagraphSpacing.set(null);
       this.documentDefaultParagraphSpacingBefore.set(null);
+      this.documentParagraphSpacingSum.set(false);
       this.documentDefaultLineTw.set(null);
       return null;
     }
+    this.documentParagraphSpacingSum.set(container.getAttribute('data-para-spacing-sum') === '1');
     if (container.style.fontSize) this.documentDefaultFontSize.set(container.style.fontSize);
     if (container.style.fontFamily) this.documentDefaultFontFamily.set(container.style.fontFamily);
     this.documentDefaultLineHeight.set(container.style.lineHeight || null);
@@ -6559,6 +6569,12 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const fontsReady: Promise<unknown> =
       fontSet && typeof fontSet.ready?.then === 'function' ? fontSet.ready : Promise.resolve();
     Promise.all([fontsReady, this._pendingImagesSettled()])
+      // Makrotask, nie mikrotask (ADR-0108 r.7): gdy `fonts.ready` jest już spełnione, `then`
+      // odpalał się PRZED change detection Angulara — strony w DOM miały jeszcze rozmiar i
+      // marginesy POPRZEDNIEGO dokumentu (A4 2,5 cm), a `_repaginateNow` bierze szerokość
+      // pomiaru z DOM strony 1: measurer 605 px zamiast 687 px → węższe łamanie → +1 strona
+      // (PB02 fixture'a table-text-layout), korygowana dopiero przy pierwszej edycji.
+      .then(() => new Promise<void>(resolve => setTimeout(resolve, 0)))
       .then(() => {
         if (this._isDestroyed || gen !== this._resourceRepaginateGen) return;
         // Doładowane fonty/obrazy zmieniają metryki bez zmiany HTML — pomiary sprzed
@@ -6641,6 +6657,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // fragmentacja nigdy nie utrwala się w treści.
       const mergedInput: HTMLElement[] = [];
       for (const b of allBlocks) {
+        // Prezentacyjna klasa szczytu strony z poprzedniej paginacji (ADR-0108) — zdejmij przed
+        // pomiarem: układ liczy się od nowa, a measurer musi widzieć realny margin-top bloku.
+        this._stripFmtPageTop(b);
         const prev = mergedInput[mergedInput.length - 1];
         if (b.getAttribute('data-split-para') === 'cont' && prev && prev.tagName === b.tagName) {
           while (b.firstChild) prev.appendChild(b.firstChild);
@@ -6669,7 +6688,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           const targetBody = prev.querySelector('tbody') ?? prev;
           // Tylko wiersze WŁASNE fragmentu (RC4): querySelectorAll('tr') łapał też wiersze
           // tabel zagnieżdżonych i wyrywał je do tbody tabeli zewnętrznej.
-          this._tableDirectRows(b as HTMLTableElement).forEach(tr => targetBody.appendChild(tr));
+          this._tableSourceRows(b as HTMLTableElement).forEach(tr => targetBody.appendChild(tr));
           continue;
         }
         premerged.push(b);
@@ -6732,7 +6751,20 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       // dla kolejnych sekcji skalowana proporcjonalnie do ich szerokości treści w cm.
       const innerW = probeEd.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
       const baseContentPx = contentWidthPx(baseGeo);
-      const widthScale = innerW > 0 && baseContentPx > 0 ? innerW / baseContentPx : 1;
+      // Strona 1 w DOM może jeszcze nieść geometrię POPRZEDNIEGO dokumentu (przebieg przed
+      // change detection po setContent — ADR-0108 r.7): wtedy skala z DOM fałszuje szerokość
+      // pomiaru (605 px zamiast 687 px → +1 strona). Rozjazd szerokości strony z geometrią
+      // bazową = DOM nieaktualny → mierz wg geometrii i dołóż jeden przebieg po renderze.
+      const page0 = probeEd.closest('.page') as HTMLElement | null;
+      const domGeometryStale = !!page0 && page0.clientWidth > 0
+        && Math.abs(page0.clientWidth - baseGeo.widthCm * CSS_PX_PER_CM) > 1;
+      if (domGeometryStale && !this._staleGeometryRerun) {
+        this._staleGeometryRerun = true;
+        this._flushPaginateSoon();
+      } else if (!domGeometryStale) {
+        this._staleGeometryRerun = false;
+      }
+      const widthScale = !domGeometryStale && innerW > 0 && baseContentPx > 0 ? innerW / baseContentPx : 1;
       const measurerWidthFor = (geo: PageGeometry): number => columnWidthPx(geo) * widthScale;
       // Linia nie dzieli się na granicy kolumny — każda kolumna poza ostatnią może zostawić
       // przy dole do jednej niepełnej linii. Pojemność strony wielokolumnowej dostaje więc
@@ -6850,6 +6882,43 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         }
       };
 
+      // ADR-0108: Word IGNORUJE odstęp „przed" pierwszego akapitu na stronie — zarówno po
+      // twardym łamaniu strony, jak i przy naturalnym przelaniu (pomiar COM: nagłówek
+      // z before=24pt siedzi dokładnie na górnym marginesie). Odstęp ZOSTAJE na pierwszej
+      // stronie dokumentu i na pierwszej stronie nowej sekcji (marker docx-section-break leży
+      // już na tej stronie — reader emituje [page-break][docx-section-break][akapit]).
+      // Akapit z pageBreakBefore bez zmian (brak pomiaru — zachowanie jak dotąd).
+      const suppressTopMarginHere = (blk: HTMLElement): boolean => {
+        if (pages.length === 1) return false;
+        const page = pages[pages.length - 1];
+        if (page.some(b => this._isSectionBreakMarker(b))) return false;
+        if (page.some(b => !this._isSectionBreakMarker(b))) return false; // nie pierwszy blok treści
+        return this._isPageTopSpacingBlock(blk) && !this._hasPageBreakBeforeStyle(blk);
+      };
+
+      // ADR-0108 r.3: w:keepNext — Word trzyma akapit z PIERWSZĄ LINIĄ następnego. Gdy następny
+      // blok w całości spada na nową stronę, poprzedzające go bloki z `break-after:avoid` jadą
+      // razem z nim (łańcuch, np. etykieta + próbka); podział następnego (jego 1. linia zostaje)
+      // łańcucha nie rusza. Wysokości SKONSUMOWANE (po topCut) pamiętane per blok, żeby cofnąć
+      // currentHeight bez ponownego pomiaru.
+      const placedHeights = new Map<HTMLElement, number>();
+      const pullKeepNextChain = (): HTMLElement[] => {
+        const page = pages[pages.length - 1];
+        const pulled: HTMLElement[] = [];
+        // ≥1 blok zostaje — Word też przerywa łańcuch, gdy nie mieści się na pustej stronie.
+        // Blok z przypisem nie wraca (rezerwa przypisów jest już policzona na tej stronie).
+        while (page.length > 1) {
+          const last = page[page.length - 1];
+          if (!this._keepsWithNext(last) || this._footnoteIdsIn(last).length > 0) break;
+          page.pop();
+          currentHeight -= placedHeights.get(last) ?? 0;
+          placedHeights.delete(last);
+          this._stripFmtPageTop(last);
+          pulled.unshift(last);
+        }
+        return pulled;
+      };
+
       const pushMeasured = (block: HTMLElement, h: number) => {
         // Akapit niemieszczący się w reszcie pojemności strony dzielimy na granicy LINII
         // (jak Word) — dopasowany fragment zostaje na stronie, kontynuacja
@@ -6858,32 +6927,139 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         // w całości na kolejną stronę; blok większy niż PUSTA strona zostaje przycięty.
         let blk = block;
         let bh = h;
+        // Margin-top zdjęty ze szczytu strony (ADR-0108): pomiar `h` liczy go w wysokości
+        // bloku, render zeruje go klasą .fmt-page-top — budżet strony musi widzieć to samo.
+        let topCut = 0;
+        const applyPageTop = () => {
+          topCut = 0;
+          if (!suppressTopMarginHere(blk)) return;
+          topCut = this._blockMarginTopPx(blk, measurer);
+          if (topCut > 0) bh = Math.max(0, bh - topCut);
+        };
+        applyPageTop();
         // Rezerwa przypisów tego bloku (odwołania w treści) skraca pojemność body — treść
         // spływa niżej, żeby zrobić miejsce na przypis na dole strony (jak w MS Word). Liczona
         // z CAŁEGO bloku (górne oszacowanie dla fragmentu na stronie = bezpiecznie, bez nachodzenia).
         let blkExtra = fnProspectiveReserve(this._footnoteIdsIn(blk));
         while (currentHeight + bh > fnEffAvail(blkExtra)) {
           const pageHasContent = pages[pages.length - 1].length > 0;
-          const parts = this._splitBlockAtBudget(
-            blk, fnEffAvail(blkExtra) - currentHeight, measurer, lineHeightPx);
+          // Budżet splittera liczy blok „łącznie z marginesem górnym" — na szczycie strony
+          // ten margines nie jest renderowany, więc oddajemy go do budżetu.
+          // w:keepLines (break-inside:avoid) = akapit niedzielny — w całości na kolejną stronę.
+          const parts = this._keepsLinesTogether(blk) ? null : this._splitBlockAtBudget(
+            blk, fnEffAvail(blkExtra) - currentHeight + topCut, measurer, lineHeightPx);
           if (!parts) {
             if (!pageHasContent) break;
+            // Blok jedzie w całości → poprzedzające bloki „zachowaj z następnym" jadą z nim.
+            const pulled = pullKeepNextChain();
             openPage();
+            for (const pb of pulled) pushMeasured(pb, measureBlock(pb));
             blkExtra = fnProspectiveReserve(this._footnoteIdsIn(blk));
+            applyPageTop();
             continue;
           }
           // parts[0] zostaje na stronie → jego przypisy rezerwują się TU; parts[1] płynie dalej
           // i zabiera swoje przypisy na kolejną stronę (przypisanie per fragment).
+          if (topCut > 0) parts[0].classList.add('fmt-page-top');
           commitFootnotes(parts[0]);
           pages[pages.length - 1].push(parts[0]);
+          placedHeights.set(parts[0], Math.max(0, fnEffAvail(blkExtra) - currentHeight));
           openPage();
           blk = parts[1];
           bh = measureBlock(blk);
+          topCut = 0; // kontynuacja ma już wyzerowany margin-top (ADR-0046)
           blkExtra = fnProspectiveReserve(this._footnoteIdsIn(blk));
         }
+        if (topCut > 0) blk.classList.add('fmt-page-top');
         commitFootnotes(blk);
         pages[pages.length - 1].push(blk);
+        placedHeights.set(blk, bh);
         currentHeight += bh;
+      };
+
+      // Tabela w przebiegu: dotąd mierzona OSOBNO (własny przebieg), więc jej margines górny i
+      // dolny sumowały się z marginesami sąsiadów zamiast kolapsować (4 + 13.3 zamiast 13.3 —
+      // ok. 8 px na tabelę). Strona z 7 tabelami traciła ok. 56 px i nagłówek+nota PS01 uciekały
+      // na kolejną stronę mimo miejsca (Word trzymał je na poprzedniej). Teraz tabela jest
+      // mierzona W przebiegu z sąsiadami (runHeightHint), a tu tylko układana (ADR-0108 r.8).
+      const placeTable = (tableBlock: HTMLElement, runHeightHint: number | null) => {
+          // Tabela mieści się w jednej KOLUMNIE (nie w całej szerokości strony wielokolumnowej),
+          // więc fragmenty tnie wysokość kolumny; kolejny fragment idzie do następnej kolumny,
+          // a na nową stronę dopiero, gdy kolumny się skończą.
+          // Problem 7 / RC1: splitter mierzy SAME wiersze, a kontrola pojemności fragmentu
+          // (measureBlock = _measureBlockRunHeights) liczy blok z pionowymi MARGINESAMI tabeli
+          // (`.editor-content table { margin: 15px 0 }` / inline z importu). Budżety splittera
+          // pomniejszamy o te marginesy — inaczej świeżo dopasowany fragment mierzył się na
+          // avail+marginesy, oblewał kontrolę i CAŁY jechał dalej mimo wolnego miejsca.
+          // Dolny margines tabeli to render (`margin:4px 0`; Word nie ma marginesów tabeli) —
+          // może wisieć poza dołem strony, więc budżety cięcia pomniejszamy TYLKO o górny
+          // (PG04: 0.5 pt zabrakło i wysoki wiersz szedł na 2 strony, w Wordzie 1; r.9).
+          const marginBottomPx = parseFloat(getComputedStyle(tableBlock).marginBottom) || 0;
+          const tableMargins = Math.max(0, this._measureTableVerticalMargins(
+            tableBlock as HTMLTableElement, measurer) - marginBottomPx);
+          const freshColumnBudget = Math.max(80, columnHeight - tableMargins);
+          const usedInColumn = columnHeight > 0 ? (currentHeight - columnBase) % columnHeight : 0;
+          let split = this._splitTableForPagination(
+            tableBlock as HTMLTableElement,
+            Math.max(80, columnHeight - usedInColumn - tableMargins),
+            freshColumnBudget,
+            measurer,
+            lineHeightPx
+          );
+          const advanceColumnOrPage = () => {
+            const nextColumnTop = columnBase
+              + (Math.floor((currentHeight - columnBase) / columnHeight) + 1) * columnHeight;
+            if (nextColumnTop < availableHeight) {
+              currentHeight = nextColumnTop;
+            } else {
+              openPage();
+            }
+          };
+          for (let i = 0; i < split.length; i++) {
+            let frag = split[i];
+            // Wysokość CAŁEJ tabeli z pomiaru przebiegu (kolaps marginesów z sąsiadami jak na
+            // stronie, ADR-0108 r.8); fragmenty po cięciu — pomiar osobny jak dotąd.
+            let h = i === 0 && split.length === 1 && runHeightHint !== null
+              ? runHeightHint
+              : measureBlock(frag);
+            if (i > 0) {
+              advanceColumnOrPage();
+            } else {
+              // Bug 13902621: PIERWSZY fragment też musi przejść kontrolę pojemności —
+              // splitter dostaje budżet min. 80px, więc tabela krótsza niż 80px (albo
+              // niedzielna) wracała w całości i była kładziona w resztce strony/kolumny,
+              // w której się NIE mieściła — wizualnie wjeżdżała pod stopkę. Przy braku
+              // miejsca przechodzimy do następnej kolumny/strony (raz — świeża kolumna
+              // to maksimum, które możemy dać; guard pustej strony jak w pushMeasured).
+              const used = columnHeight > 0 ? (currentHeight - columnBase) % columnHeight : 0;
+              const remaining = columnHeight - used;
+              // Dolny margines tabeli (render `margin:4px 0`, Word go nie ma) może wisieć poza
+              // dołem strony — nie decyduje o dopasowaniu (PG04: 0.5 pt za dużo = +1 strona).
+              if (h > remaining + 0.5 + marginBottomPx && pages[pages.length - 1].length > 0) {
+                advanceColumnOrPage();
+                // Problem 7 / RC2: fragmenty były skrojone pod STARĄ resztkę strony — po
+                // przejściu na świeżą kolumnę/stronę potnij tabelę od nowa pełnym budżetem
+                // (dokładnie raz; każdy nowy fragment mieści się w pełnej kolumnie
+                // z konstrukcji, więc bez ryzyka pętli). Bez tego chunk 0 skrojony pod małą
+                // resztkę siedział sam na świeżej stronie, a chunk 1 otwierał następną —
+                // niemal puste strony w środku tabeli.
+                if (split.length > 1) {
+                  split = this._splitTableForPagination(
+                    tableBlock as HTMLTableElement,
+                    freshColumnBudget,
+                    freshColumnBudget,
+                    measurer,
+                    lineHeightPx
+                  );
+                  frag = split[0];
+                  h = measureBlock(frag);
+                }
+              }
+            }
+            pages[pages.length - 1].push(frag);
+            commitFootnotes(frag);
+            currentHeight += h;
+          }
       };
 
       let bi = 0;
@@ -6978,77 +7154,6 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           bi++;
           continue;
         }
-        if (block.tagName === 'TABLE') {
-          // Tabela mieści się w jednej KOLUMNIE (nie w całej szerokości strony wielokolumnowej),
-          // więc fragmenty tnie wysokość kolumny; kolejny fragment idzie do następnej kolumny,
-          // a na nową stronę dopiero, gdy kolumny się skończą.
-          // Problem 7 / RC1: splitter mierzy SAME wiersze, a kontrola pojemności fragmentu
-          // (measureBlock = _measureBlockRunHeights) liczy blok z pionowymi MARGINESAMI tabeli
-          // (`.editor-content table { margin: 15px 0 }` / inline z importu). Budżety splittera
-          // pomniejszamy o te marginesy — inaczej świeżo dopasowany fragment mierzył się na
-          // avail+marginesy, oblewał kontrolę i CAŁY jechał dalej mimo wolnego miejsca.
-          const tableMargins = this._measureTableVerticalMargins(
-            block as HTMLTableElement, measurer);
-          const freshColumnBudget = Math.max(80, columnHeight - tableMargins);
-          const usedInColumn = columnHeight > 0 ? (currentHeight - columnBase) % columnHeight : 0;
-          let split = this._splitTableForPagination(
-            block as HTMLTableElement,
-            Math.max(80, columnHeight - usedInColumn - tableMargins),
-            freshColumnBudget,
-            measurer,
-            lineHeightPx
-          );
-          const advanceColumnOrPage = () => {
-            const nextColumnTop = columnBase
-              + (Math.floor((currentHeight - columnBase) / columnHeight) + 1) * columnHeight;
-            if (nextColumnTop < availableHeight) {
-              currentHeight = nextColumnTop;
-            } else {
-              openPage();
-            }
-          };
-          for (let i = 0; i < split.length; i++) {
-            let frag = split[i];
-            let h = measureBlock(frag);
-            if (i > 0) {
-              advanceColumnOrPage();
-            } else {
-              // Bug 13902621: PIERWSZY fragment też musi przejść kontrolę pojemności —
-              // splitter dostaje budżet min. 80px, więc tabela krótsza niż 80px (albo
-              // niedzielna) wracała w całości i była kładziona w resztce strony/kolumny,
-              // w której się NIE mieściła — wizualnie wjeżdżała pod stopkę. Przy braku
-              // miejsca przechodzimy do następnej kolumny/strony (raz — świeża kolumna
-              // to maksimum, które możemy dać; guard pustej strony jak w pushMeasured).
-              const used = columnHeight > 0 ? (currentHeight - columnBase) % columnHeight : 0;
-              const remaining = columnHeight - used;
-              if (h > remaining + 0.5 && pages[pages.length - 1].length > 0) {
-                advanceColumnOrPage();
-                // Problem 7 / RC2: fragmenty były skrojone pod STARĄ resztkę strony — po
-                // przejściu na świeżą kolumnę/stronę potnij tabelę od nowa pełnym budżetem
-                // (dokładnie raz; każdy nowy fragment mieści się w pełnej kolumnie
-                // z konstrukcji, więc bez ryzyka pętli). Bez tego chunk 0 skrojony pod małą
-                // resztkę siedział sam na świeżej stronie, a chunk 1 otwierał następną —
-                // niemal puste strony w środku tabeli.
-                if (split.length > 1) {
-                  split = this._splitTableForPagination(
-                    block as HTMLTableElement,
-                    freshColumnBudget,
-                    freshColumnBudget,
-                    measurer,
-                    lineHeightPx
-                  );
-                  frag = split[0];
-                  h = measureBlock(frag);
-                }
-              }
-            }
-            pages[pages.length - 1].push(frag);
-            commitFootnotes(frag);
-            currentHeight += h;
-          }
-          bi++;
-          continue;
-        }
         // Ciągły przebieg zwykłych bloków — zmierz wsadowo, potem rozłóż na strony.
         let runEnd = bi;
         while (
@@ -7056,15 +7161,15 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           !this._isSectionBreakMarker(allBlocks[runEnd]) &&
           !this._isPageBreakBlock(allBlocks[runEnd]) &&
           !this._hasPageBreakBeforeStyle(allBlocks[runEnd]) &&
-          !this._isColumnBreakBlock(allBlocks[runEnd]) &&
-          allBlocks[runEnd].tagName !== 'TABLE'
+          !this._isColumnBreakBlock(allBlocks[runEnd])
         ) {
           runEnd++;
         }
         const run = allBlocks.slice(bi, runEnd);
         const heights = measureRun(run);
         for (let k = 0; k < run.length; k++) {
-          pushMeasured(run[k], heights[k]);
+          if (run[k].tagName === 'TABLE') placeTable(run[k], heights[k]);
+          else pushMeasured(run[k], heights[k]);
         }
         bi = runEnd;
       }
@@ -7450,10 +7555,34 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private _createBlockMeasurer(cs: CSSStyleDeclaration, widthPx: number): HTMLElement {
     const measurer = document.createElement('div');
-    measurer.className = 'editor-content';
+    // Klasa modelu odstępów jak na realnej stronie (ADR-0107) — inaczej measurer liczyłby
+    // odstępy innym nośnikiem niż render i paginacja rozjeżdżałaby się z ekranem.
+    measurer.className = this.documentParagraphSpacingSum()
+      ? 'editor-content para-spacing-sum'
+      : 'editor-content';
+    // ADR-0108: interlinia measurera = wartość AUTORSKA kontenera, nie wyliczona. Strona ma
+    // bezjednostkowe `line-height:1.404` (mnożnik dziedziczony przez każdy blok względem JEGO
+    // font-size), a `cs.lineHeight` zwraca px policzone dla font-size kontenera — dziedziczone
+    // jako stała wysokość, bloki mniejszym fontem (etykiety 9pt, noty 8.5pt) mierzyły się
+    // ~2pt wyżej niż render; przy 30 takich blokach strona „traciła" ~50pt i przelewała
+    // treść, która na ekranie się mieściła. Bez domyślnej z dokumentu — jak dotąd.
+    const lineHeight = this.documentDefaultLineHeight() || cs.lineHeight;
+    // Zmienne CSS strony (ADR-0108): measurer wisi w <body>, poza `.page`/`.editor-content`,
+    // więc bez nich akapit bez inline margin-bottom mierzył się z FALLBACKIEM SCSS
+    // (`--doc-par-margin` = 10px) zamiast z domyślnym odstępem dokumentu (tu 0) — ~7.5pt
+    // nadwyżki na akapit, kolejne dziesiątki pt „zjedzone" z pojemności strony. Te same
+    // źródła co bindingi [style.--…] w szablonie; null = binding nic nie pisze = fallback po
+    // obu stronach (spójnie).
+    const vars = [
+      ['--doc-par-margin', this.documentDefaultParagraphSpacing()],
+      ['--doc-par-margin-top', this.documentDefaultParagraphSpacingBefore()],
+      ['--w-line-tw', this.documentDefaultLineTw()],
+      ['--w-line-single', this.documentDefaultLineSingle()],
+    ].filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k}:${v};`).join('');
     measurer.style.cssText =
       `position:absolute;left:-99999px;top:0;width:${widthPx}px;padding:0;border:0;` +
-      `font-family:${cs.fontFamily};font-size:${cs.fontSize};line-height:${cs.lineHeight};visibility:hidden;`;
+      `font-family:${cs.fontFamily};font-size:${cs.fontSize};line-height:${lineHeight};visibility:hidden;` +
+      vars;
     return measurer;
   }
 
@@ -7480,7 +7609,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     measurer.innerHTML = '';
     for (const b of blocks) measurer.appendChild(b.cloneNode(true));
     const sentinel = document.createElement('div');
-    sentinel.style.cssText = 'margin:0;padding:0;border:0;height:0;';
+    // clear:both — tabela pływająca (float, ADR-0108 r.6) wyższa niż bloki obok niej musi
+    // doliczyć się do ostatniego bloku przebiegu; bez clear sentinel stawał obok floata
+    // i strona przelewała się pod nim.
+    sentinel.style.cssText = 'margin:0;padding:0;border:0;height:0;clear:both;';
     measurer.appendChild(sentinel);
     const kids = Array.from(measurer.children) as HTMLElement[];
     const tops = kids.map(k => k.getBoundingClientRect().top);
@@ -7494,6 +7626,41 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (this._blockRunMeasureCache.size >= 500) this._blockRunMeasureCache.clear();
     this._blockRunMeasureCache.set(key, out);
     return out;
+  }
+
+  /**
+   * Margin-top bloku w px w kontekście measurera (te same fonty/szerokość co strona).
+   * Cache współdzielony z pomiarem przebiegów (klucz z prefiksem) — ADR-0075: repaginacja
+   * leci po każdym keystroke, więc bez cache każdy szczyt strony kosztowałby reflow.
+   */
+  private _blockMarginTopPx(block: HTMLElement, measurer: HTMLElement): number {
+    const key = measurer.style.cssText + '|mt|' + block.outerHTML;
+    const cached = this._blockRunMeasureCache.get(key);
+    if (cached !== undefined) return cached[0] ?? 0;
+    measurer.innerHTML = '';
+    const clone = block.cloneNode(true) as HTMLElement;
+    measurer.appendChild(clone);
+    const mt = parseFloat(getComputedStyle(clone).marginTop) || 0;
+    if (this._blockRunMeasureCache.size >= 500) this._blockRunMeasureCache.clear();
+    this._blockRunMeasureCache.set(key, [mt]);
+    return mt;
+  }
+
+  /** Bloki, którym Word zdejmuje odstęp „przed" na szczycie strony (ADR-0108): akapity
+   *  i nagłówki. Listy/tabele/formanty świadomie poza zakresem (inny nośnik odstępu). */
+  private _isPageTopSpacingBlock(el: HTMLElement): boolean {
+    return /^(P|H[1-6]|BLOCKQUOTE|PRE)$/.test(el.tagName);
+  }
+
+  /** Zdejmuje prezentacyjną klasę .fmt-page-top (szczyt strony, ADR-0108) — z bloku
+   *  lub ze wszystkich potomków korzenia. Nigdy nie może wejść do zapisu. */
+  private _stripFmtPageTop(root: Element | ParentNode): void {
+    const strip = (el: Element) => {
+      el.classList.remove('fmt-page-top');
+      if (!el.getAttribute('class')) el.removeAttribute('class');
+    };
+    if ((root as Element).classList?.contains('fmt-page-top')) strip(root as Element);
+    root.querySelectorAll('.fmt-page-top').forEach(strip);
   }
 
   /**
@@ -7753,6 +7920,24 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     return Array.from(table.rows);
   }
 
+  /** Wiersze ŹRÓDŁOWE fragmentu — bez prezentacyjnych kopii nagłówka (data-repeated-header). */
+  private _tableSourceRows(table: HTMLTableElement): HTMLTableRowElement[] {
+    return this._tableDirectRows(table).filter(tr => !tr.hasAttribute('data-repeated-header'));
+  }
+
+  /**
+   * Wiersze nagłówka powtarzane na kolejnych stronach (w:tblHeader → data-tbl-header):
+   * tylko ciągły prefiks od pierwszego wiersza (ECMA-376 §17.4.49; fixture HDR04).
+   */
+  private _repeatingHeaderRows(rows: HTMLTableRowElement[]): HTMLTableRowElement[] {
+    const out: HTMLTableRowElement[] = [];
+    for (const r of rows) {
+      if (r.getAttribute('data-tbl-header') !== '1' || r.hasAttribute('data-repeated-header')) break;
+      out.push(r);
+    }
+    return out;
+  }
+
   /**
    * Czy zawartość wiersza może być dzielona między strony (Word: „Zezwalaj na dzielenie
    * wierszy między strony"). Nie dzielimy: jawny zakaz `w:cantSplit`, wiersz nagłówkowy,
@@ -7763,6 +7948,8 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
    */
   private _rowCanSplit(table: HTMLTableElement, row: HTMLTableRowElement): boolean {
     if (row.getAttribute('data-cant-split') === '1') return false;
+    // cantSplit odziedziczone ze stylu tabeli (reader: data-cant-split-eff, ADR-0108 r.9).
+    if (row.getAttribute('data-cant-split-eff') === '1') return false;
     if (row.getAttribute('data-tbl-header') === '1') return false;
     if (row.getAttribute('data-row-hrule') === 'exact') return false;
     // Tylko wiersze WŁASNE tabeli i ich WŁASNE komórki (row.cells) — komórki tabel
@@ -7791,7 +7978,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     table: HTMLTableElement,
     row: HTMLTableRowElement,
     measurer: HTMLElement
-  ): { contentWidthPx: number; blockTops: number[]; blockBottoms: number[] }[] {
+  ): { contentWidthPx: number; blockTops: number[]; blockBottoms: number[]; bottomExtraPx?: number }[] {
     const t = table.cloneNode(false) as HTMLTableElement;
     const colgroup = table.querySelector(':scope > colgroup');
     if (colgroup) t.appendChild(colgroup.cloneNode(true));
@@ -7812,6 +7999,10 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         contentWidthPx,
         blockTops: blocks.map(b => b.getBoundingClientRect().top - rowTop),
         blockBottoms: blocks.map(b => b.getBoundingClientRect().bottom - rowTop),
+        // Dolny padding + ramka komórki: fragment-głowa kończy się nimi PO ostatnim bloku, więc
+        // budżet na bloki jest o tyle mniejszy (MF02: tcMar bottom 25 pt → głowa 33 px za
+        // wysoka → cięcie odrzucane, cała tabela jechała na nową stronę; ADR-0108 r.9).
+        bottomExtraPx: (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderBottomWidth) || 0),
       };
     });
     measurer.innerHTML = '';
@@ -7928,6 +8119,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
 
     const EPS = 0.5;
     const cs = getComputedStyle(measurer);
+    // Linia cięcia dla BLOKÓW: budżet minus dolny padding/ramka komórki (największy w wierszu).
+    const contentBudgetPx = budgetPx - Math.max(0, ...layout.map(l => l.bottomExtraPx ?? 0));
+    if (contentBudgetPx < lineHeightPx) return null;
     const headCells: HTMLElement[][] = [];
     const tailCells: HTMLElement[][] = [];
     let anyHeadContent = false;
@@ -7942,16 +8136,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         const top = info.blockTops[j] ?? 0;
         const bottom = info.blockBottoms[j] ?? 0;
         const blk = blocks[j].cloneNode(true) as HTMLElement;
-        if (bottom <= budgetPx + EPS) {
+        if (bottom <= contentBudgetPx + EPS) {
           head.push(blk);
-        } else if (top >= budgetPx - EPS) {
+        } else if (top >= contentBudgetPx - EPS) {
+          tail.push(blk);
+        } else if (this._keepsLinesTogether(blk)) {
+          // w:keepLines w komórce (ADR-0108 r.9): akapit niedzielny — w całości do kontynuacji.
           tail.push(blk);
         } else {
           const cellMeasurer = this._createBlockMeasurer(cs, info.contentWidthPx);
           document.body.appendChild(cellMeasurer);
           let parts: [HTMLElement, HTMLElement] | null;
           try {
-            parts = this._splitBlockAtBudget(blk, budgetPx - top, cellMeasurer, lineHeightPx);
+            parts = this._splitBlockAtBudget(blk, contentBudgetPx - top, cellMeasurer, lineHeightPx);
           } finally {
             cellMeasurer.remove();
           }
@@ -8015,6 +8212,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const measureRows = (subset: HTMLTableRowElement[]): number =>
       this._measureTableRowsHeight(table, subset, measurer);
 
+    // w:tblHeader (ADR-0108 r.9): wiersze nagłówka powtarzane na KAŻDYM kolejnym fragmencie
+    // tabeli — wyłącznie ciągłe od pierwszego wiersza (ECMA §17.4.49: wiersz 2 oznaczony bez
+    // wiersza 1 NIE powtarza się — HDR04). Kopie są prezentacyjne (data-repeated-header,
+    // contenteditable=false), znikają przy scalaniu fragmentów (pre-merge, getContent,
+    // schowek) — model źródłowy trzyma 1 wiersz. Budżet kolejnych stron pomniejszony o ich
+    // wysokość.
+    const headerRows = this._repeatingHeaderRows(rows);
+    const headerH = headerRows.length > 0 && headerRows.length < rows.length ? measureRows(headerRows) : 0;
+    const contAvail = Math.max(80, fullAvail - headerH);
+
     const chunks: HTMLTableRowElement[][] = [];
     let bucket: HTMLTableRowElement[] = [];
     let avail = firstAvail;
@@ -8032,13 +8239,16 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
         // Wiersz nie mieści się: spróbuj rozciąć jego zawartość na granicy strony —
         // W RESZTCE bieżącej strony (jak Word), z budżetem pomniejszonym o wiersze bucketa.
         const bucketH = bucket.length > 0 ? measureRows(bucket) : 0;
+        // Zapas 3 px (ADR-0108 r.9, MF01): fragment-głowa mierzył się ~1 px ponad budżet
+        // (ramki 0.7 px + zaokrąglenia paddingu) → kontrola pojemności fragmentu 0 odrzucała
+        // cięcie i CAŁA tabela jechała na świeżą stronę zamiast dzielić wiersz jak Word.
         const parts = this._rowCanSplit(table, row)
-          ? this._splitRowAtBudget(table, row, avail - bucketH, measurer, lineHeightPx)
+          ? this._splitRowAtBudget(table, row, avail - bucketH - 3, measurer, lineHeightPx)
           : null;
         if (parts) {
           chunks.push([...bucket, parts[0]]);
           bucket = [];
-          avail = fullAvail;
+          avail = contAvail;
           row = parts[1];
           continue;
         }
@@ -8046,7 +8256,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
           // Nie da się ciąć w resztce — wiersz od świeżej strony (i ponowna próba cięcia tam).
           chunks.push(bucket);
           bucket = [];
-          avail = fullAvail;
+          avail = contAvail;
           continue;
         }
         // Świeża strona i cięcie niemożliwe (cantSplit/exact/rowspan/za mało treści) —
@@ -8066,10 +8276,19 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     const splitId = chunks.length > 1 ? (existingId ?? `st-${++this._splitTableSeq}`) : existingId;
     const colgroup = table.querySelector(':scope > colgroup');
 
-    return chunks.map(subset => {
+    return chunks.map((subset, ci) => {
       const t = table.cloneNode(false) as HTMLTableElement;
       if (colgroup) t.appendChild(colgroup.cloneNode(true));
       const tbody = document.createElement('tbody');
+      if (ci > 0 && headerH > 0) {
+        for (const hr of headerRows) {
+          const copy = hr.cloneNode(true) as HTMLTableRowElement;
+          copy.setAttribute('data-repeated-header', '1');
+          copy.setAttribute('contenteditable', 'false');
+          copy.removeAttribute('data-split-row-id');
+          tbody.appendChild(copy);
+        }
+      }
       subset.forEach(r => tbody.appendChild(r.cloneNode(true)));
       t.appendChild(tbody);
       if (splitId) t.setAttribute('data-split-table-id', splitId);
@@ -8080,11 +8299,24 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
   /** Sekwencja id dla fragmentów jednej logicznie podzielonej tabeli (R-17). */
   private _splitTableSeq = 0;
 
+  /** Jednorazowy przebieg po renderze, gdy strona 1 w DOM miała starą geometrię (ADR-0108 r.7). */
+  private _staleGeometryRerun = false;
+
   /**
    * Czy blok żąda rozpoczęcia nowej strony WŁAŚCIWOŚCIĄ `page-break-before` (w:pageBreakBefore
    * z Worda / checkbox dialogu akapitu) — w odróżnieniu od markera `.page-break` blok sam
    * idzie na nową stronę. `break-before:column` (podział kolumny) celowo nie pasuje.
    */
+  /** w:keepNext — reader emituje `break-after:avoid` (ADR-0108 r.3); jawne `auto` = wyłączone. */
+  private _keepsWithNext(el: HTMLElement): boolean {
+    return /(?:page-)?break-after\s*:\s*avoid\b/i.test(el.getAttribute?.('style') ?? '');
+  }
+
+  /** w:keepLines — reader emituje `break-inside:avoid`: akapit nie dzieli się między strony. */
+  private _keepsLinesTogether(el: HTMLElement): boolean {
+    return /(?:page-)?break-inside\s*:\s*avoid\b/i.test(el.getAttribute?.('style') ?? '');
+  }
+
   private _hasPageBreakBeforeStyle(el: HTMLElement): boolean {
     // Z atrybutu style (nie przez CSSOM): działa identycznie w przeglądarce i jsdom,
     // niezależnie od tego, czy silnik implementuje akcesory legacy `page-break-before`.
@@ -8127,7 +8359,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       while (next && next.tagName === 'TABLE' && next.getAttribute('data-split-table-id') === id) {
         handled.add(next);
         // Tylko wiersze WŁASNE fragmentu — nie wyrywaj wierszy tabel zagnieżdżonych (RC4).
-        this._tableDirectRows(next as HTMLTableElement).forEach(tr => targetBody.appendChild(tr));
+        this._tableSourceRows(next as HTMLTableElement).forEach(tr => targetBody.appendChild(tr));
         const toRemove = next;
         next = next.nextElementSibling;
         toRemove.remove();
@@ -8695,6 +8927,9 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     // Klasa .fmt-trailing-br („Pokaż wszystko": ¶ malowane w overlayu za ↵ przy <br>
     // zamykającym blok) jest czysto prezentacyjna — nie może wejść do zapisu.
     this._stripFmtTrailingBr(clone);
+    // Klasa .fmt-page-top (szczyt strony, ADR-0108) — tak samo prezentacyjna: inline margin-top
+    // z readera ZOSTAJE w treści, więc writer nadal widzi zadeklarowane w:before.
+    this._stripFmtPageTop(clone);
 
     this._unwrapImageWrappers(clone);
 
@@ -8889,7 +9124,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
     if (!element) return null;
 
     const computedStyle = window.getComputedStyle(element);
-    
+
     return {
       bold: document.queryCommandState('bold'),
       italic: document.queryCommandState('italic'),
@@ -8898,7 +9133,7 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       subscript: document.queryCommandState('subscript'),
       superscript: document.queryCommandState('superscript'),
       fontFamily: computedStyle.fontFamily.replace(/['"]/g, '').split(',')[0].trim(),
-      fontSize: parseInt(computedStyle.fontSize),
+      fontSize: Math.round(parseFloat(computedStyle.fontSize) * 0.75),
       textColor: this.rgbToHex(computedStyle.color),
       backgroundColor: computedStyle.backgroundColor === 'rgba(0, 0, 0, 0)' ? '' : this.rgbToHex(computedStyle.backgroundColor)
     };
@@ -8915,47 +9150,28 @@ export class WysiwygEditorComponent implements AfterViewInit, OnDestroy {
       return;
     }
 
-    // Aplikuj formatowanie tekstu
-    if (format.bold) document.execCommand('bold', false);
-    if (format.italic) document.execCommand('italic', false);
-    if (format.underline) document.execCommand('underline', false);
-    if (format.strikethrough) document.execCommand('strikeThrough', false);
-    if (format.subscript) document.execCommand('subscript', false);
-    if (format.superscript) document.execCommand('superscript', false);
+    // Atrybuty znakowe USTAWIAMY na wartość źródła, nie przełączamy: `executeCommand`
+    // działa jak toggle, więc bezwarunkowe wywołanie zdejmowałoby pogrubienie z tekstu,
+    // który już był pogrubiony (malarz ma kopiować format, nie odwracać go).
+    const setMark = (state: boolean, queryName: string, command: EditorCommand) => {
+      if (document.queryCommandState(queryName) !== state) this.executeCommand(command);
+    };
+    setMark(!!format.bold, 'bold', 'bold');
+    setMark(!!format.italic, 'italic', 'italic');
+    setMark(!!format.underline, 'underline', 'underline');
+    setMark(!!format.strikethrough, 'strikeThrough', 'strikethrough');
+    setMark(!!format.subscript, 'subscript', 'subscript');
+    setMark(!!format.superscript, 'superscript', 'superscript');
 
-    // Aplikuj czcionkę i rozmiar
-    if (format.fontFamily) {
-      document.execCommand('fontName', false, format.fontFamily);
-    }
-    if (format.fontSize) {
-      // Zawijamy zaznaczenie w span z rozmiarem czcionki
-      const range = selection.getRangeAt(0);
-      const span = document.createElement('span');
-      span.style.fontSize = format.fontSize + 'px';
-      
-      try {
-        const contents = range.extractContents();
-        span.appendChild(contents);
-        range.insertNode(span);
-        selection.selectAllChildren(span);
-      } catch (e) {
-        // Fallback dla złożonych zakresów
-        document.execCommand('fontSize', false, '7');
-        const fontElements = this.editorContent?.nativeElement.querySelectorAll('font[size="7"]');
-        fontElements?.forEach((el: Element) => {
-          (el as HTMLElement).removeAttribute('size');
-          (el as HTMLElement).style.fontSize = format.fontSize + 'px';
-        });
-      }
-    }
-
-    // Aplikuj kolory
-    if (format.textColor) {
-      document.execCommand('foreColor', false, format.textColor);
-    }
-    if (format.backgroundColor) {
-      document.execCommand('hiliteColor', false, format.backgroundColor);
-    }
+    // Krój, rozmiar i kolory idą przez te same appliery co toolbar (ADR-0102: owijanie
+    // text-node'ów W MIEJSCU). Poprzednia implementacja robiła tu `extractContents()` +
+    // `insertNode()` — wzorzec, który przy zaznaczeniu przez szkielet stron wyrywał
+    // strukturę i produkował puste strony — oraz zapisywała rozmiar w `px`, przez co
+    // eksport do DOCX dostawał inną wartość niż pokazywał toolbar.
+    if (format.fontFamily) this.setFontFamily(format.fontFamily);
+    if (format.fontSize) this.setFontSize(format.fontSize);
+    if (format.textColor) this.setTextColor(format.textColor);
+    if (format.backgroundColor) this.setBackgroundColor(format.backgroundColor);
 
     // Emituj zmiany
     const html = this.editorContent?.nativeElement?.innerHTML || '';

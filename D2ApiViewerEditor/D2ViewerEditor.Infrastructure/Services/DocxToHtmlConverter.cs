@@ -56,9 +56,43 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string? _defaultSpacingAfterTw;
     private string? _defaultSpacingLine;
     private string? _defaultSpacingLineRule; // "auto" | "exact" | "atLeast"
+    // Model granicy między akapitami (ADR-0107, pomiar Word 16 przez COM): Word domyślnie
+    // bierze MAX(after A, before B) — „HTML paragraph auto spacing"; SUMĘ stosuje wyłącznie
+    // z flagą zgodności w:doNotUseHTMLParagraphAutoSpacing (tryby compat 11/12/14 bez flagi
+    // też dają max). true = suma → w:after emitowane jako padding-bottom (nie kolapsuje);
+    // false = margin-bottom (kolaps marginesów rodzeństwa CSS = dokładnie max Worda).
+    private bool _paragraphSpacingSum;
+    // Jednostka „linii" dla w:beforeLines/w:afterLines (1/100 linii): linePitch siatki
+    // dokumentu, gdy w:docGrid type=lines/linesAndChars; inaczej 240 tw = 12 pt niezależnie
+    // od fontu i interlinii akapitu (pomiar: 11 pt i 24 pt Calibri, single i double → 12 pt).
+    private int _lineUnitTwips = LineUnitDefaultTwips;
+    /// <summary>
+    /// Skok siatki BIEŻĄCEJ sekcji (w:docGrid type=lines/linesAndChars, w twipsach) albo null bez
+    /// siatki. ADR-0108 r.5: Word przy snapToGrid zastępuje jednostkę „single" skokiem siatki —
+    /// interlinia auto N = N × pitch (pomiar PDF: 1.15× przy pitch 18 pt = 20.7 pt; snapToGrid=0
+    /// = 1.15 × single fontu; exact ignoruje siatkę). Aktualizowany przy markerze sekcji.
+    /// </summary>
+    private int? _gridPitchTwips;
+    /// <summary>Lewy margines BIEŻĄCEJ sekcji (twips) — pozycja pozioma tabel pływających
+    /// z horzAnchor=page liczy się od krawędzi strony (ADR-0108 r.6).</summary>
+    private int _sectionLeftMarginTwips;
+    private const int LineUnitDefaultTwips = 240;
+    // w:beforeAutospacing / w:afterAutospacing: Word stosuje 14 pt (280 tw) i ignoruje
+    // before/beforeLines (pomiar: before=600 + auto → 14 pt; auto↔auto → 14 pt, nie 28).
+    private const int AutoSpacingTwips = 280;
+    // Cache efektywnych odstępów akapitów (porównanie sąsiadów przy contextualSpacing) —
+    // klucz referencyjny, czyszczony per Convert.
+    private readonly Dictionary<Paragraph, SpacingInfo> _spacingInfoCache =
+        new(ReferenceEqualityComparer.Instance);
     // Id domyślnego stylu akapitowego (w:default="1") — porównanie stylów sąsiadów
     // przy w:contextualSpacing (ADR-0053).
     private string? _defaultParagraphStyleId;
+
+    /// <summary>Nośnik CSS odstępu „po" akapicie zależny od modelu granicy (ADR-0107).</summary>
+    private string AfterCssProperty => _paragraphSpacingSum ? "padding-bottom" : "margin-bottom";
+
+    /// <summary>Efektywne odstępy akapitu w pt + flaga contextualSpacing (ADR-0107).</summary>
+    private readonly record struct SpacingInfo(double BeforePt, double AfterPt, bool Contextual);
     // Układ kolumn sekcji bazowej (0), ustalany w ConvertBodyToHtml (ADR-0039).
     private ColumnLayout? _baseSectionColumns;
 
@@ -214,6 +248,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         _defaultFontSizePt = null;
         _defaultSpacingBeforeTw = _defaultSpacingAfterTw = null;
         _defaultSpacingLine = _defaultSpacingLineRule = null;
+        _paragraphSpacingSum = false;
+        _lineUnitTwips = LineUnitDefaultTwips;
+        _gridPitchTwips = null;
+        _sectionLeftMarginTwips = 0;
+        _spacingInfoCache.Clear();
         _defaultParagraphStyleId = null;
         _defaultParagraphSpacingCss = "";
         _tableParagraphDefaultCss = null;
@@ -243,7 +282,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var defaultTab = document.MainDocumentPart?.DocumentSettingsPart?.Settings?
             .GetFirstChild<DefaultTabStop>()?.Val?.Value;
         _defaultTabStopTwips = defaultTab is > 0 ? defaultTab.Value : 708;
-        
+
+        // ADR-0107: model granicy akapitów z ustawień zgodności (suma tylko z flagą; brak
+        // flagi / val=false = max Worda) + jednostka „linii" z siatki pierwszej sekcji.
+        var noHtmlAutoSpacing = document.MainDocumentPart?.DocumentSettingsPart?.Settings?
+            .GetFirstChild<Compatibility>()?.GetFirstChild<DoNotUseHTMLParagraphAutoSpacing>();
+        _paragraphSpacingSum = noHtmlAutoSpacing != null
+            && (noHtmlAutoSpacing.Val == null || noHtmlAutoSpacing.Val.Value);
+        _lineUnitTwips = ResolveLineUnitTwips(GetFirstSectionProperties(document)?.GetFirstChild<DocGrid>());
+        _gridPitchTwips = ResolveGridPitchTwips(GetFirstSectionProperties(document)?.GetFirstChild<DocGrid>());
+        _sectionLeftMarginTwips = (int)(GetFirstSectionProperties(document)?.GetFirstChild<PageMargin>()?.Left?.Value ?? 0u);
+
         // Załaduj style dokumentu
         var stylesLoaded = ExtractDocumentStyles(document);
         
@@ -372,9 +421,73 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
 
         AppendColumnDataAttributes(sb, page.Columns);
+        AppendDocGridDataAttributes(sb, page);
 
         sb.Append("></div>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Serializuje w:docGrid sekcji do data-doc-grid-* (round-trip, ADR-0107). Emituje tylko
+    /// gdy sekcja deklaruje siatkę; type "default" bez linePitch nie brudzi HTML.
+    /// </summary>
+    private static void AppendDocGridDataAttributes(StringBuilder sb, PageSettings page)
+    {
+        if (page.DocGridType == null && page.DocGridLinePitchTwips == null && page.DocGridCharSpace == null)
+            return;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        sb.Append(" data-doc-grid-type=\"").Append(page.DocGridType ?? "default").Append('"');
+        if (page.DocGridLinePitchTwips is { } pitch)
+            sb.Append(string.Format(inv, " data-doc-grid-pitch-tw=\"{0}\"", pitch));
+        if (page.DocGridCharSpace is { } chars)
+            sb.Append(string.Format(inv, " data-doc-grid-chars=\"{0}\"", chars));
+    }
+
+    /// <summary>
+    /// Jednostka „linii" dla w:beforeLines/afterLines: linePitch siatki typu lines /
+    /// linesAndChars, inaczej 240 tw (Word: 12 pt bez względu na font i interlinię).
+    /// </summary>
+    private static int ResolveLineUnitTwips(DocGrid? grid)
+    {
+        if (grid?.LinePitch?.Value is { } pitch && pitch > 0
+            && (grid.Type?.Value == DocGridValues.Lines || grid.Type?.Value == DocGridValues.LinesAndChars))
+            return pitch;
+        return LineUnitDefaultTwips;
+    }
+
+    /// <summary>
+    /// Siatka dokumentu bieżącej sekcji (ADR-0108 r.5) dla CSS akapitu LUB punktu listy: przy
+    /// snapToGrid (domyślnie ON) i interlinii auto Word zastępuje jednostkę „single" skokiem
+    /// siatki — line = N × pitch. Emitujemy pt + marker <c>--w-line-grid:1</c> (writer z niego
+    /// i z <c>--w-line-tw</c> odtwarza w:line/lineRule=auto). exact/atLeast (marker
+    /// <c>--w-line-rule</c>) i <c>--w-snap-to-grid:0</c> siatkę ignorują; akapit bez własnej
+    /// interlinii pod domyślną exact/atLeast dokumentu — również.
+    /// </summary>
+    private string ApplyDocGridLineSnap(string css)
+    {
+        if (_gridPitchTwips is not { } gridPitch) return css;
+        var defaultRuleFixed = _defaultSpacingLineRule is "exact" or "atLeast";
+        if (css.Contains("--w-snap-to-grid:0") || css.Contains("--w-line-rule:")
+            || (defaultRuleFixed && !css.Contains("--w-line-tw:")))
+            return css;
+
+        var twMatch = System.Text.RegularExpressions.Regex.Match(css, @"--w-line-tw:(\d+)");
+        var lineTw = twMatch.Success ? int.Parse(twMatch.Groups[1].Value)
+            : (int.TryParse(_defaultSpacingLine, out var defTw) ? defTw : (int)WordLineSpacing.LineUnitsPerSingle);
+        var snappedPt = lineTw / WordLineSpacing.LineUnitsPerSingle * OoxmlUnits.TwipsToPoints(gridPitch);
+        var snapped = SetCssProperty(css, "line-height",
+            string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:0.##}pt", snappedPt));
+        if (!twMatch.Success) snapped += $"--w-line-tw:{lineTw};";
+        return snapped + "--w-line-grid:1;";
+    }
+
+    /// <summary>Skok siatki linii sekcji (twips) albo null, gdy sekcja nie ma siatki typu lines.</summary>
+    private static int? ResolveGridPitchTwips(DocGrid? grid)
+    {
+        if (grid?.LinePitch?.Value is { } pitch && pitch > 0
+            && (grid.Type?.Value == DocGridValues.Lines || grid.Type?.Value == DocGridValues.LinesAndChars))
+            return pitch;
+        return null;
     }
 
     /// <summary>
@@ -1206,6 +1319,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (_defaultSpacingLine != null)
             containerAttrs.Append($" data-default-line=\"{_defaultSpacingLine}\"" +
                 $" data-default-line-rule=\"{_defaultSpacingLineRule}\"");
+        // ADR-0107: model sumy (flaga zgodności) → GUI przełącza nośnik odstępu „po" na
+        // padding, writer odtwarza w:doNotUseHTMLParagraphAutoSpacing w settings.xml.
+        if (_paragraphSpacingSum)
+            containerAttrs.Append(" data-para-spacing-sum=\"1\"");
+        // Siatka dokumentu sekcji bazowej (w:docGrid) — wyłącznie round-trip (render nie
+        // modeluje przyciągania do siatki; P2). Markery sekcji ≥1 niosą własną.
+        AppendDocGridDataAttributes(containerAttrs,
+            SectionPropertiesReader.ReadPageSettings(GetFirstSectionProperties(document)));
 
         // Układ kolumn sekcji bazowej (0) — na kontenerze .document-content (ADR-0039).
         // Writer odtwarza z niego w:cols body-level sectPr; dodatkowo idzie w DocumentContent.Columns.
@@ -1268,7 +1389,13 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     // Od tego miejsca obowiązuje geometria NASTĘPNEJ sekcji.
                     var endedIdx = orderedSections.IndexOf(endedSection);
                     if (endedIdx >= 0 && endedIdx + 1 < orderedSections.Count)
+                    {
                         _availableContentWidthTwips = SectionColumnWidthTwips(orderedSections[endedIdx + 1]);
+                        // Siatka dokumentu jest per sekcja (ADR-0108 r.5) — kolejne akapity snapują
+                        // do skoku NASTĘPNEJ sekcji (albo przestają, gdy ta siatki nie ma).
+                        _gridPitchTwips = ResolveGridPitchTwips(orderedSections[endedIdx + 1].GetFirstChild<DocGrid>());
+                        _sectionLeftMarginTwips = (int)(orderedSections[endedIdx + 1].GetFirstChild<PageMargin>()?.Left?.Value ?? (uint)_sectionLeftMarginTwips);
+                    }
                 }
                 i++;
             }
@@ -1601,22 +1728,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
                 // w:contextualSpacing działa też dla elementów list (ADR-0053) — bez tego
                 // każdy punkt listy w komórce dostawał pełne w:after z docDefaults i komórka
-                // rosła o n×after względem Worda.
-                if (cssStyle.Contains("--w-contextual-spacing"))
-                {
-                    var myStyleId = EffectiveParagraphStyleId(p);
-                    if (p.PreviousSibling() is Paragraph prevPara
-                        && EffectiveParagraphStyleId(prevPara) == myStyleId)
-                    {
-                        cssStyle = SetCssProperty(cssStyle, "margin-top", "0");
-                    }
-                    if (p.NextSibling() is Paragraph nextPara
-                        && EffectiveParagraphStyleId(nextPara) == myStyleId)
-                    {
-                        cssStyle = SetCssProperty(cssStyle, "margin-bottom", "0");
-                        cssStyle = SetCssProperty(cssStyle, "padding-bottom", "0");
-                    }
-                }
+                // rosła o n×after względem Worda. Markery jak dla <p> (ADR-0107).
+                cssStyle = ApplyContextualSpacingMarkers(p, cssStyle);
+
+                // Siatka dokumentu (ADR-0108 r.5) obowiązuje także punkty list — bez tego lista
+                // w sekcji z siatką renderowała się z interlinią fontu (15 pt) zamiast siatki (20.7).
+                cssStyle = ApplyDocGridLineSnap(cssStyle);
 
                 // Direct w:ind akapitu NADPISUJE wcięcie z definicji poziomu numeracji
                 // (semantyka Worda). Wizualnie: margin-left = delta względem pozycji tekstu
@@ -1827,9 +1944,12 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var styleSpacing = defaultStyle?.StyleParagraphProperties?.GetFirstChild<SpacingBetweenLines>();
         if (styleSpacing != null)
             CaptureDefaultParagraphSpacing(styleSpacing);
-        _defaultParagraphSpacingCss = BuildDefaultParagraphSpacingCss();
 
-        if (defaultStyle == null) return;
+        if (defaultStyle == null)
+        {
+            _defaultParagraphSpacingCss = BuildDefaultParagraphSpacingCss();
+            return;
+        }
 
         // Krój i rozmiar mogą siedzieć WYŻEJ w łańcuchu basedOn domyślnego stylu (Word
         // rozwiązuje dziedziczenie do docDefaults) — sam bezpośredni rPr gubił rozmiar,
@@ -1861,6 +1981,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         if (chainFont != null) _defaultFontFamily = chainFont;
         if (chainSizePt != null) _defaultFontSizePt = chainSizePt;
+
+        // CSS domyślnych odstępów DOPIERO po rozwiązaniu efektywnego fontu (ADR-0108): interlinia
+        // „auto" jest kalibrowana współczynnikiem single KROJU (PG-09), a docDefaults niosą font
+        // MOTYWU (np. minorHAnsi = Cambria 1.171), który domyślny styl akapitowy nadpisuje
+        // (Normal = Calibri 1.221). Budowanie CSS przed łańcuchem stylu dawało kontener
+        // `font-family:Calibri` z line-height policzonym dla Cambrii — każda linia ~4% za niska,
+        // rozjazd paginacji z Wordem narastający z długością dokumentu.
+        _defaultParagraphSpacingCss = BuildDefaultParagraphSpacingCss();
     }
 
     /// <summary>
@@ -1925,7 +2053,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (_defaultSpacingBeforeTw != null && int.TryParse(_defaultSpacingBeforeTw, out var beforeTw))
             css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeTw)));
         if (_defaultSpacingAfterTw != null && int.TryParse(_defaultSpacingAfterTw, out var afterTw))
-            css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterTw)));
+            css.Append(string.Format(inv, "{0}:{1:0.##}pt;", AfterCssProperty, OoxmlUnits.TwipsToPoints(afterTw)));
         if (_defaultSpacingLine != null && int.TryParse(_defaultSpacingLine, out var lineTw))
         {
             if (_defaultSpacingLineRule == "atLeast")
@@ -1939,6 +2067,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             else if (_defaultSpacingLineRule == "exact")
             {
                 css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineTw)));
+                // Marker kotwicy tuszu (ADR-0108 r.4): exact/atLeast = tusz przy DOLE slotu
+                // (nadmiar nad linią), auto = przy GÓRZE (nadmiar pod linią). SCSS wybiera
+                // po markerze; writer go ignoruje (pt = exact bez markera atLeast).
+                css.Append("--w-line-rule:exact;");
             }
             else
             {
@@ -2045,6 +2177,89 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// </summary>
     private string? EffectiveParagraphStyleId(Paragraph paragraph) =>
         paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value ?? _defaultParagraphStyleId;
+
+    /// <summary>
+    /// w:contextualSpacing — model zmierzony w Word 16 (ADR-0107), NIE „każdy zeruje swoją
+    /// stronę":
+    /// <list type="bullet">
+    /// <item>B z flagą i poprzednikiem tego samego stylu: before B = 0 (własna strona) — zawsze;</item>
+    /// <item>A z flagą i następnikiem tego samego stylu: after A = 0; w modelu MAX Word
+    ///   dodatkowo znosi CAŁĄ granicę (także before B bez flagi), o ile after A było wartością
+    ///   wygrywającą (after A ≥ before B po zniesieniu własnym B): A(after 10, ctx)+B(before 6)
+    ///   → 0, ale A(after 0, ctx)+B(before 6) → 6 i A(after 4)+B(before 10, ctx) → 4;</item>
+    /// <item>w modelu SUMY (flaga zgodności) — czysto własne strony: A(12, ctx)+B(4) → 4.</item>
+    /// </list>
+    /// Emitowane są MARKERY (--w-ctx-prev / --w-ctx-next) zerowane przez SCSS edytora
+    /// (!important), a wartości inline zostają — dialog akapitu pokazuje wartości
+    /// zadeklarowane, a writer round-tripuje je bez utrwalania zer (R-38 c).
+    /// </summary>
+    private string ApplyContextualSpacingMarkers(Paragraph paragraph, string cssStyle)
+    {
+        var myStyleId = EffectiveParagraphStyleId(paragraph);
+        var mine = ParseSpacingInfo(cssStyle);
+
+        if (paragraph.PreviousSibling() is Paragraph prev && EffectiveParagraphStyleId(prev) == myStyleId)
+        {
+            var zeroBefore = mine.Contextual;
+            if (!zeroBefore && !_paragraphSpacingSum)
+            {
+                var prevInfo = GetEffectiveSpacingInfo(prev);
+                zeroBefore = prevInfo.Contextual && prevInfo.AfterPt >= mine.BeforePt;
+            }
+            if (zeroBefore) cssStyle += "--w-ctx-prev:1;";
+        }
+
+        if (mine.Contextual && paragraph.NextSibling() is Paragraph next
+            && EffectiveParagraphStyleId(next) == myStyleId)
+        {
+            cssStyle += "--w-ctx-next:1;";
+        }
+        return cssStyle;
+    }
+
+    /// <summary>
+    /// Efektywne odstępy akapitu (defaulty komórki tabeli / docDefaults → styl → direct pPr),
+    /// liczone tą samą ścieżką CSS co render; cache per Convert (sąsiedzi pytają wielokrotnie).
+    /// </summary>
+    private SpacingInfo GetEffectiveSpacingInfo(Paragraph paragraph)
+    {
+        if (_spacingInfoCache.TryGetValue(paragraph, out var cached)) return cached;
+
+        var css = new StringBuilder();
+        if (!string.IsNullOrEmpty(_tableParagraphDefaultCss) && paragraph.Ancestors<TableCell>().Any())
+            css.Append(_tableParagraphDefaultCss);
+        var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        if (styleId != null && _styles.TryGetValue(styleId, out var styleCss))
+            css.Append(styleCss);
+        css.Append(GetParagraphStyle(paragraph.ParagraphProperties));
+
+        var info = ParseSpacingInfo(DeduplicateCss(css.ToString()));
+        _spacingInfoCache[paragraph] = info;
+        return info;
+    }
+
+    /// <summary>
+    /// before/after w pt z inline CSS (margin-top; „po" = padding-bottom albo margin-bottom —
+    /// oba nośniki), z fallbackiem na domyślne odstępy dokumentu (klasowe --doc-par-margin*
+    /// w GUI), oraz flaga --w-contextual-spacing:1.
+    /// </summary>
+    private SpacingInfo ParseSpacingInfo(string css)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double? Pt(string property)
+        {
+            var m = Regex.Match(css, $@"(?<![\w-]){Regex.Escape(property)}\s*:\s*(-?[\d.]+)(pt|px)?\s*;");
+            if (!m.Success) return null;
+            var v = double.Parse(m.Groups[1].Value, inv);
+            return m.Groups[2].Value == "px" ? OoxmlUnits.PixelsToPoints(v) : v;
+        }
+        double DefaultPt(string? tw) => tw != null && int.TryParse(tw, out var t) ? OoxmlUnits.TwipsToPoints(t) : 0;
+
+        var before = Pt("margin-top") ?? DefaultPt(_defaultSpacingBeforeTw);
+        var after = Pt("padding-bottom") ?? Pt("margin-bottom") ?? DefaultPt(_defaultSpacingAfterTw);
+        var contextual = Regex.IsMatch(css, @"--w-contextual-spacing\s*:\s*1\s*;");
+        return new SpacingInfo(before, after, contextual);
+    }
 
     /// <summary>Wartość pojedynczej właściwości z inline CSS (ostatnie wystąpienie) lub null.</summary>
     private static string? ExtractCssProperty(string css, string property)
@@ -2436,6 +2651,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// <summary>
     /// Konwertuje paragraf na HTML z pełnym odwzorowaniem stylów
     /// </summary>
+    /// <summary>
+    /// Rozmiar (pt) do strutu akapitu: największy bezpośredni w:sz runów z tekstem, gdy wszystkie
+    /// takie runy mają w:sz i największy jest mniejszy niż efektywny rozmiar akapitu (CSS ze
+    /// stylu albo domyślny dokumentu). Null = bez nadpisania.
+    /// </summary>
+    private double? RunStrutFontSizePt(Paragraph paragraph, string paragraphCss)
+    {
+        double? paraPt = null;
+        var m = System.Text.RegularExpressions.Regex.Match(paragraphCss, @"font-size:\s*([\d.]+)pt");
+        if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var cssPt))
+            paraPt = cssPt;
+        paraPt ??= _defaultFontSizePt ?? (_defaults.FontSizePt > 0 ? _defaults.FontSizePt : (double?)null);
+        if (!paraPt.HasValue) return null;
+
+        double? maxRun = null;
+        foreach (var run in paragraph.Elements<Run>())
+        {
+            if (!run.Elements<Text>().Any(t => !string.IsNullOrEmpty(t.Text))) continue;
+            var sz = run.RunProperties?.FontSize?.Val?.Value;
+            if (sz == null || !int.TryParse(sz, out var half) || half <= 0) return null;
+            var pt = half / 2.0;
+            if (!maxRun.HasValue || pt > maxRun.Value) maxRun = pt;
+        }
+        if (!maxRun.HasValue || maxRun.Value >= paraPt.Value - 0.01) return null;
+        return maxRun;
+    }
+
     private string ConvertParagraphToHtml(Paragraph paragraph, WordprocessingDocument document, OpenXmlPart? sourcePart = null)
     {
         // A standalone page-break paragraph (only <w:br w:type="page"/>, no text/image) is emitted
@@ -2484,8 +2727,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         cssBuilder.Append(GetParagraphStyle(paraProps, ResolveParagraphLineFont(paragraph)));
 
-        // Obramowanie paragrafu
+        // Obramowanie paragrafu: bezpośrednie pPr, a gdy brak — ze STYLU (łańcuch basedOn);
+        // ADR-0108 r.10: styl Title ma w:pBdr bottom (niebieska kreska pod tytułem) i nie
+        // renderował się w edytorze. Marker `--w-pbdr-source:style` — writer NIE zapisuje go
+        // jako bezpośredniego w:pBdr (declared ≠ effective).
         var borderCss = GetParagraphBorderCss(paraProps);
+        if (string.IsNullOrEmpty(borderCss) && styleId != null
+            && ResolveStyleParagraphBorders(styleId) is { } styleBorders)
+        {
+            borderCss = GetParagraphBorderCss(styleBorders);
+            if (!string.IsNullOrEmpty(borderCss)) borderCss += "--w-pbdr-source:style;";
+        }
         if (!string.IsNullOrEmpty(borderCss))
         {
             cssBuilder.Append(borderCss);
@@ -2582,6 +2834,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         else if (paraProps?.GetFirstChild<PageBreakBefore>() != null)
             cssBuilder.Append("page-break-before:auto;");
 
+        // Word „zachowaj z następnym" (w:keepNext) i „zachowaj wiersze razem" (w:keepLines) —
+        // ADR-0108 r.3: standardowe CSS `break-after:avoid` / `break-inside:avoid`. Dotąd obie
+        // właściwości GINĘŁY przy każdym zapisie (writer pisał keepNext tylko dla nagłówków),
+        // a paginacja GUI ich nie znała: Word przenosił etykietę razem z następnym akapitem,
+        // edytor tnął między nimi. Jawne val=false w direct pPr → `auto` (nadpisuje styl).
+        var keepNext = paraProps?.GetFirstChild<KeepNext>();
+        if (keepNext != null)
+            cssBuilder.Append(IsOn(keepNext) ? "break-after:avoid;" : "break-after:auto;");
+        var keepLines = paraProps?.GetFirstChild<KeepLines>();
+        if (keepLines != null)
+            cssBuilder.Append(IsOn(keepLines) ? "break-inside:avoid;" : "break-inside:auto;");
+
+        // Siatka dokumentu (w:docGrid type=lines, ADR-0108 r.5): przy snapToGrid (domyślnie ON)
+        // Word zastępuje jednostkę „single" SKOKIEM siatki — interlinia auto N = N × pitch
+        // (pomiar PDF: 1.15× przy pitch 18 pt = 20.7 pt; z snapToGrid=0 = 1.15 × single fontu;
+        // exact/atLeast siatkę ignorują). Emitujemy wysokość w pt + marker --w-line-grid:1,
+        // z którego writer (razem z --w-line-tw) odtwarza w:line/lineRule=auto zamiast exact.
+        if (_gridPitchTwips != null)
+        {
+            var snapped = ApplyDocGridLineSnap(cssBuilder.ToString());
+            cssBuilder.Clear().Append(snapped);
+        }
+
         // Akapit będący samą POZIOMĄ LINIĄ (w:pict v:rect o:hr): Word renderuje go na wysokość
         // POJEDYNCZEJ linii fontu (bez mnożnika w:line) i BEZ odstępu „po" — 1px rula w zwykłym
         // akapicie z domyślnym after zawyżała wysokość ~60%. line-height:normal sprawia, że
@@ -2605,17 +2880,29 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                     "font-size:{0:0.##}pt;", effHeadingPt.Value));
         }
 
+        // STRUT linii (ADR-0108 r.9, fixture table-pagination): Word liczy wysokość linii z fontów
+        // RUNÓW, CSS z fontu akapitu (strut) — akapit 9 pt z runami 8 pt dawał linię 10.35 pt
+        // zamiast 9.2 pt (+15 % na wiersz tabeli, PG04/LONG02 o stronę za dużo). Gdy KAŻDY run
+        // z tekstem ma bezpośredni w:sz i największy jest MNIEJSZY niż rozmiar akapitu, akapit
+        // dostaje font-size = największy run (strut = największa linia; runy większe niż akapit
+        // i tak wygrywają ze strutem). Writer nie buduje z tego znacznika akapitu.
+        var strutPt = RunStrutFontSizePt(paragraph, cssBuilder.ToString());
+        if (strutPt.HasValue)
+            cssBuilder.Append(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "font-size:{0:0.##}pt;", strutPt.Value));
+
         // Dedup finalnego CSS: styl + direct pPr potrafiły zostawić duplikaty tej samej
         // właściwości (przeglądarka bierze ostatnią, ale regexy writera brały PIERWSZĄ —
         // nadpisanie stylu przez direct pPr ginęło na eksporcie).
         var cssStyle = DeduplicateCss(cssBuilder.ToString());
 
-        // ADR-0053: akapit z tłem/obramowaniem — w:after wraca na margin-bottom, bo
-        // padding-bottom malowałby odstęp tłem / wciągał go do wnętrza ramki (w Wordzie
-        // odstęp after jest POZA cieniowaniem i ramką). Świadoma degradacja: między takim
-        // akapitem a następnym marginesy kolapsują do max (rzadki przypadek).
-        if (!string.IsNullOrEmpty(borderCss)
-            || cssStyle.Contains("background-color", StringComparison.OrdinalIgnoreCase))
+        // ADR-0053 (tylko model SUMY, ADR-0107): akapit z tłem/obramowaniem — w:after wraca
+        // na margin-bottom, bo padding-bottom malowałby odstęp tłem / wciągał go do wnętrza
+        // ramki (w Wordzie odstęp after jest POZA cieniowaniem i ramką). Świadoma degradacja:
+        // między takim akapitem a następnym marginesy kolapsują do max (rzadki przypadek).
+        // W modelu max nośnikiem jest już margin-bottom — nic do zrobienia.
+        if (_paragraphSpacingSum && (!string.IsNullOrEmpty(borderCss)
+            || cssStyle.Contains("background-color", StringComparison.OrdinalIgnoreCase)))
         {
             cssStyle = Regex.Replace(cssStyle, @"(?<![\w-])padding-bottom\s*:", "margin-bottom:");
             // Domyślny odstęp dokumentu (--doc-par-margin na klasie .editor-content p) też
@@ -2630,31 +2917,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             cssStyle = SetCssProperty(cssStyle, "padding-bottom", "0");
         }
 
-        // w:contextualSpacing (ADR-0053): Word ZNOSI before/after tego akapitu, gdy sąsiad
-        // (bezpośredni brat) ma ten sam styl akapitowy — bez tego listy i bloki stylowe
-        // renderowały pełne odstępy między swoimi pozycjami. Jawne zero wygrywa też
-        // z domyślnym odstępem dokumentu (--doc-par-margin) na klasie .editor-content p.
-        if (cssStyle.Contains("--w-contextual-spacing"))
-        {
-            var myStyleId = EffectiveParagraphStyleId(paragraph);
-            if (paragraph.PreviousSibling() is Paragraph prevPara
-                && EffectiveParagraphStyleId(prevPara) == myStyleId)
-            {
-                cssStyle = SetCssProperty(cssStyle, "margin-top", "0");
-            }
-            if (paragraph.NextSibling() is Paragraph nextPara
-                && EffectiveParagraphStyleId(nextPara) == myStyleId)
-            {
-                cssStyle = SetCssProperty(cssStyle, "margin-bottom", "0");
-                cssStyle = SetCssProperty(cssStyle, "padding-bottom", "0");
-            }
-        }
+        // w:contextualSpacing (ADR-0053 → ADR-0107): markery zniesienia odstępów przy
+        // sąsiadach tego samego stylu; wartości inline zostają (round-trip bezstratny).
+        cssStyle = ApplyContextualSpacingMarkers(paragraph, cssStyle);
         var classAttr = docClass != null ? $" class=\"{docClass}\"" : string.Empty;
         // data-style-id pozwala eksporterowi HTML→DOCX odtworzyć oryginalny styleId (np. Title,
         // Subtitle), nawet jeśli wizualny tag to <p>. Style spisu treści (TOC1..9/TOCHeading,
         // polskie „Spistreści…") też round-tripują — bez pStyle wpisy TOC traciły po zapisie
         // tożsamość stylu i Word formatował zaktualizowany spis od zera.
-        var dataStyleAttr = !string.IsNullOrEmpty(styleId) && (docClass != null || IsTocParagraphStyleId(styleId))
+        // ADR-0108 (runda 2): KAŻDY nazwany, niedomyślny styl akapitowy istniejący w styles.xml
+        // (np. własne „Treść pisma", FixtureNote) round-tripuje przez data-style-id → writer
+        // pisze w:pStyle, a styles.xml idzie pass-through. Bez tego zapis spłaszczał styl do
+        // runów: po ponownym odczycie <p> tracił font-size/italic ze stylu, dostawał font
+        // kontenera i CSS liczył wysokość linii ze STRUTU bloku (10.5pt) zamiast z tekstu
+        // (8.5pt) — każdy taki akapit rósł o ~2.5pt, dokument 12 stron → 14 po przeładowaniu.
+        var isNamedNonDefaultStyle = !string.IsNullOrEmpty(styleId)
+            && !string.Equals(styleId, _defaultParagraphStyleId, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(styleId, "Normal", StringComparison.OrdinalIgnoreCase)
+            && _rawStyles.ContainsKey(styleId);
+        var dataStyleAttr = !string.IsNullOrEmpty(styleId)
+            && (docClass != null || IsTocParagraphStyleId(styleId) || isNamedNonDefaultStyle)
             ? $" data-style-id=\"{System.Net.WebUtility.HtmlEncode(styleId)}\""
             : string.Empty;
 
@@ -2793,12 +3075,55 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// True, gdy akapit ma ustawione <c>w:pageBreakBefore</c> (brak val = true; val=false/0 = false).
     /// Word używa tego do wymuszenia startu akapitu od nowej strony.
     /// </summary>
+    /// <summary>
+    /// Atrybuty data-* z ŹRÓDŁOWĄ semantyką komórki (ADR-0108 r.7): <c>data-tcw="w:type"</c>,
+    /// <c>data-tcmar-tw="top=80;start=100"</c> (tylko zadeklarowane strony, oryginalne nazwy),
+    /// <c>data-hide-mark</c>, <c>data-fit-text</c>. Writer odtwarza z nich w:tcW/w:tcMar/w:hideMark/
+    /// w:tcFitText zamiast liczyć z px renderu (tcW 3437 → 1800; tcMar 80 → 75; hideMark/fitText ginęły).
+    /// </summary>
+    private static string BuildCellSourceAttrs(TableCellProperties? props)
+    {
+        if (props == null) return string.Empty;
+        var sb = new StringBuilder();
+        static string? W(OpenXmlElement? el) => el?.GetAttributes().FirstOrDefault(a => a.LocalName == "w").Value;
+
+        var tcw = props.TableCellWidth;
+        if (tcw != null)
+        {
+            var t = tcw.Type?.Value;
+            var type = t == TableWidthUnitValues.Pct ? "pct" : t == TableWidthUnitValues.Auto ? "auto"
+                : t == TableWidthUnitValues.Nil ? "nil" : "dxa";
+            sb.Append($" data-tcw=\"{tcw.Width?.Value ?? "0"}:{type}\"");
+        }
+
+        var cm = props.TableCellMargin;
+        if (cm != null)
+        {
+            var parts = new List<string>();
+            void Add(string name, OpenXmlElement? el) { if (W(el) is { } v && int.TryParse(v, out _)) parts.Add($"{name}={v}"); }
+            Add("top", cm.TopMargin); Add("start", cm.StartMargin); Add("left", cm.LeftMargin);
+            Add("bottom", cm.BottomMargin); Add("end", cm.EndMargin); Add("right", cm.RightMargin);
+            if (parts.Count > 0) sb.Append($" data-tcmar-tw=\"{string.Join(';', parts)}\"");
+        }
+
+        if (props.HideMark != null) sb.Append(" data-hide-mark=\"1\"");
+        if (props.TableCellFitText != null) sb.Append(" data-fit-text=\"1\"");
+        return sb.ToString();
+    }
+
     private static bool HasPageBreakBefore(ParagraphProperties? paraProps)
     {
         var pbb = paraProps?.GetFirstChild<PageBreakBefore>();
         if (pbb == null) return false;
         return pbb.Val == null || pbb.Val.Value;
     }
+
+    /// <summary>Element typu on/off (w:keepNext, w:keepLines…): obecny bez w:val = włączony.</summary>
+    private static bool IsOn(OnOffType el) => el.Val == null || el.Val.Value;
+    /// <summary>ST_OnOff w wariancie OnOffOnly (w:cantSplit/w:tblHeader): brak = on; "0"/"false"/"off" = off.
+    /// Word zapisuje w:val="0" (fixture CS08) — OpenXml SDK rzuca FormatException przy .Val.Value.</summary>
+    private static bool IsOnOffOnlyOn(string? val) =>
+        val == null || !(val == "0" || val.Equals("false", StringComparison.OrdinalIgnoreCase) || val.Equals("off", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// True when the paragraph declares a center or right/end tab stop — the signature of a
@@ -3628,10 +3953,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Pobiera CSS obramowania paragrafu
     /// </summary>
     private string GetParagraphBorderCss(ParagraphProperties? props)
+        => GetParagraphBorderCss(props?.ParagraphBorders);
+
+    /// <summary>w:pBdr stylu akapitowego (łańcuch basedOn); null = żaden styl nie definiuje.</summary>
+    private ParagraphBorders? ResolveStyleParagraphBorders(string styleId)
     {
-        if (props == null) return string.Empty;
-        
-        var borders = props.ParagraphBorders;
+        var id = styleId; var guard = 0;
+        while (!string.IsNullOrEmpty(id) && guard++ < 12 && _rawStyles.TryGetValue(id, out var st))
+        {
+            if (st.StyleParagraphProperties?.ParagraphBorders is { } b) return b;
+            id = st.BasedOn?.Val?.Value;
+        }
+        return null;
+    }
+
+    private string GetParagraphBorderCss(ParagraphBorders? borders)
+    {
         if (borders == null) return string.Empty;
         
         var css = new StringBuilder();
@@ -4274,76 +4611,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var spacing = props.Descendants<SpacingBetweenLines>().FirstOrDefault();
         if (spacing != null)
         {
-            var inv = System.Globalization.CultureInfo.InvariantCulture;
-
-            // w:beforeAutoSpacing="true" oznacza, że Word ignoruje wartość Before i wylicza auto.
-            // W HTML nie mamy sensownego odpowiednika — pomijamy emisję, by nie wpisać niepoprawnej wartości.
-            var beforeAuto = spacing.BeforeAutoSpacing?.Value == true;
-            var afterAuto = spacing.AfterAutoSpacing?.Value == true;
-
-            // Round-trip markers: without them the flags vanished on save and Word fell
-            // back to the raw before/after values.
-            if (beforeAuto) css.Append("--w-before-auto:1;");
-            if (afterAuto) css.Append("--w-after-auto:1;");
-
-            if (!beforeAuto)
-            {
-                if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
-                    css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeVal)));
-                else if (spacing.BeforeLines?.Value != null)
-                {
-                    // BeforeLines jest w 1/100 linii — przybliżamy do wielokrotności domyślnego rozmiaru.
-                    var pt = spacing.BeforeLines.Value / 100.0 * (_defaultFontSizePt ?? 11);
-                    css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", pt));
-                }
-            }
-
-            if (!afterAuto)
-            {
-                // w:after jako padding-bottom, NIE margin-bottom (ADR-0053): Word SUMUJE
-                // after akapitu z before następnego, a marginesy CSS rodzeństwa kolapsują
-                // do max — między akapitami znikał mniejszy z dwóch odstępów. Padding nie
-                // kolapsuje: gap = padding-bottom(A) + margin-top(B) = suma jak w Wordzie.
-                // Akapit z tłem/obramowaniem wraca na margin-bottom w ConvertParagraphToHtml.
-                if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
-                    css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
-                else if (spacing.AfterLines?.Value != null)
-                {
-                    var pt = spacing.AfterLines.Value / 100.0 * (_defaultFontSizePt ?? 11);
-                    css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", pt));
-                }
-            }
-
-            if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
-            {
-                var lineRule = spacing.LineRule?.Value;
-                if (lineRule == LineSpacingRuleValues.AtLeast)
-                {
-                    // PG-10: atLeast = „CO NAJMNIEJ" — linia rośnie, gdy treść wyższa
-                    // (Word nie przycina). Dotąd renderowane jak exact: mniejsza wartość
-                    // niż pojedynczy odstęp fontu ŚCISKAŁA linie (zgłoszenie „odstępy
-                    // między liniami"). CSS max(pt, single-em) = dokładna semantyka;
-                    // --w-line-single żyje na .page (PG-09), em rozwiązuje się fontem akapitu.
-                    css.Append(string.Format(inv,
-                        "line-height:max({0:0.##}pt, var(--w-line-single, 1.2em));",
-                        OoxmlUnits.TwipsToPoints(lineVal)));
-                    css.Append("--w-line-rule:atLeast;");
-                }
-                else if (lineRule == LineSpacingRuleValues.Exact)
-                {
-                    css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
-                }
-                else
-                {
-                    // Auto (domyślne gdy brak w:lineRule) — mnożnik pojedynczego odstępu
-                    // w 240-tych; emisja skalibrowana metrykami fontu + marker (PG-09).
-                    // Kalibracja po foncie AKAPITU (gdy znany) — akapit w innym kroju niż
-                    // domyślny dokumentu (np. Times 1.149 vs Calibri 1.221) miał interlinię
-                    // przeliczoną złym współczynnikiem i rozjeżdżał wysokość strony.
-                    css.Append(WordLineSpacing.AutoCss(lineVal, lineFontFamily ?? _defaultFontFamily));
-                }
-            }
+            // Kalibracja po foncie AKAPITU (gdy znany) — akapit w innym kroju niż domyślny
+            // dokumentu (np. Times 1.149 vs Calibri 1.221) miał interlinię przeliczoną złym
+            // współczynnikiem i rozjeżdżał wysokość strony.
+            AppendSpacingCss(css, spacing, lineFontFamily ?? _defaultFontFamily);
         }
+
+        // w:snapToGrid val=false (akapit wyłączony z siatki dokumentu) — tylko round-trip
+        // (ADR-0107); domyślne true nie jest emitowane.
+        var snapToGrid = props.GetFirstChild<SnapToGrid>();
+        if (snapToGrid?.Val != null && !snapToGrid.Val.Value)
+            css.Append("--w-snap-to-grid:0;");
 
         // w:pageBreakBefore w definicji STYLU (typowe dla nagłówków rozdziałów) — ta sama
         // właściwość CSS co dla direct pPr; direct val=false nadpisuje przez dedupe.
@@ -4351,13 +4629,25 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         if (stylePageBreak != null && (stylePageBreak.Val == null || stylePageBreak.Val.Value))
             css.Append("page-break-before:always;");
 
-        // w:contextualSpacing — gdy true, Word znosi odstępy między sąsiednimi paragrafami tego samego stylu.
-        // Eksportujemy jako data-attribute, aby HtmlToDocxConverter mógł to przywrócić.
+        // w:keepNext / w:keepLines w definicji STYLU (etykiety, nagłówki) — ta sama CSS co dla
+        // direct pPr (ADR-0108 r.3); direct val=false nadpisuje przez dedupe (`auto`).
+        var styleKeepNext = props.Descendants<KeepNext>().FirstOrDefault();
+        if (styleKeepNext != null && IsOn(styleKeepNext))
+            css.Append("break-after:avoid;");
+        var styleKeepLines = props.Descendants<KeepLines>().FirstOrDefault();
+        if (styleKeepLines != null && IsOn(styleKeepLines))
+            css.Append("break-inside:avoid;");
+
+        // w:contextualSpacing — gdy true, Word znosi odstępy między sąsiednimi paragrafami
+        // tego samego stylu. Marker CSS (writer odtwarza element); jawne val=false w direct
+        // pPr emituje ":0", które przez DeduplicateCss KASUJE ":1" odziedziczone ze stylu
+        // (dotąd marker stylu przeżywał i akapit tracił odstęp wbrew Wordowi — R-38 d).
         var contextualSpacing = props.Descendants<ContextualSpacing>().FirstOrDefault();
-        if (contextualSpacing != null && (contextualSpacing.Val == null || contextualSpacing.Val.Value))
+        if (contextualSpacing != null)
         {
-            // Zaznacz w CSS custom property — HtmlToDocx to rozpozna.
-            css.Append("--w-contextual-spacing:1;");
+            css.Append(contextualSpacing.Val == null || contextualSpacing.Val.Value
+                ? "--w-contextual-spacing:1;"
+                : "--w-contextual-spacing:0;");
         }
 
         // Kolor tła paragrafu
@@ -4738,7 +5028,10 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // dublowałyby tę samą treść.
             var pendingBefore = _pendingTextBoxes.Count;
             var html = new StringBuilder();
-            foreach (var drawing in branch.Descendants<Drawing>())
+            // Tylko drawingi NAJWYŻSZEGO poziomu gałęzi: obraz wewnątrz pola tekstowego (w:txbxContent
+            // w wps:txbx) konwertuje się razem z polem — osobna iteracja dublowała go w akapicie (r.11).
+            foreach (var drawing in branch.Descendants<Drawing>()
+                         .Where(d => !d.Ancestors<Drawing>().Any(a => a.Ancestors().Contains(branch))))
                 html.Append(ConvertDrawingToHtml(drawing, document, sourcePart));
             if (html.Length == 0 && _pendingTextBoxes.Count == pendingBefore)
             {
@@ -6684,7 +6977,27 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// jak i referencje do motywu (AsciiTheme, HighAnsiTheme, itd.).
     /// </summary>
     private static string FontFamilyCss(string fontName) =>
-        $"font-family:'{fontName}',{GenericFontFallback(fontName)};";
+        $"font-family:'{fontName}',{KnownSubstitutes(fontName)}{GenericFontFallback(fontName)};";
+
+    /// <summary>
+    /// Podstawienia jak w Wordzie dla krojów, których przeglądarka zwykle nie widzi (ADR-0108 r.10).
+    /// Fakt: Word bez „Aptos Display" podstawia Calibri Light (PDF fixture'a: tytuł = Calibri,
+    /// treść = Aptos). Chrome bez podstawienia bierze `sans-serif` = Arial: +4.7 % szerokości
+    /// (Aptos 10 pt: 474 pt vs Arial 497; Segoe UI 489 = +3 %, wizualnie najbliższy) —
+    /// tytuł 24 pt łamał się na 2 linie. Oryginalna nazwa zostaje pierwsza (maszyny z fontem).
+    /// </summary>
+    private static string KnownSubstitutes(string fontName)
+    {
+        var f = fontName.Trim().ToLowerInvariant();
+        return f switch
+        {
+            "aptos display" => "'Calibri Light','Segoe UI',",
+            "aptos" or "aptos serif" => "'Segoe UI',",
+            "aptos narrow" => "'Arial Narrow','Segoe UI',",
+            "aptos mono" => "'Consolas',",
+            _ => string.Empty
+        };
+    }
 
     /// <summary>
     /// Picks a generic CSS fallback matching the font's family class. Critical for environments
@@ -6968,7 +7281,22 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             return RenderPreservedPlaceholder(drawing, dispatchPart, extWpx, extHpx, "chart");
         }
 
-        var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
+        // POLE TEKSTOWE z obrazem w środku (ADR-0108 r.11): wps:txbx → w:txbxContent z akapitem
+        // zawierającym w:drawing. Heurystyka „pierwszy blip" brała blip WNĘTRZA pola i renderowała
+        // całe pole jako <img> rozciągnięty do rozmiaru pola, a tekst pola ginął (autosave = utrata
+        // danych; „faksymila" = pieczęć + podpis w polu tekstowym). Pole tekstowe ma pierwszeństwo,
+        // a blip obrazu szukamy POZA treścią pola.
+        if (graphicUri.EndsWith("/wordprocessingShape", StringComparison.OrdinalIgnoreCase)
+            && drawing.Descendants<TextBoxContent>().Any())
+        {
+            var textBoxWithImage = RenderTextBoxContent(drawing, document, sourcePart);
+            if (!string.IsNullOrEmpty(textBoxWithImage)) return HoistTextBox(textBoxWithImage);
+        }
+
+        // Blip WEWNĄTRZ pola tekstowego TEGO drawingu nie jest jego obrazem (obraz w polu
+        // konwertuje się osobno, przy własnym w:drawing — wtedy jego txbxContent jest NAD nim).
+        var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>()
+            .FirstOrDefault(b => !b.Ancestors<TextBoxContent>().Any(t => t.Ancestors<Drawing>().Contains(drawing)));
         if (blip?.Embed?.Value == null)
         {
             // Kształt bez obrazu (wps:wsp) może nieść POLE TEKSTOWE (wps:txbx → w:txbxContent).
@@ -7557,6 +7885,23 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var gridColumnsPx = ReadTableGridColumnsPx(table);
         var isFixedLayout = tableProps?.TableLayout?.Type?.Value == TableLayoutValues.Fixed;
 
+        // ADR-0108 r.8: przy autofit BEZ tblW Word układa kolumny wg PREFEROWANYCH szerokości
+        // komórek (tcW dxa) — tblGrid to cache ostatniego układu i bywa niespójny (fixture W03:
+        // grid 1800/3000/2400, tcW 3×3437 → Word na pełną szerokość, reader na 7200 tw).
+        // Bierzemy tcW pierwszego wiersza, gdy komórki nie mają spanów, wszystkie są dxa
+        // i suma mieści się w szpalcie; inaczej siatka jak dotąd.
+        if (!isFixedLayout && !hasExplicitWidth)
+        {
+            var preferred = ReadFirstRowPreferredColumnsPx(table, gridColumnsPx.Count);
+            if (preferred != null)
+            {
+                var availForPref = _availableContentWidthTwips ?? FullContentWidthTwips();
+                long sumPref = preferred.Sum(c => (long)c.Tw);
+                if (sumPref != gridColumnsPx.Sum(c => (long)c.Tw) && (availForPref is not { } ap || ap <= 0 || sumPref <= ap))
+                    gridColumnsPx = preferred;
+            }
+        }
+
         // tblW=auto z pełną siatką tblGrid: Word układa tabelę wg zapisanej siatki, a inline
         // `width:auto` kazał przeglądarce robić shrink-to-fit (tabela wyraźnie za wąska).
         // Renderujemy geometrię siatki (fixed + colgroup); oryginalne tblW/tblLayout niosą
@@ -7597,6 +7942,26 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             }
         }
 
+        // w:tblW dxa MNIEJSZE niż suma tblGrid przy tblLayout=autofit (ADR-0108 r.6): Word układa
+        // tabelę w szerokości PREFEROWANEJ (tblGrid to cache ostatniego układu), a przeglądarka
+        // przy table-layout:fixed rozszerza tabelę do sumy <col> — FT07/FT08 z tblW=3600 (2.5")
+        // renderowały się na pełną szerokość strony. Skalujemy kolumny PODGLĄDU do tblW
+        // (data-w-tw niesie oryginalne twipy, zapis bez zmian). Fixed layout: Word też trzyma
+        // siatkę, więc bez zmian.
+        if (hasExplicitWidth && !isFixedLayout && explicitWidthDxa > 0 && gridColumnsPx.Count > 0
+            && tableWidth.EndsWith("px", StringComparison.Ordinal))
+        {
+            var targetPx = TwipsToPx(explicitWidthDxa);
+            var totalPx = gridColumnsPx.Sum(c => c.Px);
+            if (targetPx > 0 && totalPx > targetPx)
+            {
+                var f = (double)targetPx / totalPx;
+                gridColumnsPx = gridColumnsPx
+                    .Select(c => (Px: Math.Max(1, (int)Math.Round(c.Px * f)), c.Tw))
+                    .ToList();
+            }
+        }
+
         // When a fixed-layout table declares no explicit width, fall back to the grid sum
         // so the fixed layout has a width to distribute across the columns.
         if (useFixedLayout && tableWidth == "auto" && gridColumnsPx.Count > 0)
@@ -7607,11 +7972,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
 
         // Wyrównanie tabeli
         var tableAlign = "";
+        var tableJcAttr = "";
         if (tableProps?.TableJustification?.Val != null)
         {
             var tblAlignVal = tableProps.TableJustification.Val.Value;
             if (tblAlignVal == TableRowAlignmentValues.Center) tableAlign = "margin-left:auto;margin-right:auto;";
             else if (tblAlignVal == TableRowAlignmentValues.Right) tableAlign = "margin-left:auto;margin-right:0;";
+            // Jawne jc=left = render domyślny, ale marker pozwala writerowi oddać w:jc 1:1 (r.7).
+            else if (tblAlignVal == TableRowAlignmentValues.Left) tableJcAttr = " data-tbl-jc=\"left\"";
         }
 
         // Wcięcie tabeli. With jc=center/right Word ignores w:tblInd — and the px margin-left
@@ -7629,8 +7997,34 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var cellSpacingTw = GetTwipsValue(tableProps?.GetFirstChild<TableCellSpacing>());
         if (cellSpacingTw is > 0)
         {
-            collapseCss = $"border-collapse:separate;border-spacing:{TwipsToPx(cellSpacingTw.Value)}px;";
+            // Pomiar PDF Worda (ADR-0108 r.8, CS02 w=120): odstęp między sąsiednimi komórkami
+            // = 2×w (każda komórka ma własny odstęp w), a obramowanie TABELI (tblBorders top/
+            // start/bottom/end) jest rysowane osobno wokół komórek w odległości 2×w. CSS:
+            // border-spacing = 2×w px, ramka zewnętrzna jako longhandy na <table> (writer
+            // odtwarza z nich tblBorders zewnętrzne; skrót `border:` dałby też insideH/V).
+            collapseCss = $"border-collapse:separate;border-spacing:{TwipsToPx(cellSpacingTw.Value * 2)}px;";
             cellSpacingAttr = $" data-cell-spacing-tw=\"{cellSpacingTw.Value}\"";
+            string Outer(string side, BorderType? b) =>
+                b?.Val != null && b.Val.Value != BorderValues.None && b.Val.Value != BorderValues.Nil
+                    ? $"border-{side}:{GetBorderCss(b)};" : string.Empty;
+            collapseCss += Outer("top", styleCtx.Borders.Top) + Outer("left", styleCtx.Borders.Left)
+                + Outer("bottom", styleCtx.Borders.Bottom) + Outer("right", styleCtx.Borders.Right);
+            // Box tabeli w Wordzie (PDF CS02): Σ szerokości kolumn + 6w, lewa krawędź 3w PRZED
+            // marginesem (komórki zaczynają się w − w, ramka w − 3w) — komórki 168 pt przy
+            // tcW 171.85. Przesunięcie przez position/left, NIE margin-left (writer mapuje
+            // margin-left na w:tblInd).
+            if (tableWidth.EndsWith("px", StringComparison.Ordinal) && int.TryParse(tableWidth[..^2], out var tblPxForSpacing))
+                tableWidth = $"{tblPxForSpacing + TwipsToPx(cellSpacingTw.Value * 6)}px";
+            collapseCss += $"position:relative;left:-{TwipsToPx(cellSpacingTw.Value * 3)}px;";
+            // Komórki: Word zwęża je o (2w·(n+1) − 6w)/n (PDF: 168 pt przy tcW 171.85), inaczej przy
+            // table-layout:fixed suma <col> + odstępy przekracza box i tabela rośnie o ~12 pt.
+            var nCols = gridColumnsPx.Count;
+            if (nCols > 0)
+            {
+                var shrinkPx = (double)(TwipsToPx(cellSpacingTw.Value * 2) * (nCols + 1) - TwipsToPx(cellSpacingTw.Value * 6)) / nCols;
+                gridColumnsPx = gridColumnsPx.Select(c => (Px: Math.Max(1, (int)Math.Round(c.Px - shrinkPx)), c.Tw)).ToList();
+                colgroupHtml = BuildColgroupHtml(gridColumnsPx);
+            }
         }
 
         // Sygnał dla HtmlToDocx: czy tabela ma jakiekolwiek zdefiniowane obramowania —
@@ -7647,7 +8041,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // The width in CSS is render-clamped (column of a multi-column section / nested
         // table) — the marker carries the ORIGINAL w:tblW dxa so export does not persist
         // the compressed pixels as the document width.
-        if (clampedExplicitWidth && explicitWidthDxa > 0)
+        // ADR-0108 r.7: marker ZAWSZE dla tblW dxa (nie tylko przy clampie) — px renderu wracał
+        // jako 7995 zamiast 8000 tw przy każdym zapisie.
+        if (explicitWidthDxa > 0)
             widthSemanticsAttrs += $" data-tbl-w-tw=\"{explicitWidthDxa}\"";
 
         // Referencja stylu tabeli — zachowywana w data-*, by eksport mógł ponownie
@@ -7667,7 +8063,56 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             rows.Count,
             CountGridColumns(table, rows));
 
-        html.Append($"<table{tblBordersMarker}{styleAttrs}{cellSpacingAttr}{widthSemanticsAttrs} style=\"{collapseCss}width:{tableWidth};margin:4px 0;{layoutCss}{tableAlign}{tableIndent}\">");
+        // Tabela pływająca (w:tblpPr) — ADR-0108 r.6. Dotąd tblpPr był ignorowany (tabela w
+        // przepływie na pełną szerokość) i GINĄŁ przy zapisie. Round-trip: wszystkie atrybuty
+        // w data-tblp-*; render: CSS float z marginesami = dystanse od tekstu (pomiar PDF:
+        // FT07 tblpX=2200 tw → komórka na 110 pt od krawędzi strony, tekst zawija się z prawej;
+        // FT08 center → obie strony). Model float ma dwa świadome ograniczenia: (1) tekst
+        // zawija się po JEDNEJ stronie (CSS nie umie obu — center/absolutne X = float:left
+        // z offsetem, right/outside = float:right), (2) pozycja PIONOWA = miejsce w przepływie
+        // (dokładne dla vertAnchor=text; page/margin z tblpY nie są modelowane).
+        var tblpAttrs = string.Empty;
+        var floatCss = string.Empty;
+        if (tableProps?.GetFirstChild<TablePositionProperties>() is { } tblp)
+        {
+            string A(string n, object? v) => v == null ? string.Empty : $" data-tblp-{n}=\"{v}\"";
+            var horzAnchor = tblp.HorizontalAnchor?.InnerText;
+            var xspec = tblp.TablePositionXAlignment?.InnerText;
+            var leftTw = (int)(tblp.LeftFromText?.Value ?? 0);
+            var rightTw = (int)(tblp.RightFromText?.Value ?? 0);
+            var topTw = (int)(tblp.TopFromText?.Value ?? 0);
+            var bottomTw = (int)(tblp.BottomFromText?.Value ?? 0);
+            tblpAttrs = " data-tblp=\"1\""
+                + A("horz-anchor", horzAnchor) + A("vert-anchor", tblp.VerticalAnchor?.InnerText)
+                + A("xspec", xspec) + A("yspec", tblp.TablePositionYAlignment?.InnerText)
+                + A("x-tw", tblp.TablePositionX?.Value) + A("y-tw", tblp.TablePositionY?.Value)
+                + A("left-tw", tblp.LeftFromText?.Value) + A("right-tw", tblp.RightFromText?.Value)
+                + A("top-tw", tblp.TopFromText?.Value) + A("bottom-tw", tblp.BottomFromText?.Value);
+
+            var tablePx = tableWidth.EndsWith("px", StringComparison.Ordinal)
+                && int.TryParse(tableWidth[..^2], out var tpx) ? tpx : gridColumnsPx.Sum(c => c.Px);
+            var availPx = _availableContentWidthTwips is { } aw && aw > 0 ? TwipsToPx((int)aw) : 0;
+            var floatRight = xspec is "right" or "outside";
+            var offsetPx = 0;
+            if (!floatRight)
+            {
+                if (xspec == "center" && availPx > tablePx) offsetPx = (availPx - tablePx) / 2;
+                else if (xspec is null && tblp.TablePositionX?.Value is { } xTw)
+                    offsetPx = TwipsToPx(Math.Max(0, xTw - (horzAnchor == "page" ? _sectionLeftMarginTwips : 0)));
+            }
+            floatCss = floatRight
+                ? $"float:right;margin:{TwipsToPx(topTw)}px 0 {TwipsToPx(bottomTw)}px {TwipsToPx(leftTw)}px;"
+                : $"float:left;margin:{TwipsToPx(topTw)}px {TwipsToPx(rightTw)}px {TwipsToPx(bottomTw)}px {offsetPx}px;";
+            // float + auto-marginesy/wcięcie wykluczają się — pozycję niesie float.
+            tableAlign = string.Empty;
+            tableIndent = string.Empty;
+        }
+
+        var marginCss = floatCss.Length > 0 ? floatCss : "margin:4px 0;";
+        // EFEKTYWNE domyślne marginesy komórek tabeli (direct tblCellMar → styl → default Worda)
+        // w twipsach — writer odtwarza z nich w:tblCellMar zamiast hardkodu 0/108 (ADR-0108 r.7).
+        var cellMarAttr = $" data-tbl-cell-mar-tw=\"{styleCtx.DefaultCellPadTopTw},{styleCtx.DefaultCellPadLeftTw},{styleCtx.DefaultCellPadBottomTw},{styleCtx.DefaultCellPadRightTw}\"";
+        html.Append($"<table{tblBordersMarker}{styleAttrs}{cellSpacingAttr}{widthSemanticsAttrs}{tblpAttrs}{cellMarAttr}{tableJcAttr} style=\"{collapseCss}width:{tableWidth};{marginCss}{layoutCss}{tableAlign}{tableIndent}\">");
         html.Append(colgroupHtml);
 
         // Akapity w komórkach dostają INLINE rozwiązane domyślne odstępy (docDefaults + w:pPr
@@ -7706,8 +8151,17 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             // przez data-* chroni właściwości przy eksporcie.
             if (trPr?.Elements<TableHeader>().Any() == true)
                 rowAttrs.Append(" data-tbl-header=\"1\"");
-            if (trPr?.Elements<CantSplit>().Any() == true)
+            // w:cantSplit w:val="0"/false = jawne ZEZWOLENIE na dzielenie (CS08: nadpisuje styl).
+            var directCantSplit = trPr?.Elements<CantSplit>().FirstOrDefault();
+            if (directCantSplit != null && IsOnOffOnlyOn(directCantSplit.Val?.InnerText))
                 rowAttrs.Append(" data-cant-split=\"1\"");
+            else if (directCantSplit != null)
+                // Jawne w:val="0" musi wrócić do pliku (bez niego wiersz odziedziczyłby cantSplit ze stylu).
+                rowAttrs.Append(" data-cant-split=\"0\"");
+            else if (styleCtx.StyleCantSplit)
+                // Odziedziczone ze stylu tabeli (CS07 fixture): paginator honoruje, writer NIE
+                // zapisuje jako bezpośrednie w:cantSplit (declared ≠ effective).
+                rowAttrs.Append(" data-cant-split-eff=\"1\"");
 
             html.Append($"<tr{rowAttrs}{rowStyle}>");
 
@@ -7802,6 +8256,44 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     /// Reads tblGrid column widths (twips) and converts them to CSS pixels.
     /// Columns without an explicit width contribute 0 (browser distributes remainder).
     /// </summary>
+    /// <summary>
+    /// Preferowane szerokości kolumn z tcW (dxa) PIERWSZEGO wiersza — tylko gdy każda komórka
+    /// zajmuje jedną kolumnę siatki, ma tcW dxa > 0 i liczba komórek zgadza się z tblGrid
+    /// (gdy siatka istnieje). Null = brak spójnych preferencji (zostaje tblGrid).
+    /// </summary>
+    private List<(int Px, int Tw)>? ReadFirstRowPreferredColumnsPx(Table table, int gridCount)
+    {
+        var row = table.Elements<TableRow>().FirstOrDefault();
+        if (row == null) return null;
+        var result = new List<(int Px, int Tw)>();
+        foreach (var cell in row.Elements<TableCell>())
+        {
+            if (GetGridSpan(cell) != 1) return null;
+            var w = EffectiveCellProps(cell)?.TableCellWidth;
+            if (w?.Type?.Value != TableWidthUnitValues.Dxa || !int.TryParse(w.Width?.Value, out var tw) || tw <= 0)
+                return null;
+            result.Add((TwipsToPx(tw), tw));
+        }
+        if (result.Count == 0 || (gridCount > 0 && result.Count != gridCount)) return null;
+        return result;
+    }
+
+    /// <summary>Szerokość wnętrza komórki w twipach: kolumny siatki objęte komórką minus tcMar
+    /// (bezpośredni albo domyślny tabeli). Null, gdy siatka nie ma szerokości.</summary>
+    private long? CellInnerWidthTwips(Table table, TableCellProperties? cellProps, TableRenderContext ctx, int gridColStart, int gridSpan)
+    {
+        var grid = ReadTableGridColumnsPx(table);
+        if (grid.Count == 0) return null;
+        long sum = 0;
+        for (var c = gridColStart; c < Math.Min(grid.Count, gridColStart + Math.Max(1, gridSpan)); c++)
+            sum += grid[c].Tw;
+        if (sum <= 0) return null;
+        var mar = cellProps?.TableCellMargin;
+        var left = mar != null ? (GetTwipsValue(mar.StartMargin) ?? GetTwipsValue(mar.LeftMargin)) : null;
+        var right = mar != null ? (GetTwipsValue(mar.EndMargin) ?? GetTwipsValue(mar.RightMargin)) : null;
+        return sum - (left ?? ctx.Style.DefaultCellPadLeftTw) - (right ?? ctx.Style.DefaultCellPadRightTw);
+    }
+
     private List<(int Px, int Tw)> ReadTableGridColumnsPx(Table table)
     {
         var result = new List<(int Px, int Tw)>();
@@ -7994,8 +8486,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         var cb = props?.TableCellBorders;
         css.Append($"border-top:{ResolveCellBorderSide(cb?.TopBorder, regions, TableCellEdge.Top, isFirstRow ? ctx.Style.Borders.Top : ctx.Style.Borders.InsideH, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
         css.Append($"border-bottom:{ResolveCellBorderSide(cb?.BottomBorder, regions, TableCellEdge.Bottom, isLastRow ? ctx.Style.Borders.Bottom : ctx.Style.Borders.InsideH, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
-        css.Append($"border-left:{ResolveCellBorderSide(cb?.LeftBorder, regions, TableCellEdge.Left, isFirstCol ? ctx.Style.Borders.Left : ctx.Style.Borders.InsideV, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
-        css.Append($"border-right:{ResolveCellBorderSide(cb?.RightBorder, regions, TableCellEdge.Right, isLastCol ? ctx.Style.Borders.Right : ctx.Style.Borders.InsideV, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
+        css.Append($"border-left:{ResolveCellBorderSide((BorderType?)cb?.StartBorder ?? cb?.LeftBorder, regions, TableCellEdge.Left, isFirstCol ? ctx.Style.Borders.Left : ctx.Style.Borders.InsideV, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
+        css.Append($"border-right:{ResolveCellBorderSide((BorderType?)cb?.EndBorder ?? cb?.RightBorder, regions, TableCellEdge.Right, isLastCol ? ctx.Style.Borders.Right : ctx.Style.Borders.InsideV, ctx, rowIndex, gridColStart, gridSpan, rowSpan)};");
 
         // Padding: w:tcMar nadpisuje TYLKO zadeklarowane strony — pozostałe dziedziczą
         // z tblCellMar/defaultu Worda (wcześniej częściowy tcMar zerował brakujące strony,
@@ -8005,10 +8497,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         {
             var top = GetTwipsValue(cm.TopMargin) ?? ctx.Style.DefaultCellPadTopTw;
             var bottom = GetTwipsValue(cm.BottomMargin) ?? ctx.Style.DefaultCellPadBottomTw;
-            var left = cm.LeftMargin?.Width?.Value != null
-                ? int.Parse(cm.LeftMargin.Width.Value) : ctx.Style.DefaultCellPadLeftTw;
-            var right = cm.RightMargin?.Width?.Value != null
-                ? int.Parse(cm.RightMargin.Width.Value) : ctx.Style.DefaultCellPadRightTw;
+            // w:start/w:end (nowszy markup, np. Word dla Mac) = w:left/w:right w LTR — dotąd
+            // czytane było tylko left/right, więc tcMar ze start/end spadał na default (ADR-0108 r.7).
+            var left = cm.StartMargin?.Width?.Value != null ? int.Parse(cm.StartMargin.Width.Value)
+                : cm.LeftMargin?.Width?.Value != null ? int.Parse(cm.LeftMargin.Width.Value)
+                : ctx.Style.DefaultCellPadLeftTw;
+            var right = cm.EndMargin?.Width?.Value != null ? int.Parse(cm.EndMargin.Width.Value)
+                : cm.RightMargin?.Width?.Value != null ? int.Parse(cm.RightMargin.Width.Value)
+                : ctx.Style.DefaultCellPadRightTw;
             css.Append($"padding:{TwipsToPx(top)}px {TwipsToPx(right)}px {TwipsToPx(bottom)}px {TwipsToPx(left)}px;");
         }
         else
@@ -8154,12 +8650,14 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         return GetBorderCss(tableFallback);
     }
 
+    // w:start/w:end (strict, tak zapisuje Word 2013+) są równoważne w:left/w:right — bez
+    // fallbacku szara ramka tblBorders start/end wracała jako czarna ze stylu (ADR-0108 r.7).
     private static BorderType? PickEdge(TableCellBorders? b, TableCellEdge edge) => edge switch
     {
         TableCellEdge.Top => b?.TopBorder,
         TableCellEdge.Bottom => b?.BottomBorder,
-        TableCellEdge.Left => b?.LeftBorder,
-        TableCellEdge.Right => b?.RightBorder,
+        TableCellEdge.Left => (BorderType?)b?.StartBorder ?? b?.LeftBorder,
+        TableCellEdge.Right => (BorderType?)b?.EndBorder ?? b?.RightBorder,
         _ => null
     };
 
@@ -8239,8 +8737,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     {
         TableCellEdge.Top => b?.TopBorder,
         TableCellEdge.Bottom => b?.BottomBorder,
-        TableCellEdge.Left => b?.LeftBorder,
-        TableCellEdge.Right => b?.RightBorder,
+        TableCellEdge.Left => (BorderType?)b?.StartBorder ?? b?.LeftBorder,
+        TableCellEdge.Right => (BorderType?)b?.EndBorder ?? b?.RightBorder,
         _ => null
     };
 
@@ -8294,6 +8792,9 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private sealed class TableStyleContext
     {
         public string? StyleId;
+        // w:style/w:trPr/w:cantSplit stylu tabeli (ADR-0108 r.9) — wartość EFEKTYWNA wiersza,
+        // emitowana osobnym markerem (data-cant-split-eff), nie jako bezpośrednia (§58 notatki).
+        public bool StyleCantSplit;
         public string LookHex = "04A0";
         public bool FirstRow, LastRow, FirstColumn, LastColumn, RowBands = true, ColumnBands;
         public int RowBandSize = 1, ColBandSize = 1;
@@ -8344,6 +8845,7 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             chain.Add(st);
             styleId = st.BasedOn?.Val?.Value;
         }
+        ctx.StyleCantSplit = chain.Any(st => st.Elements().Any(e => e.LocalName == "trPr" && e.Elements<CantSplit>().Any()));
 
         // tblLook: atrybuty boolowskie mają pierwszeństwo; starszy zapis to maska hex w @w:val
         // (0x0020 firstRow, 0x0040 lastRow, 0x0080 firstColumn, 0x0100 lastColumn,
@@ -8379,8 +8881,8 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         ctx.Borders.Top = Side(b => b.TopBorder);
         ctx.Borders.Bottom = Side(b => b.BottomBorder);
-        ctx.Borders.Left = Side(b => b.LeftBorder);
-        ctx.Borders.Right = Side(b => b.RightBorder);
+        ctx.Borders.Left = Side(b => (BorderType?)b.StartBorder ?? b.LeftBorder);
+        ctx.Borders.Right = Side(b => (BorderType?)b.EndBorder ?? b.RightBorder);
         ctx.Borders.InsideH = Side(b => b.InsideHorizontalBorder);
         ctx.Borders.InsideV = Side(b => b.InsideVerticalBorder);
 
@@ -8432,8 +8934,11 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         }
         var topPad = PadSide(m => GetTwipsValue(m.TopMargin), 0);
         var bottomPad = PadSide(m => GetTwipsValue(m.BottomMargin), 0);
-        var leftPad = PadSide(m => GetDxaValue(m.TableCellLeftMargin), wordDefaultCellMarginTwips);
-        var rightPad = PadSide(m => GetDxaValue(m.TableCellRightMargin), wordDefaultCellMarginTwips);
+        // w:tblCellMar niesie boki jako w:left/w:right (transitional) ALBO w:start/w:end (strict,
+        // tak zapisuje Word 2013+) — bez w:start/w:end fixture CM07 (tblCellMar 200 tw) renderował
+        // się z domyślnym 108 tw (ADR-0108 r.7).
+        var leftPad = PadSide(m => m.StartMargin != null ? GetTwipsValue(m.StartMargin) : GetDxaValue(m.TableCellLeftMargin), wordDefaultCellMarginTwips);
+        var rightPad = PadSide(m => m.EndMargin != null ? GetTwipsValue(m.EndMargin) : GetDxaValue(m.TableCellRightMargin), wordDefaultCellMarginTwips);
         ctx.DefaultCellPadTopTw = topPad;
         ctx.DefaultCellPadBottomTw = bottomPad;
         ctx.DefaultCellPadLeftTw = leftPad;
@@ -8475,19 +8980,70 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
     private string SpacingCss(SpacingBetweenLines spacing)
     {
         var css = new StringBuilder();
+        // Auto — kalibracja fontem domyślnym dokumentu (łańcuch stylu tabeli, PG-09).
+        AppendSpacingCss(css, spacing, _defaultFontFamily);
+        return css.ToString();
+    }
+
+    /// <summary>
+    /// JEDYNE miejsce mapowania w:spacing → CSS (direct pPr, style, łańcuch stylu tabeli):
+    /// <list type="bullet">
+    /// <item>before/after: pt; „po" na nośniku modelu granicy (<see cref="AfterCssProperty"/>);</item>
+    /// <item>beforeLines/afterLines (1/100 linii): WYGRYWAJĄ z before/after (Word: before=30pt +
+    ///   beforeLines=1 → 12 pt), wartość = n/100 × jednostka linii; marker --w-before/after-lines
+    ///   round-tripuje surową liczbę setnych (writer odtwarza atrybut);</item>
+    /// <item>beforeAutospacing/afterAutospacing: 14 pt Worda + marker flagi (dotąd 0 pt);</item>
+    /// <item>line: auto → mnożnik skalibrowany metrykami fontu + --w-line-tw (PG-09);
+    ///   exact → pt; atLeast → max(pt, pojedynczy odstęp fontu) + --w-line-rule (PG-10).</item>
+    /// </list>
+    /// </summary>
+    private void AppendSpacingCss(StringBuilder css, SpacingBetweenLines spacing, string? lineFontFamily)
+    {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
+        var beforeAuto = spacing.BeforeAutoSpacing?.Value == true;
+        var afterAuto = spacing.AfterAutoSpacing?.Value == true;
+
+        if (beforeAuto)
+        {
+            css.Append("--w-before-auto:1;");
+            css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(AutoSpacingTwips)));
+        }
+        else if (spacing.BeforeLines?.Value is { } beforeLines)
+        {
+            css.Append(string.Format(inv, "margin-top:{0:0.##}pt;",
+                OoxmlUnits.TwipsToPoints(beforeLines / 100.0 * _lineUnitTwips)));
+            css.Append(string.Format(inv, "--w-before-lines:{0};", beforeLines));
+        }
+        else if (spacing.Before?.Value != null && int.TryParse(spacing.Before.Value, out var beforeVal))
+        {
             css.Append(string.Format(inv, "margin-top:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(beforeVal)));
-        if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
-            css.Append(string.Format(inv, "padding-bottom:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(afterVal)));
+        }
+
+        if (afterAuto)
+        {
+            css.Append("--w-after-auto:1;");
+            css.Append(string.Format(inv, "{0}:{1:0.##}pt;", AfterCssProperty, OoxmlUnits.TwipsToPoints(AutoSpacingTwips)));
+        }
+        else if (spacing.AfterLines?.Value is { } afterLines)
+        {
+            css.Append(string.Format(inv, "{0}:{1:0.##}pt;", AfterCssProperty,
+                OoxmlUnits.TwipsToPoints(afterLines / 100.0 * _lineUnitTwips)));
+            css.Append(string.Format(inv, "--w-after-lines:{0};", afterLines));
+        }
+        else if (spacing.After?.Value != null && int.TryParse(spacing.After.Value, out var afterVal))
+        {
+            css.Append(string.Format(inv, "{0}:{1:0.##}pt;", AfterCssProperty, OoxmlUnits.TwipsToPoints(afterVal)));
+        }
+
         if (spacing.Line?.Value != null && int.TryParse(spacing.Line.Value, out var lineVal))
         {
             var lineRule = spacing.LineRule?.Value;
             if (lineRule == LineSpacingRuleValues.AtLeast)
             {
-                // PG-10, same semantics as the main paragraph path: "at least" is a MINIMUM —
-                // a bare pt value rendered like exact and squeezed lines below the font's
-                // single spacing in table cells.
+                // PG-10: atLeast = „CO NAJMNIEJ" — linia rośnie, gdy treść wyższa (Word nie
+                // przycina). Renderowane jak exact ściskało linie poniżej pojedynczego odstępu
+                // fontu. CSS max(pt, single-em) = dokładna semantyka; --w-line-single żyje na
+                // .page (PG-09), em rozwiązuje się fontem akapitu.
                 css.Append(string.Format(inv,
                     "line-height:max({0:0.##}pt, var(--w-line-single, 1.2em));",
                     OoxmlUnits.TwipsToPoints(lineVal)));
@@ -8496,14 +9052,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
             else if (lineRule == LineSpacingRuleValues.Exact)
             {
                 css.Append(string.Format(inv, "line-height:{0:0.##}pt;", OoxmlUnits.TwipsToPoints(lineVal)));
+                css.Append("--w-line-rule:exact;"); // kotwica tuszu przy dole slotu (ADR-0108 r.4)
             }
             else
             {
-                // Auto — kalibracja jak w ConvertParagraphPropertiesToCss (PG-09).
-                css.Append(WordLineSpacing.AutoCss(lineVal, _defaultFontFamily));
+                // Auto (domyślne gdy brak w:lineRule) — mnożnik pojedynczego odstępu w 240-tych;
+                // emisja skalibrowana metrykami fontu + marker (PG-09).
+                css.Append(WordLineSpacing.AutoCss(lineVal, lineFontFamily));
             }
         }
-        return css.ToString();
     }
 
     /// <summary>
@@ -8810,13 +9367,24 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
         // siatka istnieje wyłącznie w edytorze, w wyeksportowanym pliku linii nie ma.
         var borderlessClass = HasNoVisibleBorders(cellStyle) ? " class=\"docx-borderless-cell\"" : "";
 
-        html.Append($"<td{colspan}{rowspan}{borderlessClass} style=\"{cellStyle}\">");
+        // Markery ŹRÓDŁOWEJ semantyki komórki (ADR-0108 r.7) — CSS niżej to render (px):
+        // tcW (preferred width, typ+wartość), tcMar (twips, oryginalne nazwy stron), hideMark, tcFitText.
+        var cellSourceAttrs = BuildCellSourceAttrs(cellProps);
+        html.Append($"<td{colspan}{rowspan}{borderlessClass}{cellSourceAttrs} style=\"{cellStyle}\">");
 
         // Iteruj wszystkie dzieci komórki, by obsłużyć też SdtBlock i Table osadzone bezpośrednio.
         // Akapity LISTOWE grupujemy w ol/ul jak w body — bez tego lista w komórce renderowała
         // się jako gołe akapity (bez numeru) i TRACIŁA numerację przy pierwszym zapisie (R-30).
         var innerElements = cell.Elements().Cast<OpenXmlElement>().ToList();
         var innerIndex = 0;
+        // Tabela zagnieżdżona mieści się we WNĘTRZU komórki (Word: szerokość komórki minus
+        // tcMar) — dotąd clamp brał szerokość szpalty i nested o siatce = szerokości komórki
+        // wystawał poza jej prawą krawędź (TVAL06, ADR-0108 r.8).
+        var prevAvailTw = _availableContentWidthTwips;
+        if (innerElements.Any(e => e is Table) && CellInnerWidthTwips(table, cellProps, ctx, gridColStart, gridSpan) is { } innerTw && innerTw > 0)
+            _availableContentWidthTwips = innerTw;
+        try
+        {
         while (innerIndex < innerElements.Count)
         {
             var inner = innerElements[innerIndex];
@@ -8834,12 +9402,15 @@ public class DocxToHtmlConverter : IDocxToHtmlConverter
                 case Table nestedTable:
                     html.Append(ConvertTableToHtml(nestedTable, document, sourcePart));
                     break;
+                // (clamp szerokości zagnieżdżonej tabeli: _availableContentWidthTwips ustawione wyżej)
                 case SdtBlock sdt:
                     html.Append(ConvertSdtBlockToHtml(sdt, document));
                     break;
             }
             innerIndex++;
         }
+        }
+        finally { _availableContentWidthTwips = prevAvailTw; }
 
         html.Append("</td>");
     }

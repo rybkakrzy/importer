@@ -486,7 +486,7 @@ public class Doc2ImportFidelityTests
         var html = _reader.Convert(ms).Html;
 
         html.Should().Contain("margin-top:12pt;");     // 240 tw = 12 pt (odstęp PRZED)
-        html.Should().Contain("padding-bottom:6pt;");  // 120 tw = 6 pt (odstęp PO, ADR-0053)
+        html.Should().Contain("margin-bottom:6pt;");   // 120 tw = 6 pt (odstęp PO, ADR-0107: max = kolaps CSS)
         html.Should().Contain("line-height:1.8;");     // 360/240 × 1.2 (kalibracja PG-09, font nieznany)
         html.Should().Contain("--w-line-tw:360;");     // marker round-trip oryginału
         html.Should().Contain("<br/>");                // ręczne złamanie wiersza

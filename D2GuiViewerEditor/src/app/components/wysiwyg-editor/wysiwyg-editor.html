@@ -43,6 +43,7 @@
               #pageEditor
               class="editor-content"
               [class.show-formatting-marks]="showFormattingMarks()"
+              [class.para-spacing-sum]="documentParagraphSpacingSum()"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="false"
               [attr.data-page-index]="$index"
@@ -73,6 +74,7 @@
               #pageEditor
               class="editor-content"
               [class.show-formatting-marks]="showFormattingMarks()"
+              [class.para-spacing-sum]="documentParagraphSpacingSum()"
               [attr.contenteditable]="readOnly ? 'false' : 'true'"
               spellcheck="false"
               [attr.data-page-index]="$index"

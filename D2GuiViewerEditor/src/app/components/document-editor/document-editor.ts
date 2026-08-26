@@ -70,6 +70,12 @@ import {
   applyExactLineSpacing,
   readWordLineMultiple,
 } from '../../core/utils/word-line-spacing.util';
+import {
+  readParagraphSpaceAfterPx,
+  readParagraphSpaceBeforePx,
+  setParagraphSpaceAfter,
+  setParagraphSpaceBefore,
+} from '../../core/utils/paragraph-spacing.util';
 
 /**
  * Jeden komunikat dla dokumentu oznaczonego jako tylko do odczytu w pliku źródłowym
@@ -1066,12 +1072,56 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         return;
       }
 
-      // Wczytanie przez /open (normalizer): obsługa DOCX, DOCX z hasłem (prompt) oraz detekcja .doc.
-      // Treść trafia bezpośrednio do edytora (HTML).
-      this.loadDocument(file);
+      // DOCX/.doc: NOWY dokument w bazie (v1 = wgrany plik, v2 = kopia robocza) i nawigacja
+      // na nowe masterId/versionId — jak na stronie startowej. Dotąd treść była wczytywana do
+      // BIEŻĄCEGO widoku bez zmiany adresu: masterId/versionId zostawały ze STAREGO dokumentu,
+      // a autosave nadpisywał jego v2 treścią nowego pliku („kopia robocza ≠ plik bazowy").
+      // Hasło/detekcja .doc: loadFromStorage → _convertAndLoad (dialog hasła w tej ścieżce).
+      void this.openDocxAsNewDocument(file);
     };
 
     input.click();
+  }
+
+  /**
+   * DOCX/.doc z „Plik → Otwórz": upload do bazy (v1, oryginał niezmienny) + wersja edytowalna
+   * (v2) + nawigacja do edytora z NOWYMI identyfikatorami. Ten sam kontrakt co `dashboard`
+   * (ręczne wczytanie = zamiar edycji). Niezapisane zmiany bieżącego dokumentu wymagają
+   * potwierdzenia — po nawigacji stary dokument zostaje w bazie w stanie sprzed otwarcia.
+   */
+  private async openDocxAsNewDocument(file: File): Promise<void> {
+    if (this.editorState()?.isModified
+      && !confirm('Masz niezapisane zmiany. Czy na pewno chcesz otworzyć inny dokument?')) {
+      return;
+    }
+    this.isLoading.set(true);
+    this.errorMessage.set(null);
+    try {
+      const base64 = await this.documentStorageService.fileToBase64(file);
+      const isDoc = file.name.toLowerCase().endsWith('.doc');
+      const mimeType = isDoc
+        ? 'application/msword'
+        : (file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      this.documentStorageService.uploadDocument({ name: file.name, mimeType, content: base64 }).pipe(
+        switchMap(result =>
+          this.documentStorageService.saveDocumentVersion(result.masterId, { content: base64 }).pipe(
+            map(saved => ({ masterId: result.masterId, versionId: saved.versionId }))
+          )
+        )
+      ).subscribe({
+        next: ({ masterId, versionId }) => {
+          this.documentNavigation.navigateToEditableDocument(masterId, versionId);
+        },
+        error: (err) => {
+          this.isLoading.set(false);
+          this.showError(documentDefectMessage(err)
+            ?? 'Błąd podczas wczytywania dokumentu. Spróbuj ponownie.');
+        },
+      });
+    } catch {
+      this.isLoading.set(false);
+      this.showError('Błąd podczas odczytu pliku.');
+    }
   }
 
   /**
@@ -1110,14 +1160,6 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
       reader.onload = () => resolve((reader.result as string).split(',')[1]);
       reader.onerror = reject;
     });
-  }
-
-  /** Ładuje dokument z pliku z dysku ("Plik → Otwórz"). */
-  private loadDocument(file: File, password?: string): void {
-    // Keep the untouched original so "Pobierz oryginał dokumentu" can hand it back verbatim.
-    this.diskOriginalFile = file;
-    this.loadedFromDisk.set(true);
-    this._convertAndLoad(file, file.name, password, true);
   }
 
   /**
@@ -1599,8 +1641,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Kopiuje formatowanie z bieżącego zaznaczenia
    */
   onCopyFormat(): void {
-    if (this.editor) {
-      this.copiedFormat = this.editor.getCurrentFormatting();
+    if (!this.editor) return;
+    this.copiedFormat = this.editor.getCurrentFormatting();
+    // Klik w malarza bez zaznaczenia nie ma czego skopiować — nie zostawiaj uzbrojonego
+    // przycisku, który potem „nic nie robi".
+    if (!this.copiedFormat) {
+      this.toolbar?.deactivateFormatPainter();
+      this.showError('Najpierw zaznacz tekst, z którego chcesz skopiować formatowanie.');
     }
   }
 
@@ -1610,6 +1657,66 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   onPasteFormat(): void {
     if (this.editor && this.copiedFormat) {
       this.editor.applyFormatting(this.copiedFormat);
+    }
+  }
+
+  /** Powierzchnie edytowalne, na których malarz formatów ma działać. */
+  private static readonly EDITABLE_SURFACES =
+    '.editor-content, .page-overflow-content, .header-editor-content, .footer-editor-content';
+
+  /**
+   * Domknięcie malarza formatów: uzbrojony pędzel czekał dotąd na wyzwalacz, którego NIE BYŁO
+   * — `EditorToolbarComponent.applyFormatPainter()` nie miał w aplikacji ani jednego wywołania,
+   * więc `pasteFormat` nigdy nie leciało i po zaznaczeniu celu nic się nie działo.
+   * Zastosowanie odpalamy na PUSZCZENIU przycisku myszy (zaznaczenie jest już kompletne);
+   * `selectionchange` nie nadaje się — leci przy każdym drgnięciu w trakcie przeciągania.
+   */
+  // UWAGA: BEZ własnego @HostListener('document:mouseup'). Metadane `host` są mapą po nazwie
+  // zdarzenia, więc drugi dekorator na to samo zdarzenie nadpisuje pierwszy — malarz cicho
+  // nie działał, bo wygrywał `onCellMouseUp`. Wejściem dla document:mouseup jest wyłącznie
+  // `onCellMouseUp`, które deleguje tutaj (sonda CDP: cdp-painter-probe).
+  onFormatPainterMouseUp(event: MouseEvent): void {
+    if (!this.toolbar?.formatPainterActive() || !this.copiedFormat) return;
+    if (this.editingDisabled()) return;
+
+    const target = event.target as HTMLElement | null;
+    // Puszczenie na pasku narzędzi to klik uzbrajający (albo inny przycisk) — nie cel malowania.
+    if (target?.closest('d2-editor-toolbar')) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+
+    // O tym, czy malujemy, decyduje POŁOŻENIE ZAZNACZENIA, a nie element pod kursorem w chwili
+    // puszczenia. Przy zaznaczaniu przeciągnięciem mysz bardzo często ląduje na marginesie strony
+    // albo na `.page` poza paskiem treści — warunek oparty na `event.target` odrzucał wtedy
+    // poprawne zaznaczenie i pędzel „nic nie robił".
+    if (!this.selectionInsideEditableSurface(selection)) return;
+
+    this.toolbar.applyFormatPainter();
+  }
+
+  /**
+   * Czy zaznaczenie zaczyna się w powierzchni edytowalnej (treść strony albo pasmo).
+   * Świadomie NIE wymagamy, żeby oba końce siedziały w TEJ SAMEJ powierzchni: przy paginacji
+   * każda strona ma własny `.editor-content`, więc zaznaczenie przeciągnięte przez granicę
+   * stron ma końce w różnych kontenerach — warunek „start === koniec" odrzucałby je i pędzel
+   * znowu „nic by nie robił".
+   */
+  private selectionInsideEditableSurface(selection: Selection): boolean {
+    const range = selection.getRangeAt(0);
+    const surfaceOf = (node: Node | null): Element | null => {
+      const el = node?.nodeType === Node.ELEMENT_NODE
+        ? (node as Element)
+        : node?.parentElement ?? null;
+      return el?.closest(DocumentEditorComponent.EDITABLE_SURFACES) ?? null;
+    };
+    return !!surfaceOf(range.startContainer) || !!surfaceOf(range.endContainer);
+  }
+
+  /** Esc anuluje uzbrojony malarz formatów — jak w Wordzie. */
+  private cancelFormatPainter(): void {
+    if (this.toolbar?.formatPainterActive()) {
+      this.toolbar.deactivateFormatPainter();
     }
   }
 
@@ -1791,6 +1898,13 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
   onEscapeKeydown(event: KeyboardEvent): void {
     if (event.defaultPrevented) return;
     if (this.isAnyDialogOpen() || this.showContextMenu()) return;
+
+    // Uzbrojony malarz formatów gaśnie pierwszy — jak w Wordzie, gdzie Esc odkłada pędzel.
+    if (this.toolbar?.formatPainterActive()) {
+      event.preventDefault();
+      this.cancelFormatPainter();
+      return;
+    }
 
     // Header/footer edit mode takes precedence over side panels — it's the most
     // recently entered context and the spec lists ESC as a way to leave it.
@@ -2073,6 +2187,10 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
 
   @HostListener('document:mouseup', ['$event'])
   onCellMouseUp(event: MouseEvent): void {
+    // Malarz formatów PRZED logiką zaznaczania komórek — ta czyści selekcję tekstową,
+    // a pędzel potrzebuje jej jeszcze żywej.
+    this.onFormatPainterMouseUp(event);
+
     if (this.isCellSelecting) {
       this.isCellSelecting = false;
       // Wyczyść selekcję tekstową przeglądarki - zostawiamy custom cell selection
@@ -2862,35 +2980,36 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
    * Dodaj odstęp przed akapitem
    */
   addSpaceBefore(): void {
-    this.setBlockSpacing('marginTop', '12pt');
+    this.setBlockSpacing('before', '12pt');
   }
 
   /**
    * Usuń odstęp przed akapitem
    */
   removeSpaceBefore(): void {
-    this.setBlockSpacing('marginTop', '0');
+    this.setBlockSpacing('before', '0');
   }
 
   /**
    * Dodaj odstęp po akapicie
    */
   addSpaceAfter(): void {
-    this.setBlockSpacing('paddingBottom', '12pt');
+    this.setBlockSpacing('after', '12pt');
   }
 
   /**
    * Usuń odstęp po akapicie
    */
   removeSpaceAfter(): void {
-    this.setBlockSpacing('paddingBottom', '0');
+    this.setBlockSpacing('after', '0');
   }
 
   /**
-   * Ustawia odstęp bloku. Odstęp PO akapicie = padding-bottom (ADR-0053: sumuje się
-   * z margin-top następnego jak w Wordzie; marginesy CSS kolapsują do max).
+   * Ustawia odstęp bloku. Nośnik odstępu „po" zależy od modelu dokumentu (ADR-0107:
+   * margin-bottom = max Worda przez kolaps marginesów; padding-bottom tylko dla dokumentów
+   * z flagą zgodności doNotUseHTMLParagraphAutoSpacing) — patrz paragraph-spacing.util.
    */
-  private setBlockSpacing(property: 'marginTop' | 'paddingBottom', value: string): void {
+  private setBlockSpacing(side: 'before' | 'after', value: string): void {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0) {
       const range = selection.getRangeAt(0);
@@ -2902,12 +3021,8 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         block = block.parentNode!;
       }
       if (block) {
-        (block as HTMLElement).style[property] = value;
-        // Odstęp „po" mógł dotąd siedzieć w margin-bottom (treść sprzed ADR-0053,
-        // akapity z tłem) — czyścimy, żeby się nie dublował z padding-bottom.
-        if (property === 'paddingBottom') {
-          (block as HTMLElement).style.marginBottom = '';
-        }
+        if (side === 'before') setParagraphSpaceBefore(block as HTMLElement, value);
+        else setParagraphSpaceAfter(block as HTMLElement, value);
       }
     }
     this.closeAllMenus();
@@ -4148,14 +4263,14 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         this.paragraphData.specialIndent = 'none';
       }
 
-      // Odstępy (px -> pt, 1pt ≈ 1.333px). Odstęp „po" = padding-bottom (ADR-0053:
-      // sumuje się z margin-top następnego jak w Wordzie); margin-bottom doliczamy
-      // dla akapitów z tłem/obramowaniem i treści sprzed zmiany (jedno z dwóch = 0).
+      // Odstępy (px -> pt). Wartości ZADEKLAROWANE inline mają pierwszeństwo nad kaskadą
+      // (jak dialog Worda: pokazuje 6 pt także wtedy, gdy contextualSpacing znosi je
+      // wizualnie); „po" = suma obu nośników — margin-bottom (model max, ADR-0107) albo
+      // padding-bottom (model sumy z flagą zgodności), jeden z nich jest zawsze 0.
       // Dokładna relacja CSS: 1pt = 96/72 px (drift gap-analysis pkt 5 — 1.333 gubił ułamki).
       const pxToPt = (px: number) => Math.round((px * 72) / 96);
-      this.paragraphData.spaceBefore = pxToPt(parseFloat(style.marginTop) || 0);
-      this.paragraphData.spaceAfter = pxToPt(
-        (parseFloat(style.marginBottom) || 0) + (parseFloat(style.paddingBottom) || 0));
+      this.paragraphData.spaceBefore = pxToPt(readParagraphSpaceBeforePx(el));
+      this.paragraphData.spaceAfter = pxToPt(readParagraphSpaceAfterPx(el));
 
       // Interlinia — mnożnik Worda z markera --w-line-tw (własnego lub odziedziczonego
       // z domyślnych dokumentu), nie ze skalibrowanej wartości renderowej (PG-09);
@@ -4234,12 +4349,12 @@ export class DocumentEditorComponent implements OnInit, OnDestroy {
         el.style.textIndent = '0';
       }
 
-      // Odstępy — „po" idzie w padding-bottom (ADR-0053), ewentualny stary
-      // margin-bottom czyścimy, żeby wartości się nie sumowały podwójnie.
+      // Odstępy — nośnik „po" zależny od modelu dokumentu (ADR-0107: margin-bottom = max
+      // Worda; padding-bottom tylko przy fladze zgodności), drugi nośnik czyszczony;
+      // ręczna wartość w pt zdejmuje markery jednostek liniowych (--w-*-lines).
       const ptToPx = (pt: number) => (pt * 96) / 72;
-      el.style.marginTop = ptToPx(this.paragraphData.spaceBefore) + 'px';
-      el.style.paddingBottom = ptToPx(this.paragraphData.spaceAfter) + 'px';
-      el.style.marginBottom = '';
+      setParagraphSpaceBefore(el, ptToPx(this.paragraphData.spaceBefore) + 'px');
+      setParagraphSpaceAfter(el, ptToPx(this.paragraphData.spaceAfter) + 'px');
 
       // Interlinia — mnożniki w semantyce Worda (kalibracja + marker, PG-09);
       // atLeast dostaje marker reguły, bez którego writer zapisywał exact

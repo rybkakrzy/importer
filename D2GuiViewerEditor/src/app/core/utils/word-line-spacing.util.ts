@@ -64,11 +64,10 @@ export function applyExactLineSpacing(el: HTMLElement, points: number, atLeast: 
     ? `max(${points}pt, var(--w-line-single, 1.2em))`
     : `${points}pt`;
   el.style.removeProperty('--w-line-tw');
-  if (atLeast) {
-    el.style.setProperty('--w-line-rule', 'atLeast');
-  } else {
-    el.style.removeProperty('--w-line-rule');
-  }
+  // Marker reguły: atLeast — writer odtwarza w:lineRule=atLeast; exact — SCSS kotwiczy tusz
+  // przy DOLE slotu (ADR-0108 r.4: dla exact/atLeast Word kładzie nadmiar NAD linią, dla auto
+  // POD nią). Writer ignoruje wartość `exact` (pt bez markera atLeast = exact).
+  el.style.setProperty('--w-line-rule', atLeast ? 'atLeast' : 'exact');
 }
 
 /**

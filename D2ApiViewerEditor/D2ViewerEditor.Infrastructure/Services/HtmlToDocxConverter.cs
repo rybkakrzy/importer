@@ -115,7 +115,12 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         public string? BreakType { get; set; }
         /// <summary>Układ kolumn sekcji (w:cols). Null = jednokolumnowa (ADR-0039).</summary>
         public ColumnLayout? Columns { get; set; }
+        /// <summary>Siatka dokumentu (w:docGrid) — round-trip z data-doc-grid-* (ADR-0107). Null = brak.</summary>
+        public DocGridSettings? DocGrid { get; set; }
     }
+
+    /// <summary>w:docGrid sekcji surowo (type/linePitch/charSpace) — tylko round-trip.</summary>
+    private sealed record DocGridSettings(string Type, int? LinePitchTwips, int? CharSpace);
 
     /// <summary>
     /// Geometria AKTUALNIE otwartej sekcji podczas konwersji body. Start = argumenty
@@ -150,6 +155,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     private string? _docDefaultSpacingAfterTw;
     private string? _docDefaultSpacingLine;
     private string? _docDefaultSpacingLineRule;
+    // ADR-0107: model SUMY odstępów akapitów (data-para-spacing-sum na kontenerze) →
+    // w:doNotUseHTMLParagraphAutoSpacing w settings.xml; bez niego Word bierze max.
+    private bool _paragraphSpacingSum;
+    // Siatka dokumentu sekcji bazowej (data-doc-grid-* na kontenerze .document-content).
+    private DocGridSettings? _docDefaultDocGrid;
     // Układ kolumn sekcji bazowej (0) z data-col-* kontenera .document-content (ADR-0039).
     private ColumnLayout? _docDefaultColumns;
     // Licznik pól złożonych otwartych markerem docx-fld-marker (TOC/PAGEREF) — End emitowany
@@ -199,6 +209,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             _docDefaultSpacingBeforeTw = _docDefaultSpacingAfterTw = null;
             _docDefaultSpacingLine = _docDefaultSpacingLineRule = null;
             _docDefaultColumns = null;
+            _paragraphSpacingSum = false;
+            _docDefaultDocGrid = null;
             _openFieldMarkerCount = 0;
             _nextBookmarkId = 1;
 
@@ -217,6 +229,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // wielosekcyjnym pierwszy marker zamknie tę sekcję z jej kolumnami; sekcje ≥1 niosą
             // własne kolumny w markerach (ADR-0039).
             _currentSection.Columns = _docDefaultColumns;
+            _currentSection.DocGrid = _docDefaultDocGrid;
 
             // Dodaj style dokumentu
             AddDocumentStyles(document);
@@ -266,10 +279,48 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // (plik musi wyglądać jak ekran; bez tego Word wracał do swoich domyślnych).
             ApplyNoteNumberFormats(document, footnoteNumberFormat, endnoteNumberFormat);
 
+            // ADR-0107: dokument w modelu SUMY odstępów musi wrócić do Worda z flagą zgodności,
+            // inaczej po zapisie Word przeszedłby na max i odstępy między akapitami by zmalały.
+            ApplyParagraphSpacingCompat(document);
+
             document.Save();
         }
 
         return memoryStream.ToArray();
+    }
+
+    /// <summary>
+    /// w:compat/w:doNotUseHTMLParagraphAutoSpacing dla dokumentów, których kontener niósł
+    /// data-para-spacing-sum (reader: flaga w oryginale). CT_Settings: w:compat stoi ZA
+    /// footnotePr/endnotePr — dopinamy na końcu; PreserveNoteProperties wstawia swoje
+    /// elementy PRZED w:compat (AppendBeforeCompat).
+    /// </summary>
+    private void ApplyParagraphSpacingCompat(WordprocessingDocument document)
+    {
+        if (!_paragraphSpacingSum) return;
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return;
+        var settingsPart = mainPart.DocumentSettingsPart ?? mainPart.AddNewPart<DocumentSettingsPart>();
+        settingsPart.Settings ??= new Settings();
+        var settings = settingsPart.Settings;
+        var compat = settings.GetFirstChild<Compatibility>();
+        if (compat == null)
+        {
+            compat = new Compatibility();
+            settings.AppendChild(compat);
+        }
+        if (!compat.Elements<DoNotUseHTMLParagraphAutoSpacing>().Any())
+            compat.PrependChild(new DoNotUseHTMLParagraphAutoSpacing());
+        settings.Save();
+    }
+
+    /// <summary>Dopina element ustawień na końcu, ale PRZED w:compat (kolejność CT_Settings).</summary>
+    private static void AppendBeforeCompat(Settings settings, OpenXmlElement element)
+    {
+        if (settings.GetFirstChild<Compatibility>() is { } compat)
+            settings.InsertBefore(element, compat);
+        else
+            settings.AppendChild(element);
     }
 
     public byte[] ConvertPreservingPackage(string html, Stream? originalPackage,
@@ -441,14 +492,14 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             else if (settings.GetFirstChild<EndnoteDocumentWideProperties>() is { } existingEndnotePr)
                 settings.InsertBefore(footnotePr, existingEndnotePr);
             else
-                settings.AppendChild(footnotePr);
+                AppendBeforeCompat(settings, footnotePr);
         }
         if (endnotePr != null)
         {
             if (settings.GetFirstChild<EndnoteDocumentWideProperties>() is { } generatedEndnotePr)
                 MergeMissingNoteProperties(generatedEndnotePr, endnotePr);
             else
-                settings.AppendChild(endnotePr);
+                AppendBeforeCompat(settings, endnotePr);
         }
         settings.Save();
     }
@@ -1026,6 +1077,48 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         _docDefaultColumns = ParseColumnDataAttributes(container);
+        _paragraphSpacingSum = container.GetAttributeValue("data-para-spacing-sum", "") == "1";
+        _docDefaultDocGrid = ParseDocGridDataAttributes(container);
+    }
+
+    /// <summary>
+    /// Odtwarza w:docGrid z data-doc-grid-* (kontener .document-content albo marker sekcji).
+    /// Null, gdy brak atrybutów (sekcja bez siatki) — ADR-0107, wyłącznie round-trip.
+    /// </summary>
+    private static DocGridSettings? ParseDocGridDataAttributes(HtmlNode node)
+    {
+        var type = node.GetAttributeValue("data-doc-grid-type", "");
+        var pitchRaw = node.GetAttributeValue("data-doc-grid-pitch-tw", "");
+        var charsRaw = node.GetAttributeValue("data-doc-grid-chars", "");
+        if (string.IsNullOrEmpty(type) && string.IsNullOrEmpty(pitchRaw) && string.IsNullOrEmpty(charsRaw))
+            return null;
+        return new DocGridSettings(
+            string.IsNullOrEmpty(type) ? "default" : type,
+            int.TryParse(pitchRaw, out var pitch) ? pitch : null,
+            int.TryParse(charsRaw, out var chars) ? chars : null);
+    }
+
+    /// <summary>
+    /// Dopisuje w:docGrid do sectPr. CT_SectPr: docGrid stoi ZA titlePg/textDirection/bidi
+    /// (dlatego nie AppendBeforeTitlePage), przed printerSettings.
+    /// </summary>
+    private static void AppendDocGrid(SectionProperties sectionProps, DocGridSettings? grid)
+    {
+        if (grid == null || sectionProps.Elements<DocGrid>().Any()) return;
+        var docGrid = new DocGrid();
+        docGrid.Type = grid.Type switch
+        {
+            "lines" => DocGridValues.Lines,
+            "linesAndChars" => DocGridValues.LinesAndChars,
+            "snapToChars" => DocGridValues.SnapToChars,
+            _ => null
+        };
+        if (grid.LinePitchTwips is { } pitch) docGrid.LinePitch = pitch;
+        if (grid.CharSpace is { } chars) docGrid.CharacterSpace = chars;
+        if (sectionProps.GetFirstChild<PrinterSettingsReference>() is { } printer)
+            sectionProps.InsertBefore(docGrid, printer);
+        else
+            sectionProps.AppendChild(docGrid);
     }
 
     /// <summary>
@@ -1496,9 +1589,37 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // jest ich akapitem-kotwicą (run z drawingiem na początku treści akapitu).
         AttachPendingTextBoxes(paragraph);
 
-        AppendInlineContent(paragraph, node);
+        // PUSTY akapit Worda (<w:p/> bez runów) reader renderuje jako <p>&nbsp;</p> (pełny wiersz),
+        // a edytor po Enter daje <p><br></p>. Oba wracają jako pusty w:p — bez runu z U+00A0 /
+        // w:br: NBSP w treści zmieniał semantykę tekstu (18 komórek fixture'a table-text-layout),
+        // a w:br w pustym akapicie dawał w Wordzie fantomową drugą linię (ADR-0108 r.7).
+        if (!IsEmptyParagraphMarkup(node))
+            AppendInlineContent(paragraph, node);
 
         return paragraph;
+    }
+
+    /// <summary>Akapit, którego jedyną treścią jest pojedynczy NBSP albo pojedynczy &lt;br&gt;.</summary>
+    private static bool IsEmptyParagraphMarkup(HtmlNode node)
+    {
+        var elements = node.Descendants().Where(d => d.NodeType == HtmlNodeType.Element).ToList();
+        var text = System.Net.WebUtility.HtmlDecode(node.InnerText);
+
+        // <p><br></p> (Enter w edytorze): jedyny element to <br>, zero tekstu.
+        if (elements.Count == 1 && elements[0].Name.Equals("br", StringComparison.OrdinalIgnoreCase))
+            return string.IsNullOrEmpty(text);
+
+        // Dozwolone tylko „przezroczyste" spany bez markerów — reader dla pustej komórki daje
+        // <p><span style=""></span>&nbsp;</p> (pusty span z rPr + NBSP jako rodzeństwo).
+        // Każdy inny element (obraz, pole, grafika XML, tab, marker) = akapit ma treść.
+        foreach (var el in elements)
+        {
+            if (!el.Name.Equals("span", StringComparison.OrdinalIgnoreCase)) return false;
+            if (el.Attributes.Any(a => a.Name.StartsWith("data-", StringComparison.OrdinalIgnoreCase)
+                                       || a.Name.Equals("class", StringComparison.OrdinalIgnoreCase)))
+                return false;
+        }
+        return text == " ";
     }
 
     /// <summary>
@@ -2407,6 +2528,57 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         if (!string.IsNullOrEmpty(tblStyleId))
             tableProps.Append(new TableStyle { Val = System.Net.WebUtility.HtmlDecode(tblStyleId) });
 
+        // Tabela pływająca (w:tblpPr) — ADR-0108 r.6: reader niesie WSZYSTKIE atrybuty w data-tblp-*
+        // (CSS float jest tylko renderowe). Dotąd tblpPr ginął przy każdym zapisie — tabela
+        // pływająca wracała do przepływu. Kolejność CT_TblPr: tblStyle → tblpPr → … → tblW.
+        if (node.GetAttributeValue("data-tblp", "") == "1")
+        {
+            var tblp = new TablePositionProperties();
+            string? Attr(string n) { var v = node.GetAttributeValue("data-tblp-" + n, ""); return string.IsNullOrEmpty(v) ? null : v; }
+            short? S(string n) => short.TryParse(Attr(n), out var s) ? s : null; // dystanse: ST_TwipsMeasure w Int16Value
+            int? I(string n) => int.TryParse(Attr(n), out var i) ? i : null;
+            if (S("left-tw") is { } l) tblp.LeftFromText = l;
+            if (S("right-tw") is { } r) tblp.RightFromText = r;
+            if (S("top-tw") is { } t) tblp.TopFromText = t;
+            if (S("bottom-tw") is { } b) tblp.BottomFromText = b;
+            tblp.HorizontalAnchor = Attr("horz-anchor") switch
+            {
+                "page" => HorizontalAnchorValues.Page,
+                "margin" => HorizontalAnchorValues.Margin,
+                "text" => HorizontalAnchorValues.Text,
+                _ => null
+            };
+            tblp.VerticalAnchor = Attr("vert-anchor") switch
+            {
+                "page" => VerticalAnchorValues.Page,
+                "margin" => VerticalAnchorValues.Margin,
+                "text" => VerticalAnchorValues.Text,
+                _ => null
+            };
+            tblp.TablePositionXAlignment = Attr("xspec") switch
+            {
+                "left" => HorizontalAlignmentValues.Left,
+                "center" => HorizontalAlignmentValues.Center,
+                "right" => HorizontalAlignmentValues.Right,
+                "inside" => HorizontalAlignmentValues.Inside,
+                "outside" => HorizontalAlignmentValues.Outside,
+                _ => null
+            };
+            tblp.TablePositionYAlignment = Attr("yspec") switch
+            {
+                "inline" => VerticalAlignmentValues.Inline,
+                "top" => VerticalAlignmentValues.Top,
+                "center" => VerticalAlignmentValues.Center,
+                "bottom" => VerticalAlignmentValues.Bottom,
+                "inside" => VerticalAlignmentValues.Inside,
+                "outside" => VerticalAlignmentValues.Outside,
+                _ => null
+            };
+            if (I("x-tw") is { } x) tblp.TablePositionX = x;
+            if (I("y-tw") is { } y) tblp.TablePositionY = y;
+            tableProps.Append(tblp);
+        }
+
         // Szerokość (reader emituje też ułamkowe %: 66.66%). Marker data-tbl-w="auto" oznacza,
         // że px w CSS jest tylko renderowe (geometria z tblGrid), a oryginał miał tblW=auto —
         // wtedy nie wolno utrwalić dxa.
@@ -2454,6 +2626,11 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             tableProps.Append(new TableJustification { Val = TableRowAlignmentValues.Right });
         }
+        else if (node.GetAttributeValue("data-tbl-jc", "") == "left")
+        {
+            // Jawne w:jc=left źródła (ADR-0108 r.7) — semantycznie = domyślne, ale zostaje 1:1.
+            tableProps.Append(new TableJustification { Val = TableRowAlignmentValues.Left });
+        }
 
         // Odstęp między komórkami: preferuj dokładne twips z data-*, inaczej border-spacing px.
         var cellSpacingTwAttr = node.GetAttributeValue("data-cell-spacing-tw", "");
@@ -2467,8 +2644,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             if (spacingMatch.Success)
             {
                 var spacingPx = double.Parse(spacingMatch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                // border-spacing = odstęp MIĘDZY komórkami = 2 × w:tblCellSpacing (ADR-0108 r.8).
                 if (spacingPx > 0)
-                    tableProps.Append(new TableCellSpacing { Width = ((int)Math.Round(spacingPx * 15)).ToString(), Type = TableWidthUnitValues.Dxa });
+                    tableProps.Append(new TableCellSpacing { Width = ((int)Math.Round(spacingPx * 15 / 2)).ToString(), Type = TableWidthUnitValues.Dxa });
             }
         }
 
@@ -2499,13 +2677,38 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             );
         }
 
+        // Longhandy border-top/left/bottom/right na <table> (reader przy tblCellSpacing, ADR-0108
+        // r.8): obramowanie ZEWNĘTRZNE tabeli — bez insideH/insideV (te niosą komórki).
+        var longhandBorders = false;
+        if (!borderMatch.Success)
+        {
+            BorderType? Side<T>(string side) where T : BorderType, new()
+            {
+                var m = Regex.Match(tableStyle, @"(?<![a-z-])border-" + side + @":\s*([\d.]+)px\s+(\w+)\s+#?([a-fA-F0-9]{3,6})");
+                if (!m.Success) return null;
+                var st = ParseBorderStyle(m.Groups[2].Value);
+                return new T { Val = st, Size = CssBorderWidthToEighthPoints(m.Groups[1].Value, st), Color = NormalizeColor(m.Groups[3].Value) };
+            }
+            var lt = Side<TopBorder>("top"); var ll = Side<LeftBorder>("left");
+            var lb = Side<BottomBorder>("bottom"); var lr = Side<RightBorder>("right");
+            if (lt != null || ll != null || lb != null || lr != null)
+            {
+                longhandBorders = true;
+                defaultBorders = new TableBorders();
+                if (lt != null) defaultBorders.Append(lt);
+                if (ll != null) defaultBorders.Append(ll);
+                if (lb != null) defaultBorders.Append(lb);
+                if (lr != null) defaultBorders.Append(lr);
+            }
+        }
+
         // Tabela ze stylem Worda (data-tbl-style) i BEZ jawnego CSS-owego obramowania na
         // <table>: NIE emituj tblBorders — bezpośrednie val=none NADPISYWAŁO obramowania
         // stylu (Tabela – Siatka traciła linie w Wordzie), a przy ponownym otwarciu reader
         // znakował tabelę data-no-borders i strata się utrwalała. Jawny brak obramowań
         // oryginału niesie data-no-borders="1" — wtedy val=none jest zamierzone.
         var noBordersMarker = node.GetAttributeValue("data-no-borders", "") == "1";
-        if (borderMatch.Success || noBordersMarker || string.IsNullOrEmpty(tblStyleId))
+        if (borderMatch.Success || longhandBorders || noBordersMarker || string.IsNullOrEmpty(tblStyleId))
             tableProps.Append(defaultBorders);
 
         // Reader emituje table-layout:fixed dla tabel z geometrią kolumn z tblGrid —
@@ -2518,11 +2721,20 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Domyślne marginesy komórek = domyślne Worda (TableNormal): top/bottom=0, left/right=108
         // twips. Wcześniej hardkodowane 40/80 dodawało pionowy margines do każdej komórki (tabele
         // rosły w pionie). Per-komórkowe tcMar z CSS i tak nadpisują tę wartość.
+        // Marker readera data-tbl-cell-mar-tw="top,left,bottom,right" (twips, EFEKTYWNE marginesy
+        // tabeli: direct tblCellMar → styl → default Worda) — ADR-0108 r.7: dotąd każda tabela
+        // dostawała 0/108/108/0, a CM07 (tblCellMar 200) wracał tylko przez per-komórkowe tcMar z px.
+        var cellMarTw = node.GetAttributeValue("data-tbl-cell-mar-tw", "").Split(',');
+        var hasCellMar = cellMarTw.Length == 4 && cellMarTw.All(v => int.TryParse(v, out _));
+        var marTop = hasCellMar ? cellMarTw[0] : "0";
+        var marLeft = hasCellMar ? short.Parse(cellMarTw[1]) : (short)108;
+        var marBottom = hasCellMar ? cellMarTw[2] : "0";
+        var marRight = hasCellMar ? short.Parse(cellMarTw[3]) : (short)108;
         tableProps.Append(new TableCellMarginDefault(
-            new TopMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
-            new TableCellLeftMargin { Width = 108, Type = TableWidthValues.Dxa },
-            new BottomMargin { Width = "0", Type = TableWidthUnitValues.Dxa },
-            new TableCellRightMargin { Width = 108, Type = TableWidthValues.Dxa }
+            new TopMargin { Width = marTop, Type = TableWidthUnitValues.Dxa },
+            new TableCellLeftMargin { Width = marLeft, Type = TableWidthValues.Dxa },
+            new BottomMargin { Width = marBottom, Type = TableWidthUnitValues.Dxa },
+            new TableCellRightMargin { Width = marRight, Type = TableWidthValues.Dxa }
         ));
 
         // w:tblLook (flagi formatowania warunkowego stylu) — round-trip z data-tbl-look.
@@ -2590,7 +2802,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // wierszach — OOXML wymaga tam jawnych komórek kontynuacji (vMerge bez val).
         // Bez nich komórki przesuwały się w lewo i tabela była uszkodzona w Wordzie.
         // activeRowSpans: kolumna gridu → (pozostałe wiersze scalenia, rozpiętość kolumn).
-        var activeRowSpans = new Dictionary<int, (int RemainingRows, int ColSpan)>();
+        var activeRowSpans = new Dictionary<int, (int RemainingRows, int ColSpan, TableCellProperties Origin)>();
         if (rowNodes != null)
         {
             foreach (var rowNode in rowNodes)
@@ -2603,7 +2815,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 {
                     while (activeRowSpans.TryGetValue(gridCursor, out var span))
                     {
-                        row.Append(CreateVerticalMergeContinuationCell(span.ColSpan));
+                        row.Append(CreateVerticalMergeContinuationCell(span.ColSpan, span.Origin));
                         gridCursor += span.ColSpan;
                     }
                 }
@@ -2643,6 +2855,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
 
                 if (rowNode.GetAttributeValue("data-cant-split", "") == "1")
                     rowProps.Append(new CantSplit());
+                else if (rowNode.GetAttributeValue("data-cant-split", "") == "0")
+                    // Jawne wyłączenie (w:val="0", CS08) — bez niego wiersz dziedziczyłby cantSplit ze stylu tabeli.
+                    rowProps.Append(new CantSplit { Val = OnOffOnlyValues.Off });
 
                 var hRule = rowNode.GetAttributeValue("data-row-hrule", "") == "exact"
                     ? HeightRuleValues.Exact
@@ -2700,7 +2915,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                         if (int.TryParse(rowspanAttr, out var rowspan) && rowspan > 1)
                         {
                             cellProps.Append(new VerticalMerge { Val = MergedCellValues.Restart });
-                            activeRowSpans[gridCursor] = (rowspan - 1, colspan);
+                            activeRowSpans[gridCursor] = (rowspan - 1, colspan, cellProps);
                             spansStartedThisRow.Add(gridCursor);
                         }
                         var cellStartColumn = gridCursor;
@@ -2710,10 +2925,19 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                         var cellStyle = cellNode.GetAttributeValue("style", "");
                         ApplyCellStyle(cellProps, cellStyle);
 
+                        // Markery ŹRÓDŁOWEJ semantyki komórki (ADR-0108 r.7): tcW (preferred width ≠
+                        // resolved px), tcMar w twipsach i nazwach stron z pliku (start/end vs left/right),
+                        // hideMark, tcFitText. CSS jest tylko renderem — bez markerów tcW 3437 wracał
+                        // jako 1800/2400 (szerokość kolumny), tcMar 80 tw jako 75 (px), a hideMark
+                        // i tcFitText ginęły.
+                        var hasTcwMarker = ApplyCellSourceMarkers(cellProps, cellNode,
+                            node.GetAttributeValue("data-tbl-cell-mar-tw", "") != "");
+
                         // Gdy wszystkie kolumny siatki pod komórką mają DOKŁADNE twips
                         // (data-w-tw, bez ręcznego resize), tcW = ich suma — spójne z
-                        // w:tblGrid i bez dryfu zaokrągleń px→twips per zapis.
-                        if (cellStartColumn + colspan <= colWidthsTwips.Count)
+                        // w:tblGrid i bez dryfu zaokrągleń px→twips per zapis. Z markerem tcW
+                        // z pliku NIE nadpisujemy (preferowana szerokość to nie suma siatki).
+                        if (!hasTcwMarker && cellStartColumn + colspan <= colWidthsTwips.Count)
                         {
                             var spanned = colWidthsTwips.GetRange(cellStartColumn, colspan);
                             var tcW = cellProps.GetFirstChild<TableCellWidth>();
@@ -2793,9 +3017,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
                 foreach (var col in activeRowSpans.Keys.ToList())
                 {
                     if (spansStartedThisRow.Contains(col)) continue;
-                    var (remaining, span) = activeRowSpans[col];
+                    var (remaining, span, origin) = activeRowSpans[col];
                     if (remaining <= 1) activeRowSpans.Remove(col);
-                    else activeRowSpans[col] = (remaining - 1, span);
+                    else activeRowSpans[col] = (remaining - 1, span, origin);
                 }
 
                 table.Append(row);
@@ -2808,6 +3032,72 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Porządkuje dzieci w:tcPr zgodnie ze schematem OOXML (CT_TcPr). Sort stabilny.
     /// </summary>
+    /// <summary>
+    /// Markery źródłowej semantyki komórki z readera (ADR-0108 r.7):
+    /// <c>data-tcw="w:type"</c> → w:tcW (preferred width, nie px renderu),
+    /// <c>data-tcmar-tw="top=80;start=100;…"</c> → w:tcMar z ORYGINALNYMI nazwami stron,
+    /// <c>data-hide-mark</c> → w:hideMark, <c>data-fit-text</c> → w:tcFitText.
+    /// Bez markera tcMar, gdy tabela niesie <c>data-tbl-cell-mar-tw</c>, komórka dziedziczy
+    /// tblCellMar tabeli — px z CSS nie jest utrwalany jako direct tcMar. Zwraca true, gdy tcW
+    /// pochodzi z markera (wtedy nie nadpisujemy go sumą siatki).
+    /// </summary>
+    private static bool ApplyCellSourceMarkers(TableCellProperties props, HtmlNode cellNode, bool tableHasCellMarMarker)
+    {
+        var hasTcw = false;
+        var tcwMatch = Regex.Match(cellNode.GetAttributeValue("data-tcw", ""), @"^(\d+):(dxa|pct|auto|nil)$");
+        if (tcwMatch.Success)
+        {
+            props.RemoveAllChildren<TableCellWidth>();
+            props.Append(new TableCellWidth
+            {
+                Width = tcwMatch.Groups[1].Value,
+                Type = tcwMatch.Groups[2].Value switch
+                {
+                    "pct" => TableWidthUnitValues.Pct,
+                    "auto" => TableWidthUnitValues.Auto,
+                    "nil" => TableWidthUnitValues.Nil,
+                    _ => TableWidthUnitValues.Dxa
+                }
+            });
+            hasTcw = true;
+        }
+
+        var marAttr = cellNode.GetAttributeValue("data-tcmar-tw", "");
+        if (!string.IsNullOrEmpty(marAttr))
+        {
+            var sides = marAttr.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Split('='))
+                .Where(kv => kv.Length == 2 && int.TryParse(kv[1], out _))
+                .ToDictionary(kv => kv[0], kv => kv[1]);
+            props.RemoveAllChildren<TableCellMargin>();
+            var tcMar = new TableCellMargin();
+            // Kolejność CT_TcMar: top, start, left, bottom, end, right.
+            foreach (var side in new[] { "top", "start", "left", "bottom", "end", "right" })
+            {
+                if (!sides.TryGetValue(side, out var w)) continue;
+                OpenXmlElement el = side switch
+                {
+                    "top" => new TopMargin { Width = w, Type = TableWidthUnitValues.Dxa },
+                    "start" => new StartMargin { Width = w, Type = TableWidthUnitValues.Dxa },
+                    "left" => new LeftMargin { Width = w, Type = TableWidthUnitValues.Dxa },
+                    "bottom" => new BottomMargin { Width = w, Type = TableWidthUnitValues.Dxa },
+                    "end" => new EndMargin { Width = w, Type = TableWidthUnitValues.Dxa },
+                    _ => new RightMargin { Width = w, Type = TableWidthUnitValues.Dxa }
+                };
+                tcMar.Append(el);
+            }
+            if (tcMar.HasChildren) props.Append(tcMar);
+        }
+        else if (tableHasCellMarMarker)
+        {
+            props.RemoveAllChildren<TableCellMargin>();
+        }
+
+        if (cellNode.GetAttributeValue("data-hide-mark", "") == "1") props.Append(new HideMark());
+        if (cellNode.GetAttributeValue("data-fit-text", "") == "1") props.Append(new TableCellFitText());
+        return hasTcw;
+    }
+
     private static void NormalizeTableCellPropertiesOrder(TableCellProperties props)
     {
         if (!props.HasChildren) return;
@@ -2840,12 +3130,17 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// Komórka kontynuacji scalenia pionowego (w:vMerge bez w:val = continue) —
     /// odpowiednik komórki, którą HTML pomija pod komórką z rowspan.
     /// </summary>
-    private static TableCell CreateVerticalMergeContinuationCell(int colSpan)
+    private static TableCell CreateVerticalMergeContinuationCell(int colSpan, TableCellProperties origin)
     {
+        // Word daje komórkom kontynuacji ten sam tcW/tcMar co komórce startowej — bez nich
+        // audyt table-text-layout (ADR-0108 r.7) pokazywał utratę szerokości/marginesów
+        // w vMerge; kolejność CT_TcPr: tcW → gridSpan → vMerge → … → tcMar.
         var props = new TableCellProperties();
+        if (origin.TableCellWidth is { } w) props.Append((TableCellWidth)w.CloneNode(true));
         if (colSpan > 1)
             props.Append(new GridSpan { Val = colSpan });
         props.Append(new VerticalMerge());
+        if (origin.TableCellMargin is { } m) props.Append((TableCellMargin)m.CloneNode(true));
         return new TableCell(props, new Paragraph());
     }
 
@@ -3305,6 +3600,20 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// <summary>
     /// Buduje Drawing dla obrazka, dodaje ImagePart do aktualnej części (body/header/footer).
     /// </summary>
+    /// <summary>Typ MIME z sygnatury bajtów (PNG/JPEG/GIF/BMP/TIFF/EMF/WMF); null = nierozpoznany.</summary>
+    public static string? SniffImageContentType(byte[] b)
+    {
+        if (b.Length < 8) return null;
+        if (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) return "image/png";
+        if (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) return "image/jpeg";
+        if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) return "image/gif";
+        if (b[0] == 0x42 && b[1] == 0x4D) return "image/bmp";
+        if ((b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A && b[3] == 0x00) || (b[0] == 0x4D && b[1] == 0x4D && b[2] == 0x00 && b[3] == 0x2A)) return "image/tiff";
+        if (b[0] == 0x01 && b[1] == 0x00 && b[2] == 0x00 && b[3] == 0x00 && b.Length > 44 && b[40] == 0x20 && b[41] == 0x45 && b[42] == 0x4D && b[43] == 0x46) return "image/x-emf";
+        if (b[0] == 0xD7 && b[1] == 0xCD && b[2] == 0xC6 && b[3] == 0x9A) return "image/x-wmf";
+        return null;
+    }
+
     private Drawing? BuildImageDrawing(byte[] imageBytes, string contentType, HtmlNode node)
     {
         var container = _currentImageContainer ?? (OpenXmlPart?)_mainPart;
@@ -3320,6 +3629,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // Part musi dostać PRAWDZIWY content type danych. Wcześniej wszystko spoza krótkiej listy
         // (TIFF/ICO/WEBP/EMZ…) lądowało jako rzekomy Jpeg — obraz przeżywał pierwszy zapis z błędną
         // deklaracją typu i przestawał się renderować po round-tripie.
+        // ADR-0108 r.11: zadeklarowany MIME bywa kłamstwem (bajty JPEG w części image/png — Word
+        // to toleruje, część konwerterów DOCX→PDF nie dekoduje) — sygnatura bajtów ma pierwszeństwo.
+        contentType = SniffImageContentType(imageBytes) ?? contentType;
         PartTypeInfo? knownType = contentType switch
         {
             "image/png" => ImagePartType.Png,
@@ -4682,6 +4994,18 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             // aktywnego podziału) — val=false nadpisuje pageBreakBefore z definicji STYLU.
             props.Append(new PageBreakBefore { Val = false });
 
+        // „Zachowaj z następnym" / „zachowaj wiersze razem" (ADR-0108 r.3): reader emituje
+        // standardowe `break-after:avoid` / `break-inside:avoid`; `auto` = jawne wyłączenie
+        // nadpisujące styl. Kolejność w pPr porządkuje NormalizeParagraphPropertiesOrder.
+        if (Regex.IsMatch(style, @"(page-break-after|break-after)\s*:\s*avoid", RegexOptions.IgnoreCase))
+            props.Append(new KeepNext());
+        else if (Regex.IsMatch(style, @"(page-break-after|break-after)\s*:\s*auto", RegexOptions.IgnoreCase))
+            props.Append(new KeepNext { Val = false });
+        if (Regex.IsMatch(style, @"(page-break-inside|break-inside)\s*:\s*avoid", RegexOptions.IgnoreCase))
+            props.Append(new KeepLines());
+        else if (Regex.IsMatch(style, @"(page-break-inside|break-inside)\s*:\s*auto", RegexOptions.IgnoreCase))
+            props.Append(new KeepLines { Val = false });
+
         // Text-align
         var alignMatch = Regex.Match(style, @"text-align:\s*(left|center|right|justify)");
         if (alignMatch.Success)
@@ -4802,7 +5126,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         {
             var val = double.Parse(lineHeightMatch.Groups[1].Value.Replace(',', '.'), inv);
             var unit = lineHeightMatch.Groups[2].Value;
-            if (unit == "pt")
+            var gridTwMatch = Regex.Match(style, @"--w-line-tw\s*:\s*(\d+)");
+            if (unit == "pt" && Regex.IsMatch(style, @"--w-line-grid\s*:\s*1") && gridTwMatch.Success)
+            {
+                // Siatka dokumentu (ADR-0108 r.5): reader renderuje interlinię auto jako pt
+                // (N × skok siatki), ale to nadal AUTO — w:line z markera, nie exact z pt.
+                spacing.Line = gridTwMatch.Groups[1].Value;
+                spacing.LineRule = LineSpacingRuleValues.Auto;
+            }
+            else if (unit == "pt")
             {
                 // Dokładna wartość w pt. Reader oznacza regułę atLeast markerem
                 // --w-line-rule:atLeast — bez niego atLeast wracało jako exact,
@@ -4841,15 +5173,39 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             hasSpacing = true;
         }
 
+        // ADR-0107: odstępy w jednostkach linii (1/100 linii) — reader niesie surową liczbę
+        // setnych w markerze, a wartość renderową w pt; Word przy obu atrybutach stosuje
+        // wersję liniową (zmierzone), więc before/after z pt zostaje jako fallback.
+        var beforeLines = Regex.Match(style, @"--w-before-lines\s*:\s*(\d+)");
+        if (beforeLines.Success)
+        {
+            spacing.BeforeLines = int.Parse(beforeLines.Groups[1].Value, inv);
+            hasSpacing = true;
+        }
+        var afterLines = Regex.Match(style, @"--w-after-lines\s*:\s*(\d+)");
+        if (afterLines.Success)
+        {
+            spacing.AfterLines = int.Parse(afterLines.Groups[1].Value, inv);
+            hasSpacing = true;
+        }
+
         if (hasSpacing)
             props.Append(spacing);
 
         // w:contextualSpacing (znosi odstępy między paragrafami tego samego stylu) —
-        // oznaczony w CSS jako --w-contextual-spacing:1
-        if (Regex.IsMatch(style, @"--w-contextual-spacing\s*:\s*1"))
+        // marker --w-contextual-spacing:1; ":0" = jawne wyłączenie w direct pPr, które musi
+        // nadpisać flagę odziedziczoną ze stylu (val=false).
+        var contextual = Regex.Match(style, @"--w-contextual-spacing\s*:\s*([01])");
+        if (contextual.Success)
         {
-            props.Append(new ContextualSpacing());
+            props.Append(contextual.Groups[1].Value == "1"
+                ? new ContextualSpacing()
+                : new ContextualSpacing { Val = false });
         }
+
+        // w:snapToGrid val=false — akapit wyłączony z siatki dokumentu (round-trip, ADR-0107).
+        if (Regex.IsMatch(style, @"--w-snap-to-grid\s*:\s*0"))
+            props.Append(new SnapToGrid { Val = false });
 
         // Kolor tła paragrafu
         var bgColor = ExtractColor(style, @"background(?:-color)?:\s*");
@@ -4887,14 +5243,15 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             ParagraphBorders => 8,
             Shading => 9,
             Tabs => 10,
-            SpacingBetweenLines => 11,
-            Indentation => 12,
-            ContextualSpacing => 13,
-            Justification => 15,
+            SnapToGrid => 11,
+            SpacingBetweenLines => 12,
+            Indentation => 13,
+            ContextualSpacing => 14,
+            Justification => 16,
             OutlineLevel => 18,
             ParagraphMarkRunProperties => 19,
             SectionProperties => 20,
-            _ => 14 // nieznane zostają między contextualSpacing a jc (kolejność wstawienia)
+            _ => 15 // nieznane zostają między contextualSpacing a jc (kolejność wstawienia)
         };
 
         var ordered = props.ChildElements.OrderBy(Rank).ToList();
@@ -4930,6 +5287,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
     /// </summary>
     private void ApplyParagraphBorders(ParagraphProperties props, string style)
     {
+        // Obramowanie odziedziczone ze stylu akapitowego (reader: --w-pbdr-source:style) —
+        // nie duplikuj jako bezpośrednie w:pBdr (ADR-0108 r.10).
+        if (style.Contains("--w-pbdr-source:style", StringComparison.OrdinalIgnoreCase)) return;
         var borders = new ParagraphBorders();
         bool hasBorders = false;
 
@@ -5078,7 +5438,8 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Subscript });
 
         // Letter spacing
-        var letterSpacingMatch = Regex.Match(style, @"letter-spacing:\s*([\d.,]+)(pt|px)");
+        // Ujemny odstęp znaków (w:spacing val<0, „ścieśniony") — bez `-?` ginął przy zapisie (ADR-0108 r.7).
+        var letterSpacingMatch = Regex.Match(style, @"letter-spacing:\s*(-?[\d.,]+)(pt|px)");
         if (letterSpacingMatch.Success && !props.Elements<Spacing>().Any())
         {
             var ls = double.Parse(letterSpacingMatch.Groups[1].Value.Replace(',', '.'),
@@ -5237,7 +5598,9 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
             FooterDistanceCm = Attr("data-footer-distance-cm"),
             BreakType = node.GetAttributeValue("data-break-type", "nextPage"),
             // Kolumny NIE dziedziczą po poprzedniej sekcji — w OOXML brak w:cols = jednokolumnowa.
-            Columns = ParseColumnDataAttributes(node)
+            Columns = ParseColumnDataAttributes(node),
+            // Siatka też per sekcja (reader emituje ją na każdym markerze, który ją ma).
+            DocGrid = ParseDocGridDataAttributes(node)
         };
     }
 
@@ -5336,7 +5699,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         // z argumentów (dotychczasowe zachowanie, jedna sekcja).
         var geometry = _hasSectionMarkers
             ? _currentSection
-            : new SectionGeometry { PageSize = pageSize, Margins = margins, Columns = _docDefaultColumns };
+            : new SectionGeometry { PageSize = pageSize, Margins = margins, Columns = _docDefaultColumns, DocGrid = _docDefaultDocGrid };
 
         if (_hasSectionMarkers)
             AppendSectionBreakType(sectionProps, geometry.BreakType);
@@ -5399,6 +5762,7 @@ public class HtmlToDocxConverter : IHtmlToDocxConverter
         }
 
         AppendColumns(sectionProps, geometry.Columns);
+        AppendDocGrid(sectionProps, geometry.DocGrid);
     }
 
     /// <summary>

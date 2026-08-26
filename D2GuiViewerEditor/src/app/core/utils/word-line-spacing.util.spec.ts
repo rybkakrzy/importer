@@ -60,7 +60,8 @@ describe('word-line-spacing.util — kalibracja interlinii Worda (PG-09)', () =>
 
       expect(el.style.lineHeight).toBe('18pt');
       expect(el.style.getPropertyValue('--w-line-tw')).toBe('');
-      expect(el.style.getPropertyValue('--w-line-rule')).toBe('');
+      // ADR-0108 r.4: exact niesie własny marker — SCSS kotwiczy tusz przy dole slotu
+      expect(el.style.getPropertyValue('--w-line-rule')).toBe('exact');
     });
 
     it('atLeast: max(pt, single) + marker reguły (PG-10 — linia ROŚNIE gdy treść wyższa)', () => {
@@ -70,11 +71,11 @@ describe('word-line-spacing.util — kalibracja interlinii Worda (PG-09)', () =>
       expect(el.style.getPropertyValue('--w-line-rule')).toBe('atLeast');
     });
 
-    it('przełączenie atLeast → exactly zdejmuje marker reguły', () => {
+    it('przełączenie atLeast → exactly zamienia marker reguły na exact', () => {
       applyExactLineSpacing(el, 18, true);
       applyExactLineSpacing(el, 18, false);
 
-      expect(el.style.getPropertyValue('--w-line-rule')).toBe('');
+      expect(el.style.getPropertyValue('--w-line-rule')).toBe('exact');
     });
   });
 

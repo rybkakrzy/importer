@@ -161,7 +161,7 @@ public class DocumentDefaultsAndTableSpacingFidelityTests
         var cellParagraph = System.Text.RegularExpressions.Regex.Match(
             html, "<td[^>]*><p style=\"([^\"]*)\"");
         cellParagraph.Success.Should().BeTrue();
-        cellParagraph.Groups[1].Value.Should().Contain("padding-bottom:0pt;");
+        cellParagraph.Groups[1].Value.Should().Contain("margin-bottom:0pt;");
         // Pojedyncza interlinia stylu tabeli (240) po kalibracji Calibri + marker round-trip.
         cellParagraph.Groups[1].Value.Should().Contain("line-height:1.221;");
         cellParagraph.Groups[1].Value.Should().Contain("--w-line-tw:240;");

@@ -173,6 +173,65 @@ public class RunColorAndWhitespaceFidelityTests
         text.Space!.Value.Should().Be(SpaceProcessingModeValues.Preserve);
     }
 
+    [Test]
+    public void RoundTrip_LeadingTrailingSpacesSplitAcrossRuns_KeepSpaceCount()
+    {
+        // Spacja między zdaniami rozbita na granicy runów (`A.` + ` B`) oraz spacja wiodąca
+        // i końcowa — liczba spacji nie może się zmienić (xml:space="preserve" na w:t).
+        var para = new Paragraph(
+            new Run(new Text("Pierwsze zdanie.") { Space = SpaceProcessingModeValues.Preserve }),
+            new Run(new RunProperties(new Bold()), new Text("  Drugie zdanie. ") { Space = SpaceProcessingModeValues.Preserve }),
+            new Run(new Text(" koniec ") { Space = SpaceProcessingModeValues.Preserve }));
+        var html = _reader.Convert(BuildDocx(_ => { }, para)).Html;
+
+        // Tekst po zdjęciu tagów (reader owija runy w <span>) — spacje wiodące/końcowe
+        // i podwójna spacja między zdaniami verbatim.
+        System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", "")
+            .Should().Contain("Pierwsze zdanie.  Drugie zdanie.  koniec ");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(_writer.Convert(html)), false);
+        var joined = string.Concat(doc.MainDocumentPart!.Document!.Body!.Descendants<Text>().Select(t => t.Text));
+        joined.Should().Be("Pierwsze zdanie.  Drugie zdanie.  koniec ");
+        doc.MainDocumentPart.Document.Body.Descendants<Text>()
+            .Where(t => t.Text.StartsWith(' ') || t.Text.EndsWith(' '))
+            .Should().OnlyContain(t => t.Space != null && t.Space.Value == SpaceProcessingModeValues.Preserve);
+    }
+
+    [Test]
+    public void RoundTrip_NonBreakingSpaceInText_IsKept()
+    {
+        // Twarda spacja z Worda (U+00A0, np. „10 zł") to treść, nie formatowanie.
+        var para = new Paragraph(new Run(new Text("10 zł") { Space = SpaceProcessingModeValues.Preserve }));
+        var html = _reader.Convert(BuildDocx(_ => { }, para)).Html;
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(_writer.Convert(html)), false);
+        doc.MainDocumentPart!.Document!.Body!.Descendants<Text>().First().Text.Should().Be("10 zł");
+    }
+
+    [Test]
+    public void ParagraphSpacing_And_RunCharacterSpacing_AreNotConfused()
+    {
+        // w:pPr/w:spacing (odstępy akapitu) i w:rPr/w:spacing (rozstrzelenie znaków) mają
+        // tę samą nazwę XML, ale inną semantykę: 240 tw before → margin-top 12pt na <p>,
+        // 20 tw na runie → letter-spacing 1pt na spanie, nigdy odwrotnie.
+        var para = new Paragraph(
+            new ParagraphProperties(new SpacingBetweenLines { Before = "240" }),
+            new Run(new RunProperties(new Spacing { Val = 20 }), new Text("rozstrzelone")),
+            new Run(new Text(" zwykłe")));
+        var html = _reader.Convert(BuildDocx(_ => { }, para)).Html;
+
+        var p = System.Text.RegularExpressions.Regex.Match(html, "<p style=\"([^\"]*)\"").Groups[1].Value;
+        p.Should().Contain("margin-top:12pt;").And.NotContain("letter-spacing");
+        html.Should().MatchRegex("<span style=\"[^\"]*letter-spacing:1pt;[^\"]*\">rozstrzelone</span>");
+
+        using var doc = WordprocessingDocument.Open(new MemoryStream(_writer.Convert(html)), false);
+        var paragraph = doc.MainDocumentPart!.Document!.Body!.Elements<Paragraph>().First();
+        paragraph.ParagraphProperties!.GetFirstChild<SpacingBetweenLines>()!.Before!.Value.Should().Be("240");
+        var runs = paragraph.Elements<Run>().ToList();
+        runs.First(r => r.InnerText == "rozstrzelone").RunProperties!.GetFirstChild<Spacing>()!.Val!.Value.Should().Be(20);
+        runs.First(r => r.InnerText == " zwykłe").RunProperties?.GetFirstChild<Spacing>().Should().BeNull();
+    }
+
     // ── tabulatory ───────────────────────────────────────────────────────────────
 
     [Test]
